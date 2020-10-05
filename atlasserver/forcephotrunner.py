@@ -12,7 +12,7 @@ from pathlib import Path
 from signal import signal, SIGINT
 
 remoteServer = 'atlas'
-localresultdir = Path('atlasserver', 'static', 'results')
+localresultdir = Path('atlasserver', 'forcephot', 'static', 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
 
@@ -142,7 +142,7 @@ def main():
 
                     message = EmailMessage(
                         subject='ATLAS forced photometry results',
-                        body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n',
+                        body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
                         from_email='luke.shingles+alas@gmail.com',
                         to=[task["email"]],
                     )

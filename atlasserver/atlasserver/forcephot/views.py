@@ -38,7 +38,7 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
             return True
 
         # Instance must have an attribute named `owner`.
-        return obj.userid == request.user
+        return obj.user == request.user
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
@@ -53,4 +53,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(user_id=self.request.user)
+
+    def get(self, request):
+            year = now().year
+            data['result_url'] = 'ok'
+            # data = {
+            #     ...
+            #     'year-summary-url': reverse('year-summary', args=[year], request=request)
+            # }
+            return Response(data)
