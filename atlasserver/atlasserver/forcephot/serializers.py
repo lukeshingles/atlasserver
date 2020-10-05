@@ -1,6 +1,7 @@
 from django.contrib.auth.models import User, Group
 from rest_framework import serializers
-from .models import ForcePhotTask
+# from .models import Tasks
+from .models import *
 
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
@@ -17,6 +18,6 @@ class GroupSerializer(serializers.HyperlinkedModelSerializer):
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ForcePhotTask
+        model = Tasks
         fields = ['url', 'id', 'user', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max', 'finished']
         read_only_fields = ['user', 'timestamp', 'finished']

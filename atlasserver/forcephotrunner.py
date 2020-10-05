@@ -5,17 +5,20 @@ import subprocess
 import sys
 import time
 
+from django.conf import settings
+from django.core.mail import EmailMessage
 from datetime import datetime
 from pathlib import Path
 from signal import signal, SIGINT
 
 remoteServer = 'atlas'
-localresultdir = Path('results')
+localresultdir = Path('atlasserver', 'static', 'results')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
 
-def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, **kwargs):
+def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     filename = f'job{id:05d}.txt'
-    remoteresultdir = Path('~/atlasserver/jobresults/')
+    remoteresultdir = Path('~/atlasserver/results/')
     remoteresultfile = Path(remoteresultdir, filename)
     localresultfile = Path(localresultdir, filename)
 
@@ -112,32 +115,44 @@ def main():
     signal(SIGINT, handler)
     # runforced("job00000", 347.38792, 15.65928, mjd_min=57313, mjd_max=57314)
 
-    with sqlite3.connect('../../db.sqlite3') as conn:
+    with sqlite3.connect('db.sqlite3') as conn:
 
         conn.row_factory = sqlite3.Row
 
         cur = conn.cursor()
 
         # DEBUG: mark all jobs as unfinished
-        cur.execute(f"UPDATE forcephot_forcephottask SET finished=false")
+        cur.execute(f"UPDATE forcephot_tasks SET finished=false")
 
         while True:
-            taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_forcephottask WHERE finished=false;").fetchone()[0]
+            taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_tasks WHERE finished=false;").fetchone()[0]
             log(f'Unfinished jobs in queue: {taskcount}')
 
-            cur.execute("SELECT * FROM forcephot_forcephottask WHERE finished=false ORDER BY timestamp ASC;")
+            cur.execute(
+                "select t.*, a.email from forcephot_tasks as t LEFT JOIN auth_user as a"
+                " on user_id = a.id WHERE finished=false ORDER BY timestamp ASC;")
 
-            for row in cur:
-                task = dict(row)
+            for taskrow in cur:
+                task = dict(taskrow)
                 log("Starting job", task)
                 taskid = task['id']
 
-                if runforced(**task):
+                if localresultfile := runforced(**task):
+                    log(f'Sending email to {task["email"]} containing {localresultfile}')
+
+                    message = EmailMessage(
+                        subject='ATLAS forced photometry results',
+                        body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n',
+                        from_email='luke.shingles+alas@gmail.com',
+                        to=[task["email"]],
+                    )
+                    message.attach_file(localresultfile)
+                    message.send()
+
                     cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_forcephottask SET finished=true WHERE id={taskid}")
-                    log(f"Completed task id {taskid}")
+                    cur2.execute(f"UPDATE forcephot_tasks SET finished=true WHERE id={taskid}")
                 else:
-                    log("ERROR: Task not completed.")
+                    log("ERROR: Task not completed successfully.")
 
             time.sleep(5)
 

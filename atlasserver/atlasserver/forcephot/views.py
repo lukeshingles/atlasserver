@@ -45,7 +45,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be viewed or edited.
     """
-    queryset = ForcePhotTask.objects.all()
+    queryset = Tasks.objects.all()
     serializer_class = ForcePhotTaskSerializer
     permission_classes = [IsOwnerOrReadOnly]
 
