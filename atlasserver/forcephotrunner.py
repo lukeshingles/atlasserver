@@ -122,15 +122,16 @@ def main():
         cur = conn.cursor()
 
         # DEBUG: mark all jobs as unfinished
-        cur.execute(f"UPDATE forcephot_tasks SET finished=false")
+        # cur.execute(f"UPDATE forcephot_tasks SET finished=false;")
+        # conn.commit()
 
         while True:
             taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_tasks WHERE finished=false;").fetchone()[0]
             log(f'Unfinished jobs in queue: {taskcount}')
 
             cur.execute(
-                "select t.*, a.email from forcephot_tasks as t LEFT JOIN auth_user as a"
-                " on user_id = a.id WHERE finished=false ORDER BY timestamp ASC;")
+                "SELECT t.*, a.email from forcephot_tasks as t LEFT JOIN auth_user as a"
+                " on user_id = a.id WHERE finished=false ORDER BY timestamp ASC LIMIT 1;")
 
             for taskrow in cur:
                 task = dict(taskrow)
@@ -150,9 +151,13 @@ def main():
                     message.send()
 
                     cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_tasks SET finished=true WHERE id={taskid}")
+                    cur2.execute(f"UPDATE forcephot_tasks SET finished=true WHERE id={taskid};")
+                    conn.commit()
+                    cur2.close()
                 else:
                     log("ERROR: Task not completed successfully.")
+
+            cur.close()
 
             time.sleep(5)
 
