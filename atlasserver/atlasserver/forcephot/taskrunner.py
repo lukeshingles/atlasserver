@@ -15,7 +15,7 @@ localresultdir = Path('results')
 
 def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, **kwargs):
     filename = f'job{id:05d}.txt'
-    remoteresultdir = Path('/home/shingles/atlasserver/jobresults/')
+    remoteresultdir = Path('~/atlasserver/jobresults/')
     remoteresultfile = Path(remoteresultdir, filename)
     localresultfile = Path(localresultdir, filename)
 
@@ -36,34 +36,63 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, **kwargs):
 
     p = subprocess.Popen(["ssh", f"{remoteServer}", atlascommand],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         encoding='utf-8')
+                         encoding='utf-8', bufsize=1, universal_newlines=True)
 
+    starttime = time.perf_counter()
     while True:
-        line = p.stdout.readline()
-        if not line:
+        try:
+            p.communicate(timeout=5)
+
+        except subprocess.TimeoutExpired:
+            log(f"ssh has been running for {time.perf_counter() - starttime:.1f} seconds")
+
+        else:
             break
-        log(f"{remoteServer} >>> {line.rstrip()}")
 
     stdout, stderr = p.communicate()
 
     if stdout:
-        log(f"{remoteServer} STDOUT: {stdout}")
+        stdoutlines = stdout.split('\n')
+        log(f"{remoteServer} STDOUT: ({len(stdoutlines)} lines of output)")
+        # for line in stdoutlines:
+        #     log(f"{remoteServer} STDOUT: {line}")
+
     if stderr:
-        log(f"{remoteServer} STDERR: {stderr}")
+        for line in stderr.split('\n'):
+            log(f"{remoteServer} STDERR: {line}")
+
+    # output realtime ssh output line by line
+    # while True:
+    #     stdoutline = p.stdout.readline()
+    #     stderrline = p.stderr.readline()
+    #     if not stdoutline and not stderrline:
+    #         break
+    #     if stdoutline:
+    #         log(f"{remoteServer} STDOUT >>> {stdoutline.rstrip()}")
+    #     if stderrline:
+    #         log(f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
     copycommand = f"scp {remoteServer}:{remoteresultfile} {localresultfile}"
     log(copycommand)
+
     p = subprocess.Popen(copycommand,
-                         shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
+                         shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         encoding='utf-8', bufsize=1, universal_newlines=True)
     stdout, stderr = p.communicate()
 
     if stdout:
-        log(f"STDOUT: {stdout}")
+        for line in stdout.split('\n'):
+            log(f"STDOUT: {line}")
+
     if stderr:
-        log(f"STDERR: {stderr}")
+        for line in stderr.split('\n'):
+            log(f"STDERR: {line}")
+
+        # task failed
         return False
 
     if not os.path.exists(localresultfile):
+        # task failed
         return False
 
     return localresultfile
@@ -76,7 +105,7 @@ def handler(signal_received, frame):
 
 
 def log(msg, *args):
-    print(f'{datetime.utcnow()}: {msg}', *args)
+    print(f'{datetime.utcnow()}  {msg}', *args)
 
 
 def main():
