@@ -50,7 +50,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     permission_classes = [IsOwnerOrReadOnly]
 
     def perform_create(self, serializer):
-        serializer.save(userid=self.request.user)
+        serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(userid=self.request.user)
+        serializer.save(user=self.request.user)

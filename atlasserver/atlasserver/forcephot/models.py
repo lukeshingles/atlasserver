@@ -5,7 +5,7 @@ from django.conf import settings
 
 class ForcePhotTask(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
-    userid = models.ForeignKey(
+    user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
     )

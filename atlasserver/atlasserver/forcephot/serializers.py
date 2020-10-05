@@ -18,6 +18,5 @@ class GroupSerializer(serializers.HyperlinkedModelSerializer):
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = ForcePhotTask
-        fields = ['url', 'id', 'userid', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max', 'finished']
-        read_only_fields = ['userid', 'timestamp', 'finished']
-
+        fields = ['url', 'id', 'user', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max', 'finished']
+        read_only_fields = ['user', 'timestamp', 'finished']
