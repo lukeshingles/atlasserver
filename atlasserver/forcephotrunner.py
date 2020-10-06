@@ -157,7 +157,6 @@ def main():
                 else:
                     log("ERROR: Task not completed successfully.")
 
-
             if taskcount == 0:
                 time.sleep(5)
 
