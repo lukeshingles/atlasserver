@@ -55,11 +55,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(user_id=self.request.user)
 
-    def get(self, request):
-            year = now().year
-            data['result_url'] = 'ok'
-            # data = {
-            #     ...
-            #     'year-summary-url': reverse('year-summary', args=[year], request=request)
-            # }
-            return Response(data)
+    # def get(self, request):
+    #         year = now().year
+    #         data['result_url'] = 'ok'
+    #         # data = {
+    #         #     ...
+    #         #     'year-summary-url': reverse('year-summary', args=[year], request=request)
+    #         # }
+    #         return Response(data)
