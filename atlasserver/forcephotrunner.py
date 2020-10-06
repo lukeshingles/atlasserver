@@ -159,7 +159,8 @@ def main():
 
             cur.close()
 
-            time.sleep(5)
+            if taskcount == 0:
+                time.sleep(5)
 
     return
 
