@@ -157,10 +157,11 @@ def main():
                 else:
                     log("ERROR: Task not completed successfully.")
 
-            cur.close()
 
             if taskcount == 0:
                 time.sleep(5)
+
+        cur.close()
 
     return
 
