@@ -1,6 +1,9 @@
+import os
+
 from django.shortcuts import render
 
 from django.contrib.auth.models import User, Group
+from django.core.exceptions import ValidationError
 from rest_framework import viewsets
 from rest_framework import permissions
 from atlasserver.forcephot.serializers import *
@@ -48,12 +51,23 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     queryset = Tasks.objects.all()
     serializer_class = ForcePhotTaskSerializer
     permission_classes = [IsOwnerOrReadOnly]
+    throttle_scope = 'forcephottasks'
 
     def perform_create(self, serializer):
+        usertasks = Tasks.objects.filter(user_id=self.request.user, finished=False)
+        usertaskcount = usertasks.count()
+        if (usertaskcount > 10):
+            raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
         serializer.save(user_id=self.request.user)
+
+    def perform_destroy(self, instance):
+        localresultfile = os.path.join('atlasserver', 'forcephot', instance.get_localresultfile())
+        if localresultfile and os.path.exists(localresultfile):
+            os.remove(localresultfile)
+        instance.delete()
 
     # def get(self, request):
     #         year = now().year

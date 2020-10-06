@@ -20,13 +20,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     result_url = serializers.SerializerMethodField('get_result_url')
 
     def get_result_url(self, obj):
-        localresultfile = f'/static/results/job{int(obj.id):05d}.txt'
-        # TODO: what if it's finished but the file doesn't exist or vice-versa?
-        # if not os.path.exists(localresultfile):
-
-        if obj.finished:
+        if obj.get_localresultfile():
             request = self.context.get('request')
-            return request.build_absolute_uri(localresultfile)
+            return request.build_absolute_uri('/' + obj.get_localresultfile())
 
         return None
 

@@ -14,3 +14,9 @@ class Tasks(models.Model):
     mjd_min = models.FloatField(null=True, blank=True, default=None)
     mjd_max = models.FloatField(null=True, blank=True, default=None)
     finished = models.BooleanField(default=False)
+
+    def get_localresultfile(self):
+        if self.finished:
+            return f'static/results/job{int(self.id):05d}.txt'
+
+        return None
