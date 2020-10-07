@@ -46,8 +46,8 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
             return True
 
         # Instance owner must match current user
-        # return request.user and request.user.is_authenticated and (obj.user == request.user)
-        return obj.user == request.user
+        return request.user and request.user.is_authenticated and (obj.user.id == request.user.id)
+        # return obj.user == request.user
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
