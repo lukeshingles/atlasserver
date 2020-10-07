@@ -31,8 +31,13 @@ class GroupViewSet(viewsets.ModelViewSet):
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """
     Object-level permission to only allow owners of an object to edit it.
-    Assumes the model instance has an `owner` attribute.
+    Assumes the model instance has an `user` attribute.
     """
+
+    message = 'You must be the owner of this object.'
+
+    # def has_permission(self, request, view):
+    #     return request.user and request.user.is_authenticated
 
     def has_object_permission(self, request, view, obj):
         # Read permissions are allowed to any request,
@@ -40,7 +45,8 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        # Instance must have an attribute named `owner`.
+        # Instance owner must match current user
+        # return request.user and request.user.is_authenticated and (obj.user == request.user)
         return obj.user == request.user
 
 
@@ -50,15 +56,16 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     queryset = Tasks.objects.all()
     serializer_class = ForcePhotTaskSerializer
-    permission_classes = [IsOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     throttle_scope = 'forcephottasks'
 
     def perform_create(self, serializer):
-        usertasks = Tasks.objects.filter(user_id=self.request.user, finished=False)
-        usertaskcount = usertasks.count()
-        if (usertaskcount > 10):
-            raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
-        serializer.save(user=self.request.user)
+        if self.request.user and self.request.user.is_authenticated:
+            usertasks = Tasks.objects.filter(user_id=self.request.user, finished=False)
+            usertaskcount = usertasks.count()
+            if (usertaskcount > 10):
+                raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
+            serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
         serializer.save(user_id=self.request.user)
