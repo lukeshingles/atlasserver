@@ -45,6 +45,9 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
+        if request.method in ['PUT', 'PATCH']:  # and obj.started
+            return False
+
         # Instance owner must match current user
         return request.user and request.user.is_authenticated and (obj.user.id == request.user.id)
         # return obj.user == request.user
