@@ -68,7 +68,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(user_id=self.request.user)
+        serializer.save(user=self.request.user)
 
     def perform_destroy(self, instance):
         localresultfile = os.path.join('atlasserver', 'forcephot', instance.get_localresultfile())
