@@ -4,8 +4,10 @@ from django.shortcuts import render
 
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
 from rest_framework import permissions
+from rest_framework import filters
 from atlasserver.forcephot.serializers import *
 from atlasserver.forcephot.models import *
 
@@ -55,12 +57,15 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
-    API endpoint that allows force.sh tasks to be viewed or edited.
+    API endpoint that allows force.sh tasks to be created and deleted.
     """
     queryset = Tasks.objects.all()
     serializer_class = ForcePhotTaskSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     throttle_scope = 'forcephottasks'
+    filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
+    ordering_fields = ['timestamp', 'id']
+    filterset_fields = ['user', 'finished']
 
     def perform_create(self, serializer):
         if self.request.user and self.request.user.is_authenticated:

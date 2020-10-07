@@ -129,3 +129,5 @@ dmypy.json
 .pyre/
 settings_secret.py
 atlasserver/atlasserver/settings_secret.py
+
+.tags*
