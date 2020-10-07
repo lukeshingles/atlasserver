@@ -65,6 +65,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     throttle_scope = 'forcephottasks'
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
+    ordering = '-timestamp'
     filterset_fields = ['user', 'finished']
 
     def perform_create(self, serializer):
@@ -83,12 +84,3 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         if localresultfile and os.path.exists(localresultfile):
             os.remove(localresultfile)
         instance.delete()
-
-    # def get(self, request):
-    #         year = now().year
-    #         data['result_url'] = 'ok'
-    #         # data = {
-    #         #     ...
-    #         #     'year-summary-url': reverse('year-summary', args=[year], request=request)
-    #         # }
-    #         return Response(data)
