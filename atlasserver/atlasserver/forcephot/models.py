@@ -13,6 +13,7 @@ class Tasks(models.Model):
     dec = models.FloatField()
     mjd_min = models.FloatField(null=True, blank=True, default=None)
     mjd_max = models.FloatField(null=True, blank=True, default=None)
+    use_reduced = models.BooleanField("Use reduced images instead of difference", default=False)
     finished = models.BooleanField(default=False)
 
     def get_localresultfile(self):

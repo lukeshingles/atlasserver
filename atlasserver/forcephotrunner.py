@@ -28,7 +28,9 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
         atlascommand += f" m0={float(mjd_min)}"
     if mjd_max:
         atlascommand += f" m1={float(mjd_max)}"
-    atlascommand += " parallel=10"
+    if use_reduced:
+        atlascommand += " red=1"
+    atlascommand += " dodb=1 parallel=2"
 
     # for debugging because force.sh takes a long time to run
     # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
@@ -107,8 +109,8 @@ def handler(signal_received, frame):
     exit(0)
 
 
-def log(msg, *args):
-    print(f'{datetime.utcnow()}  {msg}', *args)
+def log(msg, *args, **kwargs):
+    print(f'{datetime.utcnow()}  {msg}', *args, **kwargs)
 
 
 def main():
@@ -127,7 +129,10 @@ def main():
 
         while True:
             taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_tasks WHERE finished=false;").fetchone()[0]
-            log(f'Unfinished jobs in queue: {taskcount}')
+            if taskcount == 0:
+                log(f'Waiting for tasks', end='\r')
+            else:
+                log(f'Unfinished jobs in queue: {taskcount}')
 
             cur.execute(
                 "SELECT t.*, a.email from forcephot_tasks as t LEFT JOIN auth_user as a"

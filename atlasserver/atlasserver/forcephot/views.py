@@ -65,7 +65,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     throttle_scope = 'forcephottasks'
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
-    ordering = '-timestamp'
+    ordering = ['-timestamp']
     filterset_fields = ['user', 'finished']
 
     def perform_create(self, serializer):
