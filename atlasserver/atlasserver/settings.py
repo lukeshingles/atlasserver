@@ -13,7 +13,7 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 import os
 from pathlib import Path  # Python 3.6+ only
 
-import atlasserver.forcephot
+import forcephot
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -34,7 +34,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
-    'atlasserver.forcephot',
+    'forcephot',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',

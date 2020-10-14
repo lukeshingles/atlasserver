@@ -12,7 +12,7 @@ from pathlib import Path
 from signal import signal, SIGINT
 
 remoteServer = 'atlas'
-localresultdir = Path('atlasserver', 'forcephot', 'static', 'results')
+localresultdir = Path('forcephot', 'static', 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
 

@@ -8,8 +8,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
 from rest_framework import permissions
 from rest_framework import filters
-from atlasserver.forcephot.serializers import *
-from atlasserver.forcephot.models import *
+from forcephot.serializers import *
+from forcephot.models import *
 
 
 class UserViewSet(viewsets.ModelViewSet):
