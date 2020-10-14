@@ -3,7 +3,7 @@ from django.contrib.auth.models import User
 from django.conf import settings
 
 
-class Tasks(models.Model):
+class Task(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

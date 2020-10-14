@@ -8,26 +8,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
 from rest_framework import permissions
 from rest_framework import filters
-from forcephot.serializers import *
-from forcephot.models import *
-
-
-class UserViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows users to be viewed or edited.
-    """
-    queryset = User.objects.all().order_by('-date_joined')
-    serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-
-class GroupViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows groups to be viewed or edited.
-    """
-    queryset = Group.objects.all()
-    serializer_class = GroupSerializer
-    permission_classes = [permissions.IsAuthenticated]
+from .serializers import *
+from .models import *
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -59,7 +41,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be created and deleted.
     """
-    queryset = Tasks.objects.all()
+    queryset = Task.objects.all()
     serializer_class = ForcePhotTaskSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     throttle_scope = 'forcephottasks'
@@ -70,7 +52,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         if self.request.user and self.request.user.is_authenticated:
-            usertasks = Tasks.objects.filter(user_id=self.request.user, finished=False)
+            usertasks = Task.objects.filter(user_id=self.request.user, finished=False)
             usertaskcount = usertasks.count()
             if (usertaskcount > 10):
                 raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')

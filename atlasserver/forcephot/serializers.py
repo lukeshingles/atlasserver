@@ -1,8 +1,8 @@
 from django.contrib.auth.models import User, Group
 from rest_framework import serializers
-# from .models import Tasks
-from .models import *
 from rest_framework.reverse import reverse
+from .models import Task
+
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
@@ -27,6 +27,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         return None
 
     class Meta:
-        model = Tasks
-        fields = ['url', 'id', 'user', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max', 'use_reduced', 'finished', 'result_url']
+        model = Task
+        fields = ['url', 'id', 'user', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max',
+                  'use_reduced', 'finished', 'result_url']
         read_only_fields = ['user', 'timestamp', 'finished', 'result_url']
