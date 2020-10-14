@@ -28,7 +28,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
         atlascommand += f" m0={float(mjd_min)}"
     if mjd_max:
         atlascommand += f" m1={float(mjd_max)}"
-    if use_reduced:
+    if kwargs['use_reduced']:
         atlascommand += " red=1"
     atlascommand += " dodb=1 parallel=2"
 
@@ -124,18 +124,18 @@ def main():
         cur = conn.cursor()
 
         # DEBUG: mark all jobs as unfinished
-        # cur.execute(f"UPDATE forcephot_tasks SET finished=false;")
+        # cur.execute(f"UPDATE forcephot_task SET finished=false;")
         # conn.commit()
 
         while True:
-            taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_tasks WHERE finished=false;").fetchone()[0]
+            taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
             if taskcount == 0:
                 log(f'Waiting for tasks', end='\r')
             else:
                 log(f'Unfinished jobs in queue: {taskcount}')
 
             cur.execute(
-                "SELECT t.*, a.email from forcephot_tasks as t LEFT JOIN auth_user as a"
+                "SELECT t.*, a.email from forcephot_task as t LEFT JOIN auth_user as a"
                 " on user_id = a.id WHERE finished=false ORDER BY timestamp ASC LIMIT 1;")
 
             for taskrow in cur:
@@ -156,7 +156,7 @@ def main():
                     message.send()
 
                     cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_tasks SET finished=true WHERE id={taskid};")
+                    cur2.execute(f"UPDATE forcephot_task SET finished=true WHERE id={taskid};")
                     conn.commit()
                     cur2.close()
                 else:
