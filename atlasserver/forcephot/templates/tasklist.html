@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+{% load rest_framework %}
+<html lang="en-UK">
+<head>
+<title>ATLAS Forced Photometry</title>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+<style>
+
+    html {
+        /* background-color: #132C48; */
+        background-color: rgb(244, 246, 249);
+    }
+
+    input {
+        padding: 0.1em 10px;
+        margin: 8px 0;
+        box-sizing: border-box;
+    }
+
+    input::placeholder {
+      color: #d3d3d3;
+    }
+
+    .submit {
+        background-color: #6BA3E8;
+    }
+
+    body {
+        width:600px;
+        margin: 20px auto;
+        padding: 40px;
+        /* background-color: #fff; */
+        background-color: white;
+        border-radius: 3px;
+        box-shadow: 5px 5px 7px 7px rgba(0,0,0,0.15);
+    }
+
+    ul#tasks li {
+        background-color: rgb(100, 150, 200);
+        /* background-color: rgb(128,128,128); */
+        /* background-color: #ffae19; */
+        margin: 1em 0;
+        padding: 1em;
+        /* border-radius: 0.5em; */
+        border: 0.1em solid black;
+        color: #fff;
+        font-size: 100%;
+        box-shadow: 10px -1px 0.8em -4px rgba(0,0,0,0.75);
+        color: black;
+    }
+
+    ul#tasks li.unfinished {
+        background-color: rgb(200, 200, 200);
+    }
+
+    ul#tasks li.finished {
+        background-color: white;
+    }
+
+    .btn-danger {
+        /* background-color: #ff4e19; */
+        /* border-color: #e59400; */
+        float: right;
+    }
+
+    form li div:nth-child(1) {
+        display: inline-block;
+        text-align: right;
+        width: 5em;
+        margin-right: 10px;
+        vertical-align: center;
+    }
+
+    form li div:nth-child(2) {
+        display: inline;
+        width: auto;
+        text-align: left;
+    }
+
+    ul {
+        list-style: none;
+        padding: 0;
+    }
+
+    a.results {
+        border-color: #e59400;
+        background-color: #ef4e19;
+        /* background-color: #6BA3E8; */
+        color: white;
+        display: block;
+        clear: both;
+        margin-top: 1em;
+    }
+</style>
+</head>
+<body>
+    <h1>ATLAS Forced Photometry</h1>
+    <form method="POST" action="/">
+        {% csrf_token %}
+        <ul>
+            <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
+            <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li>
+            <li><div>{{ form.mjd_min.label_tag }}</div><div>{{ form.mjd_min }}</div></li>
+            <li><div>{{ form.mjd_max.label_tag }}</div><div>{{ form.mjd_max }}</div></li>
+            <li><div>{{ form.use_reduced }}</div><div>{{ form.use_reduced.label_tag }}</div></li>
+        </ul>
+        <input class="btn btn-info" type="submit" name="Create Task">
+    </form>
+
+    <ul id="tasks">
+
+    {% for task in tasks %}
+        {% if task.finished %}
+        <li class="item-row finished">
+            <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
+        {% else %}
+        <li class="item-row unfinished">
+            <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+        {% endif %}
+            RA: {{task.ra}}<br/>
+            DEC: {{task.dec}}<br/>
+            {% if task.finished %}
+            Finished<br/>
+            <a class="results btn btn-sm" href="/{{task.get_localresultfile}}">Results</a>
+            {% else %}
+            Queued
+            {% endif %}
+            <!-- Email: {{task.user.email}} -->
+        </li>
+    {% endfor %}
+
+    </ul>
+</body>
+</html>

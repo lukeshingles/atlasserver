@@ -1,6 +1,13 @@
 import os
 
-from django.shortcuts import render
+from django.shortcuts import render, redirect
+from django.http import HttpResponse
+
+from django.shortcuts import get_object_or_404
+
+from rest_framework.renderers import TemplateHTMLRenderer
+from rest_framework.views import APIView
+from rest_framework import status
 
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
@@ -8,8 +15,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
 from rest_framework import permissions
 from rest_framework import filters
+from rest_framework.renderers import TemplateHTMLRenderer
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from .serializers import *
 from .models import *
+from .forms import *
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -66,3 +77,53 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         if localresultfile and os.path.exists(localresultfile):
             os.remove(localresultfile)
         instance.delete()
+
+
+class index(APIView):
+    queryset = Task.objects.all().order_by('-timestamp')
+    serializer_class = ForcePhotTaskSerializer
+    renderer_classes = [TemplateHTMLRenderer]
+    template_name = 'tasklist.html'
+
+    # def get(self, request, pk):
+    #     profile = get_object_or_404(Task, pk=pk)
+    #     serializer = ForcePhotTaskSerializer(profile)
+    #     return Response({'serializer': serializer, 'profile': profile})
+    #
+    # def post(self, request, pk):
+    #     profile = get_object_or_404(Task, pk=pk)
+    #     serializer = ForcePhotTaskSerializer(profile, data=request.data)
+    #     if not serializer.is_valid():
+    #         return Response({'serializer': serializer, 'profile': profile})
+    #     serializer.save()
+    #     return redirect('profile-list')
+    form = TaskForm()
+    tasks = Task.objects.all().order_by('-timestamp')
+
+    def get(self, request, format=None):
+        serializer = ForcePhotTaskSerializer(self.tasks, context={'request': request})
+        return Response({'serializer': serializer, 'tasks': self.tasks, 'form': self.form})
+
+    def post(self, request, format=None):
+        print(request.data)
+        serializer = ForcePhotTaskSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(user=self.request.user)
+            # return Response(request.data, status=status.HTTP_201_CREATED)
+            return redirect('/', status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+def deleteTask(request, pk):
+    item = Task.objects.get(id=pk)
+
+    item.delete()
+    return redirect('/')
+
+    # if request.method == 'POST':
+    #     item.delete()
+    #     return redirect('/')
+
+    # context = {'item': item}
+    # return render(request, 'tasks/delete.html', context)

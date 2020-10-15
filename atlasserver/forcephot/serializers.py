@@ -31,3 +31,5 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         fields = ['url', 'id', 'user', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max',
                   'use_reduced', 'finished', 'result_url']
         read_only_fields = ['user', 'timestamp', 'finished', 'result_url']
+
+    # def save(self)

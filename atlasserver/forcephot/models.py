@@ -21,3 +21,7 @@ class Task(models.Model):
             return f'static/results/job{int(self.id):05d}.txt'
 
         return None
+
+    def __str__(self):
+        email = User.objects.get(id=self.user_id).email
+        return f"RA: {self.ra} DEC: {self.dec} {email}"
