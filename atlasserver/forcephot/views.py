@@ -1,23 +1,20 @@
 import os
 
-from django.shortcuts import render, redirect
-from django.http import HttpResponse
-
-from django.shortcuts import get_object_or_404
-
-from rest_framework.renderers import TemplateHTMLRenderer
-from rest_framework.views import APIView
-from rest_framework import status
-
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
+from django.http import HttpResponse
+from django.shortcuts import render, redirect
+from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import viewsets
-from rest_framework import permissions
+
 from rest_framework import filters
+from rest_framework import permissions
+from rest_framework import status
+from rest_framework import viewsets
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from .serializers import *
 from .models import *
 from .forms import *
@@ -97,12 +94,12 @@ class index(APIView):
     #         return Response({'serializer': serializer, 'profile': profile})
     #     serializer.save()
     #     return redirect('profile-list')
-    form = TaskForm()
 
     def get(self, request, format=None):
         tasks = Task.objects.all().order_by('-timestamp')
         serializer = ForcePhotTaskSerializer(tasks, context={'request': request})
-        return Response({'serializer': serializer, 'tasks': tasks, 'form': self.form})
+        form = TaskForm()
+        return Response({'serializer': serializer, 'tasks': tasks, 'form': form})
 
     def post(self, request, format=None):
         serializer = ForcePhotTaskSerializer(data=request.data, context={'request': request})
