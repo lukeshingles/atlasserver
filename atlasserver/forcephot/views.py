@@ -98,14 +98,13 @@ class index(APIView):
     #     serializer.save()
     #     return redirect('profile-list')
     form = TaskForm()
-    tasks = Task.objects.all().order_by('-timestamp')
 
     def get(self, request, format=None):
-        serializer = ForcePhotTaskSerializer(self.tasks, context={'request': request})
-        return Response({'serializer': serializer, 'tasks': self.tasks, 'form': self.form})
+        tasks = Task.objects.all().order_by('-timestamp')
+        serializer = ForcePhotTaskSerializer(tasks, context={'request': request})
+        return Response({'serializer': serializer, 'tasks': tasks, 'form': self.form})
 
     def post(self, request, format=None):
-        print(request.data)
         serializer = ForcePhotTaskSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save(user=self.request.user)

@@ -10,6 +10,7 @@
     html {
         /* background-color: #132C48; */
         background-color: rgb(244, 246, 249);
+        color: black;
     }
 
     input {
@@ -27,12 +28,13 @@
     }
 
     body {
-        width:600px;
+        width: 50%;
+        min-width: 700px;
         margin: 20px auto;
         padding: 40px;
         /* background-color: #fff; */
         background-color: white;
-        border-radius: 3px;
+        border-radius: 0.5em;
         box-shadow: 5px 5px 7px 7px rgba(0,0,0,0.15);
     }
 
@@ -42,16 +44,15 @@
         /* background-color: #ffae19; */
         margin: 1em 0;
         padding: 1em;
-        /* border-radius: 0.5em; */
-        border: 0.1em solid black;
-        color: #fff;
-        font-size: 100%;
-        box-shadow: 10px -1px 0.8em -4px rgba(0,0,0,0.75);
-        color: black;
+        /* box-shadow: 10px -1px 0.8em -4px rgba(0,0,0,0.75); */
+        border-radius: 0.5em;
+        border: 0.1em solid rgb(0, 0, 0, 0.6);
     }
 
-    ul#tasks li.unfinished {
-        background-color: rgb(200, 200, 200);
+    ul#tasks li.queued {
+        background-color: rgba(0, 0, 0, 0.1);
+        border: none;
+        color: grey;
     }
 
     ul#tasks li.finished {
@@ -91,6 +92,7 @@
         display: block;
         clear: both;
         margin-top: 1em;
+        width: 9em;
     }
 </style>
 </head>
@@ -115,7 +117,7 @@
         <li class="item-row finished">
             <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
         {% else %}
-        <li class="item-row unfinished">
+        <li class="item-row queued">
             <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
         {% endif %}
             RA: {{task.ra}}<br/>
