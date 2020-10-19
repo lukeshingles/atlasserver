@@ -9,8 +9,8 @@ class Task(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
     )
-    ra = models.DecimalField(max_digits=8, decimal_places=5)
-    dec = models.DecimalField(max_digits=8, decimal_places=5)
+    ra = models.FloatField()
+    dec = models.FloatField()
     mjd_min = models.FloatField(null=True, blank=True, default=None)
     mjd_max = models.FloatField(null=True, blank=True, default=None)
     use_reduced = models.BooleanField("Use reduced images instead of difference", default=False)

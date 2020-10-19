@@ -6,6 +6,7 @@ from django.http import HttpResponse
 from django.shortcuts import render, redirect
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
+from django.http.response import HttpResponseRedirect
 
 from rest_framework import filters
 from rest_framework import permissions
@@ -49,7 +50,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be created and deleted.
     """
-    queryset = Task.objects.all()
+    queryset = Task.objects.all().order_by('-timestamp')
     serializer_class = ForcePhotTaskSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     throttle_scope = 'forcephottasks'
@@ -57,58 +58,76 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     ordering_fields = ['timestamp', 'id']
     ordering = ['-timestamp']
     filterset_fields = ['user', 'finished']
+    template_name = 'tasklist.html'
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        # return self.list(request, args=args, kwargs=kwargs)
+        # return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        return redirect('/', status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
-        if self.request.user and self.request.user.is_authenticated:
-            usertasks = Task.objects.filter(user_id=self.request.user, finished=False)
-            usertaskcount = usertasks.count()
-            if (usertaskcount > 10):
-                raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
-            serializer.save(user=self.request.user)
+        # if self.request.user and self.request.user.is_authenticated:
+        #     usertasks = Task.objects.filter(user_id=self.request.user, finished=False)
+        #     usertaskcount = usertasks.count()
+        #     if (usertaskcount > 10):
+        #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
+        #     serializer.save(user=self.request.user)
+        serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        print(reverse('task-list', request=request))
+        # if request.accepted_renderer.format == 'html':
+        return Response(status=status.HTTP_303_SEE_OTHER, headers={
+                'Location': reverse('task-list', request=request)})
+        # return Response(status=status.HTTP_204_NO_CONTENT)
+
     def perform_destroy(self, instance):
-        localresultfile = os.path.join('atlasserver', 'forcephot', instance.get_localresultfile())
-        if localresultfile and os.path.exists(localresultfile):
-            os.remove(localresultfile)
+        if instance.get_localresultfile():
+            localresultfile = os.path.join('atlasserver', 'forcephot', instance.get_localresultfile())
+            if localresultfile and os.path.exists(localresultfile):
+                os.remove(localresultfile)
         instance.delete()
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
 
-class index(APIView):
-    queryset = Task.objects.all().order_by('-timestamp')
-    serializer_class = ForcePhotTaskSerializer
-    renderer_classes = [TemplateHTMLRenderer]
-    template_name = 'tasklist.html'
+        if request.accepted_renderer.format == 'html':
+            tasks = queryset
+            # serializer2 = ForcePhotTaskSerializer(tasks, context={'request': request})
+            form = TaskForm()
+            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
 
-    # def get(self, request, pk):
-    #     profile = get_object_or_404(Task, pk=pk)
-    #     serializer = ForcePhotTaskSerializer(profile)
-    #     return Response({'serializer': serializer, 'profile': profile})
-    #
-    # def post(self, request, pk):
-    #     profile = get_object_or_404(Task, pk=pk)
-    #     serializer = ForcePhotTaskSerializer(profile, data=request.data)
-    #     if not serializer.is_valid():
-    #         return Response({'serializer': serializer, 'profile': profile})
-    #     serializer.save()
-    #     return redirect('profile-list')
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
 
-    def get(self, request, format=None):
-        tasks = Task.objects.all().order_by('-timestamp')
-        serializer = ForcePhotTaskSerializer(tasks, context={'request': request})
-        form = TaskForm()
-        return Response({'serializer': serializer, 'tasks': tasks, 'form': form})
+        return Response(serializer.data)
 
-    def post(self, request, format=None):
-        serializer = ForcePhotTaskSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            serializer.save(user=self.request.user)
-            # return Response(request.data, status=status.HTTP_201_CREATED)
-            return redirect('/', status=status.HTTP_201_CREATED)
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        if request.accepted_renderer.format == 'html':
+            # return redirect('/')
+            # queryset = self.filter_queryset(self.get_queryset())
+            # serializer = self.get_serializer(queryset, many=True)
+
+            tasks = [instance]
+            form = TaskForm()
+            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
+
+        return Response(serializer.data)
 
 
 def deleteTask(request, pk):
@@ -117,9 +136,6 @@ def deleteTask(request, pk):
     item.delete()
     return redirect('/')
 
-    # if request.method == 'POST':
-    #     item.delete()
-    #     return redirect('/')
-
     # context = {'item': item}
     # return render(request, 'tasks/delete.html', context)
+    #     return Response(serializer.data)

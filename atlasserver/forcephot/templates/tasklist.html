@@ -12,115 +12,38 @@
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/bootstrap-tweaks.css" %}"/>
       {% endblock %}
 
+
+      <link rel="stylesheet" type="text/css" href="{% static "main.css" %}"/>
       <!-- <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/> -->
       <!-- <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/> -->
       {% if code_style %}<style>{{ code_style }}</style>{% endif %}
     {% endblock %}
 
-    <style>
-    html {
-        /* background-color: #132C48; */
-        background-color: rgb(244, 246, 249);
-        color: black;
-    }
-
-    input {
-        padding: 0.1em 10px;
-        margin: 8px 0;
-        box-sizing: border-box;
-    }
-
-    input::placeholder {
-      color: #d3d3d3;
-    }
-
-    .submit {
-        background-color: #6BA3E8;
-    }
-
-    body {
-        width: 50%;
-        min-width: 700px;
-        margin: 20px auto;
-        padding: 40px;
-        /* background-color: #fff; */
-        background-color: white;
-        border-radius: 0.5em;
-        box-shadow: 5px 5px 7px 7px rgba(0,0,0,0.15);
-        font-size: 18px;
-    }
-
-    ul#tasks li {
-        background-color: rgb(100, 150, 200);
-        /* background-color: rgb(128,128,128); */
-        /* background-color: #ffae19; */
-        margin: 1em 0;
-        padding: 1em;
-        /* box-shadow: 10px -1px 0.8em -4px rgba(0,0,0,0.75); */
-        border-radius: 0.5em;
-        border: 0.1em solid rgb(0, 0, 0, 0.6);
-    }
-
-    ul#tasks li.queued {
-        background-color: rgba(0, 0, 0, 0.1);
-        border: none;
-        color: grey;
-    }
-
-    ul#tasks li.finished {
-        background-color: white;
-    }
-
-    .btn-danger {
-        /* background-color: #ff4e19; */
-        /* border-color: #e59400; */
-        float: right;
-    }
-
-    form li div:nth-child(1) {
-        display: inline-block;
-        text-align: right;
-        width: 5em;
-        margin-right: 10px;
-        vertical-align: center;
-    }
-
-    form li div:nth-child(2) {
-        display: inline;
-        width: auto;
-        text-align: left;
-    }
-
-    ul {
-        list-style: none;
-        padding: 0;
-    }
-
-    a.results {
-        border-color: #e59400;
-        background-color: #ef4e19;
-        /* background-color: #6BA3E8; */
-        color: white;
-        display: block;
-        clear: both;
-        margin-top: 1em;
-        width: 9em;
-    }
-    </style>
 </head>
 <body>
-    <div class="wrapper">
       {% block navbar %}
         <div class="navbar navbar-static-top {% block bootstrap_navbar_variant %}navbar-inverse{% endblock %}"
              role="navigation" aria-label="{% trans "navbar" %}">
           <div class="container">
             <span>
               {% block branding %}
-                <h1><a class='navbar-brand' rel="nofollow" href='#'>
+                <h1><a class='navbar-brand' rel="nofollow" href='{% url 'task-list' %}'>
                     ATLAS Forced Photometry
                 </a></h1>
               {% endblock %}
             </span>
+
+
+            <ul class="nav navbar-nav">
+                <li>
+                  <a href="/?format=json" rel="nofollow">json</a>
+                </li>
+
+                <li>
+                  <a href="/?format=api" rel="nofollow">api</a>
+                </li>
+            </ul>
+
             <ul class="nav navbar-nav pull-right">
               {% block userlinks %}
                 {% if user.is_authenticated %}
@@ -136,7 +59,7 @@
 
 
     <h2>New request</h2>
-    <form method="POST" action="/">
+    <form method="POST" action="{% url 'task-list' %}">
         {% csrf_token %}
         <ul>
             <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
@@ -145,7 +68,7 @@
             <li><div>{{ form.mjd_max.label_tag }}</div><div>{{ form.mjd_max }}</div></li>
             <li><div>{{ form.use_reduced }}</div><div>{{ form.use_reduced.label_tag }}</div></li>
         </ul>
-        <input class="btn btn-info" type="submit" name="Create Task" value="Request" />
+        <input class="btn btn-info" type="submit" value="Request" />
     </form>
 
     <h2>Previous requests</h2>
@@ -159,6 +82,7 @@
         <li class="item-row queued">
             <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
         {% endif %}
+            Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
             RA: {{task.ra}}<br/>
             DEC: {{task.dec}}<br/>
             {% if task.finished %}
