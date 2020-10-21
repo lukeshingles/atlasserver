@@ -117,11 +117,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
+        listqueryset = self.filter_queryset(self.get_queryset())
+        # listqueryset = self.filter_queryset(self.get_queryset()).filter(user_id=request.user)
+        serializer = self.get_serializer(listqueryset, many=True)
 
         if request.accepted_renderer.format == 'html':
-            tasks = queryset
+            tasks = listqueryset
             # serializer2 = ForcePhotTaskSerializer(tasks, context={'request': request})
             form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})

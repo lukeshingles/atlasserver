@@ -84,7 +84,13 @@
             <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
         {% endif %}
             Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
+            Queued at: {{task.timestamp}}<br/>
             RA DEC: {{task.ra}} {{task.dec}}<br/>
+
+            {% if task.mjd_min or task.mjd_max %}
+                MJD range: [{{task.mjd_min}}, {{task.mjd_max}}]<br/>
+            {% endif %}
+
             {% if task.finished %}
             Finished<br/>
             <a class="results btn btn-sm" href="/{{task.get_localresultfile}}">Results</a>

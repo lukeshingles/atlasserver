@@ -8,9 +8,9 @@ class Task(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     ra = models.FloatField(null=False, blank=False, default=None)
     dec = models.FloatField(null=False, blank=False, default=None)
-    mjd_min = models.FloatField(null=True, blank=True, default=None)
-    mjd_max = models.FloatField(null=True, blank=True, default=None)
-    use_reduced = models.BooleanField("Use reduced images instead of difference", default=False)
+    mjd_min = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD min')
+    mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
+    use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     finished = models.BooleanField(default=False)
 
     def get_localresultfile(self):
