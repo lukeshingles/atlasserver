@@ -28,13 +28,13 @@ jobs:
       run: |
         python3 -m pip install --upgrade pip
         python3 -m pip install -r requirements.txt
-    - name: Run Tests
-      run: |
-        cd atlasserver
-        ls
-        echo "SECRET_KEY = '3gy2&d^d59mvspz^ey&+9fvf6sgpob8m2+g6@cp5=^h1!5c5l0'" > atlasserver/settings_secret.py
-        pwd
-        python3 manage.py shell -c "from django.core.management.utils import get_random_secret_key; print(f'SECRET_KEY = \'{get_random_secret_key()}\'')" > atlasserver/settings_secret_new.py
-        mv atlasserver/settings_secret_new.py atlasserver/settings_secret.py
-        cat atlasserver/settings_secret.py
-        python3 manage.py test
+    # - name: Run Tests
+    #   run: |
+    #     cd atlasserver
+    #     ls
+    #     echo "SECRET_KEY = '3gy2&d^d59mvspz^ey&+9fvf6sgpob8m2+g6@cp5=^h1!5c5l0'" > atlasserver/settings_secret.py
+    #     pwd
+    #     python3 manage.py shell -c "from django.core.management.utils import get_random_secret_key; print(f'SECRET_KEY = \'{get_random_secret_key()}\'')" > atlasserver/settings_secret_new.py
+    #     mv atlasserver/settings_secret_new.py atlasserver/settings_secret.py
+    #     cat atlasserver/settings_secret.py
+    #     python3 manage.py test

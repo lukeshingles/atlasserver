@@ -78,7 +78,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     newrow['ra'] = row[0]
                     newrow['dec'] = row[1]
                     newrow['radeclist'] = ['']
-                    print(f"{newrow=}")
                     datalist.append(newrow)
 
         serializer = self.get_serializer(data=datalist, many=True)
@@ -117,17 +116,19 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     def list(self, request, *args, **kwargs):
-        listqueryset = self.filter_queryset(self.get_queryset())
         # listqueryset = self.filter_queryset(self.get_queryset()).filter(user_id=request.user)
-        serializer = self.get_serializer(listqueryset, many=True)
 
         if request.accepted_renderer.format == 'html':
+            listqueryset = self.get_queryset()
+            serializer = self.get_serializer(listqueryset, many=True)
             tasks = listqueryset
             # serializer2 = ForcePhotTaskSerializer(tasks, context={'request': request})
             form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
 
-        page = self.paginate_queryset(queryset)
+        listqueryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(listqueryset, many=True)
+        page = self.paginate_queryset(listqueryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)

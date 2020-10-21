@@ -6,7 +6,7 @@ from .models import *
 
 class TaskForm(forms.ModelForm):
 
-    radeclist = forms.CharField(label="RA DEC list", required=True,
+    radeclist = forms.CharField(label="RA Dec list", required=True,
                                 widget=forms.Textarea(attrs={"rows": 2, "cols": ""}))
 
     class Meta:

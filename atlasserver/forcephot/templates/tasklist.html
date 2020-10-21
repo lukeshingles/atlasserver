@@ -21,87 +21,91 @@
 
 </head>
 <body>
-      {% block navbar %}
-        <div class="navbar navbar-static-top {% block bootstrap_navbar_variant %}navbar-inverse{% endblock %}"
-             role="navigation" aria-label="{% trans "navbar" %}">
-          <div class="container">
-            <span>
-              {% block branding %}
-                <h1><a class='navbar-brand' rel="nofollow" href='{% url 'task-list' %}'>
-                    ATLAS Forced Photometry
-                </a></h1>
-              {% endblock %}
-            </span>
+  {% block navbar %}
+    <div class="navbar navbar-static-top {% block bootstrap_navbar_variant %}navbar-inverse{% endblock %}"
+         role="navigation" aria-label="{% trans "navbar" %}">
+      <div class="container">
+        <span>
+          {% block branding %}
+            <h1><a class='navbar-brand' rel="nofollow" href='{% url 'task-list' %}'>
+                ATLAS Forced Photometry
+            </a></h1>
+          {% endblock %}
+        </span>
 
 
-            <ul class="nav navbar-nav">
-                <li>
-                  <a href="/?format=json" rel="nofollow">json</a>
-                </li>
+        <ul class="nav navbar-nav">
+            <li>
+              <a href="/?format=json" rel="nofollow">json</a>
+            </li>
 
-                <li>
-                  <a href="/?format=api" rel="nofollow">api</a>
-                </li>
-            </ul>
-
-            <ul class="nav navbar-nav pull-right">
-              {% block userlinks %}
-                {% if user.is_authenticated %}
-                  {% optional_logout request user %}
-                {% else %}
-                  {% optional_login request %}
-                {% endif %}
-              {% endblock %}
-            </ul>
-          </div>
-        </div>
-      {% endblock %}
-
-
-    <h2>New request</h2>
-    <form method="POST" action="{% url 'task-list' %}" id="newrequest">
-        {% csrf_token %}
-        <ul>
-            <li>{{ form.radeclist.label_tag }}{{ form.radeclist }}</li>
-            <!-- <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
-            <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li> -->
-            <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}</li>
-            <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}</li>
-            <li>{{ form.use_reduced }}{{ form.use_reduced.label_tag }}</li>
+            <li>
+              <a href="/?format=api" rel="nofollow">api</a>
+            </li>
         </ul>
-        <input class="btn btn-info" type="submit" value="Request" />
-    </form>
 
-    <h2>Previous requests</h2>
-    <ul id="tasks">
-
-    {% for task in tasks %}
-        {% if task.finished %}
-        <li class="item-row finished">
-            <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
-        {% else %}
-        <li class="item-row queued">
-            <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
-        {% endif %}
-            Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
-            Queued at: {{task.timestamp}}<br/>
-            RA DEC: {{task.ra}} {{task.dec}}<br/>
-
-            {% if task.mjd_min or task.mjd_max %}
-                MJD range: [{{task.mjd_min}}, {{task.mjd_max}}]<br/>
-            {% endif %}
-
-            {% if task.finished %}
-            Finished<br/>
-            <a class="results btn btn-sm" href="/{{task.get_localresultfile}}">Results</a>
+        <ul class="nav navbar-nav pull-right">
+          {% block userlinks %}
+            {% if user.is_authenticated %}
+              {% optional_logout request user %}
             {% else %}
-            Queued
+              {% optional_login request %}
             {% endif %}
-            <!-- Email: {{task.user.email}} -->
-        </li>
-    {% endfor %}
+          {% endblock %}
+        </ul>
+      </div>
+    </div>
+  {% endblock %}
 
-    </ul>
+
+    <div class="newrequest">
+        <h2>New request</h2>
+        <form method="POST" action="{% url 'task-list' %}" id="newrequest">
+            {% csrf_token %}
+            <ul>
+                <li>{{ form.radeclist.label_tag }}{{ form.radeclist }}</li>
+                <!-- <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
+                <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li> -->
+                <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}</li>
+                <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}</li>
+                <li>{{ form.use_reduced }}{{ form.use_reduced.label_tag }}</li>
+            </ul>
+            <input class="btn btn-info" type="submit" value="Request" />
+        </form>
+    </div>
+
+    <div id="tasklist">
+        <h2>Previous requests</h2>
+        <ul id="tasks">
+
+        {% for task in tasks %}
+            {% if task.finished %}
+            <li class="item-row finished">
+                <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
+            {% else %}
+            <li class="item-row queued">
+                <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+            {% endif %}
+                Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
+                Queued at: {{task.timestamp}}<br/>
+                RA DEC: {{task.ra}} {{task.dec}}<br/>
+
+                {% if task.mjd_min or task.mjd_max %}
+                    MJD range: [{{task.mjd_min}}, {{task.mjd_max}}]<br/>
+                {% endif %}
+
+                {% if task.finished %}
+                Finished<br/>
+                <a class="results btn btn-sm" href="/{{task.get_localresultfile}}">Results</a>
+                {% else %}
+                Queued
+                {% endif %}
+                <!-- Email: {{task.user.email}} -->
+            </li>
+        {% endfor %}
+
+        </ul>
+    </div>
 
     {% block script %}
       <script>
