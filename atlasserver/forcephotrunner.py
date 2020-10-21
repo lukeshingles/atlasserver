@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os
-import sqlite3
+# import sqlite3
 import subprocess
 import sys
 import time
@@ -8,8 +8,12 @@ import time
 from django.conf import settings
 from django.core.mail import EmailMessage
 from datetime import datetime
+import mysql.connector
 from pathlib import Path
 from signal import signal, SIGINT
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 remoteServer = 'atlas'
 localresultdir = Path('forcephot', 'static', 'results')
@@ -117,18 +121,28 @@ def main():
     signal(SIGINT, handler)
     # runforced("job00000", 347.38792, 15.65928, mjd_min=57313, mjd_max=57314)
 
-    with sqlite3.connect('db.sqlite3') as conn:
+    # with sqlite3.connect('db.sqlite3') as conn:
+    #     conn.row_factory = sqlite3.Row
+    with mysql.connector.connect(
+            host="127.0.0.1",
+            # port=3306,
+            database='atlasserver',
+            user=os.environ.get('DJANGO_MYSQL_USER'),
+            password=os.environ.get('DJANGO_MYSQL_PASSWORD')) as conn:
 
-        conn.row_factory = sqlite3.Row
-
-        cur = conn.cursor()
+        cur = conn.cursor(dictionary=True)
 
         # DEBUG: mark all jobs as unfinished
         # cur.execute(f"UPDATE forcephot_task SET finished=false;")
         # conn.commit()
 
         while True:
-            taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
+            # SQLite version
+            # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finished=false;")
+            taskcount = cur.fetchone()['taskcount']
+
             if taskcount == 0:
                 log(f'Waiting for tasks', end='\r')
             else:
@@ -143,7 +157,11 @@ def main():
                 log("Starting job", task)
                 taskid = task['id']
 
-                if localresultfile := runforced(**task):
+                runforced_starttime = time.perf_counter()
+                localresultfile = runforced(**task)
+                runforced_duration = time.perf_counter() - runforced_starttime
+
+                if localresultfile:
                     log(f'Sending email to {task["email"]} containing {localresultfile}')
 
                     message = EmailMessage(
@@ -160,7 +178,9 @@ def main():
                     conn.commit()
                     cur2.close()
                 else:
-                    log("ERROR: Task not completed successfully.")
+                    waittime = 10
+                    log(f"ERROR: Task not completed successfully. Waiting {waittime} seconds before retrying...")
+                    time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
             if taskcount == 0:
                 time.sleep(5)
