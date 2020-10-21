@@ -14,14 +14,8 @@ body {
     background-color: white;
     border-radius: 0.5em;
     box-shadow: 5px 5px 7px 7px rgba(0,0,0,0.15);
-    font-size: 19px;
+    font-size: 18px;
     height: auto;
-}
-
-input {
-    padding: 0.1em 10px;
-    margin: 8px 0;
-    box-sizing: border-box;
 }
 
 input::placeholder {
@@ -60,18 +54,31 @@ ul#tasks li.finished {
     float: right;
 }
 
-form li div:nth-child(1) {
-    display: inline-block;
-    text-align: right;
-    width: 5em;
-    margin-right: 10px;
-    vertical-align: center;
+form#newrequest li {
+    display: block;
 }
 
-form li div:nth-child(2) {
-    display: inline;
-    width: auto;
+form#newrequest li > * {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+form#newrequest li > *:nth-child(1) {
+    text-align: right;
+    width: 7em;
+    margin-right: 10px;
+}
+
+form#newrequest li > *:nth-child(2) {
     text-align: left;
+    width: 15em;
+}
+
+input, textarea {
+    display:inline-block;
+    padding: 0.3em 0.3em;
+    margin: 8px 0;
+    box-sizing: border-box;
 }
 
 ul {
@@ -89,4 +96,3 @@ a.results {
     margin-top: 1em;
     width: 9em;
 }
-</style>

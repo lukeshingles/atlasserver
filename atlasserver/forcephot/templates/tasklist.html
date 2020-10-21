@@ -59,14 +59,15 @@
 
 
     <h2>New request</h2>
-    <form method="POST" action="{% url 'task-list' %}">
+    <form method="POST" action="{% url 'task-list' %}" id="newrequest">
         {% csrf_token %}
         <ul>
-            <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
-            <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li>
-            <li><div>{{ form.mjd_min.label_tag }}</div><div>{{ form.mjd_min }}</div></li>
-            <li><div>{{ form.mjd_max.label_tag }}</div><div>{{ form.mjd_max }}</div></li>
-            <li><div>{{ form.use_reduced }}</div><div>{{ form.use_reduced.label_tag }}</div></li>
+            <li>{{ form.radeclist.label_tag }}{{ form.radeclist }}</li>
+            <!-- <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
+            <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li> -->
+            <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}</li>
+            <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}</li>
+            <li>{{ form.use_reduced }}{{ form.use_reduced.label_tag }}</li>
         </ul>
         <input class="btn btn-info" type="submit" value="Request" />
     </form>
@@ -83,8 +84,7 @@
             <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
         {% endif %}
             Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
-            RA: {{task.ra}}<br/>
-            DEC: {{task.dec}}<br/>
+            RA DEC: {{task.ra}} {{task.dec}}<br/>
             {% if task.finished %}
             Finished<br/>
             <a class="results btn btn-sm" href="/{{task.get_localresultfile}}">Results</a>
