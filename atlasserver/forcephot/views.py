@@ -61,7 +61,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):
-        print(request.data)
 
         if 'radeclist' not in request.data:
             datalist = [request.data]
@@ -73,7 +72,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 datalist.append(firstrow)
 
             for line in firstrow['radeclist'].split('\n'):
-                print(f"{line=}")
                 row = line.replace(',', ' ').split()
                 if len(row) >= 2:
                     newrow = firstrow.copy()
@@ -83,13 +81,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     print(f"{newrow=}")
                     datalist.append(newrow)
 
-        print(datalist)
-
         serializer = self.get_serializer(data=datalist, many=True)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        print(headers)
         # return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
         return redirect('/', status=status.HTTP_201_CREATED, headers=headers)
 
