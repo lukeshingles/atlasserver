@@ -19,6 +19,7 @@ from django.urls import path, include
 from django.contrib.auth.models import User
 from rest_framework import routers, serializers, viewsets
 from . import views
+from django.conf.urls import url
 
 
 # Routers provide an easy way of automatically determining the URL conf.
@@ -28,7 +29,8 @@ router.register(r'', views.ForcePhotTaskViewSet)
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path('', views.index, name="index"),
+    path('', views.index, name="home"),
     path('queue', include(router.urls)),
     path('queue/delete/<str:pk>/', views.deleteTask, name="delete"),
+    url(r'^signup/$', views.signup, name='signup'),
 ]

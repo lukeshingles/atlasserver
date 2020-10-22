@@ -1,8 +1,10 @@
-{% extends "template.html" %}
+{% extends "base.html" %}
 
 {% block content %}
-    <h2>ATLAS Forced Photometry Job Queue</h2>
+    <h2>Job Queue</h2>
+
     <div class="newrequest">
+        <div class="task">
         <h3>New request</h3>
         <form method="POST" action="{% url 'task-list' %}" id="newrequest">
             {% csrf_token %}
@@ -16,18 +18,19 @@
             </ul>
             <input class="btn btn-info" type="submit" value="Request" />
         </form>
+        </div>
     </div>
 
     <div id="tasklist">
-        <h3>Previous requests</h3>
-        <ul id="tasks">
+        <!-- <h3>Previous requests</h3> -->
+        <ul class="tasks">
 
         {% for task in tasks %}
             {% if task.finished %}
-            <li class="item-row finished">
+            <li class="task finished">
                 <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
             {% else %}
-            <li class="item-row queued">
+            <li class="task queued">
                 <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
             {% endif %}
                 Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
@@ -40,7 +43,7 @@
 
                 {% if task.finished %}
                 Finished<br/>
-                <a class="results btn btn-sm" href="/{{task.get_localresultfile}}">Results</a>
+                <a class="results btn btn-info" href="/{{task.get_localresultfile}}">Results</a>
                 {% else %}
                 Queued
                 {% endif %}

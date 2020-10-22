@@ -14,8 +14,8 @@
 
 
       <link rel="stylesheet" type="text/css" href="{% static "main.css" %}"/>
-      <!-- <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/> -->
-      <!-- <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/> -->
+      <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/>
+      <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/>
       <style>
 html {
     /* background-color: #132C48; */
@@ -48,26 +48,21 @@ input::placeholder {
     background-color: #6BA3E8;
 }
 
-ul#tasks li {
-    /* width: 200px; */
-    background-color: rgb(100, 150, 200);
-    /* background-color: rgb(128,128,128); */
-    /* background-color: #ffae19; */
-    margin: 1em 0;
+.task {
+    margin: 0 0 1.0em 0;
     padding: 1em;
-    /* box-shadow: 10px -1px 0.8em -4px rgba(0,0,0,0.75); */
     border-radius: 0.5em;
     border: 0.1em solid rgb(0, 0, 0, 0.6);
+    background-color: white;
 }
 
-ul#tasks li.queued {
+ul.tasks li.queued {
     background-color: rgba(0, 0, 0, 0.1);
     border: none;
     color: grey;
 }
 
-ul#tasks li.finished {
-    background-color: white;
+ul.tasks li.finished {
 }
 
 .btn-danger {
@@ -99,7 +94,7 @@ form#newrequest li > *:nth-child(1) {
 
 form#newrequest li > *:nth-child(2) {
     text-align: left;
-    width: 15em;
+    width: 14em;
 }
 
 input, textarea {
@@ -138,8 +133,17 @@ div.navbar {
 }
 
 h2 {
-  margin-top: 1em;
+  margin-top: 1.5em;
   margin-bottom: 1em;
+}
+
+h3 {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+
+input[type=submit] {
+  width: 100%;
 }
       </style>
     {% endblock %}
@@ -152,23 +156,17 @@ h2 {
       <div class="container">
         <span>
           {% block branding %}
-            <h1><a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'>
-                ATLAS Forced Photometry
-            </a></h1>
+            <h1><a class='navbar-brand' rel="nofollow" href='{% url 'home' %}'>ATLAS Forced Photometry</a></h1>
           {% endblock %}
         </span>
 
-
         <ul class="nav navbar-nav">
-            <li>
-              <a href="{% url 'task-list' %}" rel="nofollow">Queue</a>
-            </li>
-            <li>
-              <a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a>
-            </li>
-            <li>
-              <a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a>
-            </li>
+          {% if user.is_authenticated %}
+            <li><a href="{% url 'task-list' %}" rel="nofollow">Queue</a></li>
+            <li><a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a></li>
+            <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li>
+          {% else %}
+          {% endif %}
         </ul>
 
         <ul class="nav navbar-nav pull-right">
@@ -176,6 +174,7 @@ h2 {
             {% if user.is_authenticated %}
               {% optional_logout request user %}
             {% else %}
+              <li><a href="{% url 'signup' %}">Sign-up</a></li>
               {% optional_login request %}
             {% endif %}
           {% endblock %}
@@ -189,5 +188,25 @@ h2 {
     {% block content %}
     {% endblock %}
     </div>
+
+    {% block script %}
+      <script>
+        window.drf = {
+          csrfHeaderName: "{{ csrf_header_name|default:'X-CSRFToken' }}",
+          csrfToken: "{% if request %}{{ csrf_token }}{% endif %}"
+        };
+      </script>
+      <script src="{% static "rest_framework/js/jquery-3.5.1.min.js" %}"></script>
+      <script src="{% static "rest_framework/js/ajax-form.js" %}"></script>
+      <script src="{% static "rest_framework/js/csrf.js" %}"></script>
+      <script src="{% static "rest_framework/js/bootstrap.min.js" %}"></script>
+      <script src="{% static "rest_framework/js/prettify-min.js" %}"></script>
+      <script src="{% static "rest_framework/js/default.js" %}"></script>
+      <script>
+        $(document).ready(function() {
+          $('form').ajaxForm();
+        });
+      </script>
+    {% endblock %}
 </body>
 </html>

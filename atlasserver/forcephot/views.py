@@ -1,5 +1,9 @@
 import os
 
+from django.contrib.auth import login, authenticate
+from django.contrib.auth.forms import UserCreationForm
+from django.shortcuts import render, redirect
+
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
 from django.http import HttpResponse
@@ -52,7 +56,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     queryset = Task.objects.all().order_by('-timestamp')
     serializer_class = ForcePhotTaskSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+    # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
     throttle_scope = 'forcephottasks'
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
@@ -170,3 +175,18 @@ def index(request):
     # context = {'item': item}
     # return render(request, 'tasks/delete.html', context)
     #     return Response(serializer.data)
+
+
+def signup(request):
+    if request.method == 'POST':
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            form.save()
+            username = form.cleaned_data.get('username')
+            raw_password = form.cleaned_data.get('password1')
+            user = authenticate(username=username, password=raw_password)
+            login(request, user)
+            return redirect('home')
+    else:
+        form = UserCreationForm()
+    return render(request, 'signup.html', {'form': form})
