@@ -30,6 +30,9 @@ def get_localresultfile(id):
 
 
 def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
+    filename = f'job{id:05d}.txt'
+    remoteresultdir = Path('~/atlasserver/results/')
+    remoteresultfile = Path(remoteresultdir, filename)
     localresultfile = get_localresultfile(id)
 
     atlascommand = "nice -n 19 "
