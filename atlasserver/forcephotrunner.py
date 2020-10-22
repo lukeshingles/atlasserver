@@ -24,8 +24,6 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
 def get_localresultfile(id):
     filename = f'job{id:05d}.txt'
-    remoteresultdir = Path('~/atlasserver/results/')
-    remoteresultfile = Path(remoteresultdir, filename)
     return Path(localresultdir, filename)
 
 
