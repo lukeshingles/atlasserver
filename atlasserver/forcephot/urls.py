@@ -29,7 +29,7 @@ router.register(r'', views.ForcePhotTaskViewSet)
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path('', views.index, name="home"),
+    path('', views.index, name="index"),
     path('queue', include(router.urls)),
     path('queue/delete/<str:pk>/', views.deleteTask, name="delete"),
     url(r'^signup/$', views.signup, name='signup'),
