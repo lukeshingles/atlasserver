@@ -6,6 +6,7 @@ import subprocess
 import sqlalchemy
 import sys
 import time
+import atlasserver.settings as djangosettings
 
 from django.conf import settings
 from django.core.mail import EmailMessage
@@ -170,11 +171,11 @@ def main():
     #     conn.row_factory = sqlite3.Row
 
     conn = mysql.connector.connect(
-            host="127.0.0.1",
-            # port=3306,
-            database='atlasserver',
-            user=os.environ.get('DJANGO_MYSQL_USER'),
-            password=os.environ.get('DJANGO_MYSQL_PASSWORD'))
+        host=djangosettings.DATABASES['default']['HOST'],
+        port=djangosettings.DATABASES['default']['PORT'],
+        database=djangosettings.DATABASES['default']['NAME'],
+        user=djangosettings.DATABASES['default']['USER'],
+        password=djangosettings.DATABASES['default']['PASSWORD'])
 
     # engine = sqlalchemy.create_engine(
     #     f"mysql+mysqlconnector://{os.environ.get('DJANGO_MYSQL_USER')}:{os.environ.get('DJANGO_MYSQL_PASSWORD')}@127.0.0.1/atlasserver")
