@@ -85,7 +85,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         # return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-        return redirect('/', status=status.HTTP_201_CREATED, headers=headers)
+        return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         # if self.request.user and self.request.user.is_authenticated:
@@ -155,7 +155,17 @@ def deleteTask(request, pk):
     item = Task.objects.get(id=pk)
 
     item.delete()
-    return redirect('/')
+    return redirect(reverse('task-list'))
+
+    # context = {'item': item}
+    # return render(request, 'tasks/delete.html', context)
+    #     return Response(serializer.data)
+
+
+def index(request):
+    template_name = 'index.html'
+    # return redirect('/queue')
+    return render(request, 'index.html')
 
     # context = {'item': item}
     # return render(request, 'tasks/delete.html', context)
