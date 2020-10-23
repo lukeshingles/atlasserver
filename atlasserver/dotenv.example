@@ -1,8 +1,9 @@
+# rename this file to .env after editing
+
+DJANGO_SECRET_KEY = ''
 
 # to generate a new key run:
 # python3 manage.py shell -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-
-DJANGO_SECRET_KEY = ''
 
 EMAIL_HOST_USER = 'user@server.com'
 EMAIL_HOST_PASSWORD = 'PASSWORD'
