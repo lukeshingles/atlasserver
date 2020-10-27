@@ -174,7 +174,7 @@ def resultdesc(request):
     return render(request, template_name)
 
 
-def signup(request):
+def register(request):
     if request.method == 'POST':
         form = UserCreationForm(request.POST)
         if form.is_valid():
@@ -186,4 +186,4 @@ def signup(request):
             return redirect(reverse('task-list'))
     else:
         form = UserCreationForm()
-    return render(request, 'signup.html', {'form': form})
+    return render(request, 'register.html', {'form': form})

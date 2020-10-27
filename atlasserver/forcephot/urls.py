@@ -32,6 +32,6 @@ urlpatterns = [
     path('', views.index, name="index"),
     path('queue', include(router.urls)),
     path('queue/delete/<str:pk>/', views.deleteTask, name="delete"),
-    url(r'^signup/$', views.signup, name='signup'),
+    url(r'^register/$', views.register, name='register'),
     path('resultdesc', views.resultdesc, name="resultdesc"),
 ]
