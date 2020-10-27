@@ -1,3 +1,4 @@
+{% extends "rest_framework/api.html" %}
 {% load static %}
 {% load i18n %}
 {% load rest_framework %}
@@ -12,7 +13,7 @@
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/bootstrap-tweaks.css" %}"/>
       {% endblock %}
 
-      <link rel="stylesheet" type="text/css" href="{% static "main.css" %}"/>
+      <!-- <link rel="stylesheet" type="text/css" href="{% static "main.css" %}"/> -->
       <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/>
       <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/>
       <style>

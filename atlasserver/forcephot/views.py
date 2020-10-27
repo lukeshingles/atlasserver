@@ -162,19 +162,16 @@ def deleteTask(request, pk):
     item.delete()
     return redirect(reverse('task-list'))
 
-    # context = {'item': item}
-    # return render(request, 'tasks/delete.html', context)
-    #     return Response(serializer.data)
-
 
 def index(request):
     template_name = 'index.html'
     # return redirect('/queue')
-    return render(request, 'index.html')
+    return render(request, template_name)
 
-    # context = {'item': item}
-    # return render(request, 'tasks/delete.html', context)
-    #     return Response(serializer.data)
+
+def resultdesc(request):
+    template_name = 'resultdesc.html'
+    return render(request, template_name)
 
 
 def signup(request):
