@@ -2,38 +2,3 @@
 {% load i18n %}
 {% load rest_framework %}
 
-{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}
-
-{% block navbar %}
-  <div class="navbar navbar-static-top {% block bootstrap_navbar_variant %}navbar-inverse{% endblock %}"
-       role="navigation" aria-label="{% trans "navbar" %}">
-    <div class="container">
-      <span>
-        {% block branding %}
-          <h1><a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'>ATLAS Forced Photometry</a></h1>
-        {% endblock %}
-      </span>
-
-      <ul class="nav navbar-nav">
-        {% if user.is_authenticated %}
-          <li><a href="{% url 'index' %}" rel="nofollow">Home</a></li>
-          <li><a href="{% url 'resultdesc' %}" rel="nofollow">Description</a></li>
-          <li><a href="{% url 'task-list' %}" rel="nofollow">Queue</a></li>
-          <li><a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a></li>
-          <!-- <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li> -->
-        {% endif %}
-      </ul>
-
-      <ul class="nav navbar-nav pull-right">
-        {% block userlinks %}
-          {% if user.is_authenticated %}
-            {% optional_logout request user %}
-          {% else %}
-            <li><a href="{% url 'register' %}">Register</a></li>
-            {% optional_login request %}
-          {% endif %}
-        {% endblock %}
-      </ul>
-    </div>
-  </div>
-{% endblock %}
