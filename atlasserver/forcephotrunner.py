@@ -170,24 +170,24 @@ def main():
     # with sqlite3.connect('db.sqlite3') as conn:
     #     conn.row_factory = sqlite3.Row
 
-    conn = mysql.connector.connect(
-        host=djangosettings.DATABASES['default']['HOST'],
-        port=djangosettings.DATABASES['default']['PORT'],
-        database=djangosettings.DATABASES['default']['NAME'],
-        user=djangosettings.DATABASES['default']['USER'],
-        password=djangosettings.DATABASES['default']['PASSWORD'])
-
     # engine = sqlalchemy.create_engine(
     #     f"mysql+mysqlconnector://{os.environ.get('DJANGO_MYSQL_USER')}:{os.environ.get('DJANGO_MYSQL_PASSWORD')}@127.0.0.1/atlasserver")
     # conn = engine.raw_connection()
-
-    cur = conn.cursor(dictionary=True)
 
     # DEBUG: mark all jobs as unfinished
     # cur.execute(f"UPDATE forcephot_task SET finished=false;")
     # conn.commit()
 
     while True:
+        conn = mysql.connector.connect(
+            host=djangosettings.DATABASES['default']['HOST'],
+            port=djangosettings.DATABASES['default']['PORT'],
+            database=djangosettings.DATABASES['default']['NAME'],
+            user=djangosettings.DATABASES['default']['USER'],
+            password=djangosettings.DATABASES['default']['PASSWORD'])
+
+        cur = conn.cursor(dictionary=True)
+
         # SQLite version
         # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
 
@@ -243,10 +243,10 @@ def main():
 
         if taskcount == 0:
             time.sleep(5)
+        conn.commit()
+        cur.close()
 
-    cur.close()
-
-    conn.close()
+        conn.close()
 
 
 if __name__ == '__main__':
