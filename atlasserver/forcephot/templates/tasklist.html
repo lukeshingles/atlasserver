@@ -1,4 +1,5 @@
 {% extends "rest_framework/base.html" %}
+{% load static %}
 
 {% block content %}
     <h1>Job Queue</h1>
@@ -43,7 +44,7 @@
 
                 {% if task.finished %}
                 Finished<br/>
-                <a class="results btn btn-info" href="/{{task.get_localresultfile}}">Results</a>
+                <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Results</a>
                 {% else %}
                 Queued
                 {% endif %}

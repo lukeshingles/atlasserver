@@ -22,7 +22,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_result_url(self, obj):
         if obj.get_localresultfile():
             request = self.context.get('request')
-            return request.build_absolute_uri('/' + obj.get_localresultfile())
+            return request.build_absolute_uri('/static/' + obj.get_localresultfile())
 
         return None
 

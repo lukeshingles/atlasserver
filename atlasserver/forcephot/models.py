@@ -15,7 +15,7 @@ class Task(models.Model):
 
     def get_localresultfile(self):
         if self.finished:
-            return f'static/results/job{int(self.id):05d}.txt'
+            return f'results/job{int(self.id):05d}.txt'
 
         return None
 
@@ -50,7 +50,7 @@ class Result(models.Model):
 
     def get_localresultfile(self):
         if self.finished:
-            return f'static/results/job{int(self.id):05d}.txt'
+            return f'results/job{int(self.id):05d}.txt'
 
         return None
 

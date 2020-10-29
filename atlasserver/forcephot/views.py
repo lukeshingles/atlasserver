@@ -66,7 +66,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):
-
         if 'radeclist' not in request.data:
             datalist = [request.data]
         else:
@@ -115,7 +114,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         if instance.get_localresultfile():
-            localresultfile = os.path.join('atlasserver', 'forcephot', instance.get_localresultfile())
+            localresultfile = os.path.join('forcephot', 'static', instance.get_localresultfile())
             if localresultfile and os.path.exists(localresultfile):
                 os.remove(localresultfile)
         instance.delete()
@@ -158,6 +157,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
 def deleteTask(request, pk):
     item = Task.objects.get(id=pk)
+    if item.get_localresultfile():
+        localresultfullpath = os.path.join('forcephot', 'static', item.get_localresultfile())
+        if localresultfullpath and os.path.exists(localresultfullpath):
+            os.remove(localresultfullpath)
 
     item.delete()
     return redirect(reverse('task-list'))
