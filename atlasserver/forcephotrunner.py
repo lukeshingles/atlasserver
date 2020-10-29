@@ -224,7 +224,7 @@ def main():
                     message = EmailMessage(
                         subject='ATLAS forced photometry results',
                         body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
-                        from_email='luke.shingles+alas@gmail.com',
+                        from_email=os.environ.get('EMAIL_HOST_USER'),
                         to=[task["email"]],
                     )
                     message.attach_file(localresultfile)
