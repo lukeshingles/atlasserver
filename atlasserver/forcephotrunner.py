@@ -216,14 +216,14 @@ def main():
 
             localresultfile = get_localresultfile(taskid)
             if localresultfile and os.path.exists(localresultfile):
-                ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+                #ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
 
                 log(f'Sending email to {task["email"]} containing {localresultfile}')
 
                 message = EmailMessage(
                     subject='ATLAS forced photometry results',
                     body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
-                    from_email='luke.shingles+alas@gmail.com',
+                    from_email='atlasforced@gmail.com',
                     to=[task["email"]],
                 )
                 message.attach_file(localresultfile)
