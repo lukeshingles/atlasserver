@@ -216,7 +216,7 @@ def main():
 
             localresultfile = get_localresultfile(taskid)
             if localresultfile and os.path.exists(localresultfile):
-                ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+                # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
 
                 log(f'Sending email to {task["email"]} containing {localresultfile}')
 
