@@ -167,9 +167,9 @@
             </span>
 
             <ul class="nav navbar-nav">
-              {% if user.is_authenticated %}
                 <li><a href="{% url 'index' %}" rel="nofollow">Home</a></li>
                 <li><a href="{% url 'resultdesc' %}" rel="nofollow">Description</a></li>
+              {% if user.is_authenticated %}
                 <li><a href="{% url 'task-list' %}" rel="nofollow">Queue</a></li>
                 <li><a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a></li>
                 <!-- <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li> -->
