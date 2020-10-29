@@ -200,7 +200,7 @@ def main():
             log(f'Unfinished jobs in queue: {taskcount}')
 
         cur.execute(
-            "SELECT t.*, a.email from forcephot_task as t LEFT JOIN auth_user as a"
+            "SELECT t.*, a.email, a.username from forcephot_task as t LEFT JOIN auth_user as a"
             " on user_id = a.id WHERE finished=false ORDER BY timestamp ASC LIMIT 1;")
 
         for taskrow in cur:
@@ -216,18 +216,21 @@ def main():
 
             localresultfile = get_localresultfile(taskid)
             if localresultfile and os.path.exists(localresultfile):
-                #ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+                # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
 
-                log(f'Sending email to {task["email"]} containing {localresultfile}')
+                if task["email"]:
+                    log(f'Sending email to {task["email"]} containing {localresultfile}')
 
-                message = EmailMessage(
-                    subject='ATLAS forced photometry results',
-                    body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
-                    from_email='atlasforced@gmail.com',
-                    to=[task["email"]],
-                )
-                message.attach_file(localresultfile)
-                message.send()
+                    message = EmailMessage(
+                        subject='ATLAS forced photometry results',
+                        body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
+                        from_email=os.environ.get('EMAIL_HOST_USER'),
+                        to=[task["email"]],
+                    )
+                    message.attach_file(localresultfile)
+                    message.send()
+                else:
+                    log(r'User {task["username"]} has no email address.')
 
                 cur2 = conn.cursor()
                 cur2.execute(f"UPDATE forcephot_task SET finished=true WHERE id={taskid};")
