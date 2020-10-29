@@ -1,5 +1,6 @@
 import os
 
+import atlasserver.settings as djangosettings
 from django.contrib.auth import login, authenticate
 from django.contrib.auth.forms import UserCreationForm
 from django.shortcuts import render, redirect
@@ -114,7 +115,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         if instance.get_localresultfile():
-            localresultfile = os.path.join('forcephot', 'static', instance.get_localresultfile())
+            localresultfile = os.path.join(djangosettings.STATIC_ROOT, instance.get_localresultfile())
             if localresultfile and os.path.exists(localresultfile):
                 os.remove(localresultfile)
         instance.delete()
@@ -158,7 +159,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 def deleteTask(request, pk):
     item = Task.objects.get(id=pk)
     if item.get_localresultfile():
-        localresultfullpath = os.path.join('forcephot', 'static', item.get_localresultfile())
+        localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.get_localresultfile())
         if localresultfullpath and os.path.exists(localresultfullpath):
             os.remove(localresultfullpath)
 

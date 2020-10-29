@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 remoteServer = 'atlas'
-localresultdir = Path('forcephot', 'static', 'results')
+localresultdir = Path(djangosettings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
 
@@ -45,7 +45,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
         atlascommand += f" m1={float(mjd_max)}"
     if kwargs['use_reduced']:
         atlascommand += " red=1"
-    atlascommand += " dodb=1 parallel=8"
+    atlascommand += " dodb=1 parallel=16"
 
     # for debugging because force.sh takes a long time to run
     # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
@@ -92,7 +92,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     #     if stderrline:
     #         log(f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
-    copycommand = f"scp {remoteServer}:{remoteresultfile} {localresultfile}"
+    copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"'
     log(copycommand)
 
     p = subprocess.Popen(copycommand,
