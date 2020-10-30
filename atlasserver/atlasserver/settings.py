@@ -29,7 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 # Application definition
 
@@ -137,7 +137,7 @@ STATIC_URL = '/sne/atlasforced/static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
-USE_X_FORWARDED_HOST = False
+USE_X_FORWARDED_HOST = True
 
 # When set to True, if the request URL does not match any of the patterns in the URLconf and it doesn’t end in a slash,
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
