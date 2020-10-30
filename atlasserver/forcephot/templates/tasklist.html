@@ -1,7 +1,10 @@
 {% extends "rest_framework/base.html" %}
 {% load static %}
+{% load i18n %}
+{% load rest_framework %}
 
 {% block content %}
+
     <h1>Job Queue</h1>
 
     <div class="newrequest">
@@ -15,6 +18,7 @@
                 <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li> -->
                 <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}</li>
                 <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}</li>
+                <li>{{ form.comment.label_tag }}{{ form.comment }}</li>
                 <li>{{ form.use_reduced }}{{ form.use_reduced.label_tag }}</li>
             </ul>
             <input class="btn btn-info" type="submit" value="Request" />
@@ -36,7 +40,11 @@
             {% endif %}
                 Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
                 Queued at: {{task.timestamp}}<br/>
+                User: {{task.user.username}} ({{task.user.email}})<br/>
                 RA DEC: {{task.ra}} {{task.dec}}<br/>
+                {% if task.comment %}
+                Comment: {{task.comment}}<br/>
+                {% endif %}
 
                 {% if task.mjd_min or task.mjd_max %}
                     MJD range: [{{task.mjd_min}}, {{task.mjd_max}}]<br/>
@@ -48,7 +56,6 @@
                 {% else %}
                 Queued
                 {% endif %}
-                <!-- Email: {{task.user.email}} -->
             </li>
         {% endfor %}
 
