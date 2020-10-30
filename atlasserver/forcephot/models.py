@@ -11,25 +11,7 @@ calendar in 1582. No support for proleptic Gregorian/Julian calendars.
 :Author: Matt Davis
 :Website: http://github.com/jiffyclub
 """
-def jd_to_mjd(jd):
-    """
-    Convert Julian Day to Modified Julian Day
-
-    Parameters
-    ----------
-    jd : float
-        Julian Day
-
-    Returns
-    -------
-    mjd : float
-        Modified Julian Day
-
-    """
-    return jd - 2400000.5
-
-
-def date_to_jd(year, month, day):
+def date_to_mjd(year, month, day):
     """
     Convert a date to Julian Day.
 
@@ -88,13 +70,14 @@ def date_to_jd(year, month, day):
     D = math.trunc(30.6001 * (monthp + 1))
 
     jd = B + C + D + day + 1720994.5
+    mjd = jd - 2400000.5
 
-    return jd
+    return mjd
 
 
 def get_mjd_min_default():
     date_min = datetime.date.today() - datetime.timedelta(days=30)
-    return jd_to_mjd(date_to_jd(date_min.year, date_min.month, date_min.day))
+    return date_to_mjd(date_min.year, date_min.month, date_min.day)
 
 
 class Task(models.Model):
@@ -104,6 +87,7 @@ class Task(models.Model):
     dec = models.FloatField(null=False, blank=False, default=None)
     mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default(), verbose_name='MJD min')
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
+    # comment = models.CharField(max_length=100)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     finished = models.BooleanField(default=False)
 

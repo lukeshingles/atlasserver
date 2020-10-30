@@ -55,7 +55,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be created and deleted.
     """
-    queryset = Task.objects.all().order_by('-timestamp')
+    queryset = Task.objects.all().order_by('-timestamp').select_related('user') 
     serializer_class = ForcePhotTaskSerializer
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [permissions.IsAuthenticated]
