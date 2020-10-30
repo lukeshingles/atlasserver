@@ -87,7 +87,7 @@ class Task(models.Model):
     dec = models.FloatField(null=False, blank=False, default=None)
     mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default(), verbose_name='MJD min')
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
-    comment = models.CharField(max_length=300)
+    comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     finished = models.BooleanField(default=False)
 
