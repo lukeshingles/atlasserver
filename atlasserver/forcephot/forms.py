@@ -46,8 +46,11 @@ class AtlasServerUserCreationForm(forms.ModelForm):
 
     class Meta:
         model = User
-        fields = ("username",)
-        field_classes = {'username': django.contrib.auth.forms.UsernameField}
+        fields = ("username", "email")
+        field_classes = {
+            'username': django.contrib.auth.forms.UsernameField,
+            'email': forms.EmailField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -5,16 +5,17 @@ import atlasserver.settings as djangosettings
 from .models import Task
 
 
-class UserSerializer(serializers.HyperlinkedModelSerializer):
-    class Meta:
-        model = User
-        fields = ['url', 'username', 'email', 'groups']
-
-
-class GroupSerializer(serializers.HyperlinkedModelSerializer):
-    class Meta:
-        model = Group
-        fields = ['url', 'name']
+# class UserSerializer(serializers.HyperlinkedModelSerializer):
+#
+#     class Meta:
+#         model = User
+#         fields = ['url', 'username', 'email', 'groups']
+#
+#
+# class GroupSerializer(serializers.HyperlinkedModelSerializer):
+#     class Meta:
+#         model = Group
+#         fields = ['url', 'name']
 
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
