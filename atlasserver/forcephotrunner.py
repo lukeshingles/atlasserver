@@ -185,7 +185,8 @@ def main():
             port=djangosettings.DATABASES['default']['PORT'],
             database=djangosettings.DATABASES['default']['NAME'],
             user=djangosettings.DATABASES['default']['USER'],
-            password=djangosettings.DATABASES['default']['PASSWORD'])
+            password=djangosettings.DATABASES['default']['PASSWORD'],
+            autocommit=True)
 
         cur = conn.cursor(dictionary=True)
 
