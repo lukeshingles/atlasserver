@@ -1,5 +1,7 @@
 # atlasserver
 
+The is the source code respository for https://psweb.mp.qub.ac.uk/sne/atlasforced/
+
 This is the ATLAS forced photometry server, which provides full public
 access to photometric measurements over the full history of ATLAS
 survey. After registration, a user can request forced photometry at
