@@ -50,6 +50,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     # for debugging because force.sh takes a long time to run
     # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
+    atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}"
 
     log(f"Executing on {remoteServer}: {atlascommand}")
