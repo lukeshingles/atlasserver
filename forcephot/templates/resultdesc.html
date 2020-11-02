@@ -1,75 +1,78 @@
 {% extends "rest_framework/base.html" %}
 
 {% block content %}
-<h1>Results Description</h1>
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+    <h1>Output Description</h1>
+    </div>
 
-<p>The photometric measurements are from a custom built
-point-spread-function fitting routine (written in C) called tphot,
-and is based on the algorithms discussed in <a href="https://ui.adsabs.harvard.edu/abs/2011PASP..123...58T/abstract">Tonry (2011)</a> and
-<a href="https://ui.adsabs.harvard.edu/abs/2013PASP..125..456S/abstract">Sonnett et al. (2013)</a>.</p>
+    <p>The photometric measurements are from a custom built
+    point-spread-function fitting routine (written in C) called tphot,
+    and is based on the algorithms discussed in <a href="https://ui.adsabs.harvard.edu/abs/2011PASP..123...58T/abstract">Tonry (2011)</a> and
+    <a href="https://ui.adsabs.harvard.edu/abs/2013PASP..125..456S/abstract">Sonnett et al. (2013)</a>.</p>
 
-<p>The calibrated target image allows a calculation of the PSF shape and aperture correction
-(called apfit) as a function of the location on the CCD, and applies the apfit flux correction
-accordingly. That PSF is used on the difference image (when
-difference image photometry is requested) or the target image (when
-that mode is requested).</p>
+    <p>The calibrated target image allows a calculation of the PSF shape and aperture correction
+    (called apfit) as a function of the location on the CCD, and applies the apfit flux correction
+    accordingly. That PSF is used on the difference image (when
+    difference image photometry is requested) or the target image (when
+    that mode is requested).</p>
 
-<p>The output of our forced photometry measurements is a 19 column plain
-text file with the following column entries:</p>
+    <p>The output of our forced photometry measurements is a 19 column plain
+    text file with the following column entries:</p>
 
-<table>
-    <tr><td>MJD</td><td>Mean Julian date of the start of the exposure (all exposures are 30s)</td></tr>
-    <tr><td>m</td><td>AB magnitude corresponding to the flux measurement</td></tr>
-    <tr><td>dm</td><td>error on m (in magnitudes)</td></tr>
-    <tr><td>uJy</td><td>flux in microJanskys</td></tr>
-    <tr><td>duJy</td><td>error on uJy</td></tr>
-    <tr><td>F</td><td>the ATLAS filter (typically c for cyan, or o for orange)</td></tr>
-    <tr><td>err</td><td>tphot error code normally 0 for the 2 parameter fit. </td></tr>
-    <tr><td>chi/N</td><td>reduced chi^2 of the PSF fit</td></tr>
-    <tr><td>RA</td><td>RA at which the PSF is forced  (decimal degrees)</td></tr>
-    <tr><td>Dec</td><td>DEC at which the PSF is forced  (decimal degrees)</td></tr>
-    <tr><td>x</td><td>x-pixel value at which the PSF is forced</td></tr>
-    <tr><td>y</td><td>y-pixel value at which the PSF is forced</td></tr>
-    <tr><td>maj</td><td>semi-major axis of the PSF fit from tphot (in pixels; 1.86" per pix)</td></tr>
-    <tr><td>min</td><td>semi-minor axis of the PSF fit from tphot (in pixels; 1.86" per pix)</td></tr>
-    <tr><td>phi</td><td>orientation of the PSF, measured counter-clockwise with respect to RA direction (CCD x-axis)</td></tr>
-    <tr><td>apfit</td><td>the aperture correction (in magnitudes) required by tphot</td></tr>
-    <tr><td>Sky</td><td>sky mag in 1 sq arcsec</td></tr>
-    <tr><td>ZP</td><td>zeropoint AB magnitude of image</td></tr>
-    <tr><td>Obs</td><td>the ATLAS data file on which the measurements were made</td></tr>
-</table>
+    <table>
+        <tr><td>MJD</td><td>Mean Julian date of the start of the exposure (all exposures are 30s)</td></tr>
+        <tr><td>m</td><td>AB magnitude corresponding to the flux measurement</td></tr>
+        <tr><td>dm</td><td>error on m (in magnitudes)</td></tr>
+        <tr><td>uJy</td><td>flux in microJanskys</td></tr>
+        <tr><td>duJy</td><td>error on uJy</td></tr>
+        <tr><td>F</td><td>the ATLAS filter (typically c for cyan, or o for orange)</td></tr>
+        <tr><td>err</td><td>tphot error code normally 0 for the 2 parameter fit. </td></tr>
+        <tr><td>chi/N</td><td>reduced chi^2 of the PSF fit</td></tr>
+        <tr><td>RA</td><td>RA at which the PSF is forced  (decimal degrees)</td></tr>
+        <tr><td>Dec</td><td>DEC at which the PSF is forced  (decimal degrees)</td></tr>
+        <tr><td>x</td><td>x-pixel value at which the PSF is forced</td></tr>
+        <tr><td>y</td><td>y-pixel value at which the PSF is forced</td></tr>
+        <tr><td>maj</td><td>semi-major axis of the PSF fit from tphot (in pixels; 1.86" per pix)</td></tr>
+        <tr><td>min</td><td>semi-minor axis of the PSF fit from tphot (in pixels; 1.86" per pix)</td></tr>
+        <tr><td>phi</td><td>orientation of the PSF, measured counter-clockwise with respect to RA direction (CCD x-axis)</td></tr>
+        <tr><td>apfit</td><td>the aperture correction (in magnitudes) required by tphot</td></tr>
+        <tr><td>Sky</td><td>sky mag in 1 sq arcsec</td></tr>
+        <tr><td>ZP</td><td>zeropoint AB magnitude of image</td></tr>
+        <tr><td>Obs</td><td>the ATLAS data file on which the measurements were made</td></tr>
+    </table>
 
-<p>When the forced photometry runs in difference imaging mode, it is
-measuring the difference (initially in ADU) between the target and the
-reference frame. This may be significantly positive (excess flux in
-the target frame over the reference), negative (flux deficit in the
-target compared to the reference) or close to zero (no significant
-difference between the two). We calibrate this flux in microJanskys
-(with an error) and these values are the most meaningful when the user
-is interested in difference imaging measurements. The photometric
-calibration comes from the zeropoint in the input image which is based
-on stars from the ATLAS Refcat2 (<a href="https://ui.adsabs.harvard.edu/abs/2018ApJ...867..105T/abstract">Tonry et al. 2018</a>).</p>
+    <p>When the forced photometry runs in difference imaging mode, it is
+    measuring the difference (initially in ADU) between the target and the
+    reference frame. This may be significantly positive (excess flux in
+    the target frame over the reference), negative (flux deficit in the
+    target compared to the reference) or close to zero (no significant
+    difference between the two). We calibrate this flux in microJanskys
+    (with an error) and these values are the most meaningful when the user
+    is interested in difference imaging measurements. The photometric
+    calibration comes from the zeropoint in the input image which is based
+    on stars from the ATLAS Refcat2 (<a href="https://ui.adsabs.harvard.edu/abs/2018ApJ...867..105T/abstract">Tonry et al. 2018</a>).</p>
 
-<p>An AB magnitude (m) and flux in microJanskys (uJy) are related simply by</p>
+    <p>An AB magnitude (m) and flux in microJanskys (uJy) are related simply by</p>
 
-<p>m = -2.5*log10(uJy) + 23.9</p>
+    <p>m = -2.5*log10(uJy) + 23.9</p>
 
-<p>The error on the magnitude can be determined from a Taylor expansion
-of log10(uJy +/- duJy) when duJy/uJy is small</p>
+    <p>The error on the magnitude can be determined from a Taylor expansion
+    of log10(uJy +/- duJy) when duJy/uJy is small</p>
 
-<p>The sign of the flux measurement and its error (duJy) are always
-statistically meaningful in the ATLAS forced photometry. The
-magnitude, m and its error dm, are of course not meaningful when the
-flux is small (below signal-to-noise <~ 3). In such cases, if a user
-wants a 3-sigma upper limit for the magnitude, use</p>
+    <p>The sign of the flux measurement and its error (duJy) are always
+    statistically meaningful in the ATLAS forced photometry. The
+    magnitude, m and its error dm, are of course not meaningful when the
+    flux is small (below signal-to-noise <~ 3). In such cases, if a user
+    wants a 3-sigma upper limit for the magnitude, use</p>
 
-<p>m_3sig > -2.5*log10(3 * duJy) + 23.9</p>
+    <p>m_3sig > -2.5*log10(3 * duJy) + 23.9</p>
 
-<p>If the flux is negative, then a magnitude is still quoted and denoted
-with a negative sign. The flux is multiplied by -1 and all
-the above still applies.</p>
+    <p>If the flux is negative, then a magnitude is still quoted and denoted
+    with a negative sign. The flux is multiplied by -1 and all
+    the above still applies.</p>
 
-<p>The ATLAS filter bands and their throughput curves can be found in
-<a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al. (2018)</a>.</p>
-
+    <p>The ATLAS filter bands and their throughput curves can be found in
+    <a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al. (2018)</a>.</p>
+</div>
 {% endblock %}

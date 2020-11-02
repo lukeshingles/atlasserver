@@ -1,7 +1,11 @@
 {% extends "rest_framework/base.html" %}
+{% load static %}
 
 {% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
     <h1>ATLAS Forced Photometry</h1>
+    </div>
     <p>This is the ATLAS forced photometry server, which provides full public
     access to photometric measurements over the full history of ATLAS
     survey. After registration, a user can request forced photometry at
@@ -52,4 +56,12 @@
     Telescope Science Institute, and the South African Astronomical Observatory,
     and The Millennium Institute of Astrophysics (MAS), Chile.</p>
 
+    <ul class="logos">
+        <li><img src="{% static 'images/logos/LogoMAS.png' %}" /></li>
+        <li><img src="{% static 'images/logos/qubredlandscape.png' %}" %} /></li>
+        <li><img src="{% static 'images/logos/STScI.jpg' %}" %} /></li>
+        <li><img src="{% static 'images/logos/ifalogo140-240.png' %}" %} /></li>
+        <li><img src="{% static 'images/logos/logo-saao-2020.png' %}" %} /></li>
+    </ul>
+</div>
 {% endblock %}

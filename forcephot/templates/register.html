@@ -1,10 +1,15 @@
 {% extends "rest_framework/base.html" %}
 
 {% block content %}
-  <h2>Register</h2>
+
+<div class="content-main" role="main" aria-label="main content">
+  <div class="page-header">
+  <h1>Register</h1>
+  </div>
   <form method="post">
     {% csrf_token %}
     {{ form.as_p }}
     <button type="submit">Sign up</button>
   </form>
+</div>
 {% endblock %}

@@ -15,9 +15,10 @@
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
 
       {% block style %}
+
         {% block bootstrap_theme %}
           <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/bootstrap.min.css" %}"/>
-          <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/bootstrap-tweaks.css" %}"/>
+          <!-- <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/bootstrap-tweaks.css" %}"/> -->
         {% endblock %}
 
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/>
@@ -28,10 +29,23 @@
           }
 
           div.navbar {
+            background: white;
+          }
+
+          .navbar-brand {
+            height: auto;
+          }
+
+          .navbar-brand img {
+            height: 118px;
+          }
+
+          ul.nav {
+            padding-top: 96px;
           }
 
           div#content {
-            margin-top: 5em;
+            /* margin-top: 5em; */
           }
 
           h1 {
@@ -146,6 +160,20 @@
             font-weight: bold;
             margin: 2em;
           }
+
+          ul.logos {
+            text-align: center;
+            margin-top: 2em;
+          }
+
+          ul.logos li {
+            display: inline;
+          }
+
+          ul.logos img {
+            height: 90px;
+            margin: 10px;
+          }
         </style>
       {% endblock %}
 
@@ -157,18 +185,18 @@
 
     <div class="wrapper">
       {% block navbar %}
-        <div class="navbar navbar-static-top {% block bootstrap_navbar_variant %}navbar-inverse{% endblock %}"
+        <div class="navbar navbar-static-top {% block bootstrap_navbar_variant %}{% endblock %}"
              role="navigation" aria-label="{% trans "navbar" %}">
           <div class="container">
             <span>
               {% block branding %}
-                <a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'>ATLAS Forced Photometry</a>
+                <a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'><img src="{% static "images/logos/atlas_logo.svg" %}" /></a>
               {% endblock %}
             </span>
 
             <ul class="nav navbar-nav">
                 <li><a href="{% url 'index' %}" rel="nofollow">Home</a></li>
-                <li><a href="{% url 'resultdesc' %}" rel="nofollow">Description</a></li>
+                <li><a href="{% url 'resultdesc' %}" rel="nofollow">Output</a></li>
               {% if user.is_authenticated %}
                 <li><a href="{% url 'task-list' %}" rel="nofollow">Queue</a></li>
                 <li><a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a></li>
