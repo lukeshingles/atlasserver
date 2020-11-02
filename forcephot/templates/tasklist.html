@@ -39,22 +39,22 @@
                 <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
             {% endif %}
                 Task ID: <a href="{% url 'task-detail' task.id %}">{{task.id}}</a><br/>
-                Queued at: {{task.timestamp}}<br/>
+                Queued at {{task.timestamp}}<br/>
                 User: {{task.user.username}} ({{task.user.email}})<br/>
-                RA DEC: {{task.ra}} {{task.dec}}<br/>
+                RA Dec: {{task.ra}} {{task.dec}}<br/>
                 {% if task.comment %}
                 Comment: {{task.comment}}<br/>
                 {% endif %}
 
                 {% if task.mjd_min or task.mjd_max %}
-                    MJD range: [{{task.mjd_min}}, {{task.mjd_max}}]<br/>
+                    MJD range: [{{task.mjd_min|default:"0"}}, {{task.mjd_max|default:"∞"}}]<br/>
                 {% endif %}
 
                 {% if task.finished %}
-                Finished<br/>
+                Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
                 <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Results</a>
                 {% else %}
-                Queued
+                Queued (position {{task.get_queuepos}})
                 {% endif %}
             </li>
         {% endfor %}

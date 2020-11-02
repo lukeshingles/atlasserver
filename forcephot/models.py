@@ -1,18 +1,18 @@
-from django.db import models
+from django.db import models, connection
 from django.contrib.auth.models import User
 from django.conf import settings
 import datetime
 import math
 
-"""
-Functions for converting dates to/from JD and MJD. Assumes dates are historical
-dates, including the transition from the Julian calendar to the Gregorian
-calendar in 1582. No support for proleptic Gregorian/Julian calendars.
-:Author: Matt Davis
-:Website: http://github.com/jiffyclub
-"""
+
 def date_to_mjd(year, month, day):
     """
+    Functions for converting dates to/from JD and MJD. Assumes dates are historical
+    dates, including the transition from the Julian calendar to the Gregorian
+    calendar in 1582. No support for proleptic Gregorian/Julian calendars.
+    :Author: Matt Davis
+    :Website: http://github.com/jiffyclub
+
     Convert a date to Julian Day.
 
     Algorithm from 'Practical Astronomy with your Calculator or Spreadsheet',
@@ -54,7 +54,7 @@ def date_to_mjd(year, month, day):
     # of the Gregorian calendar.
     if ((year < 1582) or
         (year == 1582 and month < 10) or
-        (year == 1582 and month == 10 and day < 15)):
+            (year == 1582 and month == 10 and day < 15)):
         # before start of Gregorian calendar
         B = 0
     else:
@@ -85,17 +85,27 @@ class Task(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     ra = models.FloatField(null=False, blank=False, default=None)
     dec = models.FloatField(null=False, blank=False, default=None)
-    mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default(), verbose_name='MJD min')
+    mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default, verbose_name='MJD min')
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     finished = models.BooleanField(default=False)
+    finishtimestamp = models.DateTimeField(null=True, default=None)
 
     def get_localresultfile(self):
         if self.finished:
             return f'results/job{int(self.id):05d}.txt'
 
         return None
+
+    def get_queuepos(self):
+        if self.finished:
+            return -1
+        else:
+            return Task.objects.filter(timestamp__lt=self.timestamp, finished=False).count()
+            # with connection.cursor() as cursor:
+            #     cursor.execute("UPDATE bar SET foo = 1 WHERE baz = %s", [self.baz])
+            return 22
 
     def __str__(self):
         email = User.objects.get(id=self.user_id).email
@@ -126,11 +136,5 @@ class Result(models.Model):
 
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
 
-    def get_localresultfile(self):
-        if self.finished:
-            return f'results/job{int(self.id):05d}.txt'
-
-        return None
-
     def __str__(self):
-        return f"RA: {self.ra} DEC: {self.declination} MJD {self.mjd}"
+        return f"RA: {self.ra} DEC: {self.declination} MJD {self.mjd} m {self.m}"

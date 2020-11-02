@@ -235,7 +235,7 @@ def main():
                     log(r'User {task["username"]} has no email address.')
 
                 cur2 = conn.cursor()
-                cur2.execute(f"UPDATE forcephot_task SET finished=true WHERE id={taskid};")
+                cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() WHERE id={taskid};")
                 conn.commit()
                 cur2.close()
             else:
