@@ -54,6 +54,43 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         # return obj.user == request.user
 
 
+def splitradeclist(data):
+    if 'radeclist' not in data:
+        return [data]
+    else:
+        # multi-add functionality with a list of RA,DEC coords
+        formdata = data
+        datalist = []
+
+        converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
+
+        # if an RA and Dec were specified, add them to the list
+        if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
+            newrow = formdata.copy()
+            newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
+            newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
+            newrow['radeclist'] = ['']
+            datalist.append(newrow)
+
+        for line in formdata['radeclist'].split('\n'):
+            if ',' in line:
+                row = line.split(',')
+            else:
+                row = line.split()
+            if row:
+                try:
+                    newrow = formdata.copy()
+                    newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
+                    newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
+                    newrow['radeclist'] = ['']
+                    datalist.append(newrow)
+                except (IndexError, IOError):
+                    return []
+                    pass
+        print(datalist)
+        return datalist
+
+
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be created and deleted.
@@ -70,44 +107,23 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):
-        if 'radeclist' not in request.data:
-            datalist = [request.data]
+        # if not kwargs['form'].is_valid():
+        #     return self.list(request, *args, **kwargs)
+        datalist = splitradeclist(request.data)
+        if datalist:
+            serializer = self.get_serializer(data=datalist, many=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            kwargs['headers'] = self.get_success_headers(serializer.data)
+            # if not serializer.is_valid(raise_exception=False):
         else:
-            # multi-add functionality with a list of RA,DEC coords
-            formdata = request.data
-            datalist = []
+            kwargs['form'] = TaskForm(request.POST)
 
-            converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
-
-            # if an RA and Dec were specified, add them to the list
-            if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
-                newrow = formdata.copy()
-                newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
-                newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
-                newrow['radeclist'] = ['']
-                datalist.append(newrow)
-
-            for line in formdata['radeclist'].split('\n'):
-                if ',' in line:
-                    row = line.split(',')
-                else:
-                    row = line.split()
-
-                try:
-                    newrow = formdata.copy()
-                    newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
-                    newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
-                    newrow['radeclist'] = ['']
-                    datalist.append(newrow)
-                except IndexError:
-                    pass
-
-        serializer = self.get_serializer(data=datalist, many=True)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        # return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-        return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=headers)
+        if request.accepted_renderer.format == 'html':
+            return self.list(request, *args, **kwargs)
+            # return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=headers)
+        else:
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         # if self.request.user and self.request.user.is_authenticated:
@@ -145,7 +161,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(listqueryset, many=True)
             tasks = listqueryset
             # serializer2 = ForcePhotTaskSerializer(tasks, context={'request': request})
-            form = TaskForm()
+            if 'form' in kwargs:
+                form = kwargs['form']
+            else:
+                form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
 
         listqueryset = self.filter_queryset(self.get_queryset())

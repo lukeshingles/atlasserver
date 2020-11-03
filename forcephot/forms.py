@@ -4,18 +4,59 @@ from django.utils.translation import gettext, gettext_lazy as _
 from django.contrib.auth import (
     authenticate, get_user_model, password_validation,
 )
+from django.core.exceptions import ValidationError
 import django.contrib.auth.forms
 from .models import *
+
+import astrocalc.coords.unit_conversion
+import fundamentals.logs
 
 
 class TaskForm(forms.ModelForm):
 
     radeclist = forms.CharField(label="RA Dec list", required=True,
-                                widget=forms.Textarea(attrs={"rows": 2, "cols": ""}))
+                                widget=forms.Textarea(attrs={"rows": 3, "cols": ""}))
 
     class Meta:
         model = Task
         fields = '__all__'
+
+    # def clean_radeclist(self):
+    #     data = self.cleaned_data.get("radeclist")
+    #     if True:
+    #         raise ValidationError(
+    #             'problem',
+    #             code='password_mismatch',
+    #         )
+    #     return data
+
+    def clean(self):
+        cleaned_data = super().clean()
+        # self.add_error('radeclist', 'test')
+
+        data = cleaned_data
+        if 'radeclist' in data and data['radeclist']:
+            # multi-add functionality with a list of RA,DEC coords
+            converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
+
+            for index, line in enumerate(data['radeclist'].split('\n'), 1):
+                if ',' in line:
+                    row = line.split(',')
+                else:
+                    row = line.split()
+
+                if row and len(row) < 2:
+                    self.add_error('radeclist', f'Error on line {index}: Could not find two columns. '
+                                   'Separate RA and Dec by a comma or a space.')
+                elif row:
+                    try:
+                        converter.ra_sexegesimal_to_decimal(ra=row[0])
+                        converter.dec_sexegesimal_to_decimal(dec=row[1])
+                    except (IndexError, OSError) as err:
+                        self.add_error('radeclist', f'Error on line {index}: {err}')
+                        pass
+
+        return cleaned_data
 
 
 class AtlasServerUserCreationForm(forms.ModelForm):

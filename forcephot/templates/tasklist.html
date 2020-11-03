@@ -15,13 +15,14 @@
         <h3>New request</h3>
         <form method="POST" action="{% url 'task-list' %}" id="newrequest">
             {% csrf_token %}
+            {{ form.non_field_errors }}
             <ul>
-                <li>{{ form.radeclist.label_tag }}{{ form.radeclist }}</li>
+                <li>{{ form.radeclist.label_tag }}{{ form.radeclist }}{{ form.radeclist.errors }}</li>
                 <!-- <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
                 <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li> -->
-                <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}</li>
-                <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}</li>
-                <li>{{ form.comment.label_tag }}{{ form.comment }}</li>
+                <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}</li>
+                <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}</li>
+                <li>{{ form.comment.label_tag }}{{ form.comment }}{{ form.comment.errors }}</li>
                 <li>{{ form.use_reduced }}{{ form.use_reduced.label_tag }}</li>
             </ul>
             <input class="btn btn-info" type="submit" value="Request" />
