@@ -21,6 +21,9 @@ from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+import astrocalc.coords.unit_conversion
+import fundamentals.logs
+
 from .serializers import *
 from .models import *
 from .forms import *
@@ -55,7 +58,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be created and deleted.
     """
-    queryset = Task.objects.all().order_by('-timestamp').select_related('user') 
+    queryset = Task.objects.all().order_by('-timestamp').select_related('user')
     serializer_class = ForcePhotTaskSerializer
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [permissions.IsAuthenticated]
@@ -71,19 +74,33 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             datalist = [request.data]
         else:
             # multi-add functionality with a list of RA,DEC coords
-            firstrow = request.data
+            formdata = request.data
             datalist = []
-            if 'ra' in firstrow and firstrow['ra'] and 'dec' in firstrow and firstrow['dec']:
-                datalist.append(firstrow)
 
-            for line in firstrow['radeclist'].split('\n'):
-                row = line.replace(',', ' ').split()
-                if len(row) >= 2:
-                    newrow = firstrow.copy()
-                    newrow['ra'] = row[0]
-                    newrow['dec'] = row[1]
+            converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
+
+            # if an RA and Dec were specified, add them to the list
+            if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
+                newrow = formdata.copy()
+                newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
+                newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
+                newrow['radeclist'] = ['']
+                datalist.append(newrow)
+
+            for line in formdata['radeclist'].split('\n'):
+                if ',' in line:
+                    row = line.split(',')
+                else:
+                    row = line.split()
+
+                try:
+                    newrow = formdata.copy()
+                    newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
+                    newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
                     newrow['radeclist'] = ['']
                     datalist.append(newrow)
+                except IndexError:
+                    pass
 
         serializer = self.get_serializer(data=datalist, many=True)
         serializer.is_valid(raise_exception=True)
