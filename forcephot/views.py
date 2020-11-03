@@ -109,20 +109,24 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         # if not kwargs['form'].is_valid():
         #     return self.list(request, *args, **kwargs)
-        datalist = splitradeclist(request.data)
-        if datalist:
-            serializer = self.get_serializer(data=datalist, many=True)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
-            kwargs['headers'] = self.get_success_headers(serializer.data)
-            # if not serializer.is_valid(raise_exception=False):
-        else:
-            kwargs['form'] = TaskForm(request.POST)
-
         if request.accepted_renderer.format == 'html':
+            datalist = splitradeclist(request.data)
+            if datalist:
+                serializer = self.get_serializer(data=datalist, many=True)
+                serializer.is_valid(raise_exception=True)
+                self.perform_create(serializer)
+                kwargs['headers'] = self.get_success_headers(serializer.data)
+                # if not serializer.is_valid(raise_exception=False):
+            else:
+                kwargs['form'] = TaskForm(request.POST)
+
             return self.list(request, *args, **kwargs)
             # return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=headers)
         else:
+            serializer = self.get_serializer(data=datalist, many=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
             return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
