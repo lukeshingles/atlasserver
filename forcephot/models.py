@@ -1,8 +1,9 @@
-from django.db import models, connection
-from django.contrib.auth.models import User
-from django.conf import settings
 import datetime
 import math
+
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.db import connection, models
 
 
 def date_to_mjd(year, month, day):
