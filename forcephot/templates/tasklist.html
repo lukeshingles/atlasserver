@@ -58,7 +58,7 @@
                 Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
                 <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Results</a>
                 {% else %}
-                Queued (position {{task.get_queuepos}})
+                Queued ({{task.get_queuepos}} tasks ahead of this one)
                 {% endif %}
             </li>
         {% endfor %}
