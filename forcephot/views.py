@@ -91,7 +91,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all().order_by('-timestamp').select_related('user')
     serializer_class = ForcePhotTaskSerializer
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
     throttle_scope = 'forcephottasks'
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
