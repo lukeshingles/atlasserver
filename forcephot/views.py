@@ -1,32 +1,25 @@
 import os
 
-import atlasserver.settings as djangosettings
-from django.contrib.auth import login, authenticate
+import astrocalc.coords.unit_conversion
+import fundamentals.logs
+from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
-from django.shortcuts import render, redirect
-
-from django.contrib.auth.models import User, Group
+from django.contrib.auth.models import Group, User
 from django.core.exceptions import ValidationError
 from django.http import HttpResponse
-from django.shortcuts import render, redirect
-from django.shortcuts import get_object_or_404
-from django_filters.rest_framework import DjangoFilterBackend
 from django.http.response import HttpResponseRedirect
-
-from rest_framework import filters
-from rest_framework import permissions
-from rest_framework import status
-from rest_framework import viewsets
+from django.shortcuts import get_object_or_404, redirect, render
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters, permissions, status, viewsets
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-import astrocalc.coords.unit_conversion
-import fundamentals.logs
+import atlasserver.settings as djangosettings
 
-from .serializers import *
-from .models import *
 from .forms import *
+from .models import *
+from .serializers import *
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -111,17 +104,20 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     return self.list(request, *args, **kwargs)
         if request.accepted_renderer.format == 'html':
             datalist = splitradeclist(request.data)
+            success = False
             if datalist:
                 serializer = self.get_serializer(data=datalist, many=True)
-                serializer.is_valid(raise_exception=True)
+                success = serializer.is_valid(raise_exception=True)
                 self.perform_create(serializer)
                 kwargs['headers'] = self.get_success_headers(serializer.data)
-                # if not serializer.is_valid(raise_exception=False):
             else:
-                kwargs['form'] = TaskForm(request.POST)
+                success = False
 
+            if success:
+                return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=kwargs['headers'])
+
+            kwargs['form'] = TaskForm(request.POST)
             return self.list(request, *args, **kwargs)
-            # return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=headers)
         else:
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
