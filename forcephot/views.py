@@ -216,7 +216,7 @@ def resultdesc(request):
 
 def register(request):
     if request.method == 'POST':
-        form = AtlasServerUserCreationForm(request.POST)
+        form = RegistrationForm(request.POST)
         if form.is_valid():
             form.save()
             username = form.cleaned_data.get('username')
@@ -225,6 +225,6 @@ def register(request):
             login(request, user)
             return redirect(reverse('task-list'))
     else:
-        form = AtlasServerUserCreationForm()
+        form = RegistrationForm()
 
     return render(request, 'register.html', {'form': form})
