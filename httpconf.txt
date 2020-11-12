@@ -1,4 +1,5 @@
 #RequestHeader set HOST psweb.mp.qub.ac.uk
+RequestHeader set HOST star.pst.qub.ac.uk
 
 #RequestHeader set X_FORWARDED_HOST psweb.mp.qub.ac.uk
-#RequestHeader set X_FORWARDED_PROTO https
+RequestHeader set X_FORWARDED_PROTO https
