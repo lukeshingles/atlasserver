@@ -80,7 +80,7 @@ def splitradeclist(data):
                 except (IndexError, IOError):
                     return []
                     pass
-        print(datalist)
+        # print(datalist)
         return datalist
 
 
@@ -140,7 +140,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         self.perform_destroy(instance)
-        print(reverse('task-list', request=request))
+        # print(reverse('task-list', request=request))
         # if request.accepted_renderer.format == 'html':
         return Response(status=status.HTTP_303_SEE_OTHER, headers={
                 'Location': reverse('task-list', request=request)})
