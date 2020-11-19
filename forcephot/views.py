@@ -154,8 +154,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     def list(self, request, *args, **kwargs):
-        # listqueryset = self.filter_queryset(self.get_queryset()).filter(user_id=request.user)
-
         if request.accepted_renderer.format == 'html':
             listqueryset = self.get_queryset().filter(user_id=request.user)
             serializer = self.get_serializer(listqueryset, many=True)
@@ -167,7 +165,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
 
-        listqueryset = self.filter_queryset(self.get_queryset())
+        # listqueryset = self.filter_queryset(self.get_queryset())
+        listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
         serializer = self.get_serializer(listqueryset, many=True)
         page = self.paginate_queryset(listqueryset)
         if page is not None:
