@@ -14,6 +14,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+import rest_framework.authtoken.views
 from django.conf.urls import url
 from django.contrib import admin
 from django.urls import include, path
@@ -35,4 +36,5 @@ urlpatterns = [
     path('queue/delete/<str:pk>/', views.deleteTask, name="delete"),
     url(r'^register/$', views.register, name='register'),
     path('resultdesc', views.resultdesc, name="resultdesc"),
+    path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
 ]
