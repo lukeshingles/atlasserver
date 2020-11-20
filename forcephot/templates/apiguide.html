@@ -34,7 +34,7 @@ else:
     print(resp.json())
 </code></pre>
 
-Next, submit the RA and Dec to the server and receive a URL for checking the task status.
+<p>Next, submit the RA and Dec to the server and receive a URL for checking the task status.</p>
 <pre><code>with requests.Session() as s:
     data = {'ra': 44, 'dec': 22}
     r = s.post(f"{baseurl}/queue?format=json", headers=headers, data=data)
@@ -57,7 +57,7 @@ Now we can check if the task has completed, and if so, retrieve the results.
     textdata = s.get(result_url, headers=headers).text
 </code></pre>
 
-The raw text can be parsed into a pandas dataframe for easy manipulation.
+<p>The raw text can be parsed into a pandas dataframe for easy manipulation.</p>
 <pre><code>dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
 </code></pre>
