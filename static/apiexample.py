@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
+import io
+import os
 import sys
 import time
-from io import StringIO
 
 import pandas as pd
 import requests
 
 BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
 
-data = {
-    'username': 'USERNAME',
-    'password': 'PASSWORD',
-}
-
-resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
-
-if resp.status_code == 200:
-    token = resp.json()['token']
-    print(f'Your token is {token}')
-    headers = {'Authorization': f'Token {token}'}
+if os.environ.get('ATLASFORCED_SECRET_KEY'):
+    token = os.environ.get('ATLASFORCED_SECRET_KEY')
+    print('Using stored token')
 else:
-    print(f'ERROR {resp.status_code}')
-    print(resp.json())
-    sys.exit()
+    data = {
+        'username': 'USERNAME',
+        'password': 'PASSWORD',
+    }
 
+    resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
+
+    if resp.status_code == 200:
+        token = resp.json()['token']
+        print(f'Your token is {token}')
+        print('Store this by running/adding to your .zshrc file:')
+        print(f'export ATLASFORCED_SECRET_KEY={token}')
+    else:
+        print(f'ERROR {resp.status_code}')
+        print(resp.json())
+        sys.exit()
+
+
+headers = {'Authorization': f'Token {token}'}
 with requests.Session() as s:
     # alternative to token auth
     # s.auth = ('USERNAME', 'PASSWORD')
@@ -37,7 +45,6 @@ with requests.Session() as s:
         print(f'ERROR {resp.status_code}')
         print(resp.json())
         sys.exit()
-
 
 with requests.Session() as s:
     result_url = None
@@ -53,5 +60,5 @@ with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
 
 
-dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
+dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
