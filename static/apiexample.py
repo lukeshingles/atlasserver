@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 import time
 from io import StringIO
 
@@ -21,8 +22,11 @@ if resp.status_code == 200:
 else:
     print(f'ERROR {resp.status_code}')
     print(resp.json())
+    sys.exit()
 
 with requests.Session() as s:
+    # alternative to token auth
+    # s.auth = ('USERNAME', 'PASSWORD')
     data = {'ra': 44, 'dec': 22}
     resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data=data)
     rjson = resp.json()
@@ -32,6 +36,7 @@ with requests.Session() as s:
     else:
         print(f'ERROR {resp.status_code}')
         print(resp.json())
+        sys.exit()
 
 
 with requests.Session() as s:
