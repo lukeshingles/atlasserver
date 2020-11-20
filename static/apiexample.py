@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-import io
 import os
 import re
 import sys
 import time
+from io import StringIO
 
 import pandas as pd
 import requests
 
 BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
-# BASEURL = "http://127.0.0.1:8000"
 
 if os.environ.get('ATLASFORCED_SECRET_KEY'):
     token = os.environ.get('ATLASFORCED_SECRET_KEY')
     print('Using stored token')
 else:
-    data = {
-        'username': 'USERNAME',
-        'password': 'PASSWORD',
-    }
+    data = {'username': 'USERNAME', 'password': 'PASSWORD'}
 
     resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
 
@@ -34,15 +30,17 @@ else:
 
 
 headers = {'Authorization': f'Token {token}'}
-while True:
+
+task_url = None
+while not task_url:
     with requests.Session() as s:
         # alternative to token auth
         # s.auth = ('USERNAME', 'PASSWORD')
-        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
-        if resp.status_code == 201:
-            taskurl = resp.json()['url']
-            print(f'The task URL is {taskurl}')
-        elif resp.status_code == 429:
+        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 110, 'dec': 11, 'send_email': False})
+        if resp.status_code == 201:  # success
+            task_url = resp.json()['url']
+            print(f'The task URL is {task_url}')
+        elif resp.status_code == 429:  # throttled
             message = resp.json()["detail"]
             print(f'{resp.status_code} {message}')
             if t := re.findall(r'available in (\d+) seconds', message):
@@ -59,19 +57,25 @@ while True:
             sys.exit()
 
 
-with requests.Session() as s:
-    result_url = None
-    while not result_url:
-        r = s.get(taskurl, headers=headers).json()
-        if r['finished']:
-            result_url = r['result_url']
-            print(f"Task is complete with results available at {result_url}")
+result_url = None
+while not result_url:
+    with requests.Session() as s:
+        resp = s.get(task_url, headers=headers)
+        if resp.status_code == 200:  # HTTP OK
+            if resp.json()['finished']:
+                result_url = resp.json()['result_url']
+                print(f"Task is complete with results available at {result_url}")
+            else:
+                print("Waiting for job to finish. Checking again in a few seconds...")
+                time.sleep(5)
         else:
-            print("Not finished yet. Checking again in a few seconds...")
-            time.sleep(5)
+            print(f'ERROR {resp.status_code}')
+            print(resp.json())
+            sys.exit()
 
+with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
-
+    s.delete(task_url, headers=headers).json()  # clean up afterwards
 
 dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)

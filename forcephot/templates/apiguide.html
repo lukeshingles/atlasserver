@@ -1,4 +1,5 @@
 {% extends "rest_framework/base.html" %}
+{% load static %}
 
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
@@ -6,7 +7,7 @@
     <h1>API Guide</h1>
     </div>
 
-    <p>The forced photometry server has a REST API that makes it easy to script requests. In this example, we'lll use Python.</p>
+    <p>The forced photometry server has a REST API that makes it easy to script requests. In this example, we'll use Python.</p>
 
     <p>First, let's import some useful packages and set the API URL:</p>
 <pre><code>import io
@@ -20,7 +21,7 @@ import requests
 BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
 </code></pre>
 
-<p>Next, we need to obtain a secret token from our username and password. This usually only has to be done once, unless a token reset is specifically requested (such as if it accidentally becomes compromised).</p>
+<p>Next, we need to obtain a secret token from our username and password. This step normally only has to be done once, unless a token reset is specifically requested (e.g., if it accidentally becomes compromised).</p>
 <pre><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
 
 if resp.status_code == 200:
@@ -32,37 +33,59 @@ else:
     print(resp.json())
 </code></pre>
 
-<p>Next, submit an RA and Dec to the server to obtain a URL for checking the task status.</p>
-<pre><code>with requests.Session() as s:
-    resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22})
-    if resp.status_code == 201:
-        taskurl = resp.json()['url']
-        print(f'Your task URL is {taskurl}')
-    else:
-        print(f'ERROR {resp.status_code}')
-        print(resp.json())
-        sys.exit()
-</code></pre>
-
-Now we can check if the task has completed, and if so, retrieve the results.
-<pre><code>with requests.Session() as s:
-    result_url = None
-    while not result_url:
-        r = s.get(taskurl, headers=headers).json()
-        if r['finished']:
-            result_url = r['result_url']
-            print(f"Task complete with results available at {result_url}")
+<p>Next, submit an RA and Dec coordinate to the server to obtain a URL for checking the status. Note that our request may be throttled if we make too many in a short time.</p>
+<pre><code>task_url = None
+while not task_url:
+    with requests.Session() as s:
+        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
+        if resp.status_code == 201:  # success
+            task_url = resp.json()['url']
+            print(f'The task URL is {task_url}')
+        elif resp.status_code == 429:  # throttled
+            message = resp.json()["detail"]
+            print(f'{resp.status_code} {message}')
+            if t := re.findall(r'available in (\d+) seconds', message):
+                waittime = int(t[0])
+            elif t := re.findall(r'available in (\d+) minutes', message):
+                waittime = int(t[0]) * 60
+            else:
+                waittime = 10
+            print(f'Waiting {waittime} seconds')
+            time.sleep(waittime)
         else:
-            print("Not finished yet. Checking again in a few seconds...")
-            time.sleep(5)
-
-    textdata = s.get(result_url, headers=headers).text
+            print(f'ERROR {resp.status_code}')
+            print(resp.json())
+            sys.exit()
 </code></pre>
 
-<p>The raw text can be parsed into a pandas dataframe for easy manipulation.</p>
+Now we can check if the task has completed, and if so, retrieve the results. Manually sending a delete operation on the task helps to reduce our impact on the server resources, but all completed jobs will expire after some time anyway.
+<pre><code>result_url = None
+while not result_url:
+    with requests.Session() as s:
+        resp = s.get(task_url, headers=headers)
+        if resp.status_code == 200:  # HTTP OK
+            if resp.json()['finished']:
+                result_url = resp.json()['result_url']
+                print(f"Task is complete with results available at {result_url}")
+            else:
+                print("Waiting for job to finish. Checking again in a few seconds...")
+                time.sleep(5)
+        else:
+            print(f'ERROR {resp.status_code}')
+            print(resp.json())
+            sys.exit()
+
+with requests.Session() as s:
+    textdata = s.get(result_url, headers=headers).text
+    s.delete(task_url, headers=headers).json()  # clean up afterwards
+</code></pre>
+
+<p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>
 <pre><code>dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
 </code></pre>
+
+<p>A complete example Python script can be downloaded from <a href="{% static "apiexample.py" %}">apiexample.py</a>.</p>
 
 </div>
 {% endblock %}
