@@ -222,19 +222,22 @@ def main():
             if localresultfile and os.path.exists(localresultfile):
                 # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
 
-                if task["send_email"] and task["email"]:
-                    log(f'Sending email to {task["email"]} containing {localresultfile}')
+                if task["send_email"]:
+                    if task["email"]:
+                        log(f'Sending email to {task["email"]} containing {localresultfile}')
 
-                    message = EmailMessage(
-                        subject='ATLAS forced photometry results',
-                        body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
-                        from_email=os.environ.get('EMAIL_HOST_USER'),
-                        to=[task["email"]],
-                    )
-                    message.attach_file(localresultfile)
-                    message.send()
+                        message = EmailMessage(
+                            subject='ATLAS forced photometry results',
+                            body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
+                            from_email=os.environ.get('EMAIL_HOST_USER'),
+                            to=[task["email"]],
+                        )
+                        message.attach_file(localresultfile)
+                        message.send()
+                    else:
+                        log(f'User {task["username"]} has no email address.')
                 else:
-                    log(r'User {task["username"]} has no email address.')
+                    log(f'User {task["username"]} did not request an email.')
 
                 cur2 = conn.cursor()
                 cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() WHERE id={taskid};")
