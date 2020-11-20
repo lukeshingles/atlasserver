@@ -3,7 +3,7 @@ import os
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group, User
-from django.core.exceptions import ValidationError
+from django.core.exceptions import DoesNotExist, ValidationError
 from django.http import HttpResponse
 from django.http.response import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
@@ -157,14 +157,16 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
 
 def deleteTask(request, pk):
-    item = Task.objects.get(id=pk)
-    if item:
+    try:
+        item = Task.objects.get(id=pk)
         if item.get_localresultfile():
             localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.get_localresultfile())
             if localresultfullpath and os.path.exists(localresultfullpath):
                 os.remove(localresultfullpath)
 
         item.delete()
+    except DoesNotExist:
+        pass
     return redirect(reverse('task-list'))
 
 
