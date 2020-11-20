@@ -158,12 +158,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
 def deleteTask(request, pk):
     item = Task.objects.get(id=pk)
-    if item.get_localresultfile():
-        localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.get_localresultfile())
-        if localresultfullpath and os.path.exists(localresultfullpath):
-            os.remove(localresultfullpath)
+    if item:
+        if item.get_localresultfile():
+            localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.get_localresultfile())
+            if localresultfullpath and os.path.exists(localresultfullpath):
+                os.remove(localresultfullpath)
 
-    item.delete()
+        item.delete()
     return redirect(reverse('task-list'))
 
 
