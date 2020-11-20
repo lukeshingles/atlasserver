@@ -15,7 +15,7 @@ from pathlib import Path  # Python 3.6+ only
 
 from dotenv import load_dotenv
 
-import forcephot
+# import forcephot
 
 load_dotenv(override=True)
 
@@ -33,6 +33,7 @@ DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 # Application definition
+
 
 INSTALLED_APPS = [
     'forcephot',
@@ -171,10 +172,11 @@ REST_FRAMEWORK = {
     'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.ScopedRateThrottle',
+        # 'rest_framework.throttling.ScopedRateThrottle',
+        'forcephot.ForcedPhotRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'forcephottasks': '60/min',
+        'forcephottasks': '20/min',
     },
 
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
