@@ -32,19 +32,19 @@ else:
 
 
 headers = {'Authorization': f'Token {token}'}
-with requests.Session() as s:
-    # alternative to token auth
-    # s.auth = ('USERNAME', 'PASSWORD')
-    data = {'ra': 44, 'dec': 22}
-    resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data=data)
-    rjson = resp.json()
-    if resp.status_code == 201:
-        taskurl = resp.json()['url']
-        print(f'Your task URL is {taskurl}')
-    else:
-        print(f'ERROR {resp.status_code}')
-        print(resp.json())
-        sys.exit()
+while True:
+    with requests.Session() as s:
+        # alternative to token auth
+        # s.auth = ('USERNAME', 'PASSWORD')
+        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22})
+        if resp.status_code == 201:
+            taskurl = resp.json()['url']
+            print(f'Your task URL is {taskurl}')
+        else:
+            print(f'ERROR {resp.status_code}')
+            print(resp.json())
+            sys.exit()
+
 
 with requests.Session() as s:
     result_url = None
@@ -52,7 +52,7 @@ with requests.Session() as s:
         r = s.get(taskurl, headers=headers).json()
         if r['finished']:
             result_url = r['result_url']
-            print(f"Task complete with results available at {result_url}")
+            print(f"Task is complete with results available at {result_url}")
         else:
             print("Not finished yet. Checking again in a few seconds...")
             time.sleep(5)
@@ -60,5 +60,5 @@ with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
 
 
-dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), delim_whitespace=True)
+dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
