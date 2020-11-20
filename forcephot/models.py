@@ -104,9 +104,6 @@ class Task(models.Model):
             return -1
         else:
             return Task.objects.filter(timestamp__lt=self.timestamp, finished=False).count()
-            # with connection.cursor() as cursor:
-            #     cursor.execute("UPDATE bar SET foo = 1 WHERE baz = %s", [self.baz])
-            return 22
 
     def __str__(self):
         email = User.objects.get(id=self.user_id).email

@@ -50,38 +50,42 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
 def splitradeclist(data):
     if 'radeclist' not in data:
         return [data]
-    else:
-        # multi-add functionality with a list of RA,DEC coords
-        formdata = data
-        datalist = []
 
-        converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
+    # multi-add functionality with a list of RA,DEC coords
+    formdata = data
+    datalist = []
 
-        # if an RA and Dec were specified, add them to the list
-        if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
-            newrow = formdata.copy()
-            newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
-            newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
-            newrow['radeclist'] = ['']
-            datalist.append(newrow)
+    converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
 
-        for line in formdata['radeclist'].split('\n'):
-            if ',' in line:
-                row = line.split(',')
-            else:
-                row = line.split()
-            if row:
-                try:
-                    newrow = formdata.copy()
-                    newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
-                    newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
-                    newrow['radeclist'] = ['']
-                    datalist.append(newrow)
-                except (IndexError, IOError):
-                    return []
-                    pass
-        # print(datalist)
-        return datalist
+    # if an RA and Dec were specified, add them to the list
+    if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
+        newrow = formdata.copy()
+        newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
+        newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
+        newrow['radeclist'] = ['']
+        datalist.append(newrow)
+
+    lines = formdata['radeclist'].split('\n')
+    if len(lines) > 100:
+        return []
+
+    for line in lines:
+        if ',' in line:
+            row = line.split(',')
+        else:
+            row = line.split()
+        if row:
+            try:
+                newrow = formdata.copy()
+                newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
+                newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
+                newrow['radeclist'] = ['']
+                datalist.append(newrow)
+            except (IndexError, IOError):
+                return []
+
+    # print(datalist)
+    return datalist
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
