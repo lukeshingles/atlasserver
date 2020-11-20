@@ -66,8 +66,6 @@ def splitradeclist(data):
         datalist.append(newrow)
 
     lines = formdata['radeclist'].split('\n')
-    if len(lines) > 100:
-        return []
 
     for line in lines:
         if ',' in line:
@@ -107,20 +105,22 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         # if not kwargs['form'].is_valid():
         #     return self.list(request, *args, **kwargs)
         if request.accepted_renderer.format == 'html':
-            datalist = splitradeclist(request.data)
+            form = TaskForm(request.POST)
             success = False
-            if datalist:
-                serializer = self.get_serializer(data=datalist, many=True)
-                success = serializer.is_valid(raise_exception=True)
-                self.perform_create(serializer)
-                kwargs['headers'] = self.get_success_headers(serializer.data)
-            else:
-                success = False
+            if form.is_valid():
+                datalist = splitradeclist(request.data)
+                if datalist:
+                    serializer = self.get_serializer(data=datalist, many=True)
+                    success = serializer.is_valid(raise_exception=True)
+                    self.perform_create(serializer)
+                    kwargs['headers'] = self.get_success_headers(serializer.data)
+                else:
+                    success = False
 
             if success:
                 return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=kwargs['headers'])
 
-            kwargs['form'] = TaskForm(request.POST)
+            kwargs['form'] = form
             return self.list(request, *args, **kwargs)
         else:
             serializer = self.get_serializer(data=request.data)
