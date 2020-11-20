@@ -8,7 +8,7 @@
 
     <p>The forced photometry server has a REST API that makes it easy to access in languages like Python.</p>
 
-    First, let's import some useful packages and set the API url:
+    <p>First, let's import some useful packages and set the API url:</p>
 <pre><code>import pandas as pd
 import requests
 import time
@@ -17,6 +17,7 @@ from io import StringIO
 BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
 </code></pre>
 
+<p>Next, we need to obtain a secret key (token) from our username and password.</p>
 <pre><code>data = {
     'username': 'USERNAME',
     'password': 'PASSWORD',
