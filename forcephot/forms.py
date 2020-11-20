@@ -31,7 +31,7 @@ class TaskForm(forms.ModelForm):
             converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
 
             lines = data['radeclist'].split('\n')
-            if len(lines) > 1:
+            if len(lines) > 100:
                 self.add_error('radeclist', f'Number of lines ({len(lines)}) is above the limit of 100')
             else:
                 for index, line in enumerate(lines, 1):
