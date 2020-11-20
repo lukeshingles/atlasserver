@@ -205,6 +205,7 @@
               {% if user.is_authenticated %}
                 <li><a href="{% url 'task-list' %}" rel="nofollow">Queue</a></li>
                 <li><a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a></li>
+                <li><a href="{% url 'apiguide' %}" rel="nofollow">API Guide</a></li>
                 <!-- <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li> -->
               {% endif %}
             </ul>

@@ -36,5 +36,6 @@ urlpatterns = [
     path('queue/delete/<str:pk>/', views.deleteTask, name="delete"),
     url(r'^register/$', views.register, name='register'),
     path('resultdesc', views.resultdesc, name="resultdesc"),
+    path('apiguide', views.apiguide, name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
 ]

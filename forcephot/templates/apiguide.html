@@ -1,0 +1,65 @@
+{% extends "rest_framework/base.html" %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+    <h1>API Guide</h1>
+    </div>
+
+    <p>The forced photometry server has a REST API that makes it easy to access in languages like Python.</p>
+
+    First, let's import some useful packages and set the API url:
+<pre><code>import pandas as pd
+import requests
+import time
+from io import StringIO
+
+BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
+</code></pre>
+
+<pre><code>data = {
+    'username': 'USERNAME',
+    'password': 'PASSWORD',
+}
+
+resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
+
+if resp.status_code == 200:
+    token = resp.json()['token']
+    print(f'Your token is {token}')
+    headers = {'Authorization': f'Token {token}'}
+else:
+    print(f'ERROR {resp.status_code}')
+    print(resp.json())
+</code></pre>
+
+Next, submit the RA and Dec to the server and receive a URL for checking the task status.
+<pre><code>with requests.Session() as s:
+    data = {'ra': 44, 'dec': 22}
+    r = s.post(f"{baseurl}/queue?format=json", headers=headers, data=data)
+    rjson = r.json()
+    taskurl  = rjson['url']
+</code></pre>
+
+Now we can check if the task has completed, and if so, retrieve the results.
+<pre><code>with requests.Session() as s:
+    result_url = None
+    while not result_url:
+        r = s.get(taskurl, headers=headers).json()
+        if r['finished']:
+            result_url = r['result_url']
+            print(f"Task complete with results available at {result_url}")
+        else:
+            print("Not finished yet. Checking again in a few seconds...")
+            time.sleep(5)
+
+    textdata = s.get(result_url, headers=headers).text
+</code></pre>
+
+The raw text can be parsed into a pandas dataframe for easy manipulation.
+<pre><code>dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
+print(dfresult)
+</code></pre>
+
+</div>
+{% endblock %}

@@ -213,6 +213,11 @@ def resultdesc(request):
     return render(request, template_name)
 
 
+def apiguide(request):
+    template_name = 'apiguide.html'
+    return render(request, template_name)
+
+
 def register(request):
     if request.method == 'POST':
         form = RegistrationForm(request.POST)
