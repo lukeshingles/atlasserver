@@ -38,6 +38,7 @@ else:
 while not task_url:
     with requests.Session() as s:
         resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
+
         if resp.status_code == 201:  # success
             task_url = resp.json()['url']
             print(f'The task URL is {task_url}')
@@ -63,6 +64,7 @@ Now we can check if the task has completed, and if so, retrieve the results. Man
 while not result_url:
     with requests.Session() as s:
         resp = s.get(task_url, headers=headers)
+
         if resp.status_code == 200:  # HTTP OK
             if resp.json()['finished']:
                 result_url = resp.json()['result_url']
