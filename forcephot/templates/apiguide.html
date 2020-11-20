@@ -6,24 +6,22 @@
     <h1>API Guide</h1>
     </div>
 
-    <p>The forced photometry server has a REST API that makes it easy to access in languages like Python.</p>
+    <p>The forced photometry server has a REST API that makes it easy to script requests. In this example, we'lll use Python.</p>
 
-    <p>First, let's import some useful packages and set the API url:</p>
-<pre><code>import pandas as pd
-import requests
+    <p>First, let's import some useful packages and set the API URL:</p>
+<pre><code>import io
+import os
+import sys
 import time
-from io import StringIO
+
+import pandas as pd
+import requests
 
 BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
 </code></pre>
 
-<p>Next, we need to obtain a secret key (token) from our username and password.</p>
-<pre><code>data = {
-    'username': 'USERNAME',
-    'password': 'PASSWORD',
-}
-
-resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
+<p>Next, we need to obtain a secret token from our username and password. This usually only has to be done once, unless a token reset is specifically requested (such as if it accidentally becomes compromised).</p>
+<pre><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
 
 if resp.status_code == 200:
     token = resp.json()['token']
@@ -34,12 +32,16 @@ else:
     print(resp.json())
 </code></pre>
 
-<p>Next, submit the RA and Dec to the server and receive a URL for checking the task status.</p>
+<p>Next, submit an RA and Dec to the server to obtain a URL for checking the task status.</p>
 <pre><code>with requests.Session() as s:
-    data = {'ra': 44, 'dec': 22}
-    r = s.post(f"{baseurl}/queue?format=json", headers=headers, data=data)
-    rjson = r.json()
-    taskurl  = rjson['url']
+    resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22})
+    if resp.status_code == 201:
+        taskurl = resp.json()['url']
+        print(f'Your task URL is {taskurl}')
+    else:
+        print(f'ERROR {resp.status_code}')
+        print(resp.json())
+        sys.exit()
 </code></pre>
 
 Now we can check if the task has completed, and if so, retrieve the results.
