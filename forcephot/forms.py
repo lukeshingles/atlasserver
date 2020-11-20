@@ -1,6 +1,4 @@
-import astrocalc.coords.unit_conversion
 import django.contrib.auth.forms
-import fundamentals.logs
 from django import forms
 from django.contrib.auth import (authenticate, get_user_model,
                                  password_validation)
@@ -10,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext
 from django.utils.translation import gettext_lazy as _
 
+from .misc import splitradeclist
 from .models import *
 
 
@@ -19,37 +18,14 @@ class TaskForm(forms.ModelForm):
 
     class Meta:
         model = Task
-        fields = '__all__'
+        # fields = '__all__'
+        fields = ('radeclist', 'mjd_min', 'mjd_min', 'comment', 'use_reduced')
 
     def clean(self):
         cleaned_data = super().clean()
-        # self.add_error('radeclist', 'test')
 
-        data = cleaned_data
-        if 'radeclist' in data and data['radeclist']:
-            # multi-add functionality with a list of RA,DEC coords
-            converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
-
-            lines = data['radeclist'].split('\n')
-            if len(lines) > 100:
-                self.add_error('radeclist', f'Number of lines ({len(lines)}) is above the limit of 100')
-            else:
-                for index, line in enumerate(lines, 1):
-                    if ',' in line:
-                        row = line.split(',')
-                    else:
-                        row = line.split()
-
-                    if row and len(row) < 2:
-                        self.add_error('radeclist', f'Error on line {index}: Could not find two columns. '
-                                       'Separate RA and Dec by a comma or a space.')
-                    elif row:
-                        try:
-                            converter.ra_sexegesimal_to_decimal(ra=row[0])
-                            converter.dec_sexegesimal_to_decimal(dec=row[1])
-                        except (IndexError, OSError) as err:
-                            self.add_error('radeclist', f'Error on line {index}: {err}')
-                            pass
+        if 'radeclist' in cleaned_data and cleaned_data['radeclist']:
+            splitradeclist(cleaned_data, form=self)
 
         return cleaned_data
 

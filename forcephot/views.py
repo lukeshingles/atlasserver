@@ -1,7 +1,5 @@
 import os
 
-import astrocalc.coords.unit_conversion
-import fundamentals.logs
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group, User
@@ -13,11 +11,13 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
+from rest_framework.reverse import reverse
 from rest_framework.views import APIView
 
 import atlasserver.settings as djangosettings
 
 from .forms import *
+from .misc import splitradeclist
 from .models import *
 from .serializers import *
 
@@ -45,45 +45,6 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         # Instance owner must match current user
         return request.user and request.user.is_authenticated and (obj.user.id == request.user.id)
         # return obj.user == request.user
-
-
-def splitradeclist(data):
-    if 'radeclist' not in data:
-        return [data]
-
-    # multi-add functionality with a list of RA,DEC coords
-    formdata = data
-    datalist = []
-
-    converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
-
-    # if an RA and Dec were specified, add them to the list
-    if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
-        newrow = formdata.copy()
-        newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
-        newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
-        newrow['radeclist'] = ['']
-        datalist.append(newrow)
-
-    lines = formdata['radeclist'].split('\n')
-
-    for line in lines:
-        if ',' in line:
-            row = line.split(',')
-        else:
-            row = line.split()
-        if row:
-            try:
-                newrow = formdata.copy()
-                newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
-                newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
-                newrow['radeclist'] = ['']
-                datalist.append(newrow)
-            except (IndexError, IOError):
-                return []
-
-    # print(datalist)
-    return datalist
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
