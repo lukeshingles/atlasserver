@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import io
 import os
+import re
 import sys
 import time
 
@@ -40,7 +41,18 @@ while True:
         resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
         if resp.status_code == 201:
             taskurl = resp.json()['url']
-            print(f'Your task URL is {taskurl}')
+            print(f'The task URL is {taskurl}')
+        elif resp.status_code == 429:
+            message = resp.json()["detail"]
+            print(f'{resp.status_code} {message}')
+            if t := re.findall(r'available in (\d+) seconds', message):
+                waittime = int(t[0])
+            elif t := re.findall(r'available in (\d+) minutes', message):
+                waittime = int(t[0]) * 60
+            else:
+                waittime = 10
+            print(f'Waiting {waittime} seconds')
+            time.sleep(waittime)
         else:
             print(f'ERROR {resp.status_code}')
             print(resp.json())
