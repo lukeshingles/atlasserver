@@ -1,20 +1,22 @@
-#!/usr/bin/env python3
+
 import os
-import pandas as pd
+#!/usr/bin/env python3
 # import sqlite3
 import subprocess
-import sqlalchemy
 import sys
 import time
-import atlasserver.settings as djangosettings
+from datetime import datetime
+from pathlib import Path
+from signal import SIGINT, signal
 
+import mysql.connector
+import pandas as pd
+import sqlalchemy
 from django.conf import settings
 from django.core.mail import EmailMessage
-from datetime import datetime
-import mysql.connector
-from pathlib import Path
-from signal import signal, SIGINT
 from dotenv import load_dotenv
+
+import atlasserver.settings as djangosettings
 
 load_dotenv(override=True)
 
@@ -220,7 +222,7 @@ def main():
             if localresultfile and os.path.exists(localresultfile):
                 # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
 
-                if task["email"]:
+                if task["send_email"] and task["email"]:
                     log(f'Sending email to {task["email"]} containing {localresultfile}')
 
                     message = EmailMessage(

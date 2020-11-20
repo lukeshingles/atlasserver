@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 
 BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
+# BASEURL = "http://127.0.0.1:8000"
 
 if os.environ.get('ATLASFORCED_SECRET_KEY'):
     token = os.environ.get('ATLASFORCED_SECRET_KEY')
@@ -36,7 +37,7 @@ while True:
     with requests.Session() as s:
         # alternative to token auth
         # s.auth = ('USERNAME', 'PASSWORD')
-        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22})
+        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
         if resp.status_code == 201:
             taskurl = resp.json()['url']
             print(f'Your task URL is {taskurl}')

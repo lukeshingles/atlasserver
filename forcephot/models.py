@@ -22,6 +22,7 @@ class Task(models.Model):
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
+    send_email = models.BooleanField("Email me when completed", default=True)
     finished = models.BooleanField(default=False)
     finishtimestamp = models.DateTimeField(null=True, default=None)
 
