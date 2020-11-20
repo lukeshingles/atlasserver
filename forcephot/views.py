@@ -3,7 +3,7 @@ import os
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group, User
-from django.core.exceptions import DoesNotExist, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.http import HttpResponse
 from django.http.response import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
@@ -165,7 +165,7 @@ def deleteTask(request, pk):
                 os.remove(localresultfullpath)
 
         item.delete()
-    except DoesNotExist:
+    except ObjectDoesNotExist:
         pass
     return redirect(reverse('task-list'))
 
