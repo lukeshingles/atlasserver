@@ -24,7 +24,7 @@ else:
         token = resp.json()['token']
         print(f'Your token is {token}')
         print('Store this by running/adding to your .zshrc file:')
-        print(f'export ATLASFORCED_SECRET_KEY={token}')
+        print(f'export ATLASFORCED_SECRET_KEY="{token}"')
     else:
         print(f'ERROR {resp.status_code}')
         print(resp.json())
