@@ -129,7 +129,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     return localresultfile
 
 
-def send_possible_email(conn, task):
+def send_possible_email(task):
     if task["send_email"] and task["email"]:
         # if we find an unfinished task in the same batch, hold off sending the email
         # same batch here is defined as being queue by the same user within a few seconds of each other
