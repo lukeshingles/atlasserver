@@ -129,7 +129,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     return localresultfile
 
 
-def send_possible_email(task):
+def send_possible_email(conn, task):
     if task["send_email"] and task["email"]:
         # if we find an unfinished task in the same batch, hold off sending the email
         # same batch here is defined as being queue by the same user within a few seconds of each other
@@ -138,12 +138,10 @@ def send_possible_email(task):
 
         taskdesclist = []
         localresultfilelist = []
-        conn = mysql.connector.connect(**CONNKWARGS)
         cur3 = conn.cursor(dictionary=True)
         cur3.execute(
             "SELECT forcephot_task.* FROM forcephot_task, forcephot_task T2 "
-            f"WHERE forcephot_task.finished=false AND "
-            f"T2.id={task['id']} AND forcephot_task.user_id={task['user_id']} AND "
+            f"WHERE T2.id={task['id']} AND forcephot_task.user_id={task['user_id']} AND "
             f"T2.user_id={task['user_id']} AND "
             "forcephot_task.send_email=true AND "
             "forcephot_task.timestamp=T2.timestamp;")
@@ -160,7 +158,6 @@ def send_possible_email(task):
                 localresultfilelist.append(get_localresultfile(batchtask['id']))
         conn.commit()
         cur3.close()
-        conn.close()
 
         if batchtasks_unfinished == 0:
             log(f'Sending email to {task["email"]} containing {batchtaskcount} tasks')
@@ -271,7 +268,7 @@ def main():
             localresultfile = get_localresultfile(taskid)
             if localresultfile and os.path.exists(localresultfile):
                 # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                send_possible_email(task)
+                send_possible_email(conn, task)
 
                 cur2 = conn.cursor()
                 cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() WHERE id={taskid};")
