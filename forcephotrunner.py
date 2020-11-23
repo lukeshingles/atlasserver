@@ -148,7 +148,7 @@ def send_possible_email(conn, task):
                     f"RA {batchtask['ra']} Dec {batchtask['dec']} "
                     f"use_reduced {'yes' if batchtask['use_reduced'] else 'no'}")
                 localresultfilelist.append(get_localresultfile(batchtask['id']))
-
+        cur3.commit()
         cur3.close()
 
         if batchtasks_unfinished == 0:
