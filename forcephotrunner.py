@@ -153,9 +153,9 @@ def send_possible_email(conn, task, logprefix=''):
                 batchtasks_unfinished += 1
             else:
                 strtask = (
-                    f"RA {batchtask['ra']} Dec {batchtask['dec']} "
-                    f"use_reduced {'yes' if batchtask['use_reduced'] else 'no'} "
-                    f"jobid {batchtask['id']}"
+                    f"RA: {batchtask['ra']} Dec: {batchtask['dec']} "
+                    f"use_reduced: {'yes' if batchtask['use_reduced'] else 'no'} "
+                    f"jobid: {batchtask['id']}"
                 )
 
                 if task['comment']:
