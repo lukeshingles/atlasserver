@@ -4,6 +4,7 @@ import math
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection, models
+from django.utils import timezone
 
 from .misc import date_to_mjd
 
@@ -14,7 +15,7 @@ def get_mjd_min_default():
 
 
 class Task(models.Model):
-    timestamp = models.DateTimeField(auto_now_add=True)
+    timestamp = models.DateTimeField(default=timezone.now)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     ra = models.FloatField(null=False, blank=False, default=None)
     dec = models.FloatField(null=False, blank=False, default=None)

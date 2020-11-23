@@ -13,7 +13,8 @@ from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.views import APIView
-
+from django.utils import timezone
+import datetime
 import atlasserver.settings as djangosettings
 
 from .forms import *
@@ -97,7 +98,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     if (usertaskcount > 10):
         #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         #     serializer.save(user=self.request.user)
-        serializer.save(user=self.request.user)
+        timestampnow = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+        serializer.save(user=self.request.user, timestamp=timestampnow)
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)

@@ -120,6 +120,60 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     return localresultfile
 
 
+def send_possible_email(conn, task):
+    if task["send_email"] and task["email"]:
+        # if we find an unfinished task in the same batch, hold off sending the email
+        # same batch here is defined as being queue by the same user within a few seconds of each other
+        batchtasks_unfinished = 0
+        batchtaskcount = 0
+
+        taskdesclist = []
+        localresultfilelist = []
+        cur3 = conn.cursor(dictionary=True)
+        cur3.execute(
+            "SELECT forcephot_task.* FROM forcephot_task, forcephot_task T2 "
+            f"WHERE forcephot_task.finished=false AND "
+            f"T2.id={task['id']} AND forcephot_task.user_id={task['user_id']} AND "
+            f"T2.user_id={task['user_id']} AND "
+            "forcephot_task.send_email=true AND "
+            "forcephot_task.timestamp=T2.timestamp;")
+
+        for batchtaskrow in cur3:
+            batchtask = dict(batchtaskrow)
+            batchtaskcount += 1
+            if not batchtask['finished'] and batchtask['id'] != task['id']:
+                batchtasks_unfinished += 1
+            else:
+                taskdesclist.append(
+                    f"RA {batchtask['ra']} Dec {batchtask['dec']} "
+                    f"use_reduced {'yes' if batchtask['use_reduced'] else 'no'}")
+                localresultfilelist.append(get_localresultfile(batchtask['id']))
+
+        cur3.close()
+
+        if batchtasks_unfinished == 0:
+            log(f'Sending email to {task["email"]} containing {batchtaskcount} tasks')
+
+            message = EmailMessage(
+                subject='ATLAS forced photometry results',
+                body=(
+                    'Your forced photometry results are attached for:\n'
+                    + '\n'.join(taskdesclist) + '\n'),
+                from_email=os.environ.get('EMAIL_HOST_USER'),
+                to=[task["email"]],
+            )
+            for localresultfile in localresultfilelist:
+                message.attach_file(localresultfile)
+            message.send()
+        else:
+            log(f'Waiting to send email until remaining {batchtasks_unfinished} '
+                f'of {batchtaskcount} batched tasks are finished.')
+    elif task["send_email"]:
+        log(f'User {task["username"]} has no email address.')
+    else:
+        log(f'User {task["username"]} did not request an email.')
+
+
 def ingest_results(localresultfile, conn, use_reduced=False):
     df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
     # df.rename(columns={'#MJD': 'MJD'})
@@ -212,23 +266,7 @@ def main():
             localresultfile = get_localresultfile(taskid)
             if localresultfile and os.path.exists(localresultfile):
                 # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-
-                if task["send_email"]:
-                    if task["email"]:
-                        log(f'Sending email to {task["email"]} containing {localresultfile}')
-
-                        message = EmailMessage(
-                            subject='ATLAS forced photometry results',
-                            body=f'Your forced photometry results for RA {task["ra"]} DEC {task["dec"]} are attached.\n\n',
-                            from_email=os.environ.get('EMAIL_HOST_USER'),
-                            to=[task["email"]],
-                        )
-                        message.attach_file(localresultfile)
-                        message.send()
-                    else:
-                        log(f'User {task["username"]} has no email address.')
-                else:
-                    log(f'User {task["username"]} did not request an email.')
+                send_possible_email(conn, task)
 
                 cur2 = conn.cursor()
                 cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() WHERE id={taskid};")
