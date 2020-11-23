@@ -18,6 +18,7 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
     def allow_request(self, request, view):
         if request.method == 'GET':
             return True
+
         # We can only determine the scope once we're called by the view.
         self.scope = getattr(view, self.scope_attr, None)
 
