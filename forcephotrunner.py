@@ -23,6 +23,13 @@ remoteServer = 'atlas'
 localresultdir = Path(djangosettings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
+    'port': djangosettings.DATABASES['default']['PORT'],
+    'database': djangosettings.DATABASES['default']['NAME'],
+    'user': djangosettings.DATABASES['default']['USER'],
+    'password': djangosettings.DATABASES['default']['PASSWORD'],
+    'autocommit': True,
+}
+
 
 def get_localresultfile(id):
     filename = f'job{id:05d}.txt'
@@ -49,7 +56,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     atlascommand += " dodb=1 parallel=16"
 
     # for debugging because force.sh takes a long time to run
-    # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
+    atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}"
@@ -129,6 +136,7 @@ def send_possible_email(conn, task):
 
         taskdesclist = []
         localresultfilelist = []
+        conn = mysql.connector.connect(**CONNKWARGS)
         cur3 = conn.cursor(dictionary=True)
         cur3.execute(
             "SELECT forcephot_task.* FROM forcephot_task, forcephot_task T2 "
@@ -150,6 +158,7 @@ def send_possible_email(conn, task):
                 localresultfilelist.append(get_localresultfile(batchtask['id']))
         conn.commit()
         cur3.close()
+        conn.close()
 
         if batchtasks_unfinished == 0:
             log(f'Sending email to {task["email"]} containing {batchtaskcount} tasks')
@@ -227,13 +236,7 @@ def main():
     #     conn.row_factory = sqlite3.Row
 
     while True:
-        conn = mysql.connector.connect(
-            host=djangosettings.DATABASES['default']['HOST'],
-            port=djangosettings.DATABASES['default']['PORT'],
-            database=djangosettings.DATABASES['default']['NAME'],
-            user=djangosettings.DATABASES['default']['USER'],
-            password=djangosettings.DATABASES['default']['PASSWORD'],
-            autocommit=True)
+        conn = mysql.connector.connect(**CONNKWARGS)
 
         cur = conn.cursor(dictionary=True)
 
@@ -266,7 +269,7 @@ def main():
             localresultfile = get_localresultfile(taskid)
             if localresultfile and os.path.exists(localresultfile):
                 # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                send_possible_email(conn, task)
+                send_possible_email(task)
 
                 cur2 = conn.cursor()
                 cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() WHERE id={taskid};")
