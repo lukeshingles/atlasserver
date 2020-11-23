@@ -38,7 +38,7 @@ def get_localresultfile(id):
     return Path(localresultdir, filename)
 
 
-def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
+def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, logprefix='', **kwargs):
     filename = f'job{id:05d}.txt'
 
     remoteresultdir = Path('~/atlasserver/results/')
@@ -63,7 +63,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}"
 
-    log(f"Executing on {remoteServer}: {atlascommand}")
+    log(logprefix + f"Executing on {remoteServer}: {atlascommand}")
 
     p = subprocess.Popen(["ssh", f"{remoteServer}", atlascommand],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -75,22 +75,22 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
             p.communicate(timeout=5)
 
         except subprocess.TimeoutExpired:
-            log(f"ssh has been running for {time.perf_counter() - starttime:.1f} seconds", end='\r')
+            log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.1f} seconds        ", end='\r')
 
         else:
             break
     stdout, stderr = p.communicate()
-    log(f'\nssh ran for {time.perf_counter() - starttime:.1f} seconds')
+    log(logprefix + f'ssh ran for {time.perf_counter() - starttime:.1f} seconds                                       ')
 
     if stdout:
         stdoutlines = stdout.split('\n')
-        log(f"{remoteServer} STDOUT: ({len(stdoutlines)} lines of output)")
+        log(logprefix + f"{remoteServer} STDOUT: ({len(stdoutlines)} lines of output)")
         # for line in stdoutlines:
-        #     log(f"{remoteServer} STDOUT: {line}")
+        #     log(logprefix + f"{remoteServer} STDOUT: {line}")
 
     if stderr:
         for line in stderr.split('\n'):
-            log(f"{remoteServer} STDERR: {line}")
+            log(logprefix + f"{remoteServer} STDERR: {line}")
 
     # output realtime ssh output line by line
     # while True:
@@ -99,12 +99,12 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     #     if not stdoutline and not stderrline:
     #         break
     #     if stdoutline:
-    #         log(f"{remoteServer} STDOUT >>> {stdoutline.rstrip()}")
+    #         log(logprefix + f"{remoteServer} STDOUT >>> {stdoutline.rstrip()}")
     #     if stderrline:
-    #         log(f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
+    #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
     copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"'
-    log(copycommand)
+    log(logprefix + copycommand)
 
     p = subprocess.Popen(copycommand,
                          shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -113,11 +113,11 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
 
     if stdout:
         for line in stdout.split('\n'):
-            log(f"STDOUT: {line}")
+            log(logprefix + f"STDOUT: {line}")
 
     if stderr:
         for line in stderr.split('\n'):
-            log(f"STDERR: {line}")
+            log(logprefix + f"STDERR: {line}")
 
         # task failed
         return False
@@ -129,7 +129,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     return localresultfile
 
 
-def send_possible_email(conn, task):
+def send_possible_email(conn, task, logprefix=''):
     if task["send_email"] and task["email"]:
         # if we find an unfinished task in the same batch, hold off sending the email
         # same batch here is defined as being queue by the same user within a few seconds of each other
@@ -161,7 +161,7 @@ def send_possible_email(conn, task):
         cur3.close()
 
         if batchtasks_unfinished == 0:
-            log(f'Sending email to {task["email"]} containing {batchtaskcount} tasks')
+            log(logprefix + f'Sending email to {task["email"]} containing {batchtaskcount} tasks')
 
             message = EmailMessage(
                 subject='ATLAS forced photometry results',
@@ -175,12 +175,12 @@ def send_possible_email(conn, task):
                 message.attach_file(localresultfile)
             message.send()
         else:
-            log(f'Waiting to send email until remaining {batchtasks_unfinished} '
+            log(logprefix + f'Waiting to send email until remaining {batchtasks_unfinished} '
                 f'of {batchtaskcount} batched tasks are finished.')
     elif task["send_email"]:
-        log(f'User {task["username"]} has no email address.')
+        log(logprefix + f'User {task["username"]} has no email address.')
     else:
-        log(f'User {task["username"]} did not request an email.')
+        log(logprefix + f'User {task["username"]} did not request an email.')
 
 
 def ingest_results(localresultfile, conn, use_reduced=False):
@@ -267,21 +267,24 @@ def main():
 
             taskload_thisuser = usertaskload.get(task['user_id'], 0)
 
+            logprefix = f"job{task['id']:05d}: "
+
             if taskload_thisuser < usertaskloadlimit:
-                log(f"Starting job for {task['email']} (who has {taskload_thisuser} tasks run in this pass so far):")
-                log(task)
+                log(logprefix + f"Starting job for {task['email']} (who has run {taskload_thisuser} tasks "
+                    "in this pass so far):")
+                log(logprefix + str(task))
                 usertaskload[task['user_id']] = taskload_thisuser + 1
 
                 runforced_starttime = time.perf_counter()
 
-                localresultfile = runforced(**task)
+                localresultfile = runforced(logprefix=logprefix, **task)
 
                 runforced_duration = time.perf_counter() - runforced_starttime
 
                 localresultfile = get_localresultfile(task['id'])
                 if localresultfile and os.path.exists(localresultfile):
                     # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                    send_possible_email(conn, task)
+                    send_possible_email(conn=conn, task=task, logprefix=logprefix)
 
                     cur2 = conn.cursor()
                     cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() "
@@ -290,10 +293,11 @@ def main():
                     cur2.close()
                 else:
                     waittime = 10
-                    log(f"ERROR: Task not completed successfully. Waiting {waittime} seconds before retrying...")
+                    log(logprefix + f"ERROR: Task not completed successfully. Waiting {waittime} seconds "
+                        f"before retrying...")
                     time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
             else:
-                log(f"User {task['email']} has reached a task load of {taskload_thisuser} "
+                log(logprefix + f"User {task['email']} has reached a task load of {taskload_thisuser} "
                     f"above limit {usertaskload[task['user_id']]} for this pass. Postponing jobid {task['id']} "
                     f"until next pass.")
 
