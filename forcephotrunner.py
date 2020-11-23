@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 
 import os
-#!/usr/bin/env python3
 # import sqlite3
 import subprocess
 import sys
@@ -11,7 +11,6 @@ from signal import SIGINT, signal
 
 import mysql.connector
 import pandas as pd
-import sqlalchemy
 from django.conf import settings
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
@@ -173,14 +172,6 @@ def main():
     # with sqlite3.connect('db.sqlite3') as conn:
     #     conn.row_factory = sqlite3.Row
 
-    # engine = sqlalchemy.create_engine(
-    #     f"mysql+mysqlconnector://{os.environ.get('DJANGO_MYSQL_USER')}:{os.environ.get('DJANGO_MYSQL_PASSWORD')}@127.0.0.1/atlasserver")
-    # conn = engine.raw_connection()
-
-    # DEBUG: mark all jobs as unfinished
-    # cur.execute(f"UPDATE forcephot_task SET finished=false;")
-    # conn.commit()
-
     while True:
         conn = mysql.connector.connect(
             host=djangosettings.DATABASES['default']['HOST'],
@@ -250,6 +241,7 @@ def main():
 
         if taskcount == 0:
             time.sleep(5)
+
         conn.commit()
         cur.close()
 
