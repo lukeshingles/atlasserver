@@ -152,10 +152,16 @@ def send_possible_email(conn, task, logprefix=''):
             if not batchtask['finished'] and batchtask['id'] != task['id']:
                 batchtasks_unfinished += 1
             else:
-                taskdesclist.append(
+                strtask = (
                     f"RA {batchtask['ra']} Dec {batchtask['dec']} "
                     f"use_reduced {'yes' if batchtask['use_reduced'] else 'no'} "
-                    f"jobid {batchtask['id']}")
+                    f"jobid {batchtask['id']}"
+                )
+
+                if task['comment']:
+                    strtask += " comment: '" + task['comment'] + "'"
+
+                taskdesclist.append(strtask)
                 localresultfilelist.append(get_localresultfile(batchtask['id']))
         conn.commit()
         cur3.close()
