@@ -23,6 +23,8 @@ remoteServer = 'atlas'
 localresultdir = Path(djangosettings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
+CONNKWARGS = {
+    'host': djangosettings.DATABASES['default']['HOST'],
     'port': djangosettings.DATABASES['default']['PORT'],
     'database': djangosettings.DATABASES['default']['NAME'],
     'user': djangosettings.DATABASES['default']['USER'],
@@ -56,7 +58,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, **kwargs):
     atlascommand += " dodb=1 parallel=16"
 
     # for debugging because force.sh takes a long time to run
-    atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
+    # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}"
