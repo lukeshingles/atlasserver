@@ -266,7 +266,6 @@ def main():
             task = dict(taskrow)
 
             taskload_thisuser = usertaskload.get(task['user_id'], 0)
-            print(usertaskload)
 
             if taskload_thisuser < usertaskloadlimit:
                 log(f"Starting job for {task['email']} (who has {taskload_thisuser} tasks run in this pass so far):")
