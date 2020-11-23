@@ -149,7 +149,7 @@ def send_possible_email(conn, task, logprefix=''):
         for batchtaskrow in cur3:
             batchtask = dict(batchtaskrow)
             batchtaskcount += 1
-            if not batchtask['finished'] and batchtask['id'] != task['id']:
+            if not batchtask['finishtimestamp'] and batchtask['id'] != task['id']:
                 batchtasks_unfinished += 1
             else:
                 strtask = (

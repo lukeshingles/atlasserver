@@ -37,7 +37,7 @@
         {% else %}
             <ul class="tasks">
             {% for task in tasks %}
-                {% if task.finished %}
+                {% if task.finishtimestamp %}
                 <li class="task finished">
                     <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
                 {% else %}
@@ -56,7 +56,7 @@
                         MJD range: [{{task.mjd_min|default:"0"}}, {{task.mjd_max|default:"∞"}}]<br/>
                     {% endif %}
 
-                    {% if task.finished %}
+                    {% if task.finishtimestamp %}
                     Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
                     <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Results</a>
                     {% else %}
