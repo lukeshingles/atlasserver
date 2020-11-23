@@ -154,7 +154,8 @@ def send_possible_email(conn, task):
             else:
                 taskdesclist.append(
                     f"RA {batchtask['ra']} Dec {batchtask['dec']} "
-                    f"use_reduced {'yes' if batchtask['use_reduced'] else 'no'}")
+                    f"use_reduced {'yes' if batchtask['use_reduced'] else 'no'} "
+                    f"jobid {batchtask['id']}")
                 localresultfilelist.append(get_localresultfile(batchtask['id']))
         conn.commit()
         cur3.close()
@@ -165,8 +166,8 @@ def send_possible_email(conn, task):
             message = EmailMessage(
                 subject='ATLAS forced photometry results',
                 body=(
-                    'Your forced photometry results are attached for:\n'
-                    + '\n'.join(taskdesclist) + '\n'),
+                    'Your forced photometry results are attached for:\n\n'
+                    + '\n'.join(taskdesclist) + '\n\n'),
                 from_email=os.environ.get('EMAIL_HOST_USER'),
                 to=[task["email"]],
             )
@@ -234,10 +235,17 @@ def main():
     # with sqlite3.connect('db.sqlite3') as conn:
     #     conn.row_factory = sqlite3.Row
 
+    # set a limit on the number of tasks run for each user per full pass of the task queue
+    # this prevents a single user from monopolising a large block of the queue
+    usertaskloadlimit = 1
+
     while True:
+        # track some kind of workload measurement for each user
+        # that is reset after each complete pass
+        usertaskload = {}
         conn = mysql.connector.connect(**CONNKWARGS)
 
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(dictionary=True, buffered=True)
 
         # SQLite version
         # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
@@ -251,33 +259,44 @@ def main():
             log(f'Unfinished jobs in queue: {taskcount}')
 
         cur.execute(
-            "SELECT t.*, a.email, a.username from forcephot_task as t LEFT JOIN auth_user as a"
-            " on user_id = a.id WHERE finished=false ORDER BY timestamp ASC LIMIT 1;")
+            "SELECT t.*, a.email, a.username FROM forcephot_task AS t LEFT JOIN auth_user AS a"
+            " ON user_id = a.id WHERE finished=false ORDER BY timestamp;")
 
         for taskrow in cur:
             task = dict(taskrow)
-            log("Starting job", task)
-            taskid = task['id']
 
-            runforced_starttime = time.perf_counter()
+            taskload_thisuser = usertaskload.get(task['user_id'], 0)
+            print(usertaskload)
 
-            localresultfile = runforced(**task)
+            if taskload_thisuser < usertaskloadlimit:
+                log(f"Starting job for {task['email']} (who has {taskload_thisuser} tasks run in this pass so far):")
+                log(task)
+                usertaskload[task['user_id']] = taskload_thisuser + 1
 
-            runforced_duration = time.perf_counter() - runforced_starttime
+                runforced_starttime = time.perf_counter()
 
-            localresultfile = get_localresultfile(taskid)
-            if localresultfile and os.path.exists(localresultfile):
-                # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                send_possible_email(conn, task)
+                localresultfile = runforced(**task)
 
-                cur2 = conn.cursor()
-                cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() WHERE id={taskid};")
-                conn.commit()
-                cur2.close()
+                runforced_duration = time.perf_counter() - runforced_starttime
+
+                localresultfile = get_localresultfile(task['id'])
+                if localresultfile and os.path.exists(localresultfile):
+                    # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+                    send_possible_email(conn, task)
+
+                    cur2 = conn.cursor()
+                    cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() "
+                                 f"WHERE id={task['id']};")
+                    conn.commit()
+                    cur2.close()
+                else:
+                    waittime = 10
+                    log(f"ERROR: Task not completed successfully. Waiting {waittime} seconds before retrying...")
+                    time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
             else:
-                waittime = 10
-                log(f"ERROR: Task not completed successfully. Waiting {waittime} seconds before retrying...")
-                time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
+                log(f"User {task['email']} has reached a task load of {taskload_thisuser} "
+                    f"above limit {usertaskload[task['user_id']]} for this pass. Postponing jobid {task['id']} "
+                    f"until next pass.")
 
         if taskcount == 0:
             time.sleep(5)
