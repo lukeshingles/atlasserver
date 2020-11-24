@@ -1,3 +1,4 @@
+import datetime
 import os
 
 from django.contrib.auth import authenticate, login
@@ -7,20 +8,19 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.http import HttpResponse
 from django.http.response import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.views import APIView
-from django.utils import timezone
-import datetime
-import atlasserver.settings as djangosettings
 
-from .forms import *
-from .misc import splitradeclist
-from .models import *
-from .serializers import *
+import atlasserver.settings as djangosettings
+from forcephot.forms import *
+from forcephot.misc import splitradeclist
+from forcephot.models import *
+from forcephot.serializers import *
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -76,6 +76,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     success = serializer.is_valid(raise_exception=True)
                     self.perform_create(serializer)
                     kwargs['headers'] = self.get_success_headers(serializer.data)
+
+                    # this single post request may have actually contained multiple tasks,
+                    # so manually increment the throttles as if we made extra requests
+                    for throttle in self.get_throttles():
+                        for _ in range(len(datalist) - 1):
+                            throttle.allow_request(request=request, view=self)
                 else:
                     success = False
 

@@ -1,8 +1,9 @@
 from django.contrib import admin
 
+import forcephot.models
+
 # Register your models here.
 
-from .models import *
 
-admin.site.register(Task)
-admin.site.register(Result)
+admin.site.register(forcephot.models.Task)
+# admin.site.register(forcephot.models.Result)

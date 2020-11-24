@@ -8,8 +8,8 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext
 from django.utils.translation import gettext_lazy as _
 
-from .misc import splitradeclist
-from .models import *
+from forcephot.misc import splitradeclist
+from forcephot.models import *
 
 
 class TaskForm(forms.ModelForm):

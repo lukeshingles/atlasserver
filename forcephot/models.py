@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.db import connection, models
 from django.utils import timezone
 
-from .misc import date_to_mjd
+from forcephot.misc import date_to_mjd
 
 
 def get_mjd_min_default():

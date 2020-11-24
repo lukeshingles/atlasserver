@@ -22,7 +22,7 @@ from django.urls import include, path
 # from django.contrib.auth.decorators import login_required
 from rest_framework import routers, serializers, viewsets
 
-from . import views
+from forcephot import views
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()

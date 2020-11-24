@@ -3,8 +3,7 @@ from rest_framework import serializers
 from rest_framework.reverse import reverse
 
 import atlasserver.settings as djangosettings
-
-from .models import Task
+from forcephot.models import Task
 
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer):

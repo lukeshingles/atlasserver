@@ -176,7 +176,7 @@ REST_FRAMEWORK = {
         'forcephot.ForcedPhotRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'forcephottasks': '20/min',
+        'forcephottasks': '60/min',
     },
 
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
