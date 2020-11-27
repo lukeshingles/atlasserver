@@ -19,7 +19,7 @@ class TaskForm(forms.ModelForm):
     class Meta:
         model = Task
         # fields = '__all__'
-        fields = ('radeclist', 'mjd_min', 'mjd_min', 'comment', 'use_reduced', 'send_email')
+        fields = ('radeclist', 'mjd_min', 'mjd_max', 'comment', 'use_reduced', 'send_email')
 
     def clean(self):
         cleaned_data = super().clean()
