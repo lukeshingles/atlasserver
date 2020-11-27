@@ -17,14 +17,16 @@
             {% csrf_token %}
             {{ form.non_field_errors }}
             <ul>
-                <li>{{ form.radeclist.label_tag }}{{ form.radeclist }}{{ form.radeclist.errors }}</li>
-                <!-- <li><div>{{ form.ra.label_tag }}</div><div>{{ form.ra }}</div></li>
-                <li><div>{{ form.dec.label_tag }}</div><div>{{ form.dec }}</div></li> -->
+                <li>{{ form.radeclist.label_tag }}
+                {{ form.radeclist }}
+                <a class="collapsible">Help</a><div style="display: none; clear: right; font-size: small;">Each line should have one right ascension and one declination coordinate in decimal or sexagesimal notation separated by a space or a comma. Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
+                {{ form.radeclist.errors }}
+                </li>
                 <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}</li>
                 <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}</li>
                 <li>{{ form.comment.label_tag }}{{ form.comment }}{{ form.comment.errors }}</li>
-                <li>{{ form.use_reduced }}{{ form.use_reduced.label_tag }}</li>
-                <li>{{ form.send_email }}{{ form.send_email.label_tag }}</li>
+                <li>{{ form.use_reduced }}<label for="id_use_reduced">Use reduced instead of difference images</label></li>
+                <li>{{ form.send_email }}<label for="id_send_email">Email me when completed</label></li>
             </ul>
             <input class="btn btn-info" type="submit" value="Request" />
         </form>
