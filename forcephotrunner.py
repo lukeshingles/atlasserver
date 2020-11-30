@@ -129,7 +129,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, logprefix='
     return localresultfile
 
 
-def send_possible_email(conn, task, logprefix=''):
+def send_email_if_needed(conn, task, logprefix=''):
     if task["send_email"] and task["email"]:
         # if we find an unfinished task in the same batch, hold off sending the email
         # same batch here is defined as being queue by the same user within a few seconds of each other
@@ -290,7 +290,7 @@ def main():
                 localresultfile = get_localresultfile(task['id'])
                 if localresultfile and os.path.exists(localresultfile):
                     # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                    send_possible_email(conn=conn, task=task, logprefix=logprefix)
+                    send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
                     cur2 = conn.cursor()
                     cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() "
@@ -308,7 +308,7 @@ def main():
                     f"until next pass.")
 
         if taskcount == 0:
-            time.sleep(5)
+            time.sleep(3)
 
         conn.commit()
         cur.close()
