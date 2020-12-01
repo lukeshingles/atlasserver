@@ -16,6 +16,7 @@ Including another URLconf
 
 import rest_framework.authtoken.views
 from django.conf.urls import url
+from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import include, path
@@ -29,6 +30,7 @@ from forcephot import views
 router = routers.DefaultRouter()
 router.register(r'', views.ForcePhotTaskViewSet)
 
+admin.site.site_url = settings.PATHPREFIX + '/'
 admin.site.site_header = "ATLAS Forced Photometry Admin"
 admin.site.site_title = "ATLAS Forced Photometry"
 
