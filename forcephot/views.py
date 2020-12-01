@@ -220,10 +220,8 @@ def resultplotdata(request, taskid):
         df = pd.read_csv(Path('static', resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
 
-        strjs = """
-        var jslcdata = new Array();
-        var jslabels = new Array();\n
-        """
+        strjs += "var jslcdata = new Array();\n"
+        strjs += "var jslabels = new Array();\n"
 
         divid = f'plotforced-task-{taskid}'
 
