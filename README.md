@@ -1,6 +1,6 @@
 # atlasserver
 
-This is the source code repository for https://psweb.mp.qub.ac.uk/sne/atlasforced/
+This is the source code repository for https://fallingstar-data.com/forcedphot/
 
 This is the ATLAS forced photometry server, which provides full public
 access to photometric measurements over the full history of ATLAS

@@ -8,7 +8,7 @@ from io import StringIO
 import pandas as pd
 import requests
 
-BASEURL = "https://star.pst.qub.ac.uk/sne/atlasforced"
+BASEURL = "https://fallingstar-data.com/forcedphot"
 
 if os.environ.get('ATLASFORCED_SECRET_KEY'):
     token = os.environ.get('ATLASFORCED_SECRET_KEY')
