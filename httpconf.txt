@@ -1,4 +1,3 @@
-#RequestHeader set HOST psweb.mp.qub.ac.uk
 RequestHeader set HOST fallingstar-data.com
 
 #RequestHeader set X_FORWARDED_HOST psweb.mp.qub.ac.uk
