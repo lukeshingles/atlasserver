@@ -1,0 +1,12 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block nav-sidebar %}{% endblock %}
+
+{% block content %}
+
+<p>{% translate "Thanks for spending some quality time with the Web site today." %}</p>
+
+<p><a href="{% url 'login' %}">{% translate 'Log in again' %}</a></p>
+
+{% endblock %}
