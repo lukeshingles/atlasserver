@@ -215,7 +215,8 @@ def resultplotdata(request, taskid):
     from pathlib import Path
     item = Task.objects.get(id=taskid)
     strjs = ''
-    if (resultfile := item.get_localresultfile()):
+    resultfile = item.get_localresultfile()
+    if resultfile:
         df = pd.read_csv(Path('static', resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
 
