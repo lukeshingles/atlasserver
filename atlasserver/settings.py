@@ -151,7 +151,7 @@ USE_X_FORWARDED_PORT = False
 # WARNING! Only set this if you fully understand what you're doing. Otherwise,
 # you may be opening yourself up to a security risk.
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
-# SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
+SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
 
 # When set to True, if the request URL does not match any of the patterns in the URLconf and it doesn’t end in a slash,
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
