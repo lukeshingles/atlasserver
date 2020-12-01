@@ -490,6 +490,7 @@
           });
         }
       </script>
+
       <script src="{% static "rest_framework/js/jquery-3.5.1.min.js" %}"></script>
       <script src="{% static "rest_framework/js/ajax-form.js" %}"></script>
       <script src="{% static "rest_framework/js/csrf.js" %}"></script>
@@ -501,6 +502,8 @@
           $('form').ajaxForm();
         });
       </script>
+    {% endblock %}
+    {% block script2 %}
     {% endblock %}
 
   </body>

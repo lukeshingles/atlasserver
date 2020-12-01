@@ -61,6 +61,9 @@
                     {% if task.finishtimestamp %}
                     Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
                     <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Results</a>
+                    <a class="results btn btn-info" onclick="javascript:$.getScript('{% url 'resultplotdata' task.id %}');">Show Plot</a>
+                    <div id="plotforced-task-{{task.id}}" style="width: 100%;"></div>
+
                     {% else %}
                     Queued ({{task.get_queuepos}} tasks ahead of this one)
                     {% endif %}
@@ -70,4 +73,15 @@
         {% endif %}
     </div>
 </div>
+{% endblock %}
+
+{% block script2 %}
+<script src="{% static 'js/plotly-latest.kws.js' %}"></script>
+
+<script language="javascript" type="text/javascript">
+var jslcdataglobal = new Object();
+var jslabelsglobal = new Object();
+var jslimitsglobal = new Object();
+</script>
+
 {% endblock %}

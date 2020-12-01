@@ -18,7 +18,7 @@ from rest_framework.views import APIView
 
 import atlasserver.settings as djangosettings
 from forcephot.forms import *
-from forcephot.misc import splitradeclist
+from forcephot.misc import *
 from forcephot.models import *
 from forcephot.serializers import *
 
@@ -209,3 +209,50 @@ def register(request):
 
     return render(request, 'registration/register.html', {'form': form})
 
+
+def resultplotdata(request, taskid):
+    import pandas as pd
+    from pathlib import Path
+    item = Task.objects.get(id=taskid)
+    strjs = ''
+    if (resultfile := item.get_localresultfile()):
+        df = pd.read_csv(Path('static', resultfile), delim_whitespace=True, escapechar='#')
+        # df.rename(columns={'#MJD': 'MJD'})
+
+        strjs = """
+        var jslcdata = new Array();
+        var jslabels = new Array();\n
+        """
+
+        divid = f'plotforced-task-{taskid}'
+
+        for color, filter in [(11, 'c'), (12, 'o')]:
+            dffilter = df.query('F == @filter', inplace=False)
+
+            strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
+
+            strjs += "jslcdata.push([" + (", ".join([
+                f"[{mjd}, {m}, {dm}]" for _, (mjd, m, dm) in dffilter[["#MJD", "m", "dm"]].iterrows()])) + "]);\n"
+
+        today = datetime.date.today()
+        mjd_today = date_to_mjd(today.year, today.month, today.day)
+        xmin = df['#MJD'].min()
+        xmax = df['#MJD'].max()
+        strjs += 'var jslclimits = {'
+        strjs += f'"xmin": {xmin},'
+        strjs += f'"xmax": {xmax},'
+        strjs += f'"ymin": {df.m.min()},'
+        strjs += f'"ymax": {df.m.max()},'
+        strjs += f'"discoveryDate": {xmin},'
+        strjs += f'"today": {mjd_today},'
+        strjs += '};'
+
+        strjs += f'jslimitsglobal["#{divid}"] = jslclimits;\n'
+        strjs += f'jslcdataglobal["#{divid}"] = jslcdata;\n'
+        strjs += f'jslabelsglobal["#{divid}"] = jslabels;\n'
+
+        strjs += f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n'
+
+        strjs += "$.getScript('/static/js/lightcurveplotly.js')"
+
+    return HttpResponse(strjs, content_type="text/javascript")
