@@ -33,6 +33,7 @@ DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 CSRF_TRUSTED_ORIGINS = ['fallingstar-data.com', '*']
+CSRF_COOKIE_DOMAIN = ['fallingstar-data.com']
 
 # Application definition
 
