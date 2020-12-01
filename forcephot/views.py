@@ -212,12 +212,11 @@ def register(request):
 
 def resultplotdata(request, taskid):
     import pandas as pd
-    from pathlib import Path
     item = Task.objects.get(id=taskid)
     strjs = ''
     resultfile = item.get_localresultfile()
     if resultfile:
-        df = pd.read_csv(Path('static', resultfile), delim_whitespace=True, escapechar='#')
+        df = pd.read_csv(os.path.join(settings.STATIC_ROOT, resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
 
         strjs += "var jslcdata = new Array();\n"
