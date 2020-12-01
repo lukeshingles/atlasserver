@@ -17,6 +17,7 @@ Including another URLconf
 import rest_framework.authtoken.views
 from django.conf.urls import url
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.urls import include, path
 # from django.contrib.auth.models import User
 # from django.contrib.auth.decorators import login_required
@@ -28,6 +29,9 @@ from forcephot import views
 router = routers.DefaultRouter()
 router.register(r'', views.ForcePhotTaskViewSet)
 
+admin.site.site_header = "ATLAS Forced Photometry Admin"
+admin.site.site_title = "ATLAS Forced Photometry"
+
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
@@ -38,4 +42,11 @@ urlpatterns = [
     path('resultdesc', views.resultdesc, name="resultdesc"),
     path('apiguide', views.apiguide, name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
+
+    # path('login/', auth_views.LoginView.as_view(), name='login'),
+    # path('logout/', auth_views.LogoutView.as_view(), name='logout'),
+    path('password_reset/', auth_views.PasswordResetView.as_view(), name='password_reset'),
+    path('password_reset/done/', auth_views.PasswordResetDoneView.as_view(), name='password_reset_done'),
+    path('reset/<uidb64>/<token>/', auth_views.PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+    path('reset/done/', auth_views.PasswordResetCompleteView.as_view(), name='password_reset_complete'),
 ]

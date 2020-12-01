@@ -208,3 +208,4 @@ def register(request):
         form = RegistrationForm()
 
     return render(request, 'register.html', {'form': form})
+

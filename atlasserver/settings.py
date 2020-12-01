@@ -135,8 +135,9 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
-# STATIC_URL = '/static/'
-STATIC_URL = '/forcedphot/static/'
+PATHPREFIX = '/forcedphot'
+# PATHPREFIX = ''
+STATIC_URL = PATHPREFIX + '/static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
@@ -157,6 +158,12 @@ SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
 # in a POST request to be lost.
 APPEND_SLASH = True
+
+LOGIN_URL = PATHPREFIX + '/api-auth/login/'
+
+LOGIN_REDIRECT_URL = PATHPREFIX + '/queue'
+
+LOGOUT_REDIRECT_URL = PATHPREFIX + '/'
 
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
