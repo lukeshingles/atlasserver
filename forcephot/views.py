@@ -219,7 +219,7 @@ def taskboxhtml(request, taskid):
         return HttpResponseNotFound("Page not found")
 
 
-def resultplotdata(request, taskid):
+def resultdatajs(request, taskid):
     import pandas as pd
     item = Task.objects.get(id=taskid)
     strjs = ''
@@ -234,12 +234,14 @@ def resultplotdata(request, taskid):
         divid = f'plotforced-task-{taskid}'
 
         for color, filter in [(11, 'c'), (12, 'o')]:
-            dffilter = df.query('F == @filter', inplace=False)
+            for sign in ['', '-']:
+                dffilter = df.query('F == @filter', inplace=False)
+                dffilter.query('m < 0' if sign == '-' else 'm >= 0', inplace=True)
 
-            strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
+                strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + sign + filter + '"});\n'
 
-            strjs += "jslcdata.push([" + (", ".join([
-                f"[{mjd}, {m}, {dm}]" for _, (mjd, m, dm) in dffilter[["#MJD", "m", "dm"]].iterrows()])) + "]);\n"
+                strjs += "jslcdata.push([" + (", ".join([
+                    f"[{mjd}, {abs(m)}, {dm}]" for _, (mjd, m, dm) in dffilter[["#MJD", "m", "dm"]].iterrows()])) + "]);\n"
 
         today = datetime.date.today()
         mjd_today = date_to_mjd(today.year, today.month, today.day)
@@ -248,8 +250,8 @@ def resultplotdata(request, taskid):
         strjs += 'var jslclimits = {'
         strjs += f'"xmin": {xmin},'
         strjs += f'"xmax": {xmax},'
-        strjs += f'"ymin": {df.m.min()},'
-        strjs += f'"ymax": {df.m.max()},'
+        strjs += f'"ymin": {df.m.abs().min()},'
+        strjs += f'"ymax": {df.m.abs().max()},'
         strjs += f'"discoveryDate": {xmin},'
         strjs += f'"today": {mjd_today},'
         strjs += '};'

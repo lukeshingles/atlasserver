@@ -43,7 +43,7 @@ urlpatterns = [
     path('resultdesc', views.resultdesc, name="resultdesc"),
 
     path('taskboxhtml/<int:taskid>', views.taskboxhtml, name="taskboxhtml"),
-    path('resultplotdata/<int:taskid>', views.resultplotdata, name='resultplotdata'),
+    path('resultdatajs/<int:taskid>', views.resultdatajs, name='resultdatajs'),
 
     path('apiguide', views.apiguide, name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
