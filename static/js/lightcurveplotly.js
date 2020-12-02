@@ -180,7 +180,7 @@ if (typeof lcplotwidth !== 'undefined')
 }
 else
 {
-  w = 0.9 * $(locallcdivname).innerWidth();
+  w = $(locallcdivname).innerWidth();
 }
 
 if (locallcdivname.includes("flux"))
@@ -234,7 +234,7 @@ $(window).bind("resize.lcplot", function() {
     }
     else
     {
-      w = 0.9 * $(locallcdivname).innerWidth();
+      w = $(locallcdivname).innerWidth();
       Plotly.relayout(key.replace('#',''), {
         width: w, //window.innerWidth,
         height: lcplotheight //window.innerHeight
