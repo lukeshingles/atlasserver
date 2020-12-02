@@ -246,10 +246,8 @@ def resultdatajs(request, taskid):
         xmin = df['#MJD'].min()
         xmax = df['#MJD'].max()
         strjs += 'var jslclimits = {'
-        strjs += f'"xmin": {xmin},'
-        strjs += f'"xmax": {xmax},'
-        strjs += f'"ymin": {df.uJy.min()},'
-        strjs += f'"ymax": {df.uJy.max()},'
+        strjs += f'"xmin": {xmin}, "xmax": {xmax},'
+        strjs += f'"ymin": {df.uJy.min()}, "ymax": {df.uJy.max()},'
         strjs += f'"discoveryDate": {xmin},'
         strjs += f'"today": {mjd_today},'
         strjs += '};'
