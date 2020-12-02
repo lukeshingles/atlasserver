@@ -20,9 +20,9 @@
         MJD range: [{{task.mjd_min|default:"0"}}, {{task.mjd_max|default:"∞"}}]<br/>
     {% endif %}
 
-    Queued at {{task.timestamp}}<br/>
+    Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
     {% if task.finishtimestamp %}
-    Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
+    Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br/>
     <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Show Data</a>
     <a class="results btn btn-info" onclick="javascript:$.getScript('{% url 'resultdatajs' task.id %}'); this.style='display: none;'">Show Plot</a>
     <div id="plotforcedflux-task-{{task.id}}" style="width: 100%;"></div>
