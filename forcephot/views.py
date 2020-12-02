@@ -10,6 +10,7 @@ from django.http.response import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from django.http import HttpResponseNotFound, Http404
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
@@ -208,6 +209,14 @@ def register(request):
         form = RegistrationForm()
 
     return render(request, 'registration/register.html', {'form': form})
+
+
+def taskboxhtml(request, taskid):
+    try:
+        task = Task.objects.get(id=taskid)
+        return render(request, 'tasklist-task.html', {'task': task})
+    except Task.DoesNotExist:
+        return HttpResponseNotFound("Page not found")
 
 
 def resultplotdata(request, taskid):

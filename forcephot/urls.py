@@ -42,6 +42,7 @@ urlpatterns = [
     url(r'^register/$', views.register, name='register'),
     path('resultdesc', views.resultdesc, name="resultdesc"),
 
+    path('taskboxhtml/<int:taskid>', views.taskboxhtml, name="taskboxhtml"),
     path('resultplotdata/<int:taskid>', views.resultplotdata, name='resultplotdata'),
 
     path('apiguide', views.apiguide, name="apiguide"),

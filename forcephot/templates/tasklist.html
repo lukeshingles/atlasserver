@@ -39,38 +39,7 @@
         {% else %}
             <ul class="tasks">
             {% for task in tasks %}
-                {% if task.finishtimestamp %}
-                <li class="task finished">
-                    <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
-                {% else %}
-                <li class="task queued" id="task-{{task.id}}">
-                    <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
-                {% endif %}
-                    <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
-                    {% if task.user.id != request.user.id %}
-                    User: {{task.user.username}} ({{task.user.email}})<br/>
-                    {% endif %}
-                    {% if task.comment %}
-                    Comment: <b>{{task.comment}}</b><br/>
-                    {% endif %}
-                    RA Dec: {{task.ra}} {{task.dec}}<br/>
-                    Images: {%if task.use_reduced %}Reduced{% else %}Difference{% endif %}<br/>
-
-                    {% if task.mjd_min or task.mjd_max %}
-                        MJD range: [{{task.mjd_min|default:"0"}}, {{task.mjd_max|default:"∞"}}]<br/>
-                    {% endif %}
-
-                    Queued at {{task.timestamp}}<br/>
-                    {% if task.finishtimestamp %}
-                    Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
-                    <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Show Data</a>
-                    <a class="results btn btn-info" onclick="javascript:$.getScript('{% url 'resultplotdata' task.id %}'); this.style='display: none;'">Show Plot</a>
-                    <div id="plotforced-task-{{task.id}}" style="width: 100%;"></div>
-
-                    {% else %}
-                    Waiting for results ({{task.get_queuepos}} tasks ahead of this one)
-                    {% endif %}
-                </li>
+                {% include 'tasklist-task.html' %}
             {% endfor %}
             </ul>
         {% endif %}
@@ -86,5 +55,21 @@
     var jslcdataglobal = new Object();
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
+
+    var updatetimer = setInterval(updateTasks, 2000);
+    var unfinishedids = []
+
+    function updateTasks()
+    {
+        $('.task.queued').each(function() {
+            var taskid = $(this).attr('id').replace("task-", "");
+
+            console.log("taskid", taskid);
+            $.get('{% url 'index' %}taskboxhtml/' + taskid, function(data, status) {
+                $('#task-' + taskid).replaceWith(data);
+            });
+        });
+    };
+
     </script>
 {% endblock %}
