@@ -7,7 +7,8 @@ APACHEPATH="/tmp/atlasforced"
 if [ -f $APACHEPATH/apachectl ]; then
     echo "Stopping Apache if already running"
     $APACHEPATH/apachectl stop
-    sleep 2
+    sleep 1
+    # wait a second to make sure the port is released
 else
     echo "Creating directory $APACHEPATH"
     mkdir -p APACHEPATH
