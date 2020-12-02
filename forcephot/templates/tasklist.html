@@ -85,14 +85,14 @@
     };
 
     function checkNewOrDeletedTasks() {
-        if (window_active) {
-            // check all of the displayed tasks still exist on the server
-            var maxid = -1;
-            $('li.task').each(function() {
-                var taskid = $(this).attr('id').replace("task-", "");
-                if (taskid > maxid)
-                    maxid = taskid;
+        // check all of the displayed tasks still exist on the server
+        var maxid = -1;
+        $('li.task').each(function() {
+            var taskid = $(this).attr('id').replace("task-", "");
+            if (taskid > maxid)
+                maxid = taskid;
 
+            if (window_active) {
                 $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid))
                 .fail(function(jqXHR, textStatus, errorThrown){
                     if(jqXHR.status == 404) {
@@ -100,8 +100,8 @@
                         console.log('Removing deleted task ', taskid);
                     }
                 });
-            });
-        }
+            }
+        });
 
         // add any new tasks found on the server to the top of the page
         $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxid)).done(function(data, status) {
