@@ -60,7 +60,7 @@
 
                     {% if task.finishtimestamp %}
                     Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
-                    <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Results</a>
+                    <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Show Data</a>
                     <a class="results btn btn-info" onclick="javascript:$.getScript('{% url 'resultplotdata' task.id %}');">Show Plot</a>
                     <div id="plotforced-task-{{task.id}}" style="width: 100%;"></div>
 
