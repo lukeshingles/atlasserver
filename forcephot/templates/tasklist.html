@@ -75,7 +75,7 @@
         $('li.task.queued').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
 
-            console.log("updating taskid", taskid);
+            console.log("updating unfinished taskid", taskid);
             $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
                 if (status == 'success') {
                     $('#task-' + taskid).replaceWith(data);
@@ -99,7 +99,7 @@
                 .fail(function(jqXHR, textStatus, errorThrown){
                     if(jqXHR.status == 404) {
                         $('#task-' + taskid).replaceWith('');
-                        console.log('Removing deleted task ', taskid);
+                        console.log('removing deleted task ', taskid);
                     }
                 });
             }
@@ -108,7 +108,13 @@
         // add any new tasks found on the server to the top of the page
         $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxid)).done(function(data, status) {
             if (status == 'success') {
-                $('ul.tasks').prepend(data);
+                var datatrim = data.trim();
+                if (datatrim == "") {
+                    console.log("no new tasks on server");
+                } else {
+                    console.log("adding new task(s) from server");
+                    $('ul.tasks').prepend(datatrim);
+                }
             }
         });
     };
