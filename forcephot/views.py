@@ -211,14 +211,18 @@ def register(request):
     return render(request, 'registration/register.html', {'form': form})
 
 
-def taskboxhtml(request, taskid=None):
-    if taskid:
-        try:
-            tasks = [Task.objects.get(id=taskid)]
-        except Task.DoesNotExist:
-            return HttpResponseNotFound("Page not found")
+def taskboxhtml(request, taskid=None, type=None):
+    if type == 'maxid':
+        # get all tasks more recent than the specified once
+        tasks = Task.objects.all().order_by('-timestamp').select_related('user').filter(user_id=request.user,id__gt=taskid)
     else:
-        tasks = Task.objects.all().order_by('-timestamp').select_related('user').filter(user_id=request.user)
+        if taskid:
+            try:
+                tasks = [Task.objects.get(id=taskid)]
+            except Task.DoesNotExist:
+                return HttpResponseNotFound("Page not found")
+        else:
+            tasks = Task.objects.all().order_by('-timestamp').select_related('user').filter(user_id=request.user)
 
     return render(request, 'tasklist-tasks.html', {'tasks': tasks})
 

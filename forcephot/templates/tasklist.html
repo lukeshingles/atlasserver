@@ -54,20 +54,40 @@
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
-    var updatetimer = setInterval(updateTasks, 2500);
-    var unfinishedids = []
+    var updatequeuedtimer = setInterval(updateQueuedTasks, 2000);
+    var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 30000);
 
-    function updateTasks()
+    function updateQueuedTasks()
     {
-        $('.task.queued').each(function() {
+        $('li.task.queued').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
 
             // console.log("updating taskid", taskid);
-            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid), function(data, status) {
+            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
                 $('#task-' + taskid).replaceWith(data);
             });
         });
     };
 
+    function checkNewOrDeletedTasks()
+    {
+        // check all of the displayed tasks still exist on the server
+        var maxid = -1;
+        $('li.task').each(function() {
+            var taskid = $(this).attr('id').replace("task-", "");
+            if (taskid > maxid)
+                maxid = taskid;
+
+            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid)).fail(function() {
+                $('#task-' + taskid).replaceWith('');
+                console.log('Removing deleted task ', taskid);
+            });
+        });
+
+        // add any new tasks found on the server to the top of the page
+        $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxid)).done(function(data, status) {
+            $('ul.tasks').prepend(data);
+        });
+    };
     </script>
 {% endblock %}
