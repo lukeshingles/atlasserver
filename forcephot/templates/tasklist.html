@@ -75,13 +75,13 @@
 </div>
 {% endblock %}
 
-{% block script2 %}
-<script src="{% static 'js/plotly-latest.kws.js' %}"></script>
+{% block script %}
+    {{ block.super }}
+    <script src="{% static 'js/plotly-latest.kws.js' %}"></script>
 
-<script language="javascript" type="text/javascript">
-var jslcdataglobal = new Object();
-var jslabelsglobal = new Object();
-var jslimitsglobal = new Object();
-</script>
-
+    <script language="javascript" type="text/javascript">
+    var jslcdataglobal = new Object();
+    var jslabelsglobal = new Object();
+    var jslimitsglobal = new Object();
+    </script>
 {% endblock %}
