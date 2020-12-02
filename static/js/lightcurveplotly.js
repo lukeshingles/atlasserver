@@ -204,7 +204,7 @@ var layout = { showlegend: true,
                          hoverformat: ".5f",
                          range: [xmin, xmax],
                          title: "mjd" },
-               margin: {l: 50, r: 0, b: 30, t: 30},
+               margin: {l: 70, r: 0, b: 30, t: 30},
                width: w, //window.innerWidth,
                height: lcplotheight} //window.innerHeight
                //paper_bgcolor: 'rgba(0,0,0,0)'}
