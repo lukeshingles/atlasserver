@@ -152,7 +152,7 @@ for(filter=0;filter<jslcdataglobal[locallcdivname].length;filter++){
         }
 
         data.push(tracedets);
-     
+
         var tracenondets = {
         x: nondetx,
         y: nondety,
@@ -169,7 +169,7 @@ for(filter=0;filter<jslcdataglobal[locallcdivname].length;filter++){
                 },
             size: arrowsize
             }
-        }; 
+        };
         data.push(tracenondets);
       }
   }
@@ -185,7 +185,7 @@ else
 
 if (locallcdivname.includes("flux"))
 {
-  yautorange = true;
+  yautorange = false;
   ylabel = 'Flux / \u00B5Jy';
 }
 else
@@ -206,7 +206,7 @@ var layout = { showlegend: true,
                          title: "mjd" },
                margin: {l: 50, r: 0, b: 30, t: 30},
                width: w, //window.innerWidth,
-               height: lcplotheight} //window.innerHeight 
+               height: lcplotheight} //window.innerHeight
                //paper_bgcolor: 'rgba(0,0,0,0)'}
                //plot_bgcolor: 'rgba(0,0,0,0)'}
 

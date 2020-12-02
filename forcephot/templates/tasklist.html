@@ -7,7 +7,7 @@
 <div class="content-main" role="main" aria-label="main content">
 
     <div class="page-header">
-    <h1>{% if tasks|length == 1 %}Task Item{% else %}Job Queue{% endif %}</h1>
+    <h1>{% if tasks|length == 1 %}Task Item{% else %}Job Queue{% endif %}{{request.GET.id}}</h1>
     </div>
 
     <div class="newrequest">
@@ -38,9 +38,7 @@
         <p>You have no tasks yet.</p>
         {% else %}
             <ul class="tasks">
-            {% for task in tasks %}
-                {% include 'tasklist-task.html' %}
-            {% endfor %}
+            {% include 'tasklist-tasks.html' %}
             </ul>
         {% endif %}
     </div>
@@ -65,7 +63,7 @@
             var taskid = $(this).attr('id').replace("task-", "");
 
             // console.log("updating taskid", taskid);
-            $.get('{% url 'index' %}taskboxhtml/' + taskid, function(data, status) {
+            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid), function(data, status) {
                 $('#task-' + taskid).replaceWith(data);
             });
         });

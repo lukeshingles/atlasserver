@@ -211,12 +211,16 @@ def register(request):
     return render(request, 'registration/register.html', {'form': form})
 
 
-def taskboxhtml(request, taskid):
-    try:
-        task = Task.objects.get(id=taskid)
-        return render(request, 'tasklist-task.html', {'task': task})
-    except Task.DoesNotExist:
-        return HttpResponseNotFound("Page not found")
+def taskboxhtml(request, taskid=None):
+    if taskid:
+        try:
+            tasks = [Task.objects.get(id=taskid)]
+        except Task.DoesNotExist:
+            return HttpResponseNotFound("Page not found")
+    else:
+        tasks = Task.objects.all().order_by('-timestamp').select_related('user').filter(user_id=request.user)
+
+    return render(request, 'tasklist-tasks.html', {'tasks': tasks})
 
 
 def resultdatajs(request, taskid):
@@ -239,15 +243,19 @@ def resultdatajs(request, taskid):
             strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
 
             strjs += "jslcdata.push([" + (", ".join([
-                f"[{mjd}, {uJy}, {duJy}]" for _, (mjd, uJy, duJy) in dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n"
+                f"[{mjd}, {uJy}, {duJy}]" for _, (mjd, uJy, duJy) in
+                dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n"
 
         today = datetime.date.today()
         mjd_today = date_to_mjd(today.year, today.month, today.day)
         xmin = df['#MJD'].min()
         xmax = df['#MJD'].max()
+        ymin = max(-200, df.uJy.min())
+        ymax = min(40000, df.uJy.max())
+
         strjs += 'var jslclimits = {'
         strjs += f'"xmin": {xmin}, "xmax": {xmax},'
-        strjs += f'"ymin": {df.uJy.min()}, "ymax": {df.uJy.max()},'
+        strjs += f'"ymin": {ymin}, "ymax": {ymax},'
         strjs += f'"discoveryDate": {xmin},'
         strjs += f'"today": {mjd_today},'
         strjs += '};'
