@@ -7,7 +7,7 @@
 <div class="content-main" role="main" aria-label="main content">
 
     <div class="page-header">
-    <h1>Job Queue</h1>
+    <h1>{% if tasks|length == 1 %}Task Item{% else %}Job Queue{% endif %}</h1>
     </div>
 
     <div class="newrequest">
