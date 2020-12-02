@@ -93,6 +93,8 @@
                 maxid = taskid;
 
             if (window_active) {
+                // this method of retrieving every item to see if it still exists
+                // is probably quite expensive
                 $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid))
                 .fail(function(jqXHR, textStatus, errorThrown){
                     if(jqXHR.status == 404) {
