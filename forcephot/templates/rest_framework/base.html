@@ -48,11 +48,23 @@
             padding-top: 96px;
           }
 
+          {% if not user.is_authenticated %}
+          .navbar-nav>li>a.loginrequired {
+            color: lightgrey;
+            cursor: default;
+          }
+          {% endif %}
+
           div#content {
-            /* margin-top: 5em; */
+            /* margin-top: 0em; */
+          }
+
+          div.page-header {
+            margin: 0;
           }
 
           h1 {
+            margin-top: 0;
             margin-bottom: 0.5em;
             font-weight: bold;
           }
@@ -206,12 +218,10 @@
             <ul class="nav navbar-nav">
                 <li><a href="{% url 'index' %}" rel="nofollow">Home</a></li>
                 <li><a href="{% url 'resultdesc' %}" rel="nofollow">Output</a></li>
-              {% if user.is_authenticated %}
-                <li><a href="{% url 'task-list' %}" rel="nofollow">Queue</a></li>
-                <li><a href="{% url 'task-list' %}?format=api" rel="nofollow">API</a></li>
+                <li><a href="{% if user.is_authenticated %}{% url 'task-list' %}{% endif %}" rel="nofollow" class="loginrequired">Queue</a></li>
+                <li><a href="{% if user.is_authenticated %}{% url 'task-list' %}?format=api{% endif %}" rel="nofollow" class="loginrequired">API</a></li>
                 <li><a href="{% url 'apiguide' %}" rel="nofollow">API Guide</a></li>
                 <!-- <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li> -->
-              {% endif %}
             </ul>
 
             <ul class="nav navbar-nav pull-right">
