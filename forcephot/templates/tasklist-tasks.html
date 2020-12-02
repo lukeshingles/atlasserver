@@ -3,6 +3,8 @@
     {% if task.finishtimestamp %}
         <li class="task finished" id="task-{{task.id}}">
         <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
+    {% elif task.starttimestamp %}
+        <li class="task queued running" id="task-{{task.id}}">
     {% else %}
     <li class="task queued" id="task-{{task.id}}">
         <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
@@ -28,6 +30,8 @@
         <a class="results btn btn-info" onclick="javascript:$.getScript('{% url 'resultdatajs' task.id %}'); this.style='display: none;'">Show Plot</a>
         <div id="plotforcedflux-task-{{task.id}}" style="width: 100%;"></div>
 
+        {% elif task.starttimestamp %}
+        <span style="color: red;">Started running...</span>
         {% else %}
         Queued ({{task.get_queuepos}} tasks ahead of this one)
         {% endif %}

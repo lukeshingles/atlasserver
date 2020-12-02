@@ -26,6 +26,7 @@ class Task(models.Model):
     send_email = models.BooleanField("Email me when completed", default=True)
     finished = models.BooleanField(default=False)
     finishtimestamp = models.DateTimeField(null=True, default=None)
+    starttimestamp = models.DateTimeField(null=True, default=None)
 
     def get_localresultfile(self):
         if self.finished:

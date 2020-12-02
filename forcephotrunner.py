@@ -276,6 +276,11 @@ def main():
             logprefix = f"job{task['id']:05d}: "
 
             if taskload_thisuser < usertaskloadlimit:
+                cur2 = conn.cursor()
+                cur2.execute(f"UPDATE forcephot_task SET starttimestamp=NOW() WHERE id={task['id']};")
+                conn.commit()
+                cur2.close()
+
                 log(logprefix + f"Starting job for {task['email']} (who has run {taskload_thisuser} tasks "
                     "in this pass so far):")
                 log(logprefix + str(task))
