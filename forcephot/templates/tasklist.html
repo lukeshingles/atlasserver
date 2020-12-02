@@ -55,22 +55,38 @@
     var jslimitsglobal = new Object();
 
     var updatequeuedtimer = setInterval(updateQueuedTasks, 2000);
-    var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 20000);
+    var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 15000);
 
-    function updateQueuedTasks()
-    {
+    var window_active = true;
+
+    $(window).blur(function() {
+      window_active = false;
+    });
+
+    $(window).focus(function() {
+      window_active = true;
+    });
+
+    function updateQueuedTasks() {
+        if (!window_active) {
+            return;
+        }
+
         $('li.task.queued').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
 
-            // console.log("updating taskid", taskid);
+            console.log("updating taskid", taskid);
             $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
                 $('#task-' + taskid).replaceWith(data);
             });
         });
     };
 
-    function checkNewOrDeletedTasks()
-    {
+    function checkNewOrDeletedTasks() {
+        if (!window_active) {
+            return;
+        }
+
         // check all of the displayed tasks still exist on the server
         var maxid = -1;
         $('li.task').each(function() {
