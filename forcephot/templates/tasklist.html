@@ -54,8 +54,8 @@
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
-    var updatequeuedtimer = setInterval(updateQueuedTasks, 1000);
-    var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 1000);
+    var updatequeuedtimer = setInterval(updateQueuedTasks, 1500);
+    var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 5000);
 
     var window_active = true;
 
@@ -77,7 +77,9 @@
 
             console.log("updating taskid", taskid);
             $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
-                $('#task-' + taskid).replaceWith(data);
+                if (status == 'success') {
+                    $('#task-' + taskid).replaceWith(data);
+                }
             });
         });
     };
@@ -103,7 +105,9 @@
 
         // add any new tasks found on the server to the top of the page
         $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxid)).done(function(data, status) {
-            $('ul.tasks').prepend(data);
+            if (status == 'success') {
+                $('ul.tasks').prepend(data);
+            }
         });
     };
     </script>
