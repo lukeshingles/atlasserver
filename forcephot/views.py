@@ -239,7 +239,7 @@ def resultdatajs(request, taskid):
             strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
 
             strjs += "jslcdata.push([" + (", ".join([
-                f"[{mjd}, {uJy}, {duJy}]" for _, (mjd, uJy, duJy) in dffilter[["#MJD", "m", "duJy"]].iterrows()])) + "]);\n"
+                f"[{mjd}, {uJy}, {duJy}]" for _, (mjd, uJy, duJy) in dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n"
 
         today = datetime.date.today()
         mjd_today = date_to_mjd(today.year, today.month, today.day)
