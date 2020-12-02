@@ -231,17 +231,15 @@ def resultdatajs(request, taskid):
         strjs += "var jslcdata = new Array();\n"
         strjs += "var jslabels = new Array();\n"
 
-        divid = f'plotforced-task-{taskid}'
+        divid = f'plotforcedflux-task-{taskid}'
 
         for color, filter in [(11, 'c'), (12, 'o')]:
-            for sign in ['', '-']:
-                dffilter = df.query('F == @filter', inplace=False)
-                dffilter.query('m < 0' if sign == '-' else 'm >= 0', inplace=True)
+            dffilter = df.query('F == @filter', inplace=False)
 
-                strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + sign + filter + '"});\n'
+            strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
 
-                strjs += "jslcdata.push([" + (", ".join([
-                    f"[{mjd}, {abs(m)}, {dm}]" for _, (mjd, m, dm) in dffilter[["#MJD", "m", "dm"]].iterrows()])) + "]);\n"
+            strjs += "jslcdata.push([" + (", ".join([
+                f"[{mjd}, {uJy}, {duJy}]" for _, (mjd, uJy, duJy) in dffilter[["#MJD", "m", "duJy"]].iterrows()])) + "]);\n"
 
         today = datetime.date.today()
         mjd_today = date_to_mjd(today.year, today.month, today.day)
@@ -250,8 +248,8 @@ def resultdatajs(request, taskid):
         strjs += 'var jslclimits = {'
         strjs += f'"xmin": {xmin},'
         strjs += f'"xmax": {xmax},'
-        strjs += f'"ymin": {df.m.abs().min()},'
-        strjs += f'"ymax": {df.m.abs().max()},'
+        strjs += f'"ymin": {df.uJy.min()},'
+        strjs += f'"ymax": {df.uJy.max()},'
         strjs += f'"discoveryDate": {xmin},'
         strjs += f'"today": {mjd_today},'
         strjs += '};'

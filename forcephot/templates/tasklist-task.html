@@ -25,7 +25,7 @@
     Finished{% if task.finishtimestamp %} at {{task.finishtimestamp}}{% endif %}<br/>
     <a class="results btn btn-info" href="{% static task.get_localresultfile %}">Show Data</a>
     <a class="results btn btn-info" onclick="javascript:$.getScript('{% url 'resultdatajs' task.id %}'); this.style='display: none;'">Show Plot</a>
-    <div id="plotforced-task-{{task.id}}" style="width: 100%;"></div>
+    <div id="plotforcedflux-task-{{task.id}}" style="width: 100%;"></div>
 
     {% else %}
     Queued ({{task.get_queuepos}} tasks ahead of this one)
