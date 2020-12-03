@@ -59,6 +59,7 @@ while not task_url:
 
 
 result_url = None
+taskstarted = False
 while not result_url:
     with requests.Session() as s:
         resp = s.get(task_url, headers=headers)
@@ -67,12 +68,14 @@ while not result_url:
             if resp.json()['finishtimestamp']:
                 result_url = resp.json()['result_url']
                 print(f"Task is complete with results available at {result_url}")
-                break
             elif resp.json()['starttimestamp']:
-                print(f"Task is running (started at {resp.json()['starttimestamp']})")
+                if not taskstarted:
+                    print(f"Task is running (started at {resp.json()['starttimestamp']})")
+                    taskstarted = True
+                time.sleep(1)
             else:
                 print("Waiting for job to start. Checking again in a few seconds...")
-            time.sleep(5)
+                time.sleep(5)
         else:
             print(f'ERROR {resp.status_code}')
             print(resp.json())
