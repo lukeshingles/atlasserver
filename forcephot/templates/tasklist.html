@@ -54,8 +54,8 @@
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
-    var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 2000);
-    var updatestartedtimer = setInterval(function(){updateQueuedTasks(true, '.started');}, 1000);
+    var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 1500);
+    var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
     var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 5000);
 
     var window_active = true;
@@ -66,6 +66,9 @@
 
     $(window).focus(function() {
       window_active = true;
+      updateQueuedTasks(false, '.started');
+      updateQueuedTasks(true, '.notstarted');
+      checkNewOrDeletedTasks();
     });
 
     function updateQueuedTasks(require_active, class_suffix) {
@@ -73,15 +76,22 @@
             return;
         }
 
-        $('li.task.queued' + class_suffix).each(function() {
-            var taskid = $(this).attr('id').replace("task-", "");
+        $('li.task.queued' + class_suffix).sort(function(a, b) {
+            // ascending order of task id number
+            taskid_a = parseInt($(a).attr('id').replace("task-", ""));
+            taskid_b = parseInt($(b).attr('id').replace("task-", ""));
+            return taskid_a - taskid_b;
+        })
+        .slice(0, 3) // limit number of items updated. The ones that could change have the lowest id numbers
+        .each(function() {
+        var taskid = $(this).attr('id').replace("task-", "");
 
-            console.log("updating " + class_suffix + " task id", taskid);
-            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
-                if (status == 'success') {
-                    $('#task-' + taskid).replaceWith(data);
-                }
-            });
+        console.log("updating " + class_suffix + " task id", taskid);
+        $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
+            if (status == 'success') {
+                $('#task-' + taskid).replaceWith(data);
+            }
+        });
         });
     };
 
