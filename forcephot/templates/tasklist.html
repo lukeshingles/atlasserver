@@ -54,7 +54,8 @@
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
-    var updatequeuedtimer = setInterval(updateQueuedTasks, 1500);
+    var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 2000);
+    var updatestartedtimer = setInterval(function(){updateQueuedTasks(true, '.started');}, 1000);
     var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 5000);
 
     var window_active = true;
@@ -67,15 +68,15 @@
       window_active = true;
     });
 
-    function updateQueuedTasks() {
-        if (!window_active) {
+    function updateQueuedTasks(require_active, class_suffix) {
+        if (require_active && !window_active) {
             return;
         }
 
-        $('li.task.queued').each(function() {
+        $('li.task.queued' + class_suffix).each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
 
-            console.log("updating unfinished taskid", taskid);
+            console.log("updating " + class_suffix + " task id", taskid);
             $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
                 if (status == 'success') {
                     $('#task-' + taskid).replaceWith(data);
@@ -86,11 +87,11 @@
 
     function checkNewOrDeletedTasks() {
         // check all of the displayed tasks still exist on the server
-        var maxid = -1;
+        var maxtaskid = -1;
         $('li.task').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
-            if (taskid > maxid)
-                maxid = taskid;
+            if (taskid > maxtaskid)
+                maxtaskid = taskid;
 
             if (window_active) {
                 // this method of retrieving every item to see if it still exists
@@ -99,14 +100,14 @@
                 .fail(function(jqXHR, textStatus, errorThrown){
                     if(jqXHR.status == 404) {
                         $('#task-' + taskid).replaceWith('');
-                        console.log('removing deleted task ', taskid);
+                        console.log('removing deleted task id ', taskid);
                     }
                 });
             }
         });
 
         // add any new tasks found on the server to the top of the page
-        $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxid)).done(function(data, status) {
+        $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxtaskid)).done(function(data, status) {
             if (status == 'success') {
                 var datatrim = data.trim();
                 if (datatrim == "") {
