@@ -54,8 +54,14 @@
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
+    // check if the next job to run has started or finished
     var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 1500);
+
+    // only one task across all users will be running now, so you might as well poll it at high frequency
     var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
+
+    // occaisionally check and new items from the server, or if items in the list have been deleted
+    // only needed if the same user's queue page is open in multiple devices/browsers/tabs
     var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 5000);
 
     var window_active = true;
@@ -84,19 +90,20 @@
         })
         .slice(0, 3) // limit number of items updated. The ones that could change have the lowest id numbers
         .each(function() {
-        var taskid = $(this).attr('id').replace("task-", "");
+            var taskid = $(this).attr('id').replace("task-", "");
 
-        console.log("updating " + class_suffix + " task id", taskid);
-        $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
-            if (status == 'success') {
-                $('#task-' + taskid).replaceWith(data);
-            }
-        });
+            console.log("updating " + class_suffix + " task id", taskid);
+            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
+                if (status == 'success') {
+                    $('#task-' + taskid).replaceWith(data);
+                }
+            });
         });
     };
 
     function checkNewOrDeletedTasks() {
         // check all of the displayed tasks still exist on the server
+        // this could cause problems for users with a giant queue unless properly paginated
         var maxtaskid = -1;
         $('li.task').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
