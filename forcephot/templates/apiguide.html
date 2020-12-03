@@ -27,7 +27,7 @@ BASEURL = "https://fallingstar-data.com/forcedphot"
 if resp.status_code == 200:
     token = resp.json()['token']
     print(f'Your token is {token}')
-    headers = {'Authorization': f'Token {token}'}
+    headers = {'Authorization': f'Token {token}', 'Accept': 'application/json'}
 else:
     print(f'ERROR {resp.status_code}')
     print(resp.json())
@@ -37,7 +37,7 @@ else:
 <pre><code>task_url = None
 while not task_url:
     with requests.Session() as s:
-        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
+        resp = s.post(f"{BASEURL}/queue/", headers=headers, data={'ra': 44, 'dec': 22, 'send_email': False})
 
         if resp.status_code == 201:  # success
             task_url = resp.json()['url']
@@ -61,21 +61,24 @@ while not task_url:
 
 Now we can check if the task has completed, and if so, retrieve the results. Manually sending a delete operation on the task helps to reduce our impact on the server resources, but all completed jobs will expire after some time anyway.
 <pre><code>result_url = None
-while not result_url:
-    with requests.Session() as s:
-        resp = s.get(task_url, headers=headers)
+    while not result_url:
+        with requests.Session() as s:
+            resp = s.get(task_url, headers=headers)
 
-        if resp.status_code == 200:  # HTTP OK
-            if resp.json()['finished']:
-                result_url = resp.json()['result_url']
-                print(f"Task is complete with results available at {result_url}")
-            else:
-                print("Waiting for job to finish. Checking again in a few seconds...")
+            if resp.status_code == 200:  # HTTP OK
+                if resp.json()['finishtimestamp']:
+                    result_url = resp.json()['result_url']
+                    print(f"Task is complete with results available at {result_url}")
+                    break
+                elif resp.json()['starttimestamp']:
+                    print(f"Task is running (started at {resp.json()['starttimestamp']})")
+                else:
+                    print("Waiting for job to start. Checking again in a few seconds...")
                 time.sleep(5)
-        else:
-            print(f'ERROR {resp.status_code}')
-            print(resp.json())
-            sys.exit()
+            else:
+                print(f'ERROR {resp.status_code}')
+                print(resp.json())
+                sys.exit()
 
 with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text

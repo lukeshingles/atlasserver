@@ -29,14 +29,14 @@ else:
         sys.exit()
 
 
-headers = {'Authorization': f'Token {token}'}
+headers = {'Authorization': f'Token {token}', 'Accept': 'application/json'}
 
 task_url = None
 while not task_url:
     with requests.Session() as s:
         # alternative to token auth
         # s.auth = ('USERNAME', 'PASSWORD')
-        resp = s.post(f"{BASEURL}/queue?format=json", headers=headers, data={'ra': 110, 'dec': 11, 'send_email': False})
+        resp = s.post(f"{BASEURL}/queue/", headers=headers, data={'ra': 110, 'dec': 11, 'send_email': False})
 
         if resp.status_code == 201:  # success
             task_url = resp.json()['url']
@@ -64,12 +64,15 @@ while not result_url:
         resp = s.get(task_url, headers=headers)
 
         if resp.status_code == 200:  # HTTP OK
-            if resp.json()['finished']:
+            if resp.json()['finishtimestamp']:
                 result_url = resp.json()['result_url']
                 print(f"Task is complete with results available at {result_url}")
+                break
+            elif resp.json()['starttimestamp']:
+                print(f"Task is running (started at {resp.json()['starttimestamp']})")
             else:
-                print("Waiting for job to finish. Checking again in a few seconds...")
-                time.sleep(5)
+                print("Waiting for job to start. Checking again in a few seconds...")
+            time.sleep(5)
         else:
             print(f'ERROR {resp.status_code}')
             print(resp.json())
