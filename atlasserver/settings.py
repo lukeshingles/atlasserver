@@ -28,7 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = ['*']
 
@@ -153,8 +153,6 @@ USE_X_FORWARDED_PORT = False
 # you may be opening yourself up to a security risk.
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
 SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
-
-SECURE_SSL_REDIRECT = True  # redirect http to https
 
 CSRF_TRUSTED_ORIGINS = ['.qub.ac.uk', 'fallingstar-data.com']
 
