@@ -60,9 +60,11 @@
     // only one task across all users will be running now, so you might as well poll it at high frequency
     var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
 
+    {% if tasks|length > 1 %}
     // occaisionally check and new items from the server, or if items in the list have been deleted
     // only needed if the same user's queue page is open in multiple devices/browsers/tabs
     var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 5000);
+    {% endif %}
 
     var window_active = true;
 
