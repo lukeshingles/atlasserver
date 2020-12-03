@@ -59,7 +59,7 @@ while not task_url:
             sys.exit()
 </code></pre>
 
-Now we can check if the task has completed, and if so, retrieve the results. Manually sending a delete operation on the task helps to reduce our impact on the server resources, but all completed jobs will expire after some time anyway.
+Now we can check if the task has completed, and if so, retrieve the results. Be aware that the result URL is for short term use and may expire in the future.
 <pre><code>result_url = None
     while not result_url:
         with requests.Session() as s:
@@ -82,7 +82,10 @@ Now we can check if the task has completed, and if so, retrieve the results. Man
 
 with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
-    s.delete(task_url, headers=headers).json()  # clean up afterwards
+
+    # if we'll be making a lot of requests, keep the web queue from being
+    # cluttered (and reduce server storage usage) by sending a delete operation
+    # s.delete(task_url, headers=headers).json()
 </code></pre>
 
 <p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>

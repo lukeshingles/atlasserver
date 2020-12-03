@@ -9,12 +9,13 @@ import pandas as pd
 import requests
 
 BASEURL = "https://fallingstar-data.com/forcedphot"
+# BASEURL = "http://127.0.0.1:8000"
 
 if os.environ.get('ATLASFORCED_SECRET_KEY'):
     token = os.environ.get('ATLASFORCED_SECRET_KEY')
     print('Using stored token')
 else:
-    data = {'username': 'USERNAME', 'password': 'PASSWORD'}
+    data = {'username': 'luke', 'password': 'TQ3yHXZNX9ULWFsL'}
 
     resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
 
@@ -83,7 +84,10 @@ while not result_url:
 
 with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
-    s.delete(task_url, headers=headers).json()  # clean up afterwards
+
+    # if we'll be making a lot of requests, keep the web queue from being
+    # cluttered (and reduce server storage usage) by sending a delete operation
+    # s.delete(task_url, headers=headers).json()
 
 dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
