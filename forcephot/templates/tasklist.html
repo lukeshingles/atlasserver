@@ -76,7 +76,9 @@
       window_active = true;
       updateQueuedTasks(false, '.started');
       updateQueuedTasks(true, '.notstarted');
+      {% if tasks|length > 1 %}
       checkNewOrDeletedTasks();
+      {% endif %}
     });
 
     function updateQueuedTasks(require_active, class_suffix) {
