@@ -53,7 +53,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows force.sh tasks to be created and deleted.
     """
-    queryset = Task.objects.all().order_by('-timestamp').select_related('user')
+    queryset = Task.objects.all().order_by('-timestamp', '-id').select_related('user')
     serializer_class = ForcePhotTaskSerializer
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
@@ -216,7 +216,7 @@ def register(request):
 def taskboxhtml(request, taskid=None, type=None):
     if type == 'maxid':
         # get all tasks more recent than the specified once
-        tasks = Task.objects.all().order_by('-timestamp').select_related('user').filter(user_id=request.user,id__gt=taskid)
+        tasks = Task.objects.all().order_by('-timestamp', '-id').select_related('user').filter(user_id=request.user, id__gt=taskid)
     else:
         if taskid:
             try:
@@ -224,7 +224,7 @@ def taskboxhtml(request, taskid=None, type=None):
             except Task.DoesNotExist:
                 return HttpResponseNotFound("Page not found")
         else:
-            tasks = Task.objects.all().order_by('-timestamp').select_related('user').filter(user_id=request.user)
+            tasks = Task.objects.all().order_by('-timestamp', '-id').select_related('user').filter(user_id=request.user)
 
     return render(request, 'tasklist-tasks.html', {'tasks': tasks})
 
