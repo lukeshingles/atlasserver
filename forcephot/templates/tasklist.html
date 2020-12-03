@@ -121,9 +121,9 @@
             if (status == 'success') {
                 var datatrim = data.trim();
                 if (datatrim == "") {
-                    console.log("no new tasks on server");
+                    console.log("no new tasks on server with id > " + maxtaskid);
                 } else {
-                    console.log("adding new task(s) from server");
+                    console.log("adding new task(s) from server with id > " + maxtaskid);
                     $('ul.tasks').prepend(datatrim);
                 }
             }
