@@ -137,7 +137,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 form = kwargs['form']
             else:
                 form = TaskForm()
-            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
+            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
+                             'form': form, 'name': 'Job Queue'})
 
         # listqueryset = self.filter_queryset(self.get_queryset())
         listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
@@ -160,7 +161,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
             tasks = [instance]
             form = TaskForm()
-            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form})
+            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
+                             'name': f'Task {self.get_object().id}'})
 
         return Response(serializer.data)
 
@@ -187,12 +189,12 @@ def index(request):
 
 def resultdesc(request):
     template_name = 'resultdesc.html'
-    return render(request, template_name)
+    return render(request, template_name, {'name': 'Output Description'})
 
 
 def apiguide(request):
     template_name = 'apiguide.html'
-    return render(request, template_name)
+    return render(request, template_name, {'name': 'API Guide'})
 
 
 def register(request):
