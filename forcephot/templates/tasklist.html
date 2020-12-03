@@ -100,7 +100,7 @@
         var maxtaskid = -1;
         $('li.task').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
-            if (taskid > maxtaskid)
+            if (parseInt(taskid) > parseInt(maxtaskid))
                 maxtaskid = taskid;
 
             if (window_active) {
