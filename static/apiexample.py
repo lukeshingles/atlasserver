@@ -45,10 +45,12 @@ while not task_url:
         elif resp.status_code == 429:  # throttled
             message = resp.json()["detail"]
             print(f'{resp.status_code} {message}')
-            if t := re.findall(r'available in (\d+) seconds', message):
-                waittime = int(t[0])
-            elif t := re.findall(r'available in (\d+) minutes', message):
-                waittime = int(t[0]) * 60
+            t_sec = re.findall(r'available in (\d+) seconds', message)
+            t_min = re.findall(r'available in (\d+) minutes', message)
+            if t_sec:
+                waittime = int(t_sec[0])
+            elif t_min:
+                waittime = int(t_min[0]) * 60
             else:
                 waittime = 10
             print(f'Waiting {waittime} seconds')
