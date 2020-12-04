@@ -273,9 +273,8 @@ def main():
 
             taskload_thisuser = usertaskload.get(task['user_id'], 0)
 
-            logprefix = f"job{task['id']:05d}: "
-
             if taskload_thisuser < usertaskloadlimit:
+                logprefix = f"job{task['id']:05d}: "
                 cur2 = conn.cursor()
                 cur2.execute(f"UPDATE forcephot_task SET starttimestamp=NOW() WHERE id={task['id']};")
                 conn.commit()
@@ -307,10 +306,10 @@ def main():
                     log(logprefix + f"ERROR: Task not completed successfully. Waiting {waittime} seconds "
                         f"before retrying...")
                     time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
-            else:
-                log(logprefix + f"User {task['email']} has reached a task load of {taskload_thisuser} "
-                    f"above limit {usertaskload[task['user_id']]} for this pass. Postponing jobid {task['id']} "
-                    f"until next pass.")
+
+                if (taskload_thisuser >= usertaskloadlimit):
+                    log(logprefix + f"User {task['email']} has reached a task load of {taskload_thisuser} "
+                        f"above limit {usertaskload[task['user_id']]} for this pass.")
 
         if taskcount == 0:
             time.sleep(3)
