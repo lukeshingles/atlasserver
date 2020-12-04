@@ -77,8 +77,8 @@ while not result_url:
                     taskstarted = True
                 time.sleep(1)
             else:
-                print("Waiting for job to start. Checking again in a few seconds...")
-                time.sleep(5)
+                print("Waiting for job to start. Checking again in 10 seconds...")
+                time.sleep(10)
         else:
             print(f'ERROR {resp.status_code}')
             print(resp.json())

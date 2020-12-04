@@ -75,8 +75,8 @@ Now we can check if the task has completed, and if so, retrieve the results. Be 
                 elif resp.json()['starttimestamp']:
                     print(f"Task is running (started at {resp.json()['starttimestamp']})")
                 else:
-                    print("Waiting for job to start. Checking again in a few seconds...")
-                time.sleep(5)
+                    print("Waiting for job to start. Checking again in 10 seconds...")
+                time.sleep(10)
             else:
                 print(f'ERROR {resp.status_code}')
                 print(resp.json())
