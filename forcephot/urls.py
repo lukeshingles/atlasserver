@@ -27,7 +27,7 @@ from forcephot import views
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
-router.register(r'', views.ForcePhotTaskViewSet)
+router.register(r'queue', views.ForcePhotTaskViewSet)
 
 admin.site.site_url = settings.PATHPREFIX + '/'
 admin.site.site_header = "ATLAS Forced Photometry Admin"
@@ -37,7 +37,7 @@ admin.site.site_title = "ATLAS Forced Photometry"
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
     path('', views.index, name="index"),
-    path('queue/', include(router.urls)),
+    path('', include(router.urls)),
     path('queue/delete/<str:pk>/', views.deleteTask, name="delete"),
     url(r'^register/$', views.register, name='register'),
     path('resultdesc/', views.resultdesc, name="resultdesc"),
