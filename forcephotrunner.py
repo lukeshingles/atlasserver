@@ -308,7 +308,7 @@ def main():
                     time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
                 if (taskload_thisuser >= usertaskloadlimit):
-                    log(logprefix + f"User {task['email']} has reached a task load of {taskload_thisuser} "
+                    log(f"User {task['email']} has reached a task load of {taskload_thisuser} "
                         f"above limit {usertaskload[task['user_id']]} for this pass.")
 
         if taskcount == 0:
