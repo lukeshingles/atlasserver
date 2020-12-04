@@ -272,6 +272,7 @@ def resultdatajs(request, taskid):
 
         strjs += f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n'
 
-        strjs += "$.getScript('" + settings.STATIC_URL + "js/lightcurveplotly.js')"
+        strjs += (
+            "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script'});")
 
     return HttpResponse(strjs, content_type="text/javascript")
