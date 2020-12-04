@@ -41,8 +41,10 @@ class Task(models.Model):
             return Task.objects.filter(timestamp__lt=self.timestamp, finished=False).count()
 
     def __str__(self):
-        email = User.objects.get(id=self.user_id).email
-        return f"RA: {self.ra} DEC: {self.dec} {email}"
+        user = User.objects.get(id=self.user_id)
+        userstr = f"{user.username} ({user.email})"
+        return (f"{self.timestamp} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
+                f" {'finished' if self.finishtimestamp else ''}")
 
 
 class Result(models.Model):
@@ -70,4 +72,4 @@ class Result(models.Model):
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
 
     def __str__(self):
-        return f"RA: {self.ra} DEC: {self.declination} MJD {self.mjd} m {self.m}"
+        return f"RA: {self.ra:10.4f} DEC: {self.declination:10.4f} MJD {self.mjd} m {self.m}"

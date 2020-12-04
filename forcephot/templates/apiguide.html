@@ -89,7 +89,7 @@ with requests.Session() as s:
 </code></pre>
 
 <p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>
-<pre><code>dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
+<pre><code>dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
 </code></pre>
 
