@@ -44,7 +44,8 @@ class Task(models.Model):
         user = User.objects.get(id=self.user_id)
         userstr = f"{user.username} ({user.email})"
         return (f"{self.timestamp:%Y-%m-%d %H:%M %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
-                f" {'finished' if self.finishtimestamp else ''}")
+                f" {'finished' if self.finishtimestamp else ''} "+
+                f" {'img_reduced' if self.use_reduced else 'img_difference'}")
 
 
 class Result(models.Model):
