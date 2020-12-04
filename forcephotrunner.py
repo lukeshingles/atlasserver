@@ -256,7 +256,7 @@ def main():
         # SQLite version
         # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
 
-        cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finished=false;")
+        cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp IS NULL;")
         taskcount = cur.fetchone()['taskcount']
 
         if taskcount == 0:
@@ -266,7 +266,7 @@ def main():
 
         cur.execute(
             "SELECT t.*, a.email, a.username FROM forcephot_task AS t LEFT JOIN auth_user AS a"
-            " ON user_id = a.id WHERE finished=false ORDER BY timestamp;")
+            " ON user_id = a.id WHERE finishtimestamp IS NULL ORDER BY timestamp;")
 
         for taskrow in cur:
             task = dict(taskrow)
