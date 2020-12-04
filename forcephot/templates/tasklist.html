@@ -103,6 +103,8 @@
                 }
             });
         });
+
+        activate_first_plot();
     };
 
     function checkNewOrDeletedTasks() {
@@ -119,7 +121,7 @@
                     $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid))
                     .fail(function(jqXHR, textStatus, errorThrown){
                         if(jqXHR.status == 404) {
-                            replaceWith('');
+                            $('#task-' + taskid).replaceWith('');
                             console.log('removing deleted task id ', taskid);
                         }
                     });
@@ -139,6 +141,9 @@
                 }
             }
         });
+
+
+        activate_first_plot();
     };
 
     function getMaxTaskId() {
@@ -151,7 +156,15 @@
         return maxtaskid;
     }
 
-    // automatically "click" the "show plot" button on the first completed task
-    $('li.task > a.showplot').filter(':first').trigger('click');
+    function activate_first_plot() {
+        first_finished = $('li.task.finished').filter(':first');
+        // make sure the plot has not already been created
+        if (first_finished.find('div.plot').html() == '') {
+            // automatically "click" the "show plot" button on the first completed task
+            first_finished.find('a.showplot').trigger('click');
+        }
+    }
+
+    activate_first_plot();
     </script>
 {% endblock %}
