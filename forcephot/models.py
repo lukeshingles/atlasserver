@@ -29,22 +29,22 @@ class Task(models.Model):
     starttimestamp = models.DateTimeField(null=True, default=None)
 
     def get_localresultfile(self):
-        if self.finished:
+        if self.finishtimestamp:
             return f'results/job{int(self.id):05d}.txt'
 
         return None
 
     def get_queuepos(self):
-        if self.finished:
+        if self.finishtimestamp:
             return -1
         else:
-            return Task.objects.filter(timestamp__lt=self.timestamp, finished=False).count()
+            return Task.objects.filter(timestamp__lt=self.timestamp, finishtimestamp__isnull=True).count()
 
     def __str__(self):
         user = User.objects.get(id=self.user_id)
         userstr = f"{user.username} ({user.email})"
         return (f"{self.timestamp:%Y-%m-%d %H:%M %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
-                f" {'finished' if self.finishtimestamp else ''} "+
+                f" {'finished' if self.finishtimestamp else ''} " +
                 f" {'img_reduced' if self.use_reduced else 'img_difference'}")
 
 

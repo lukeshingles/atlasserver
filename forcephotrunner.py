@@ -254,7 +254,7 @@ def main():
         cur = conn.cursor(dictionary=True, buffered=True)
 
         # SQLite version
-        # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finished=false;").fetchone()[0]
+        # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finishtimestamp IS NULL;").fetchone()[0]
 
         cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp IS NULL;")
         taskcount = cur.fetchone()['taskcount']
