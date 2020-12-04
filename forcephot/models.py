@@ -43,7 +43,7 @@ class Task(models.Model):
     def __str__(self):
         user = User.objects.get(id=self.user_id)
         userstr = f"{user.username} ({user.email})"
-        return (f"{self.timestamp} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
+        return (f"{self.timestamp:%Y-%m-%d %H:%M %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
                 f" {'finished' if self.finishtimestamp else ''}")
 
 
