@@ -96,7 +96,7 @@ def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logpr
     cancelled = False
     while not cancelled:
         try:
-            p.communicate(timeout=5)
+            p.communicate(timeout=2)
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(conn=conn, taskid=id)
@@ -132,6 +132,9 @@ def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logpr
     #     if stderrline:
     #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
+    if not task_exists(conn=conn, taskid=id):  # check if job was cancelled
+        return False
+
     copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"'
     log(logprefix + copycommand)
 
@@ -152,7 +155,7 @@ def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logpr
         return False
 
     if not os.path.exists(localresultfile):
-        # task failed
+        # task failed somehow
         return False
 
     return localresultfile
@@ -312,6 +315,8 @@ def do_taskloop():
 
             if not task_exists(conn=conn, taskid=task['id']):  # job was cancelled
                 log(logprefix + "Task was cancelled (no longer in database)")
+
+                # in case a result file was created, delete it
                 if localresultfile and os.path.exists(localresultfile):
                     remove_task_resultfiles(taskid=task['id'])
             else:
@@ -390,7 +395,7 @@ def main():
             if not printedwaiting:
                 log('Waiting for tasks...')
                 printedwaiting = True
-            time.sleep(3)
+            time.sleep(1)
         else:
             printedwaiting = False
 
