@@ -120,6 +120,7 @@ def runforced(task, conn, logprefix='', **kwargs):
             break
 
     if cancelled:
+        log(logprefix + "                                                                                 ")
         os.kill(p.pid, SIGTERM)
         return False
 
