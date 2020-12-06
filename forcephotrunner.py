@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 import atlasserver.settings as djangosettings
 
 load_dotenv(override=True)
-
+§
 remoteServer = 'atlas'
 localresultdir = Path(djangosettings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
@@ -33,7 +33,7 @@ CONNKWARGS = {
 }
 
 
-def get_localresultfile(id):
+def localresultfile(id):
     filename = f'job{id:05d}.txt'
     return Path(localresultdir, filename)
 
@@ -44,7 +44,7 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, logprefix='
     remoteresultdir = Path('~/atlasserver/results/')
     remoteresultfile = Path(remoteresultdir, filename)
 
-    localresultfile = get_localresultfile(id)
+    localresultfile = localresultfile(id)
     localresultdir.mkdir(parents=True, exist_ok=True)
 
     atlascommand = "nice -n 19 "
@@ -162,7 +162,7 @@ def send_email_if_needed(conn, task, logprefix=''):
                     strtask += " comment: '" + task['comment'] + "'"
 
                 taskdesclist.append(strtask)
-                localresultfilelist.append(get_localresultfile(batchtask['id']))
+                localresultfilelist.append(localresultfile(batchtask['id']))
         conn.commit()
         cur3.close()
 
@@ -291,13 +291,13 @@ def main():
 
                 runforced_duration = time.perf_counter() - runforced_starttime
 
-                localresultfile = get_localresultfile(task['id'])
+                localresultfile = localresultfile(task['id'])
                 if localresultfile and os.path.exists(localresultfile):
                     # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
                     send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
                     cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_task SET finished=true, finishtimestamp=NOW() "
+                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW() "
                                  f"WHERE id={task['id']};")
                     conn.commit()
                     cur2.close()

@@ -10,9 +10,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     result_url = serializers.SerializerMethodField('get_result_url')
 
     def get_result_url(self, obj):
-        if obj.get_localresultfile():
+        if obj.localresultfile():
             request = self.context.get('request')
-            return request.build_absolute_uri(djangosettings.STATIC_URL + obj.get_localresultfile())
+            return request.build_absolute_uri(djangosettings.STATIC_URL + obj.localresultfile())
 
         return None
 

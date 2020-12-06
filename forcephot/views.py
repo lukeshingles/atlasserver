@@ -121,8 +121,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         # return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
-        if instance.get_localresultfile():
-            localresultfile = os.path.join(djangosettings.STATIC_ROOT, instance.get_localresultfile())
+        if instance.localresultfile():
+            localresultfile = os.path.join(djangosettings.STATIC_ROOT, instance.localresultfile())
             if localresultfile and os.path.exists(localresultfile):
                 os.remove(localresultfile)
         instance.delete()
@@ -170,8 +170,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 def deleteTask(request, pk):
     try:
         item = Task.objects.get(id=pk)
-        if item.get_localresultfile():
-            localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.get_localresultfile())
+        if item.localresultfile():
+            localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.localresultfile())
             if localresultfullpath and os.path.exists(localresultfullpath):
                 os.remove(localresultfullpath)
 
@@ -233,7 +233,7 @@ def resultdatajs(request, taskid):
     import pandas as pd
     item = Task.objects.get(id=taskid)
     strjs = ''
-    resultfile = item.get_localresultfile()
+    resultfile = item.localresultfile()
     if resultfile:
         df = pd.read_csv(os.path.join(settings.STATIC_ROOT, resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
