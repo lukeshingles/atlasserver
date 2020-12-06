@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 
 import os
-# import sqlite3
+import re
 import subprocess
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from signal import SIGINT, signal
+from signal import SIGINT, SIGTERM, signal
 
 import mysql.connector
 import pandas as pd
-from django.conf import settings
+# from django.conf import settings
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
 
 import atlasserver.settings as djangosettings
 
 load_dotenv(override=True)
-§
+
 remoteServer = 'atlas'
 localresultdir = Path(djangosettings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
@@ -33,18 +32,42 @@ CONNKWARGS = {
 }
 
 
-def localresultfile(id):
+# set a limit on the number of tasks run for each user per full pass of the task queue
+# this prevents a single user from monopolising a large block of the queue
+USERTASKLOADLIMIT = 1
+
+
+def get_localresultfile(id):
     filename = f'job{id:05d}.txt'
     return Path(localresultdir, filename)
 
 
-def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, logprefix='', **kwargs):
+def task_exists(conn, taskid):
+    cur = conn.cursor(dictionary=True)
+    cur.execute(f"SELECT COUNT(*) as taskcount FROM forcephot_task WHERE id={taskid};")
+    exists = not (cur.fetchone()['taskcount'] == 0)
+    conn.commit()
+    cur.close()
+    return exists
+
+
+def remove_task_resultfiles(taskid):
+    localresultfile = get_localresultfile(taskid)
+    try:
+        os.remove(localresultfile)
+    except OSError:
+        log("Error deleting file: ", localresultfile)
+    else:
+        log("Deleted ", localresultfile)
+
+
+def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logprefix='', **kwargs):
     filename = f'job{id:05d}.txt'
 
     remoteresultdir = Path('~/atlasserver/results/')
     remoteresultfile = Path(remoteresultdir, filename)
 
-    localresultfile = localresultfile(id)
+    localresultfile = get_localresultfile(id)
     localresultdir.mkdir(parents=True, exist_ok=True)
 
     atlascommand = "nice -n 19 "
@@ -70,15 +93,21 @@ def runforced(id, ra, dec, mjd_min=50000, mjd_max=60000, email=None, logprefix='
                          encoding='utf-8', bufsize=1, universal_newlines=True)
 
     starttime = time.perf_counter()
-    while True:
+    cancelled = False
+    while not cancelled:
         try:
             p.communicate(timeout=5)
 
         except subprocess.TimeoutExpired:
+            cancelled = not task_exists(conn=conn, taskid=id)
             log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.1f} seconds        ", end='\r')
-
         else:
             break
+
+    if cancelled:
+        os.kill(p.pid, SIGTERM)
+        return False
+
     stdout, stderr = p.communicate()
     log(logprefix + f'ssh ran for {time.perf_counter() - starttime:.1f} seconds                                       ')
 
@@ -162,7 +191,7 @@ def send_email_if_needed(conn, task, logprefix=''):
                     strtask += " comment: '" + task['comment'] + "'"
 
                 taskdesclist.append(strtask)
-                localresultfilelist.append(localresultfile(batchtask['id']))
+                localresultfilelist.append(get_localresultfile(batchtask['id']))
         conn.commit()
         cur3.close()
 
@@ -235,70 +264,68 @@ def log(msg, *args, **kwargs):
     print(f'{datetime.utcnow()}  {msg}', *args, **kwargs)
 
 
-def main():
-    signal(SIGINT, handler)
+def do_taskloop():
+    # track some kind of workload measurement for each user
+    # that is reset after each complete pass
+    usertaskload = {}
 
-    # with sqlite3.connect('db.sqlite3') as conn:
-    #     conn.row_factory = sqlite3.Row
+    conn = mysql.connector.connect(**CONNKWARGS)
 
-    # set a limit on the number of tasks run for each user per full pass of the task queue
-    # this prevents a single user from monopolising a large block of the queue
-    usertaskloadlimit = 1
+    cur = conn.cursor(dictionary=True, buffered=True)
 
-    while True:
-        # track some kind of workload measurement for each user
-        # that is reset after each complete pass
-        usertaskload = {}
-        conn = mysql.connector.connect(**CONNKWARGS)
+    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp IS NULL;")
+    taskcount = cur.fetchone()['taskcount']
 
-        cur = conn.cursor(dictionary=True, buffered=True)
+    if taskcount == 0:
+        return 0
+    else:
+        log(f'Unfinished jobs in queue: {taskcount}')
 
-        # SQLite version
-        # taskcount = cur.execute("SELECT COUNT(*) FROM forcephot_task WHERE finishtimestamp IS NULL;").fetchone()[0]
+    cur.execute(
+        "SELECT t.*, a.email, a.username FROM forcephot_task AS t LEFT JOIN auth_user AS a"
+        " ON user_id = a.id WHERE finishtimestamp IS NULL ORDER BY timestamp;")
 
-        cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp IS NULL;")
-        taskcount = cur.fetchone()['taskcount']
+    for taskrow in cur:
+        task = dict(taskrow)
 
-        if taskcount == 0:
-            log(f'Waiting for tasks', end='\r')
-        else:
-            log(f'Unfinished jobs in queue: {taskcount}')
+        if not task_exists(conn=conn, taskid=task['id']):
+            log("job{task['id']:05d} (user {task['user_id']}): was cancelled.")
+            continue
 
-        cur.execute(
-            "SELECT t.*, a.email, a.username FROM forcephot_task AS t LEFT JOIN auth_user AS a"
-            " ON user_id = a.id WHERE finishtimestamp IS NULL ORDER BY timestamp;")
+        taskload_thisuser = usertaskload.get(task['user_id'], 0)
 
-        for taskrow in cur:
-            task = dict(taskrow)
+        if taskload_thisuser < USERTASKLOADLIMIT:
+            logprefix = f"job{task['id']:05d}: "
+            cur2 = conn.cursor()
+            cur2.execute(f"UPDATE forcephot_task SET starttimestamp=NOW() WHERE id={task['id']};")
+            conn.commit()
+            cur2.close()
 
-            taskload_thisuser = usertaskload.get(task['user_id'], 0)
+            log(logprefix + f"Starting job for {task['email']} (who has run {taskload_thisuser} tasks "
+                "in this pass so far):")
+            log(logprefix + str(task))
+            usertaskload[task['user_id']] = taskload_thisuser + 1
 
-            if taskload_thisuser < usertaskloadlimit:
-                logprefix = f"job{task['id']:05d}: "
-                cur2 = conn.cursor()
-                cur2.execute(f"UPDATE forcephot_task SET starttimestamp=NOW() WHERE id={task['id']};")
-                conn.commit()
-                cur2.close()
+            runforced_starttime = time.perf_counter()
 
-                log(logprefix + f"Starting job for {task['email']} (who has run {taskload_thisuser} tasks "
-                    "in this pass so far):")
-                log(logprefix + str(task))
-                usertaskload[task['user_id']] = taskload_thisuser + 1
+            localresultfile = runforced(conn=conn, logprefix=logprefix, **task)
 
-                runforced_starttime = time.perf_counter()
-
-                localresultfile = runforced(logprefix=logprefix, **task)
-
+            if not task_exists(conn=conn, taskid=task['id']):  # job was cancelled
+                log(logprefix + "Task was cancelled (no longer in database)")
+                if localresultfile and os.path.exists(localresultfile):
+                    remove_task_resultfiles(taskid=task['id'])
+            else:
                 runforced_duration = time.perf_counter() - runforced_starttime
 
-                localresultfile = localresultfile(task['id'])
+                log(logprefix + f" task took {runforced_duration:.1f}s to complete")
+
+                localresultfile = get_localresultfile(task['id'])
                 if localresultfile and os.path.exists(localresultfile):
                     # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
                     send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
                     cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW() "
-                                 f"WHERE id={task['id']};")
+                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW() WHERE id={task['id']};")
                     conn.commit()
                     cur2.close()
                 else:
@@ -307,17 +334,64 @@ def main():
                         f"before retrying...")
                     time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
-                if (taskload_thisuser >= usertaskloadlimit):
+                if (taskload_thisuser >= USERTASKLOADLIMIT):
                     log(f"User {task['email']} has reached a task load of {taskload_thisuser} "
                         f"above limit {usertaskload[task['user_id']]} for this pass.")
 
-        if taskcount == 0:
+    conn.commit()
+    cur.close()
+
+    conn.close()
+
+    return taskcount
+
+
+def do_maintenance():
+    logprefix = "Maintenance: "
+
+    conn = mysql.connector.connect(**CONNKWARGS)
+
+    for resultfilepath in Path(localresultdir).glob('job*.txt'):
+        try:
+            taskidstr = resultfilepath.stem[4:]
+            taskid = int(taskidstr)
+            if not task_exists(conn=conn, taskid=taskid):
+                log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
+                remove_task_resultfiles(taskid)
+        except ValueError:
+            # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
+            pass
+
+    cur = conn.cursor(dictionary=True, buffered=True)
+
+    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp < NOW() - INTERVAL 30 DAY;")
+    taskcount = cur.fetchone()['taskcount']
+    log(logprefix + f"There are {taskcount} tasks that finished more than 30 days ago")
+
+    conn.commit()
+    cur.close()
+
+    conn.close()
+
+
+def main():
+    signal(SIGINT, handler)
+
+    last_maintenancetime = -1
+    printedwaiting = False
+    while True:
+        if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
+            last_maintenancetime = time.perf_counter()
+            do_maintenance()
+
+        queuedtaskcount = do_taskloop()
+        if queuedtaskcount == 0:
+            if not printedwaiting:
+                log('Waiting for tasks...')
+                printedwaiting = True
             time.sleep(3)
-
-        conn.commit()
-        cur.close()
-
-        conn.close()
+        else:
+            printedwaiting = False
 
 
 if __name__ == '__main__':

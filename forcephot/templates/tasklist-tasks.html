@@ -5,6 +5,7 @@
         <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
     {% elif task.starttimestamp %}
         <li class="task queued started" id="task-{{task.id}}">
+          <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
     {% else %}
     <li class="task queued notstarted" id="task-{{task.id}}">
         <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>

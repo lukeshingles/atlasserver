@@ -24,21 +24,23 @@ class Task(models.Model):
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     send_email = models.BooleanField("Email me when completed", default=True)
-    finished = models.BooleanField(default=False)
     finishtimestamp = models.DateTimeField(null=True, default=None)
     starttimestamp = models.DateTimeField(null=True, default=None)
 
-    def get_localresultfile(self):
+    def localresultfile(self):
         if self.finishtimestamp:
             return f'results/job{int(self.id):05d}.txt'
 
         return None
 
-    def get_queuepos(self):
+    def queuepos(self):
         if self.finishtimestamp:
             return -1
         else:
             return Task.objects.filter(timestamp__lt=self.timestamp, finishtimestamp__isnull=True).count()
+
+    def finished(self):
+        return True if self.finishtimestamp else False
 
     def __str__(self):
         user = User.objects.get(id=self.user_id)
