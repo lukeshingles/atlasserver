@@ -377,7 +377,7 @@ def do_maintenance():
 def main():
     signal(SIGINT, handler)
 
-    last_maintenancetime = -1
+    last_maintenancetime = float('-inf')
     printedwaiting = False
     while True:
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
