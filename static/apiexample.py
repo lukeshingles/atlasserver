@@ -26,7 +26,7 @@ else:
         print(f'export ATLASFORCED_SECRET_KEY="{token}"')
     else:
         print(f'ERROR {resp.status_code}')
-        print(resp.json())
+        print(resp.text)
         sys.exit()
 
 
@@ -57,12 +57,12 @@ while not task_url:
             time.sleep(waittime)
         else:
             print(f'ERROR {resp.status_code}')
-            print(resp.json())
+            print(resp.text)
             sys.exit()
 
 
 result_url = None
-taskstarted = False
+taskstarted_printed = False
 while not result_url:
     with requests.Session() as s:
         resp = s.get(task_url, headers=headers)
@@ -72,16 +72,16 @@ while not result_url:
                 result_url = resp.json()['result_url']
                 print(f"Task is complete with results available at {result_url}")
             elif resp.json()['starttimestamp']:
-                if not taskstarted:
+                if not taskstarted_printed:
                     print(f"Task is running (started at {resp.json()['starttimestamp']})")
-                    taskstarted = True
+                    taskstarted_printed = True
                 time.sleep(1)
             else:
-                print("Waiting for job to start. Checking again in 10 seconds...")
-                time.sleep(10)
+                print(f"Waiting for job to start (queued at {timestamp})")
+                time.sleep(2)
         else:
             print(f'ERROR {resp.status_code}')
-            print(resp.json())
+            print(resp.text)
             sys.exit()
 
 with requests.Session() as s:
