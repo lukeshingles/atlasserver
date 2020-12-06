@@ -174,7 +174,7 @@ def runforced(task, conn, logprefix='', **kwargs):
         # task failed somehow
         return False
 
-    make_pdf_plot(logprefix=logprefix, localresultfile=localresultfile, task=task)
+    make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile, logprefix=logprefix)
 
     return localresultfile
 
@@ -248,12 +248,17 @@ def send_email_if_needed(conn, task, logprefix=''):
         log(logprefix + f'User {task["username"]} did not request an email.')
 
 
-def make_pdf_plot(localresultfile, task, logprefix=''):
+def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
     epochs = plotatlasfp.read_and_simga_clip_data(log=fundamentals.logs.emptyLogger(), fpFile=localresultfile)
+    print(localresultfile)
 
-    pdftitle = f"Task {task['id']} {(':' + task['comment']) if task['comment'] else ''}"
+    pdftitle = f"Task {taskid} {(':' + taskcomment) if taskcomment else ''}"
     temp_plot_path = plotatlasfp.plot_lc(log=fundamentals.logs.emptyLogger(), epochs=epochs,
                                          objectName=pdftitle, stacked=False)
+
+    if not temp_plot_path:
+        log(logprefix + f'Problem creating PDF plot from {localresultfile.relative_to(localresultdir)}')
+        return None
 
     pdfpath = localresultfile.with_suffix('.pdf')
     Path(temp_plot_path).rename(pdfpath)
@@ -406,6 +411,10 @@ def do_maintenance():
                 if not task_exists(conn=conn, taskid=taskid):
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
                     remove_task_resultfiles(taskid)
+                elif resultfilepath.suffix == '.txt':
+                    if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
+                        make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix)
+
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
                 pass
