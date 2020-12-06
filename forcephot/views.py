@@ -61,7 +61,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
     ordering = ['-timestamp']
-    filterset_fields = ['user', 'finished']
+    filterset_fields = ['user']
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):

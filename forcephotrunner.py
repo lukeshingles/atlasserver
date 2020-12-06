@@ -322,7 +322,7 @@ def do_taskloop():
             else:
                 runforced_duration = time.perf_counter() - runforced_starttime
 
-                log(logprefix + f" task took {runforced_duration:.1f}s to complete")
+                log(logprefix + f"Task took {runforced_duration:.1f}s to complete")
 
                 localresultfile = get_localresultfile(task['id'])
                 if localresultfile and os.path.exists(localresultfile):
