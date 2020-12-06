@@ -256,7 +256,7 @@ def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
                                          objectName=pdftitle, stacked=False)
 
     if not temp_plot_path:
-        log(logprefix + f'Problem creating PDF plot from {localresultfile.relative_to(localresultdir)}')
+        log(logprefix + f'Failed to create PDF plot from {localresultfile.relative_to(localresultdir)}')
         return None
 
     pdfpath = localresultfile.with_suffix('.pdf')
