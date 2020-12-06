@@ -75,10 +75,10 @@ while not result_url:
                 if not taskstarted_printed:
                     print(f"Task is running (started at {resp.json()['starttimestamp']})")
                     taskstarted_printed = True
-                time.sleep(1)
+                time.sleep(2)
             else:
                 print(f"Waiting for job to start (queued at {timestamp})")
-                time.sleep(2)
+                time.sleep(4)
         else:
             print(f'ERROR {resp.status_code}')
             print(resp.text)
