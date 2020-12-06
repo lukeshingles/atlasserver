@@ -138,7 +138,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             else:
                 form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
-                             'form': form, 'name': 'Job Queue'})
+                             'form': form, 'name': 'Job Queue', 'addnewtaskstotop': True,
+                             'singletaskdetail': False})
 
         # listqueryset = self.filter_queryset(self.get_queryset())
         listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
@@ -162,7 +163,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             tasks = [instance]
             form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
-                             'name': f'Task {self.get_object().id}'})
+                             'name': f'Task {self.get_object().id}', 'addnewtaskstotop': False,
+                             'singletaskdetail': True})
 
         return Response(serializer.data)
 

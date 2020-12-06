@@ -10,6 +10,7 @@
     <h1>{{name}}</h1>
     </div>
 
+    {% if not singletaskdetail %}
     <div class="newrequest">
         <div class="task">
         <h3>New request</h3>
@@ -32,8 +33,9 @@
         </form>
         </div>
     </div>
+    {% endif %}
 
-    <div id="tasklist">
+    <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
         {% if not tasks %}
         <p>You have no tasks yet.</p>
         {% else %}
@@ -60,11 +62,13 @@
     // only one task across all users will be running now, so you might as well poll it at high frequency
     var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
 
-    {% if tasks|length > 1 %}
-    // occaisionally check and new items from the server, or if items in the list have been deleted
-    // only needed if the same user's queue page is open in multiple devices/browsers/tabs
-    var checknewordeletedtimer = setInterval(checkNewOrDeletedTasks, 5000);
+    {% if addnewtaskstotop %}
+    // occaisionally check and new items from the server (if not on page > 1 or single task view)
+    var checknewtimer = setInterval(checkNewTasks, 3000);
     {% endif %}
+
+    // check if any items on the page have been deleted
+    var checkdeletedtimer = setInterval(checkDeletedTasks, 15000);
 
     var window_active = true;
 
@@ -76,10 +80,12 @@
       window_active = true;
       updateQueuedTasks(false, '.started');
       updateQueuedTasks(true, '.notstarted');
-      {% if tasks|length > 1 %}
-      checkNewOrDeletedTasks();
+      {% if addnewtaskstotop %}
+      checkNewTasks();
       {% endif %}
+      checkDeletedTasks();
     });
+
 
     function updateQueuedTasks(require_active, class_suffix) {
         if (require_active && !window_active) {
@@ -105,27 +111,35 @@
         });
 
         activate_first_plot();
-    };
+    }
 
-    function checkNewOrDeletedTasks() {
+
+    function checkDeletedTasks() {
         // check all of the displayed tasks still exist on the server
         // this could cause problems for users with a giant queue unless properly paginated
-        if (window_active) {
-            $('li.task').each(function() {
-                var taskid = $(this).attr('id').replace("task-", "");
-                if (parseInt(taskid) > parseInt(maxtaskid))
-                    maxtaskid = taskid;
 
-                    // this method of retrieving every item to see if it still exists
-                    // is probably quite expensive
-                    $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid))
-                    .fail(function(jqXHR, textStatus, errorThrown){
-                        if(jqXHR.status == 404) {
-                            $('#task-' + taskid).replaceWith('');
-                            console.log('removing deleted task id ', taskid);
-                        }
-                    });
+        if (!window_active) {
+            return;
+        }
+
+        $('li.task').each(function() {
+            var taskid = $(this).attr('id').replace("task-", "");
+
+            // this method of retrieving every item to see if it still exists
+            // is probably quite expensive
+            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid))
+            .fail(function(jqXHR, textStatus, errorThrown){
+                if(jqXHR.status == 404) {
+                    $('#task-' + taskid).replaceWith('');
+                    console.log('removing deleted task id ', taskid);
+                }
             });
+        });
+    }
+
+    function checkNewTasks() {
+        if (!window_active) {
+            return;
         }
 
         var maxtaskid = getMaxTaskId();
@@ -144,7 +158,8 @@
 
 
         activate_first_plot();
-    };
+    }
+
 
     function getMaxTaskId() {
         var maxtaskid = -1;
@@ -156,6 +171,7 @@
         return maxtaskid;
     }
 
+
     function activate_first_plot() {
         first_finished = $('li.task.finished').filter(':first');
         // make sure the plot has not already been created
@@ -164,6 +180,7 @@
             first_finished.find('a.showplot').trigger('click');
         }
     }
+
 
     activate_first_plot();
     </script>
