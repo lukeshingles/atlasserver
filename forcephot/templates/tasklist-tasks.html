@@ -27,7 +27,8 @@
         Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
         {% if task.finishtimestamp %}
         Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br/>
-        <a class="results btn btn-info getdata" href="{% static task.localresultfile %}" target="_blank">Get Data</a>
+        <a class="results btn btn-info getdata" href="{% static task.localresultfile %}" target="_blank">Data</a>
+        {% if task.localresultpdfplotfile %}<a class="results btn btn-info getpdf" href="{% static task.localresultpdfplotfile %}" target="_blank">PDF</a>{% endif %}
         <a class="results btn btn-info showplot" onclick="javascript:$.ajax({url: '{% url 'resultdatajs' task.id %}', cache: true, dataType: 'script'}); this.style='display: none;'">Show Plot</a>
         <div id="plotforcedflux-task-{{task.id}}" class="plot" style="width: 100%;"></div>
 

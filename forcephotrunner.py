@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
+import fundamentals
 import os
-import re
 import subprocess
 import time
 from datetime import datetime
@@ -10,11 +10,12 @@ from signal import SIGINT, SIGTERM, signal
 
 import mysql.connector
 import pandas as pd
-# from django.conf import settings
+from django.conf import settings
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
 
 import atlasserver.settings as djangosettings
+import plotatlasfp
 
 load_dotenv(override=True)
 
@@ -52,16 +53,30 @@ def task_exists(conn, taskid):
 
 
 def remove_task_resultfiles(taskid):
+    taskfiles = []  # possible result files, that don't necessarily exist
+
     localresultfile = get_localresultfile(taskid)
-    try:
-        os.remove(localresultfile)
-    except OSError:
-        log("Error deleting file: ", localresultfile)
-    else:
-        log("Deleted ", localresultfile)
+    taskfiles.append(localresultfile)
+    pdfpath = Path(localresultfile).with_suffix('.pdf')
+    taskfiles.append(pdfpath)
+
+    for taskfile in taskfiles:
+        if os.path.exists(taskfile):
+            try:
+                os.remove(taskfile)
+            except OSError:
+                log("Error deleting file: ", taskfile)
+            else:
+                log("Deleted ", taskfile)
 
 
-def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logprefix='', **kwargs):
+def runforced(task, conn, logprefix='', **kwargs):
+    id = task['id']
+    ra = task['ra']
+    dec = task['dec']
+    mjd_min = task['mjd_min']
+    mjd_max = task['mjd_max']
+
     filename = f'job{id:05d}.txt'
 
     remoteresultdir = Path('~/atlasserver/results/')
@@ -76,7 +91,7 @@ def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logpr
         atlascommand += f" m0={float(mjd_min)}"
     if mjd_max:
         atlascommand += f" m1={float(mjd_max)}"
-    if kwargs['use_reduced']:
+    if task['use_reduced']:
         atlascommand += " red=1"
     atlascommand += " dodb=1 parallel=16"
 
@@ -158,6 +173,8 @@ def runforced(id, ra, dec, conn, mjd_min=50000, mjd_max=60000, email=None, logpr
         # task failed somehow
         return False
 
+    make_pdf_plot(logprefix=logprefix, localresultfile=localresultfile, task=task)
+
     return localresultfile
 
 
@@ -184,17 +201,19 @@ def send_email_if_needed(conn, task, logprefix=''):
             if not batchtask['finishtimestamp'] and batchtask['id'] != task['id']:
                 batchtasks_unfinished += 1
             else:
+                localresultfile = get_localresultfile(batchtask['id'])
+                taskurl = f"https://fallingstar-data.com/forcedphot/queue/{task['id']}/"
                 strtask = (
-                    f"RA: {batchtask['ra']} Dec: {batchtask['dec']} "
-                    f"use_reduced: {'yes' if batchtask['use_reduced'] else 'no'} "
-                    f"jobid: {batchtask['id']}"
+                    f"Task {batchtask['id']}: RA {batchtask['ra']} Dec {batchtask['dec']} "
+                    f"{'img_reduced' if batchtask['use_reduced'] else 'img_difference'} "
+                    f"\n{taskurl}\n"
                 )
 
                 if task['comment']:
                     strtask += " comment: '" + task['comment'] + "'"
 
                 taskdesclist.append(strtask)
-                localresultfilelist.append(get_localresultfile(batchtask['id']))
+                localresultfilelist.append(localresultfile)
         conn.commit()
         cur3.close()
 
@@ -209,8 +228,15 @@ def send_email_if_needed(conn, task, logprefix=''):
                 from_email=os.environ.get('EMAIL_HOST_USER'),
                 to=[task["email"]],
             )
+
+            for localresultfile in localresultfilelist:
+                pdfpath = Path(localresultfile).with_suffix('.pdf')
+                if os.path.exists(pdfpath):
+                    message.attach_file(pdfpath)
+
             for localresultfile in localresultfilelist:
                 message.attach_file(localresultfile)
+
             message.send()
         else:
             log(logprefix + f'Waiting to send email until remaining {batchtasks_unfinished} '
@@ -219,6 +245,21 @@ def send_email_if_needed(conn, task, logprefix=''):
         log(logprefix + f'User {task["username"]} has no email address.')
     else:
         log(logprefix + f'User {task["username"]} did not request an email.')
+
+
+def make_pdf_plot(localresultfile, task, logprefix=''):
+    epochs = plotatlasfp.read_and_simga_clip_data(log=fundamentals.logs.emptyLogger(), fpFile=localresultfile)
+
+    pdftitle = f"Task {task['id']} {(':' + task['comment']) if task['comment'] else ''}"
+    temp_plot_path = plotatlasfp.plot_lc(log=fundamentals.logs.emptyLogger(), epochs=epochs,
+                                         objectName=pdftitle, stacked=False)
+
+    pdfpath = localresultfile.with_suffix('.pdf')
+    Path(temp_plot_path).rename(pdfpath)
+
+    log(logprefix + f'Created plot file {pdfpath.relative_to(localresultdir)}')
+
+    return pdfpath
 
 
 def ingest_results(localresultfile, conn, use_reduced=False):
@@ -311,7 +352,7 @@ def do_taskloop():
 
             runforced_starttime = time.perf_counter()
 
-            localresultfile = runforced(conn=conn, logprefix=logprefix, **task)
+            localresultfile = runforced(conn=conn, logprefix=logprefix, task=task)
 
             if not task_exists(conn=conn, taskid=task['id']):  # job was cancelled
                 log(logprefix + "Task was cancelled (no longer in database)")
@@ -356,16 +397,17 @@ def do_maintenance():
 
     conn = mysql.connector.connect(**CONNKWARGS)
 
-    for resultfilepath in Path(localresultdir).glob('job*.txt'):
-        try:
-            taskidstr = resultfilepath.stem[4:]
-            taskid = int(taskidstr)
-            if not task_exists(conn=conn, taskid=taskid):
-                log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
-                remove_task_resultfiles(taskid)
-        except ValueError:
-            # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
-            pass
+    for resultfilepath in Path(localresultdir).glob('job*.*'):
+        if resultfilepath.suffix in ['.txt', '.pdf']:
+            try:
+                taskidstr = resultfilepath.stem[4:]
+                taskid = int(taskidstr)
+                if not task_exists(conn=conn, taskid=taskid):
+                    log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
+                    remove_task_resultfiles(taskid)
+            except ValueError:
+                # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
+                pass
 
     cur = conn.cursor(dictionary=True, buffered=True)
 

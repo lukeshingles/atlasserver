@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection, models
 from django.utils import timezone
-
+from pathlib import Path
 from forcephot.misc import date_to_mjd
 
 
@@ -30,6 +30,12 @@ class Task(models.Model):
     def localresultfile(self):
         if self.finishtimestamp:
             return f'results/job{int(self.id):05d}.txt'
+
+        return None
+
+    def localresultpdfplotfile(self):
+        if self.localresultfile():
+            return Path(self.localresultfile()).with_suffix('.pdf')
 
         return None
 

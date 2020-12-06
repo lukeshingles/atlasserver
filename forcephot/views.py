@@ -122,9 +122,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         if instance.localresultfile():
-            localresultfile = os.path.join(djangosettings.STATIC_ROOT, instance.localresultfile())
-            if localresultfile and os.path.exists(localresultfile):
-                os.remove(localresultfile)
+            localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, instance.localresultfile())
+            if os.path.exists(localresultfullpath):
+                os.remove(localresultfullpath)
+            pdfpath = Path(localresultfullpath).with_suffix('.pdf')
+            if os.path.exists(pdfpath):
+                os.remove(pdfpath)
         instance.delete()
 
     def list(self, request, *args, **kwargs):
@@ -174,8 +177,11 @@ def deleteTask(request, pk):
         item = Task.objects.get(id=pk)
         if item.localresultfile():
             localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.localresultfile())
-            if localresultfullpath and os.path.exists(localresultfullpath):
+            if os.path.exists(localresultfullpath):
                 os.remove(localresultfullpath)
+            pdfpath = Path(localresultfullpath).with_suffix('.pdf')
+            if os.path.exists(pdfpath):
+                os.remove(pdfpath)
 
         item.delete()
     except ObjectDoesNotExist:
