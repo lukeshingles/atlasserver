@@ -433,7 +433,7 @@ def do_maintenance(maxtime=None):
 
         maintenance_duration = time.perf_counter() - start_maintenancetime
         if maxtime and maintenance_duration > maxtime:
-            log(logprefix + f"Maintenance has run for {maintenance_duration:.0f} s "
+            log(logprefix + f"Maintenance has run for {maintenance_duration:.0f} seconds "
                 f"(above limit of {maxtime:.0f}). Resuming normal tasks...")
             break
 
@@ -448,7 +448,7 @@ def main():
     while True:
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
-            do_maintenance(maxtime=60)
+            do_maintenance(maxtime=180)
             printedwaiting = False
 
         queuedtaskcount = do_taskloop()
