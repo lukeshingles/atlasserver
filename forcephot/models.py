@@ -36,8 +36,8 @@ class Task(models.Model):
 
     def localresultpdfplotfile(self):
         if self.localresultfile():
-            pdfplotfile = Path(settings.STATIC_ROOT, self.localresultfile()).with_suffix('.pdf')
-            if os.path.exists(pdfplotfile):
+            pdfplotfile = Path(self.localresultfile()).with_suffix('.pdf')
+            if os.path.exists(Path(settings.STATIC_ROOT, pdfplotfile)):
                 return pdfplotfile
 
         return None
