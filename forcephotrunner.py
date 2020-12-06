@@ -53,7 +53,7 @@ def task_exists(conn, taskid):
 
 
 def remove_task_resultfiles(taskid):
-    taskfiles = []  # possible result files, that don't necessarily exist
+    taskfiles = []  # possible result files that don't necessarily exist
 
     localresultfile = get_localresultfile(taskid)
     taskfiles.append(localresultfile)
@@ -65,9 +65,9 @@ def remove_task_resultfiles(taskid):
             try:
                 os.remove(taskfile)
             except OSError:
-                log("Error deleting file: ", taskfile)
+                log(f"Error deleting file: {Path(taskfile).relative_to(localresultdir)}")
             else:
-                log("Deleted ", taskfile)
+                log(f"Deleted {Path(taskfile).relative_to(localresultdir)}")
 
 
 def runforced(task, conn, logprefix='', **kwargs):
@@ -397,10 +397,21 @@ def do_taskloop():
     return taskcount
 
 
-def do_maintenance():
+def do_maintenance(maxtime=None):
+    start_maintenancetime = time.perf_counter()
+
     logprefix = "Maintenance: "
 
     conn = mysql.connector.connect(**CONNKWARGS)
+
+    cur = conn.cursor(dictionary=True, buffered=True)
+
+    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp < NOW() - INTERVAL 30 DAY;")
+    taskcount = cur.fetchone()['taskcount']
+    log(logprefix + f"There are {taskcount} tasks that finished more than 30 days ago")
+
+    conn.commit()
+    cur.close()
 
     for resultfilepath in Path(localresultdir).glob('job*.*'):
         if resultfilepath.suffix in ['.txt', '.pdf']:
@@ -412,20 +423,19 @@ def do_maintenance():
                     remove_task_resultfiles(taskid)
                 elif resultfilepath.suffix == '.txt':
                     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
+                        log(logprefix + "Creating missing PDF from result file "
+                            f"{resultfilepath.relative_to(localresultdir)}")
                         make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix)
 
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
                 pass
 
-    cur = conn.cursor(dictionary=True, buffered=True)
-
-    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp < NOW() - INTERVAL 30 DAY;")
-    taskcount = cur.fetchone()['taskcount']
-    log(logprefix + f"There are {taskcount} tasks that finished more than 30 days ago")
-
-    conn.commit()
-    cur.close()
+        maintenance_duration = time.perf_counter() - start_maintenancetime
+        if maxtime and maintenance_duration > maxtime:
+            log(logprefix + f"Maintenance has run for {maintenance_duration:.0f} s "
+                f"(above limit of {maxtime:.0f}). Resuming normal tasks...")
+            break
 
     conn.close()
 
@@ -438,7 +448,7 @@ def main():
     while True:
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
-            do_maintenance()
+            do_maintenance(maxtime=30)
             printedwaiting = False
 
         queuedtaskcount = do_taskloop()
