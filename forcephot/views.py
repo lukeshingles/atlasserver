@@ -16,12 +16,13 @@ from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.views import APIView
+from django.conf import settings as settings
 
-import atlasserver.settings as djangosettings
-from forcephot.forms import *
-from forcephot.misc import *
-from forcephot.models import *
-from forcephot.serializers import *
+# import atlasserver.settings as djangosettings
+from forcephot.forms import TaskForm, RegistrationForm
+from forcephot.misc import splitradeclist, date_to_mjd
+from forcephot.models import Task
+from forcephot.serializers import ForcePhotTaskSerializer
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -60,7 +61,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     throttle_scope = 'forcephottasks'
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
-    ordering = ['-timestamp']
+    ordering = ['-timestamp', '-id']
     filterset_fields = ['user']
     template_name = 'tasklist.html'
 
@@ -122,7 +123,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         if instance.localresultfile():
-            localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, instance.localresultfile())
+            localresultfullpath = os.path.join(settings.STATIC_ROOT, instance.localresultfile())
             if os.path.exists(localresultfullpath):
                 os.remove(localresultfullpath)
             pdfpath = Path(localresultfullpath).with_suffix('.pdf')
@@ -131,23 +132,34 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     def list(self, request, *args, **kwargs):
-        if request.accepted_renderer.format == 'html':
-            listqueryset = self.get_queryset().filter(user_id=request.user)
+        listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
+        maxtaskid = listqueryset[0].id  # max id out if this user's tasks
+        page = self.paginate_queryset(listqueryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+        else:
             serializer = self.get_serializer(listqueryset, many=True)
-            tasks = listqueryset
-            # serializer2 = ForcePhotTaskSerializer(tasks, context={'request': request})
+
+        if request.accepted_renderer.format == 'html':
+            tasks = page
             if 'form' in kwargs:
                 form = kwargs['form']
             else:
                 form = TaskForm()
-            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
-                             'form': form, 'name': 'Job Queue', 'addnewtaskstotop': True,
-                             'singletaskdetail': False})
 
-        # listqueryset = self.filter_queryset(self.get_queryset())
-        listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
-        serializer = self.get_serializer(listqueryset, many=True)
-        page = self.paginate_queryset(listqueryset)
+            addnewtaskstotop = (page[0].id == maxtaskid)
+            print(dir(self.paginator))
+            print(self.paginator.get_count(page))
+            print()
+            index_low = self.paginator.get_offset(request) + 1
+            index_high = self.paginator.get_offset(request) + self.paginator.get_count(page)
+            txttaskrange = f"Tasks {index_low}-{index_high} of {self.paginator.get_count(listqueryset)}"
+
+            return Response({
+                'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
+                'form': form, 'name': 'Job Queue', 'addnewtaskstotop': addnewtaskstotop, 'singletaskdetail': False,
+                'paginator': self.paginator, 'txttaskrange': txttaskrange})
+
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
@@ -176,7 +188,7 @@ def deleteTask(request, pk):
     try:
         item = Task.objects.get(id=pk)
         if item.localresultfile():
-            localresultfullpath = os.path.join(djangosettings.STATIC_ROOT, item.localresultfile())
+            localresultfullpath = os.path.join(settings.STATIC_ROOT, item.localresultfile())
             if os.path.exists(localresultfullpath):
                 os.remove(localresultfullpath)
             pdfpath = Path(localresultfullpath).with_suffix('.pdf')

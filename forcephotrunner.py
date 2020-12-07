@@ -10,25 +10,24 @@ from signal import SIGINT, SIGTERM, signal
 
 import mysql.connector
 import pandas as pd
-from django.conf import settings
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
 
-import atlasserver.settings as djangosettings
+import atlasserver.settings as settings
 import plotatlasfp
 
 load_dotenv(override=True)
 
 remoteServer = 'atlas'
-localresultdir = Path(djangosettings.STATIC_ROOT, 'results')
+localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 
 CONNKWARGS = {
-    'host': djangosettings.DATABASES['default']['HOST'],
-    'port': djangosettings.DATABASES['default']['PORT'],
-    'database': djangosettings.DATABASES['default']['NAME'],
-    'user': djangosettings.DATABASES['default']['USER'],
-    'password': djangosettings.DATABASES['default']['PASSWORD'],
+    'host': settings.DATABASES['default']['HOST'],
+    'port': settings.DATABASES['default']['PORT'],
+    'database': settings.DATABASES['default']['NAME'],
+    'user': settings.DATABASES['default']['USER'],
+    'password': settings.DATABASES['default']['PASSWORD'],
     'autocommit': True,
 }
 

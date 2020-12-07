@@ -44,6 +44,12 @@
             </ul>
         {% endif %}
     </div>
+    {% if paginator %}
+    <div id="paginator">
+        {% if txttaskrange %}<p>{{txttaskrange}}</p>{% endif %}
+        {% get_pagination_html paginator %}
+    </div>
+    {% endif %}
 </div>
 {% endblock %}
 

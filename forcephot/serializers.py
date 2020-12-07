@@ -1,8 +1,8 @@
 from django.contrib.auth.models import Group, User
 from rest_framework import serializers
 from rest_framework.reverse import reverse
+from django.conf import settings
 
-import atlasserver.settings as djangosettings
 from forcephot.models import Task
 
 
@@ -12,7 +12,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_result_url(self, obj):
         if obj.localresultfile():
             request = self.context.get('request')
-            return request.build_absolute_uri(djangosettings.STATIC_URL + obj.localresultfile())
+            return request.build_absolute_uri(settings.STATIC_URL + obj.localresultfile())
 
         return None
 

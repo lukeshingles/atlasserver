@@ -9,7 +9,7 @@ from django.utils.translation import gettext
 from django.utils.translation import gettext_lazy as _
 
 from forcephot.misc import splitradeclist
-from forcephot.models import *
+from forcephot.models import Task
 
 
 class TaskForm(forms.ModelForm):
