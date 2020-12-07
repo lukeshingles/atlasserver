@@ -248,7 +248,8 @@ def send_email_if_needed(conn, task, logprefix=''):
 
 
 def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
-    epochs = plotatlasfp.read_and_simga_clip_data(log=fundamentals.logs.emptyLogger(), fpFile=localresultfile)
+    epochs = plotatlasfp.read_and_simga_clip_data(log=fundamentals.logs.emptyLogger(), fpFile=localresultfile,
+                                                  mjdMin=False, mjdMax=False)
 
     pdftitle = f"Task {taskid} {(':' + taskcomment) if taskcomment else ''}"
     temp_plot_path = plotatlasfp.plot_lc(log=fundamentals.logs.emptyLogger(), epochs=epochs,
