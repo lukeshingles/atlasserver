@@ -150,7 +150,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             else:
                 form = TaskForm()
 
-            addnewtaskstotop = (maxtaskid < 0 or page[0].id == maxtaskid)
+            addnewtaskstotop = (maxtaskid == 0 or page[0].id == maxtaskid)
 
             if tasks:
                 index_low = self.paginator.get_offset(request) + 1
@@ -274,7 +274,7 @@ def resultdatajs(request, taskid):
             strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
 
             strjs += "jslcdata.push([" + (", ".join([
-                f"[{mjd}, {uJy}, {duJy}]" for _, (mjd, uJy, duJy) in
+                f"[{mjd},{uJy},{duJy}]" for _, (mjd, uJy, duJy) in
                 dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n"
 
         today = datetime.date.today()
@@ -285,11 +285,10 @@ def resultdatajs(request, taskid):
         ymax = min(40000, df.uJy.max())
 
         strjs += 'var jslclimits = {'
-        strjs += f'"xmin": {xmin}, "xmax": {xmax},'
-        strjs += f'"ymin": {ymin}, "ymax": {ymax},'
+        strjs += f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},'
         strjs += f'"discoveryDate": {xmin},'
         strjs += f'"today": {mjd_today},'
-        strjs += '};'
+        strjs += '};\n'
 
         strjs += f'jslimitsglobal["#{divid}"] = jslclimits;\n'
         strjs += f'jslcdataglobal["#{divid}"] = jslcdata;\n'
