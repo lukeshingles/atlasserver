@@ -262,7 +262,7 @@ def resultdatajs(request, taskid):
     if resultfile:
         df = pd.read_csv(os.path.join(settings.STATIC_ROOT, resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
-        df.query("uJy > -1e6 and uJy < 1e6", inplace=True)
+        df.query("uJy > -1e10 and uJy < 1e10", inplace=True)
 
         strjs += "var jslcdata = new Array();\n"
         strjs += "var jslabels = new Array();\n"
