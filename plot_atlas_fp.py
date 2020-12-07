@@ -10,8 +10,8 @@
     December  3, 2020
 
 Usage:
-    plot-atlas-fp <fpFile> [--stacked <objectName>]
-    plot-atlas-fp <fpFile> <mjdMin> <mjdMax> [--stacked <objectName>]
+    plot_atlas_fp <fpFile> [--stacked <objectName>]
+    plot_atlas_fp <fpFile> <mjdMin> <mjdMax> [--stacked <objectName>]
 
 Options:
     fpFile                path to the results file returned by the ATLAS FP service
@@ -43,7 +43,7 @@ import matplotlib.ticker as mtick
 
 def main(arguments=None):
     """
-    *The main function used when ``plot-atlas-fp.py`` is run as a single script from the cl*
+    *The main function used when ``plot_atlas_fp.py`` is run as a single script from the cl*
     """
 
     # SETUP THE COMMAND-LINE UTIL SETTINGS
@@ -76,7 +76,7 @@ def main(arguments=None):
     mjdMin = a["mjdMin"]
     mjdMax = a["mjdMax"]
 
-    epochs = read_and_simga_clip_data(
+    epochs = read_and_sigma_clip_data(
         log=log, fpFile=fpFile, mjdMin=mjdMin, mjdMax=mjdMax)
 
     plotFilePath = plot_lc(log=log, epochs=epochs,
@@ -370,11 +370,11 @@ def plot_lc(
     return fileName
 
 
-def read_and_simga_clip_data(
+def read_and_sigma_clip_data(
         log,
         fpFile,
-        mjdMin,
-        mjdMax,
+        mjdMin=False,
+        mjdMax=False,
         clippingSigma=3):
     """*summary of function*
 
@@ -390,7 +390,7 @@ def read_and_simga_clip_data(
 
     - `epochs` -- sigma clipped and cleaned epoch data
     """
-    log.debug('starting the ``read_and_simga_clip_data`` function')
+    log.debug('starting the ``read_and_sigma_clip_data`` function')
 
     if mjdMin:
         mjdMin = float(mjdMin)
@@ -440,7 +440,7 @@ def read_and_simga_clip_data(
             keepEpochs.append(epoch)
         epochs = keepEpochs
 
-    log.debug('completed the ``read_and_simga_clip_data`` function')
+    log.debug('completed the ``read_and_sigma_clip_data`` function')
     return epochs
 
 

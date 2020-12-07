@@ -14,7 +14,7 @@ from django.core.mail import EmailMessage
 from dotenv import load_dotenv
 
 import atlasserver.settings as settings
-import plotatlasfp
+import plot_atlas_fp
 
 load_dotenv(override=True)
 
@@ -248,12 +248,12 @@ def send_email_if_needed(conn, task, logprefix=''):
 
 
 def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
-    epochs = plotatlasfp.read_and_simga_clip_data(log=fundamentals.logs.emptyLogger(), fpFile=localresultfile,
-                                                  mjdMin=False, mjdMax=False)
+    epochs = plot_atlas_fp.read_and_sigma_clip_data(
+        log=fundamentals.logs.emptyLogger(), fpFile=localresultfile, mjdMin=False, mjdMax=False)
 
     pdftitle = f"Task {taskid} {(':' + taskcomment) if taskcomment else ''}"
-    temp_plot_path = plotatlasfp.plot_lc(log=fundamentals.logs.emptyLogger(), epochs=epochs,
-                                         objectName=pdftitle, stacked=False)
+    temp_plot_path = plot_atlas_fp.plot_lc(
+        log=fundamentals.logs.emptyLogger(), epochs=epochs, objectName=pdftitle, stacked=False)
 
     if not temp_plot_path:
         log(logprefix + f'Failed to create PDF plot from {localresultfile.relative_to(localresultdir)}')
