@@ -338,7 +338,7 @@ def do_taskloop():
         task = dict(taskrow)
 
         if not task_exists(conn=conn, taskid=task['id']):
-            log("job{task['id']:05d} (user {task['user_id']}): was cancelled.")
+            log(f"job{task['id']:05d} (user {task['user_id']}): was cancelled.")
             continue
 
         taskload_thisuser = usertaskload.get(task['user_id'], 0)
