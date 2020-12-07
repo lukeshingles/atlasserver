@@ -13,7 +13,7 @@
     {% if not singletaskdetail %}
     <div class="newrequest">
         <div class="task">
-        <h3>New request</h3>
+        <h2>New request</h2>
         <form method="POST" action="{% url 'task-list' %}" id="newrequest">
             {% csrf_token %}
             {{ form.non_field_errors }}
