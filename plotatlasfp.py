@@ -11,10 +11,13 @@
 
 Usage:
     plot-atlas-fp <fpFile> [--stacked <objectName>]
+    plot-atlas-fp <fpFile> <mjdMin> <mjdMax> [--stacked <objectName>]
 
 Options:
     fpFile                path to the results file returned by the ATLAS FP service
     objectName            give a name for the object you are plotting (for plot title and filename)
+    mjdMin                min mjd to plot
+    mjdMax                max mjd to plot
     -h, --help            show this help message
     -s, --stacked         stack photometry from the smae night (and same filter)
 """
@@ -70,8 +73,11 @@ def main(arguments=None):
     fpFile = a["fpFile"]
     objectName = a["objectName"]
     stacked = a["stackedFlag"]
+    mjdMin = a["mjdMin"]
+    mjdMax = a["mjdMax"]
 
-    epochs = read_and_simga_clip_data(log=log, fpFile=fpFile)
+    epochs = read_and_simga_clip_data(
+        log=log, fpFile=fpFile, mjdMin=mjdMin, mjdMax=mjdMax)
 
     plotFilePath = plot_lc(log=log, epochs=epochs,
                            objectName=objectName, stacked=stacked)
@@ -133,26 +139,38 @@ def plot_lc(
 
     # STACK OR NON-STACKED?
     if stacked:
-        for fil, d in list(magnitudes.items()):
+        # magnitudes/fluxes are divided in unique filter sets - so iterate over
+        # filters
+        for fil, data in list(magnitudes.items()):
+            # we're going to create further subsets for each unqiue mjd (floored to an integer)
+            # mag variable == flux (just to confuse you)
             distinctMjds = {}
-            for m, f, e in zip(d["mjds"], d["mags"], d["magErrs"]):
-                key = str(int(math.floor(m)))
+            for mjd, flx, err in zip(data["mjds"], data["mags"], data["magErrs"]):
+                # dict key is the unique integer mjd
+                key = str(int(math.floor(mjd)))
+                # first data point of the nights? create new data set
                 if key not in distinctMjds:
                     distinctMjds[key] = {
-                        "mjds": [m],
-                        "mags": [f],
-                        "magErrs": [e]
+                        "mjds": [mjd],
+                        "mags": [flx],
+                        "magErrs": [err]
                     }
+                # or not the first? append to already created list
                 else:
                     distinctMjds[key]["mjds"].append(m)
                     distinctMjds[key]["mags"].append(f)
                     distinctMjds[key]["magErrs"].append(e)
 
+            # all data now in mjd subsets. So for each subset (i.e. individual
+            # nights) ...
             for k, v in list(distinctMjds.items()):
+                # give me the mean mjd
                 summedMagnitudes[fil]["mjds"].append(
                     old_div(sum(v["mjds"]), len(v["mjds"])))
+                # give me the mean flux
                 summedMagnitudes[fil]["mags"].append(
                     old_div(sum(v["mags"]), len(v["mags"])))
+                # give me the combined error
                 summedMagnitudes[fil]["magErrs"].append(sum(v["magErrs"]) / len(v["magErrs"]
                                                                                 ) / math.sqrt(len(v["magErrs"])))
         magnitudes = summedMagnitudes
@@ -220,17 +238,20 @@ def plot_lc(
         orangeMag[1][0].set_markeredgewidth('0.7')
         orangeMag[1][1].set_markeredgewidth('0.7')
         handles.append(orangeMag)
-        if max(np.array(magnitudes['o']['mags']) + np.array(magnitudes['o']['magErrs'])) > upperMag:
-            upperMag = max(
-                np.array(magnitudes['o']['mags']) + np.array(magnitudes['o']['magErrs']))
-            upperMagIndex = np.argmax((
-                magnitudes['o']['mags']) + np.array(magnitudes['o']['magErrs']))
+        errMask = np.array(magnitudes['o']['magErrs'])
+        np.putmask(errMask, errMask > 30, 30)
 
-        if min(np.array(magnitudes['o']['mags']) - np.array(magnitudes['o']['magErrs'])) < lowerMag:
+        if max(np.array(magnitudes['o']['mags']) + errMask) > upperMag:
+            upperMag = max(
+                np.array(magnitudes['o']['mags']) + errMask)
+            upperMagIndex = np.argmax((
+                magnitudes['o']['mags']) + errMask)
+
+        if min(np.array(magnitudes['o']['mags']) - errMask) < lowerMag:
             lowerMag = min(
-                np.array(magnitudes['o']['mags']) - np.array(magnitudes['o']['magErrs']))
+                np.array(magnitudes['o']['mags']) - errMask)
             lowerMagIndex = np.argmin((
-                magnitudes['o']['mags']) - np.array(magnitudes['o']['magErrs']))
+                magnitudes['o']['mags']) - errMask)
 
     if len(magnitudes['c']['mjds']):
         cyanMag = ax.errorbar(magnitudes['c']['mjds'], magnitudes['c']['mags'], yerr=magnitudes[
@@ -239,17 +260,20 @@ def plot_lc(
         cyanMag[1][0].set_markeredgewidth('0.7')
         cyanMag[1][1].set_markeredgewidth('0.7')
         handles.append(cyanMag)
-        if max(np.array(magnitudes['c']['mags']) + np.array(magnitudes['c']['magErrs'])) > upperMag:
-            upperMag = max(
-                np.array(magnitudes['c']['mags']) + np.array(magnitudes['c']['magErrs']))
-            upperMagIndex = np.argmax((
-                magnitudes['c']['mags']) + np.array(magnitudes['c']['magErrs']))
+        errMask = np.array(magnitudes['c']['magErrs'])
+        np.putmask(errMask, errMask > 30, 30)
 
-        if min(np.array(magnitudes['c']['mags']) - np.array(magnitudes['c']['magErrs'])) < lowerMag:
+        if max(np.array(magnitudes['c']['mags']) + errMask) > upperMag:
+            upperMag = max(
+                np.array(magnitudes['c']['mags']) + errMask)
+            upperMagIndex = np.argmax((
+                magnitudes['c']['mags']) + errMask)
+
+        if min(np.array(magnitudes['c']['mags']) - errMask) < lowerMag:
             lowerMag = min(
-                np.array(magnitudes['c']['mags']) - np.array(magnitudes['c']['magErrs']))
+                np.array(magnitudes['c']['mags']) - errMask)
             lowerMagIndex = np.argmin(
-                (magnitudes['c']['mags']) - np.array(magnitudes['c']['magErrs']))
+                (magnitudes['c']['mags']) - errMask)
 
     if len(magnitudes['I']['mjds']):
         cyanMag = ax.errorbar(magnitudes['I']['mjds'], magnitudes['I']['mags'], yerr=magnitudes[
@@ -258,17 +282,20 @@ def plot_lc(
         cyanMag[1][0].set_markeredgewidth('0.7')
         cyanMag[1][1].set_markeredgewidth('0.7')
         handles.append(cyanMag)
-        if max(np.array(magnitudes['I']['mags']) + np.array(magnitudes['I']['magErrs'])) > upperMag:
-            upperMag = max(
-                np.array(magnitudes['I']['mags']) + np.array(magnitudes['I']['magErrs']))
-            upperMagIndex = np.argmax((
-                magnitudes['I']['mags']) + np.array(magnitudes['I']['magErrs']))
+        errMask = np.array(magnitudes['I']['magErrs'])
+        np.putmask(errMask, errMask > 30, 30)
 
-        if min(np.array(magnitudes['I']['mags']) - np.array(magnitudes['I']['magErrs'])) < lowerMag:
+        if max(np.array(magnitudes['I']['mags']) + errMask) > upperMag:
+            upperMag = max(
+                np.array(magnitudes['I']['mags']) + errMask)
+            upperMagIndex = np.argmax((
+                magnitudes['I']['mags']) + errMask)
+
+        if min(np.array(magnitudes['I']['mags']) - errMask) < lowerMag:
             lowerMag = min(
-                np.array(magnitudes['I']['mags']) - np.array(magnitudes['I']['magErrs']))
+                np.array(magnitudes['I']['mags']) - errMask)
             lowerMagIndex = np.argmin(
-                (magnitudes['I']['mags']) - np.array(magnitudes['I']['magErrs']))
+                (magnitudes['I']['mags']) - errMask)
 
     plt.legend(handles=handles, prop={
                'size': 13.5}, bbox_to_anchor=(0.95, 1.2), loc=0, borderaxespad=0., ncol=4, scatterpoints=1)
@@ -277,6 +304,7 @@ def plot_lc(
     allMjd = magnitudes['o']['mjds'] + magnitudes['c']['mjds']
     xmin = min(allMjd) - 5.
     xmax = max(allMjd) + 5.
+    mjdRange = xmax - xmin
     ax.set_xlim([xmin, xmax])
 
     ax.set_ylim([0. - deltaMag, upperMag + deltaMag])
@@ -286,7 +314,6 @@ def plot_lc(
     # PLOT THE MAGNITUDE SCALE
     axisUpperFlux = upperMag
     axisLowerFlux = 1e-29
-
     axisLowerMag = -2.5 * math.log10(axisLowerFlux) + 23.9
     axisUpperMag = -2.5 * math.log10(axisUpperFlux) + 23.9
 
@@ -295,7 +322,7 @@ def plot_lc(
 
     magLabels = [20., 19.5, 19.0, 18.5,
                  18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0]
-    magFluxes = [pow(10, old_div(-(m + 48.6), 2.5)) * 1e29 for m in magLabels]
+    magFluxes = [pow(10, old_div(-(m - 23.9), 2.5)) for m in magLabels]
 
     ax.yaxis.set_major_locator(ticker.FixedLocator((magFluxes)))
     ax.yaxis.set_major_formatter(ticker.FixedFormatter((magLabels)))
@@ -317,7 +344,10 @@ def plot_lc(
     ax.xaxis.grid(False)
     plt.setp(ax3.xaxis.get_majorticklabels(),
              rotation=45, horizontalalignment='left')
-    ax3.xaxis.set_major_formatter(dates.DateFormatter('%b %d'))
+    if mjdRange > 365:
+        ax3.xaxis.set_major_formatter(dates.DateFormatter('%b %d %y'))
+    else:
+        ax3.xaxis.set_major_formatter(dates.DateFormatter('%b %d'))
 
     ax2.set_ylabel('Flux ($\mu$Jy)', rotation=-90.,  labelpad=27)
 
@@ -343,6 +373,8 @@ def plot_lc(
 def read_and_simga_clip_data(
         log,
         fpFile,
+        mjdMin,
+        mjdMax,
         clippingSigma=3):
     """*summary of function*
 
@@ -350,6 +382,8 @@ def read_and_simga_clip_data(
 
     - `log` -- logger
     - `fpFile` -- path to force photometry file
+    - `mjdMin` -- min mjd to plot. Default **False**
+    - `mjdMax` -- max mjd to plot. Default **False**
     - `clippingSigma` -- the level at which to clip flux data
 
     **Return:**
@@ -357,6 +391,11 @@ def read_and_simga_clip_data(
     - `epochs` -- sigma clipped and cleaned epoch data
     """
     log.debug('starting the ``read_and_simga_clip_data`` function')
+
+    if mjdMin:
+        mjdMin = float(mjdMin)
+    if mjdMax:
+        mjdMax = float(mjdMax)
 
     # CLEAN UP FILE FOR EASIER READING
 
@@ -374,7 +413,12 @@ def read_and_simga_clip_data(
                 row[k] = float(v)
             except:
                 pass
-        epochs.append(row)
+        if mjdMin and mjdMax:
+
+            if row["MJD"] > mjdMin and row["MJD"] < mjdMax:
+                epochs.append(row)
+        else:
+            epochs.append(row)
 
     clipped = 1000
     while clipped > 0:
@@ -382,14 +426,15 @@ def read_and_simga_clip_data(
         # WORK OUT STD FOR CLIPPING ROGUE DATA
         fluxes = []
         for e in epochs:
-            if e["uJy"] > 49.:
+            if e["uJy"] > 50.:
                 fluxes.append(e["uJy"])
         std = np.std(fluxes)
         mean = np.mean(fluxes)
+
         keepEpochs = []
         for epoch in epochs:
             # CLIP SOME ROUGE DATA-POINTS
-            if not epoch["uJy"] or epoch["uJy"] < 50. or abs(epoch["uJy"] - mean) > clippingSigma * std:
+            if not epoch["uJy"] or epoch["uJy"] < 0. or (abs(epoch["uJy"] - mean) > clippingSigma * std and e["uJy"] > 50.):
                 clipped += 1
                 continue
             keepEpochs.append(epoch)
