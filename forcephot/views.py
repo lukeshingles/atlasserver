@@ -153,7 +153,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             print()
             index_low = self.paginator.get_offset(request) + 1
             index_high = self.paginator.get_offset(request) + self.paginator.get_count(page)
-            txttaskrange = f"Tasks {index_low}-{index_high} of {self.paginator.get_count(listqueryset)}"
+            txttaskrange = f"Showing tasks {index_low}-{index_high} of {self.paginator.get_count(listqueryset)}"
 
             return Response({
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
