@@ -448,7 +448,7 @@ def main():
     while True:
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
-            do_maintenance(maxtime=180)
+            do_maintenance(maxtime=300)
             printedwaiting = False
 
         queuedtaskcount = do_taskloop()
