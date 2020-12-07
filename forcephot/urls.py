@@ -44,7 +44,8 @@ urlpatterns = [
 
     path('taskboxhtml/', views.taskboxhtml),
     path('taskboxhtml/<int:taskid>/', views.taskboxhtml, name="taskboxhtml"),
-    path('taskboxhtml/newsince/<int:taskid>/', views.taskboxhtml, {"type": "maxid"}, name="taskboxhtml_newsince_taskid"),
+    path('taskboxhtml/newsince/<int:taskid>/', views.taskboxhtml, {"type": "newsincetaskid"},
+         name="taskboxhtml_newsince_taskid"),
     path('resultdatajs/<int:taskid>/', views.resultdatajs, name='resultdatajs'),
 
     path('apiguide/', views.apiguide, name="apiguide"),
