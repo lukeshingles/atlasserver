@@ -134,7 +134,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
-        maxtaskid = listqueryset[0].id  # max id out if this user's tasks
+        # max id out if this user's tasks
+        maxtaskid = listqueryset[0].id if listqueryset else -1
+
         page = self.paginate_queryset(listqueryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -148,13 +150,14 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             else:
                 form = TaskForm()
 
-            addnewtaskstotop = (page[0].id == maxtaskid)
-            print(dir(self.paginator))
-            print(self.paginator.get_count(page))
-            print()
-            index_low = self.paginator.get_offset(request) + 1
-            index_high = self.paginator.get_offset(request) + self.paginator.get_count(page)
-            txttaskrange = f"Showing tasks {index_low}-{index_high} of {self.paginator.get_count(listqueryset)}"
+            addnewtaskstotop = (maxtaskid < 0 or page[0].id == maxtaskid)
+
+            if tasks:
+                index_low = self.paginator.get_offset(request) + 1
+                index_high = self.paginator.get_offset(request) + self.paginator.get_count(page)
+                txttaskrange = f"Showing tasks {index_low}-{index_high} of {self.paginator.get_count(listqueryset)}"
+            else:
+                txttaskrange = None
 
             return Response({
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
@@ -235,9 +238,10 @@ def register(request):
 
 
 def taskboxhtml(request, taskid=None, type=None):
-    if type == 'maxid':
+    if type == 'newsincemaxid':
         # get all tasks more recent than the specified once
-        tasks = Task.objects.all().order_by('-timestamp', '-id').select_related('user').filter(user_id=request.user, id__gt=taskid)
+        tasks = Task.objects.all().order_by('-timestamp', '-id').select_related('user').filter(
+            user_id=request.user, id__gt=taskid)
     else:
         if taskid:
             try:
