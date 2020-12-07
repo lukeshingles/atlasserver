@@ -122,6 +122,8 @@
             return;
         }
 
+        console.log('checking for deleted tasks');
+
         $('li.task').each(function() {
             var taskid = $(this).attr('id').replace("task-", "");
 
