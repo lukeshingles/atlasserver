@@ -157,9 +157,9 @@ def plot_lc(
                     }
                 # or not the first? append to already created list
                 else:
-                    distinctMjds[key]["mjds"].append(m)
-                    distinctMjds[key]["mags"].append(f)
-                    distinctMjds[key]["magErrs"].append(e)
+                    distinctMjds[key]["mjds"].append(mjd)
+                    distinctMjds[key]["mags"].append(flx)
+                    distinctMjds[key]["magErrs"].append(err)
 
             # all data now in mjd subsets. So for each subset (i.e. individual
             # nights) ...
@@ -184,8 +184,8 @@ def plot_lc(
         edgecolor=None,
         frameon=True)
 
-    mpl.rc('ytick', labelsize=20)
-    mpl.rc('xtick', labelsize=20)
+    mpl.rc('ytick', labelsize=18)
+    mpl.rc('xtick', labelsize=18)
     mpl.rcParams.update({'font.size': 22})
 
     # FORMAT THE AXES
@@ -194,7 +194,6 @@ def plot_lc(
         polar=False,
         frameon=True)
     ax.set_xlabel('MJD', labelpad=20)
-    ax.set_ylabel('Apparent Magnitude', labelpad=15)
 
     # ATLAS OBJECT NAME LABEL AS TITLE
     fig.text(0.1, 1.02, objectName, ha="left", fontsize=40)
@@ -307,7 +306,7 @@ def plot_lc(
     mjdRange = xmax - xmin
     ax.set_xlim([xmin, xmax])
 
-    ax.set_ylim([0. - deltaMag, upperMag + deltaMag])
+    ax.set_ylim([lowerMag - deltaMag, upperMag + deltaMag])
     y_formatter = mpl.ticker.FormatStrFormatter("%2.1f")
     ax.yaxis.set_major_formatter(y_formatter)
 
@@ -315,21 +314,35 @@ def plot_lc(
     axisUpperFlux = upperMag
     axisLowerFlux = 1e-29
     axisLowerMag = -2.5 * math.log10(axisLowerFlux) + 23.9
-    axisUpperMag = -2.5 * math.log10(axisUpperFlux) + 23.9
+    if axisUpperFlux > 0.:
+        axisUpperMag = -2.5 * math.log10(axisUpperFlux) + 23.9
+    else:
+        axisUpperMag = None
 
-    ax.set_yticks([2.2])
-    import matplotlib.ticker as ticker
+    if axisUpperMag:
+        ax.set_ylabel('Apparent Magnitude', labelpad=15)
+        ax.set_yticks([2.2])
+        import matplotlib.ticker as ticker
 
-    magLabels = [20., 19.5, 19.0, 18.5,
-                 18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0]
-    magFluxes = [pow(10, old_div(-(m - 23.9), 2.5)) for m in magLabels]
+        if axisUpperMag < 14:
+            magLabels = [20.,
+                         17.0, 15.0, 14.0, 13.5, 13.0]
+        elif axisUpperMag < 15:
+            magLabels = [20., 19.,
+                         18.0, 17.0, 16.0, 15.0]
+        elif axisUpperMag < 17:
+            magLabels = [20., 19.5, 19.0, 18.5,
+                         18.0, 17.5, 17.0, 16.5, 16.0, 15.5, 15.0]
+        magFluxes = [pow(10, old_div(-(m - 23.9), 2.5)) for m in magLabels]
 
-    ax.yaxis.set_major_locator(ticker.FixedLocator((magFluxes)))
-    ax.yaxis.set_major_formatter(ticker.FixedFormatter((magLabels)))
+        ax.yaxis.set_major_locator(ticker.FixedLocator((magFluxes)))
+        ax.yaxis.set_major_formatter(ticker.FixedFormatter((magLabels)))
+    else:
+        ax.set_yticks([])
 
     # ADD SECOND Y-AXIS
     ax2 = ax.twinx()
-    ax2.set_ylim([0. - deltaMag, upperMag + deltaMag])
+    ax2.set_ylim([lowerMag - deltaMag, upperMag + deltaMag])
     ax2.yaxis.set_major_formatter(y_formatter)
 
     # RELATIVE TIME SINCE DISCOVERY
@@ -375,7 +388,7 @@ def read_and_sigma_clip_data(
         fpFile,
         mjdMin=False,
         mjdMax=False,
-        clippingSigma=3):
+        clippingSigma=5):
     """*summary of function*
 
     **Key Arguments:**
@@ -426,7 +439,7 @@ def read_and_sigma_clip_data(
         # WORK OUT STD FOR CLIPPING ROGUE DATA
         fluxes = []
         for e in epochs:
-            if e["uJy"] > 50.:
+            if e["uJy"] > 50. and e["uJy"] < 10000000.:
                 fluxes.append(e["uJy"])
         std = np.std(fluxes)
         mean = np.mean(fluxes)
@@ -434,7 +447,9 @@ def read_and_sigma_clip_data(
         keepEpochs = []
         for epoch in epochs:
             # CLIP SOME ROUGE DATA-POINTS
-            if not epoch["uJy"] or epoch["uJy"] < 0. or (abs(epoch["uJy"] - mean) > clippingSigma * std and e["uJy"] > 50.):
+            # if not epoch["uJy"] or epoch["uJy"] < 0. or (abs(epoch["uJy"] -
+            # mean) > clippingSigma * std and e["uJy"] > 50.):
+            if not epoch["uJy"] or (abs(epoch["uJy"] - mean) > clippingSigma * std and e["uJy"] > 50.):
                 clipped += 1
                 continue
             keepEpochs.append(epoch)
