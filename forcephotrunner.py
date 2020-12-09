@@ -119,7 +119,7 @@ def runforced(task, conn, logprefix='', **kwargs):
             break
 
     if cancelled:
-        log(logprefix + "ssh was cancelled after {time.perf_counter() - starttime:.1f} seconds                        ")
+        log(logprefix + "                                                                                 ")
         os.kill(p.pid, SIGTERM)
         return False
 
