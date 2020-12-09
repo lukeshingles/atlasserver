@@ -110,7 +110,7 @@ def runforced(task, conn, logprefix='', **kwargs):
     cancelled = False
     while not cancelled:
         try:
-            p.communicate(timeout=2)
+            p.communicate(timeout=1)
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(conn=conn, taskid=id)
@@ -173,7 +173,7 @@ def runforced(task, conn, logprefix='', **kwargs):
         # task failed somehow
         return False
 
-    # make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile, logprefix=logprefix)
+    make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile, logprefix=logprefix)
 
     return localresultfile
 
@@ -421,11 +421,11 @@ def do_maintenance(maxtime=None):
                 if not task_exists(conn=conn, taskid=taskid):
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
                     remove_task_resultfiles(taskid)
-                # elif resultfilepath.suffix == '.txt':
-                #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
-                #         log(logprefix + "Creating missing PDF from result file "
-                #             f"{resultfilepath.relative_to(localresultdir)}")
-                #         make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix)
+                elif resultfilepath.suffix == '.txt':
+                    if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
+                        log(logprefix + "Creating missing PDF from result file "
+                            f"{resultfilepath.relative_to(localresultdir)}")
+                        make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix)
 
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")

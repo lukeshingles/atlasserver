@@ -324,9 +324,7 @@ def plot_lc(
         ax.set_yticks([2.2])
         import matplotlib.ticker as ticker
 
-        if axisUpperMag < 14:
-            magLabels = [20.,
-                         17.0, 15.0, 14.0, 13.5, 13.0]
+        magLabels = [20., 17.0, 15.0, 14.0, 13.5, 13.0]
         elif axisUpperMag < 15:
             magLabels = [20., 19.,
                          18.0, 17.0, 16.0, 15.0]
