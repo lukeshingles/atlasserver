@@ -1,4 +1,4 @@
-{% load static %}{% load i18n %}
+{% load static %}{% load i18n %}{% load humanize %}
 {% for task in tasks %}
     {% if task.finishtimestamp %}
         <li class="task finished" id="task-{{task.id}}">
@@ -33,7 +33,7 @@
         <div id="plotforcedflux-task-{{task.id}}" class="plot" style="width: 100%;"></div>
 
         {% elif task.starttimestamp %}
-        <span style="color: red;">Started running...</span>
+        <span style="color: red;">Started running {{task.starttimestamp|naturaltime}}...</span>
         {% else %}
         Queued ({{task.queuepos}} tasks ahead of this one)
         {% endif %}
