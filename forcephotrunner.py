@@ -338,7 +338,7 @@ def do_taskloop():
         task = dict(taskrow)
 
         if not task_exists(conn=conn, taskid=task['id']):
-            log(f"job{task['id']:05d} (user {task['user_id']}): was cancelled.")
+            log(f"job{task['id']:05d} (user {task['username']}): was cancelled.")
             continue
 
         taskload_thisuser = usertaskload.get(task['user_id'], 0)
@@ -350,7 +350,7 @@ def do_taskloop():
             conn.commit()
             cur2.close()
 
-            log(logprefix + f"Starting job for {task['email']} (who has run {taskload_thisuser} tasks "
+            log(logprefix + f"Starting job for {task['username']} (who has run {taskload_thisuser} tasks "
                 "in this pass so far):")
             log(logprefix + str(task))
             usertaskload[task['user_id']] = taskload_thisuser + 1
@@ -386,7 +386,7 @@ def do_taskloop():
                     time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
                 if (taskload_thisuser >= USERTASKLOADLIMIT):
-                    log(f"User {task['email']} has reached a task load of {taskload_thisuser} "
+                    log(f"User {task['username']} has reached a task load of {taskload_thisuser} "
                         f"above limit {usertaskload[task['user_id']]} for this pass.")
 
     conn.commit()
