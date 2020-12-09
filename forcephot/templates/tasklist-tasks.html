@@ -1,4 +1,4 @@
-{% load static %}{% load i18n %}
+{% load static %}{% load i18n %}{% load forcedphottags %}
 {% for task in tasks %}
     {% if task.finishtimestamp %}
         <li class="task finished" id="task-{{task.id}}">
@@ -24,7 +24,7 @@
             MJD range: [{{task.mjd_min|default:"0"}}, {{task.mjd_max|default:"∞"}}]<br/>
         {% endif %}
 
-        Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
+        Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}} ({{task.timestamp|tasktimesince}})<br/>
         {% if task.finishtimestamp %}
         Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br/>
         <a class="results btn btn-info getdata" href="{% static task.localresultfile %}" target="_blank">Data</a>
@@ -33,7 +33,7 @@
         <div id="plotforcedflux-task-{{task.id}}" class="plot" style="width: 100%;"></div>
 
         {% elif task.starttimestamp %}
-        <span style="color: red;">Started running...</span>
+        <span style="color: red;">Started running {{task.starttimestamp|tasktimesince}}</span>
         {% else %}
         Queued ({{task.queuepos}} tasks ahead of this one)
         {% endif %}
