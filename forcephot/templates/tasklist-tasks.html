@@ -1,4 +1,7 @@
-{% load static %}{% load i18n %}{% load forcedphottags %}
+{% load static %}
+{% load i18n %}
+{% load forcedphottags %}
+
 {% for task in tasks %}
     {% if task.finishtimestamp %}
         <li class="task finished" id="task-{{task.id}}">

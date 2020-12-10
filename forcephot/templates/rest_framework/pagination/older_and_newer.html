@@ -1,21 +1,22 @@
+{% load forcedphottags %}
 <ul class="pager">
   {% if previous_url %}
     <li class="previous">
-      <a href="{{ previous_url }}">&laquo; Newer</a>
+      <a href="{{ previous_url|removetaskboxqueryparam }}">&laquo; Newer</a>
     </li>
   {% else %}
-    <li class="previous disabled">
+    <!-- <li class="previous disabled">
       <a href="#">&laquo; Newer</a>
-    </li>
+    </li> -->
   {% endif %}
 
   {% if next_url %}
     <li class="next">
-      <a href="{{ next_url }}">Older &raquo;</a>
+      <a href="{{ next_url|removetaskboxqueryparam }}">Older &raquo;</a>
     </li>
   {% else %}
-    <li class="next disabled">
+    <!-- <li class="next disabled">
       <a href="#">Older &raquo;</a>
-    </li>
+    </li> -->
   {% endif %}
 </ul>

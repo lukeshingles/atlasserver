@@ -3,11 +3,11 @@
 {% load rest_framework %}
 {% load forcedphottags %}
 <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
-    {% if not tasks %}
+    {% if not tasks and usertaskcount == 0 %}
     <p>You have no tasks yet.</p>
     {% else %}
         <ul class="tasks">
-        {% include 'tasklist-tasks.html' %}
+            {% include 'tasklist-tasks.html' %}
         </ul>
     {% endif %}
     {% if paginator %}

@@ -2,6 +2,7 @@
 {% load static %}
 {% load i18n %}
 {% load rest_framework %}
+{% load forcedphottags %}
 
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
@@ -48,22 +49,78 @@
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
-    // check if the next job to run has started or finished
-    var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 1500);
+    var updatequeuedtimer = setInterval(function(){updatePageTasks();}, 2000);
 
-    // only one task across all users will be running now, so you might as well poll it at high frequency
-    var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
+    function updatePageTasks() {
+        if (!window_active) {
+            return;
+        }
 
-    {% if addnewtaskstotop %}
-    // occaisionally check and new items from the server (if not on page > 1 or single task view)
-    var checknewtimer = setInterval(checkNewTasks, 3000);
+        var plotdivs = new Array();
 
-    // check if any items on the page have been deleted
-    var checkdeletedtimer = setInterval(checkDeletedTasks, 15000);
-    {% endif %}
+        $.get('{{ request.get_full_path|addtaskboxqueryparam|escapejs }}').done(function(data, status) {
+            if (status == 'success') {
+                // $('#tasklist').replaceWith(data);
+                newhtml = jQuery(data);
 
-    var usertaskcount = {{usertaskcount}};
+                // remove any tasks from the page that are missing from the new data
+                $('li.task').each(function () {
+                    taskid = $(this).attr('id').replace("task-", "");
+                    if (newhtml.find('#task-' + taskid).length == 0) {
+                        console.log('task ' + taskid + ' is deleted');
+                        $('#task-' + taskid).replaceWith('');
+                    }
+                });
 
+                // newhtml now contains superset of the displayed tasks
+                // walk through the new items, inserting, replacing, or skipping as needed
+                prev_li_id = '-1'
+                newhtml.find('li.task').each(function () {
+                    taskid = $(this).attr('id').replace("task-", "");
+                    li_id = $(this).attr('id');
+                    servertaskhtml = newhtml.find('#' + li_id).get(0).outerHTML
+                    if ($('#' + li_id).length == 1) {
+                        if ($('#' + li_id).hasClass("finished")) {
+                            console.log('task ' + taskid + ' is already on the page and finished. Skipping');
+                        } else {
+                            console.log('task ' + taskid + ' is already on the page but unfinished. Updating');
+                            $('#' + li_id).replaceWith(servertaskhtml);
+                        }
+                    } else {
+                        if (prev_li_id == '-1') {
+                            console.log('task ' + taskid + ' is not on the page. adding to top');
+                            $('li.task:first-child').before(servertaskhtml)
+                        } else {
+                            console.log('task ' + taskid + ' is not on the page. adding after ' + prev_li_id);
+                            $('#' + prev_li_id).after(servertaskhtml)
+                        }
+                    }
+                    prev_li_id = li_id
+                });
+
+                $('#paginator').replaceWith(newhtml.find('#paginator').html());
+            }
+        });
+
+        activate_first_plot();
+    }
+
+    // // check if the next job to run has started or finished
+    // var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 1500);
+    //
+    // // only one task across all users will be running now, so you might as well poll it at high frequency
+    // var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
+    //
+    // {% if addnewtaskstotop %}
+    // // occaisionally check and new items from the server (if not on page > 1 or single task view)
+    // var checknewtimer = setInterval(checkNewTasks, 3000);
+    //
+    // // check if any items on the page have been deleted
+    // var checkdeletedtimer = setInterval(checkDeletedTasks, 15000);
+    // {% endif %}
+    //
+    // var usertaskcount = {{usertaskcount}};
+    //
     var window_active = true;
 
     $(window).blur(function() {
@@ -72,116 +129,8 @@
 
     $(window).focus(function() {
       window_active = true;
-      updateQueuedTasks(false, '.started');
-      updateQueuedTasks(true, '.notstarted');
-      {% if addnewtaskstotop %}
-      checkNewTasks();
-      checkDeletedTasks();
-      {% endif %}
+      updatePageTasks();
     });
-
-
-    function updateQueuedTasks(require_active, class_suffix) {
-        if (require_active && !window_active) {
-            return;
-        }
-
-        $('li.task.queued' + class_suffix).sort(function(a, b) {
-            // ascending order of task id number
-            taskid_a = parseInt($(a).attr('id').replace("task-", ""));
-            taskid_b = parseInt($(b).attr('id').replace("task-", ""));
-            return taskid_a - taskid_b;
-        })
-        .slice(0, 3) // limit number of items updated. The ones that could change have the lowest id numbers
-        .each(function() {
-            var taskid = $(this).attr('id').replace("task-", "");
-
-            console.log("updating " + class_suffix + " task id", taskid);
-            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid),).done(function(data, status) {
-                if (status == 'success') {
-                    $('#task-' + taskid).replaceWith(data);
-                }
-            });
-        });
-
-        activate_first_plot();
-    }
-
-
-    function checkDeletedTasks() {
-        // check all of the displayed tasks still exist on the server
-        // this could cause problems for users with a giant queue unless properly paginated
-
-        if (!window_active) {
-            return;
-        }
-
-        console.log('checking for deleted tasks');
-
-        $('li.task').each(function() {
-            var taskid = $(this).attr('id').replace("task-", "");
-
-            // this method of retrieving every item to see if it still exists
-            // is probably quite expensive
-            $.get('{% url 'taskboxhtml' 9999 %}'.replace('9999', taskid))
-            .fail(function(jqXHR, textStatus, errorThrown){
-                if(jqXHR.status == 404) {
-                    $('#task-' + taskid).replaceWith('');
-                    console.log('removing deleted task id ', taskid);
-                }
-            });
-        });
-
-        update_taskcount();
-    }
-
-    function checkNewTasks() {
-        if (!window_active) {
-            return;
-        }
-
-        var maxtaskid = getMaxTaskId();
-        // add any new tasks found on the server to the top of the page
-        $.get('{% url 'taskboxhtml_newsince_taskid' 9999 %}'.replace('9999', maxtaskid)).done(function(data, status) {
-            if (status == 'success') {
-                var datatrim = data.trim();
-                if (datatrim == "") {
-                    console.log("no new tasks on server with id > " + maxtaskid);
-                } else {
-                    console.log("adding new task(s) from server with id > " + maxtaskid);
-                    $('ul.tasks').prepend(datatrim);
-                }
-            }
-        });
-
-
-        update_taskcount();
-        activate_first_plot();
-    }
-
-
-    function getMaxTaskId() {
-        var maxtaskid = 0;
-        $('li.task').each(function() {
-            var taskid = $(this).attr('id').replace("task-", "");
-            if (parseInt(taskid) > parseInt(maxtaskid))
-                maxtaskid = taskid;
-        });
-        return maxtaskid;
-    }
-
-    function update_taskcount() {
-        displayedTasks = $('li.task').length;
-        usertaskcount = {{usertaskcount}} + displayedTasks - {{tasks|length}};
-        elemTaskCount = $('#taskcount').filter(':first')
-        if (displayedTasks > 0) {
-            elemTaskCount
-            .html('Showing ' + displayedTasks.toString() + ' of ' + usertaskcount.toString() + ' tasks');
-        }
-        else {
-            elemTaskCount.html('');
-        }
-    }
 
     function activate_first_plot() {
         first_finished = $('li.task.finished').filter(':first');
@@ -192,7 +141,6 @@
         }
     }
 
-    update_taskcount();
     activate_first_plot();
     </script>
 {% endblock %}

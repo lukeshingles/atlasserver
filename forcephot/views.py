@@ -144,7 +144,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         htmltaskframeonly = 'htmltaskframeonly' in request.GET
 
         if request.accepted_renderer.format == 'html' or htmltaskframeonly:
-            tasks = page
+            if not page:
+                return redirect(reverse('task-list'), request=request)
+
             if 'form' in kwargs:
                 form = kwargs['form']
             else:
@@ -154,7 +156,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
 
             return Response(template_name=template, data={
-                'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
+                'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Job Queue', 'addnewtaskstotop': addnewtaskstotop, 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': len(listqueryset)})
 
@@ -196,7 +198,9 @@ def deleteTask(request, pk):
         item.delete()
     except ObjectDoesNotExist:
         pass
-    return redirect(reverse('task-list'))
+    # return Response(status=status.HTTP_303_SEE_OTHER, headers={'Location': reverse('task-list', request=request)})
+    redirurl = request.META.get('HTTP_REFERER', reverse('task-list'))
+    return redirect(redirurl, request=request)
 
 
 def index(request):
@@ -229,23 +233,6 @@ def register(request):
         form = RegistrationForm()
 
     return render(request, 'registration/register.html', {'form': form})
-
-
-def taskboxhtml(request, taskid=None, type=None):
-    if type == 'newsincetaskid':
-        # get all tasks more recent than the specified once
-        tasks = Task.objects.all().order_by('-timestamp', '-id').select_related('user').filter(
-            user_id=request.user, id__gt=taskid)
-    else:
-        if taskid:
-            try:
-                tasks = [Task.objects.get(id=taskid)]
-            except Task.DoesNotExist:
-                return HttpResponseNotFound("Page not found")
-        else:
-            tasks = Task.objects.all().order_by('-timestamp', '-id').select_related('user').filter(user_id=request.user)
-
-    return render(request, 'tasklist-tasks.html', {'tasks': tasks})
 
 
 def resultdatajs(request, taskid):
