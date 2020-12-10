@@ -35,21 +35,7 @@
     </div>
     {% endif %}
 
-    <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
-        {% if not tasks %}
-        <p>You have no tasks yet.</p>
-        {% else %}
-            <ul class="tasks">
-            {% include 'tasklist-tasks.html' %}
-            </ul>
-        {% endif %}
-    </div>
-    {% if paginator %}
-    <div id="paginator">
-        {% if txttaskrange %}<p>{{txttaskrange}}</p>{% endif %}
-        {% get_pagination_html paginator %}
-    </div>
-    {% endif %}
+    {% include 'tasklist-frame.html' %}
 </div>
 {% endblock %}
 
@@ -71,10 +57,12 @@
     {% if addnewtaskstotop %}
     // occaisionally check and new items from the server (if not on page > 1 or single task view)
     var checknewtimer = setInterval(checkNewTasks, 3000);
-    {% endif %}
 
     // check if any items on the page have been deleted
     var checkdeletedtimer = setInterval(checkDeletedTasks, 15000);
+    {% endif %}
+
+    var usertaskcount = {{usertaskcount}};
 
     var window_active = true;
 
@@ -143,6 +131,8 @@
                 }
             });
         });
+
+        update_taskcount();
     }
 
     function checkNewTasks() {
@@ -165,6 +155,7 @@
         });
 
 
+        update_taskcount();
         activate_first_plot();
     }
 
@@ -179,6 +170,18 @@
         return maxtaskid;
     }
 
+    function update_taskcount() {
+        displayedTasks = $('li.task').length;
+        usertaskcount = {{usertaskcount}} + displayedTasks - {{tasks|length}};
+        elemTaskCount = $('#taskcount').filter(':first')
+        if (displayedTasks > 0) {
+            elemTaskCount
+            .html('Showing ' + displayedTasks.toString() + ' of ' + usertaskcount.toString() + ' tasks');
+        }
+        else {
+            elemTaskCount.html('');
+        }
+    }
 
     function activate_first_plot() {
         first_finished = $('li.task.finished').filter(':first');
@@ -189,7 +192,7 @@
         }
     }
 
-
+    update_taskcount();
     activate_first_plot();
     </script>
 {% endblock %}

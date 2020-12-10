@@ -62,7 +62,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     throttle_scope = 'forcephottasks'
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
-    ordering = ['-timestamp', '-id']
+    ordering = '-id'
     filterset_fields = ['user']
     template_name = 'tasklist.html'
 
@@ -134,8 +134,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
-        # max id out if this user's tasks
-        maxtaskid = listqueryset[0].id if listqueryset else 0
 
         page = self.paginate_queryset(listqueryset)
         if page is not None:
@@ -143,26 +141,22 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         else:
             serializer = self.get_serializer(listqueryset, many=True)
 
-        if request.accepted_renderer.format == 'html':
+        htmltaskframeonly = 'htmltaskframeonly' in request.GET
+
+        if request.accepted_renderer.format == 'html' or htmltaskframeonly:
             tasks = page
             if 'form' in kwargs:
                 form = kwargs['form']
             else:
                 form = TaskForm()
 
-            addnewtaskstotop = (maxtaskid == 0 or page[0].id == maxtaskid)
+            addnewtaskstotop = (not listqueryset or not page or page[0].id == listqueryset[0].id)
+            template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
 
-            if tasks:
-                index_low = self.paginator.get_offset(request) + 1
-                index_high = self.paginator.get_offset(request) + self.paginator.get_count(page)
-                txttaskrange = f"Showing tasks {index_low}-{index_high} of {self.paginator.get_count(listqueryset)}"
-            else:
-                txttaskrange = None
-
-            return Response({
+            return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks,
                 'form': form, 'name': 'Job Queue', 'addnewtaskstotop': addnewtaskstotop, 'singletaskdetail': False,
-                'paginator': self.paginator, 'txttaskrange': txttaskrange})
+                'paginator': self.paginator, 'usertaskcount': len(listqueryset)})
 
         if page is not None:
             serializer = self.get_serializer(page, many=True)

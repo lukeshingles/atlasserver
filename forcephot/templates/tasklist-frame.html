@@ -1,0 +1,19 @@
+{% load static %}
+{% load i18n %}
+{% load rest_framework %}
+{% load forcedphottags %}
+<div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
+    {% if not tasks %}
+    <p>You have no tasks yet.</p>
+    {% else %}
+        <ul class="tasks">
+        {% include 'tasklist-tasks.html' %}
+        </ul>
+    {% endif %}
+    {% if paginator %}
+    <div id="paginator">
+        <p id="taskcount">{% if tasks %}Showing {{tasks|length}} of {{usertaskcount}} tasks{% endif %}</p>
+        {% get_pagination_html paginator %}
+    </div>
+    {% endif %}
+</div>
