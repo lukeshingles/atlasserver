@@ -17,3 +17,4 @@ from rest_framework.settings import api_settings
 class TaskPagination(CursorPagination):
     cursor_query_param = 'cursor'
     ordering = ['-id']
+    template = 'rest_framework/pagination/older_and_newer.html'
