@@ -24,7 +24,7 @@
             MJD range: [{{task.mjd_min|default:"0"}}, {{task.mjd_max|default:"∞"}}]<br/>
         {% endif %}
 
-        Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}} ({{task.timestamp|tasktimesince}})<br/>
+        Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
         {% if task.finishtimestamp %}
         Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br/>
         <a class="results btn btn-info getdata" href="{% static task.localresultfile %}" target="_blank">Data</a>
