@@ -144,7 +144,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         htmltaskframeonly = 'htmltaskframeonly' in request.GET
 
         if request.accepted_renderer.format == 'html' or htmltaskframeonly:
-            if not page:
+            if not page and listqueryset:
                 return redirect(reverse('task-list'), request=request)
 
             if 'form' in kwargs:
