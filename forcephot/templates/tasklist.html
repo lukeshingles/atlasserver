@@ -105,22 +105,7 @@
         activate_first_plot();
     }
 
-    // // check if the next job to run has started or finished
-    // var updatequeuedtimer = setInterval(function(){updateQueuedTasks(true, '.notstarted');}, 1500);
-    //
-    // // only one task across all users will be running now, so you might as well poll it at high frequency
-    // var updatestartedtimer = setInterval(function(){updateQueuedTasks(false, '.started');}, 1000);
-    //
-    // {% if addnewtaskstotop %}
-    // // occaisionally check and new items from the server (if not on page > 1 or single task view)
-    // var checknewtimer = setInterval(checkNewTasks, 3000);
-    //
-    // // check if any items on the page have been deleted
-    // var checkdeletedtimer = setInterval(checkDeletedTasks, 15000);
-    // {% endif %}
-    //
-    // var usertaskcount = {{usertaskcount}};
-    //
+
     var window_active = true;
 
     $(window).blur(function() {
