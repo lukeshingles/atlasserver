@@ -152,12 +152,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             else:
                 form = TaskForm()
 
-            addnewtaskstotop = (not listqueryset or not page or page[0].id == listqueryset[0].id)
             template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
 
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
-                'form': form, 'name': 'Job Queue', 'addnewtaskstotop': addnewtaskstotop, 'singletaskdetail': False,
+                'form': form, 'name': 'Job Queue', 'htmltaskframeonly': htmltaskframeonly, 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': len(listqueryset)})
 
         if page is not None:
@@ -175,10 +174,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             # queryset = self.filter_queryset(self.get_queryset())
             # serializer = self.get_serializer(queryset, many=True)
 
+            htmltaskframeonly = 'htmltaskframeonly' in request.GET
             tasks = [instance]
             form = TaskForm()
             return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
-                             'name': f'Task {self.get_object().id}', 'addnewtaskstotop': False,
+                             'name': f'Task {self.get_object().id}', 'htmltaskframeonly': htmltaskframeonly,
                              'singletaskdetail': True})
 
         return Response(serializer.data)
@@ -198,7 +198,7 @@ def deleteTask(request, pk):
         item.delete()
     except ObjectDoesNotExist:
         pass
-    # return Response(status=status.HTTP_303_SEE_OTHER, headers={'Location': reverse('task-list', request=request)})
+
     redirurl = request.META.get('HTTP_REFERER', reverse('task-list'))
     return redirect(redirurl, request=request)
 
