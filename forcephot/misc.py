@@ -1,7 +1,10 @@
 import math
 
+import plot_atlas_fp
 import astrocalc.coords.unit_conversion
 import fundamentals.logs
+
+from pathlib import Path
 
 
 def date_to_mjd(year, month, day):
@@ -125,3 +128,20 @@ def splitradeclist(data, form=None):
                     form.add_error('radeclist', f'Error on line {index}: {err}')
 
     return datalist if valid else []
+
+
+def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
+    epochs = plot_atlas_fp.read_and_sigma_clip_data(
+        log=fundamentals.logs.emptyLogger(), fpFile=localresultfile, mjdMin=False, mjdMax=False)
+
+    pdftitle = f"Task {taskid} {(':' + taskcomment) if taskcomment else ''}"
+    temp_plot_path = plot_atlas_fp.plot_lc(
+        log=fundamentals.logs.emptyLogger(), epochs=epochs, objectName=pdftitle, stacked=False)
+
+    if not temp_plot_path:
+        return None
+
+    pdfpath = localresultfile.with_suffix('.pdf')
+    Path(temp_plot_path).rename(pdfpath)
+
+    return pdfpath

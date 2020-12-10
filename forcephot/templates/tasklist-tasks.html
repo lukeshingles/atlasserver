@@ -30,8 +30,8 @@
         Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
         {% if task.finishtimestamp %}
         Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br/>
-        <a class="results btn btn-info getdata" href="{% static task.localresultfile %}" target="_blank">Data</a>
-        {% if task.localresultpdfplotfile %}<a class="results btn btn-info getpdf" href="{% static task.localresultpdfplotfile %}" target="_blank">PDF</a>{% endif %}
+        <a class="results btn btn-info getdata" href="{% url 'taskresultdata' task.id %}" target="_blank">Data</a>
+        <a class="results btn btn-info getpdf" href="{% url 'taskpdfplot' task.id %}" target="_blank">PDF</a>
         <a class="results btn btn-info showplot" onclick="javascript:$.ajax({url: '{% url 'resultdatajs' task.id %}', cache: true, dataType: 'script'}); this.style='display: none;'">Show Plot</a>
         {% elif task.starttimestamp %}
         <span style="color: red;">Started running {{task.starttimestamp|tasktimesince}}</span>

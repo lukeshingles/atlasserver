@@ -12,7 +12,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_result_url(self, obj):
         if obj.localresultfile():
             request = self.context.get('request')
-            return request.build_absolute_uri(settings.STATIC_URL + obj.localresultfile())
+            # return request.build_absolute_uri(settings.STATIC_URL + obj.localresultfile())
+            return request.build_absolute_uri(reverse('taskresultdata', args=[obj.id]))
 
         return None
 

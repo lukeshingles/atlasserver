@@ -2,6 +2,7 @@
 {% load i18n %}
 {% load rest_framework %}
 {% load forcedphottags %}
+
 <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
     {% if not tasks and usertaskcount == 0 %}
     <p>You have no tasks yet.</p>

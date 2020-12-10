@@ -1,27 +1,25 @@
 import datetime
 import os
 
+
+from multiprocessing import Process
+
 from django.contrib.auth import authenticate, login
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth.models import Group, User
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.http import HttpResponse
-from django.http.response import HttpResponseRedirect
+from django.http import HttpResponse, FileResponse
+# from django.http.response import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
-from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
-from django.http import HttpResponseNotFound, Http404
+from django.http import HttpResponseNotFound
 from rest_framework import filters, permissions, status, viewsets
-from rest_framework.renderers import TemplateHTMLRenderer
+# from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from rest_framework.views import APIView
 from django.conf import settings as settings
 from pathlib import Path
 
-# import atlasserver.settings as djangosettings
 from forcephot.forms import TaskForm, RegistrationForm
-from forcephot.misc import splitradeclist, date_to_mjd
+from forcephot.misc import splitradeclist, date_to_mjd, make_pdf_plot
 from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
 
@@ -237,7 +235,15 @@ def register(request):
 
 def resultdatajs(request, taskid):
     import pandas as pd
-    item = Task.objects.get(id=taskid)
+
+    if taskid:
+        try:
+            item = Task.objects.get(id=taskid)
+        except ObjectDoesNotExist:
+            return HttpResponseNotFound("Page not found")
+    else:
+        return HttpResponseNotFound("Page not found")
+
     strjs = ''
     resultfile = item.localresultfile()
     if resultfile:
@@ -282,3 +288,53 @@ def resultdatajs(request, taskid):
             "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script'});")
 
     return HttpResponse(strjs, content_type="text/javascript")
+
+
+def taskpdfplot(request, taskid):
+    if taskid:
+        try:
+            item = Task.objects.get(id=taskid)
+        except ObjectDoesNotExist:
+            return HttpResponseNotFound("Page not found")
+    else:
+        return HttpResponseNotFound("Page not found")
+
+    resultfile = item.localresultfile()
+    if resultfile:
+        resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
+        pdfpath = resultfilepath.with_suffix('.pdf')
+
+        os.remove(pdfpath)  # force a refresh of all plots
+
+        if not os.path.exists(pdfpath):
+            # matplotlib needs to run in its own process or it will crash
+            p = Process(target=make_pdf_plot, kwargs=dict(
+                taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment))
+
+            p.start()
+            p.join()
+
+        if os.path.exists(pdfpath):
+            return FileResponse(open(pdfpath, 'rb'))
+
+    return HttpResponseNotFound("Page not found")
+
+
+def taskresultdata(request, taskid):
+    item = None
+    if taskid:
+        try:
+            item = Task.objects.get(id=taskid)
+        except ObjectDoesNotExist:
+            return HttpResponseNotFound("Page not found")
+
+    if item:
+        resultfile = item.localresultfile()
+        if resultfile:
+            resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
+
+            if os.path.exists(resultfilepath):
+                return FileResponse(open(resultfilepath, 'rb'))
+
+    return HttpResponseNotFound("Page not found")
+
