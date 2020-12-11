@@ -4,14 +4,14 @@
 
 {% for task in tasks %}
     {% if task.finishtimestamp %}
-        <li class="task finished" id="task-{{task.id}}">
-        <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
+      <li class="task finished" id="task-{{task.id}}">
+      <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
     {% elif task.starttimestamp %}
-        <li class="task queued started" id="task-{{task.id}}">
-          <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+      <li class="task queued started" id="task-{{task.id}}">
+      <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
     {% else %}
-    <li class="task queued notstarted" id="task-{{task.id}}">
-        <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+      <li class="task queued notstarted" id="task-{{task.id}}">
+      <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
     {% endif %}
         <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
         {% if task.user.id != request.user.id %}
@@ -42,5 +42,5 @@
         {% if task.finishtimestamp %}
         <div id="plotforcedflux-task-{{task.id}}" class="plot" style="width: 100%;"></div>
         {% endif %}
-    </li>
+      </li>
 {% endfor %}

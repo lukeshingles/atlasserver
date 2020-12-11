@@ -45,8 +45,32 @@ class Task(models.Model):
     def queuepos(self):
         if self.finishtimestamp:
             return -1
-        else:
-            return Task.objects.filter(timestamp__lt=self.timestamp, finishtimestamp__isnull=True).count()
+
+        # this can probably be done more efficiently. The goal is to figure out the task queue position
+        # given that a round-robin queue is used
+
+        posallqueue = 0.
+
+        # task position in the owner's queue
+        posownerqueue = Task.objects.filter(id__lt=self.id, finishtimestamp__isnull=True, user=self.user).count()
+
+        for tmpuser in User.objects.all():
+            tmpusertasks = Task.objects.filter(id__lt=self.id, finishtimestamp__isnull=True, user=tmpuser).order_by('id')
+
+            if tmpusertasks.count() > posownerqueue:
+                # add the number of tasks from earlier full passes
+                posallqueue += posownerqueue
+
+                # add one if this tmpuser's task preceeds it in the final pass when the task runs
+                if tmpusertasks[posownerqueue].id < self.id:
+                    posallqueue += 1
+            else:
+                # add the number of tasks from earlier full passes
+                posallqueue += tmpusertasks.count()
+
+        # queuepos = sum[
+        # x = Task.objects.filter(timestamp__lt=self.timestamp, finishtimestamp__isnull=True, user=self.user).count()
+        return int(posallqueue)
 
     def finished(self):
         return True if self.finishtimestamp else False

@@ -21,7 +21,8 @@ from django.contrib import admin
 from django.urls import include, path
 # from django.contrib.auth.models import User
 # from django.contrib.auth.decorators import login_required
-from rest_framework import routers, serializers, viewsets
+from rest_framework import routers
+# from rest_framework import serializers, viewsets
 
 from forcephot import views
 
