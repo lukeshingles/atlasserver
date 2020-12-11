@@ -43,8 +43,8 @@ urlpatterns = [
     path('resultdesc/', views.resultdesc, name="resultdesc"),
 
     path('queue/<int:taskid>/resultdatajs/', views.resultdatajs, name='resultdatajs'),
-    path('queue/<int:taskid>/pdfplot', views.taskpdfplot, name='taskpdfplot'),
-    path('queue/<int:taskid>/data', views.taskresultdata, name='taskresultdata'),
+    path('queue/<int:taskid>/pdfplot/', views.taskpdfplot, name='taskpdfplot'),
+    path('queue/<int:taskid>/data/', views.taskresultdata, name='taskresultdata'),
 
     path('apiguide/', views.apiguide, name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
