@@ -114,7 +114,7 @@ def runforced(task, conn, logprefix='', **kwargs):
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(conn=conn, taskid=id)
-            log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.1f} seconds        ", end='\r')
+            log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ", end='\r')
         else:
             break
 
