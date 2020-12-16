@@ -217,6 +217,11 @@ def apiguide(request):
     return render(request, template_name, {'name': 'API Guide'})
 
 
+def faq(request):
+    template_name = 'faq.html'
+    return render(request, template_name, {'name': 'FAQ'})
+
+
 def register(request):
     if request.method == 'POST':
         form = RegistrationForm(request.POST)

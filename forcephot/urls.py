@@ -42,6 +42,7 @@ urlpatterns = [
     path('queue/<str:pk>/delete/', views.deleteTask, name="delete"),
     url(r'^register/$', views.register, name='register'),
     path('resultdesc/', views.resultdesc, name="resultdesc"),
+    path('faq/', views.faq, name="faq"),
 
     path('queue/<int:taskid>/resultdatajs/', views.resultdatajs, name='resultdatajs'),
     path('queue/<int:taskid>/pdfplot/', views.taskpdfplot, name='taskpdfplot'),
