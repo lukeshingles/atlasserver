@@ -129,3 +129,5 @@ dmypy.json
 .pyre/
 
 .tags*
+fprunnerlog.txt
+fprunnerlogstderr.txt

@@ -12,6 +12,7 @@ import mysql.connector
 import pandas as pd
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
+from multiprocessing import Process
 
 import atlasserver.settings as settings
 import plot_atlas_fp
@@ -173,7 +174,11 @@ def runforced(task, conn, logprefix='', **kwargs):
         # task failed somehow
         return False
 
-    make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile, logprefix=logprefix)
+    p = Process(target=make_pdf_plot, kwargs=dict(
+        taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile, logprefix=logprefix))
+
+    p.start()
+    p.join()
 
     return localresultfile
 
@@ -425,7 +430,12 @@ def do_maintenance(maxtime=None):
                     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
                         log(logprefix + "Creating missing PDF from result file "
                             f"{resultfilepath.relative_to(localresultdir)}")
-                        make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix)
+
+                        p = Process(target=make_pdf_plot, kwargs=dict(
+                            taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix))
+
+                        p.start()
+                        p.join()
 
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
