@@ -207,7 +207,7 @@ def send_email_if_needed(conn, task, logprefix=''):
                 batchtasks_unfinished += 1
             else:
                 localresultfile = get_localresultfile(batchtask['id'])
-                taskurl = f"https://fallingstar-data.com/forcedphot/queue/{task['id']}/"
+                taskurl = f"https://fallingstar-data.com/forcedphot/queue/{batchtask['id']}/"
                 strtask = (
                     f"Task {batchtask['id']}: RA {batchtask['ra']} Dec {batchtask['dec']} "
                     f"{'img_reduced' if batchtask['use_reduced'] else 'img_difference'} "
