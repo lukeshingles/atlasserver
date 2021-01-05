@@ -135,7 +135,10 @@ def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix='', logfunc
     epochs = plot_atlas_fp.read_and_sigma_clip_data(
         log=fundamentals.logs.emptyLogger(), fpFile=localresultfile, mjdMin=False, mjdMax=False)
 
-    pdftitle = f"Task {taskid} {(':' + taskcomment) if taskcomment else ''}"
+    pdftitle = f"Task {taskid}"
+    # if taskcomment:
+    #     pdftitle += ':' + taskcomment
+
     temp_plot_path = plot_atlas_fp.plot_lc(
         log=fundamentals.logs.emptyLogger(), epochs=epochs, objectName=pdftitle, stacked=False)
 
