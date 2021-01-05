@@ -130,7 +130,8 @@ def splitradeclist(data, form=None):
     return datalist if valid else []
 
 
-def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
+def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix='', logfunc=None):
+    localresultdir = localresultfile.parent
     epochs = plot_atlas_fp.read_and_sigma_clip_data(
         log=fundamentals.logs.emptyLogger(), fpFile=localresultfile, mjdMin=False, mjdMax=False)
 
@@ -139,9 +140,14 @@ def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
         log=fundamentals.logs.emptyLogger(), epochs=epochs, objectName=pdftitle, stacked=False)
 
     if not temp_plot_path:
+        if logfunc:
+            logfunc(logprefix + f'Failed to create PDF plot from {localresultfile.relative_to(localresultdir)}')
         return None
 
     pdfpath = localresultfile.with_suffix('.pdf')
     Path(temp_plot_path).rename(pdfpath)
+
+    if logfunc:
+        logfunc(logprefix + f'Created plot file {pdfpath.relative_to(localresultdir)}')
 
     return pdfpath

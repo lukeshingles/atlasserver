@@ -61,7 +61,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
     ordering = '-id'
-    filterset_fields = ['user']
+    filterset_fields = ['finishtimestamp']
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):
@@ -309,7 +309,7 @@ def taskpdfplot(request, taskid):
         resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
         pdfpath = resultfilepath.with_suffix('.pdf')
 
-        os.remove(pdfpath)  # force a refresh of all plots
+        # os.remove(pdfpath)  # force a refresh of all plots
 
         if not os.path.exists(pdfpath):
             # matplotlib needs to run in its own process or it will crash

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import fundamentals
 import os
 import subprocess
 import time
@@ -15,7 +14,7 @@ from dotenv import load_dotenv
 from multiprocessing import Process
 
 import atlasserver.settings as settings
-import plot_atlas_fp
+from forcephot.misc import make_pdf_plot
 
 load_dotenv(override=True)
 
@@ -175,7 +174,8 @@ def runforced(task, conn, logprefix='', **kwargs):
         return False
 
     p = Process(target=make_pdf_plot, kwargs=dict(
-        taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile, logprefix=logprefix))
+        taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
+        logprefix=logprefix, logfunc=log))
 
     p.start()
     p.join()
@@ -250,26 +250,6 @@ def send_email_if_needed(conn, task, logprefix=''):
         log(logprefix + f'User {task["username"]} has no email address.')
     else:
         log(logprefix + f'User {task["username"]} did not request an email.')
-
-
-def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix=''):
-    epochs = plot_atlas_fp.read_and_sigma_clip_data(
-        log=fundamentals.logs.emptyLogger(), fpFile=localresultfile, mjdMin=False, mjdMax=False)
-
-    pdftitle = f"Task {taskid} {(':' + taskcomment) if taskcomment else ''}"
-    temp_plot_path = plot_atlas_fp.plot_lc(
-        log=fundamentals.logs.emptyLogger(), epochs=epochs, objectName=pdftitle, stacked=False)
-
-    if not temp_plot_path:
-        log(logprefix + f'Failed to create PDF plot from {localresultfile.relative_to(localresultdir)}')
-        return None
-
-    pdfpath = localresultfile.with_suffix('.pdf')
-    Path(temp_plot_path).rename(pdfpath)
-
-    log(logprefix + f'Created plot file {pdfpath.relative_to(localresultdir)}')
-
-    return pdfpath
 
 
 def ingest_results(localresultfile, conn, use_reduced=False):
@@ -432,7 +412,7 @@ def do_maintenance(maxtime=None):
                             f"{resultfilepath.relative_to(localresultdir)}")
 
                         p = Process(target=make_pdf_plot, kwargs=dict(
-                            taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix))
+                            taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix, logfunc=log))
 
                         p.start()
                         p.join()

@@ -182,7 +182,7 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 10,
     'DEFAULT_THROTTLE_CLASSES': [
         # 'rest_framework.throttling.ScopedRateThrottle',
-        'forcephot.ForcedPhotRateThrottle',
+        'forcephot.throttles.ForcedPhotRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
         'forcephottasks': '60/min',
