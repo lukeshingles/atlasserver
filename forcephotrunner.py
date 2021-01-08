@@ -173,12 +173,8 @@ def runforced(task, conn, logprefix='', **kwargs):
         # task failed somehow
         return False
 
-    p = Process(target=make_pdf_plot, kwargs=dict(
-        taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
-        logprefix=logprefix, logfunc=log))
-
-    p.start()
-    p.join()
+    make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
+                  logprefix=logprefix, logfunc=log, separate_process=False)
 
     return localresultfile
 
@@ -411,11 +407,8 @@ def do_maintenance(maxtime=None):
                         log(logprefix + "Creating missing PDF from result file "
                             f"{resultfilepath.relative_to(localresultdir)}")
 
-                        p = Process(target=make_pdf_plot, kwargs=dict(
-                            taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix, logfunc=log))
-
-                        p.start()
-                        p.join()
+                        make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix, logfunc=log,
+                                      separate_process=False)
 
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")

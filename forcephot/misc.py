@@ -1,9 +1,11 @@
 import math
+import os
 
 import plot_atlas_fp
 import astrocalc.coords.unit_conversion
 import fundamentals.logs
 
+from multiprocessing import Process
 from pathlib import Path
 
 
@@ -130,27 +132,54 @@ def splitradeclist(data, form=None):
     return datalist if valid else []
 
 
-def make_pdf_plot(localresultfile, taskid, taskcomment='', logprefix='', logfunc=None):
+def make_pdf_plot_worker(localresultfile, taskid, taskcomment='', logprefix='', logfunc=None):
     localresultdir = localresultfile.parent
-    epochs = plot_atlas_fp.read_and_sigma_clip_data(
-        log=fundamentals.logs.emptyLogger(), fpFile=localresultfile, mjdMin=False, mjdMax=False)
-
     pdftitle = f"Task {taskid}"
     # if taskcomment:
     #     pdftitle += ':' + taskcomment
 
-    temp_plot_path = plot_atlas_fp.plot_lc(
-        log=fundamentals.logs.emptyLogger(), epochs=epochs, objectName=pdftitle, stacked=False)
+    localresultfiles = [Path(localresultfile)]
+    plotfilepaths_requested = [f.with_suffix('.pdf') for f in localresultfiles]
 
-    if not temp_plot_path:
+    plotfilepaths = None
+    try:
+        myplotter = plot_atlas_fp.plotter(
+            log=fundamentals.logs.emptyLogger(),
+            resultFilePaths=localresultfiles,
+            outputPlotPaths=plotfilepaths_requested,
+            # outputDirectory=str(localresultdir),
+            objectName=pdftitle,
+            plotType="pdf"
+        )
+
+        plotfilepaths = myplotter.plot()
+
+    except Exception as ex:
         if logfunc:
-            logfunc(logprefix + f'Failed to create PDF plot from {localresultfile.relative_to(localresultdir)}')
-        return None
+            logfunc(logprefix + f'ERROR: plot_atlas_fp caused exception: {ex}')
+        plotfilepaths = [None for f in plotfilepaths_requested]
 
-    pdfpath = localresultfile.with_suffix('.pdf')
-    Path(temp_plot_path).rename(pdfpath)
+    localresultfile, plotfilepath, plotfilepath_requested = (
+        localresultfiles[0], plotfilepaths[0], plotfilepaths_requested[0])
+
+    if os.path.exists(plotfilepath_requested):
+        if logfunc and plotfilepath == plotfilepath_requested:
+            logfunc(logprefix + f'Created plot file {Path(plotfilepath).relative_to(localresultdir)}')
+        elif logfunc:
+            logfunc(logprefix + f'plot_atlas_fp returned an error but the PDF file '
+                    f'{plotfilepath_requested.relative_to(localresultdir)} exists')
+        return plotfilepath_requested
 
     if logfunc:
-        logfunc(logprefix + f'Created plot file {pdfpath.relative_to(localresultdir)}')
+        logfunc(logprefix + f'Failed to create PDF plot from {Path(localresultfile).relative_to(localresultdir)}')
+    return None
 
-    return pdfpath
+
+def make_pdf_plot(*args, separate_process=False, **kwargs):
+    if separate_process:
+        p = Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
+
+        p.start()
+        p.join()
+    else:
+        make_pdf_plot_worker(*args, **kwargs)

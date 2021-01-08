@@ -1,9 +1,6 @@
 import datetime
 import os
 
-
-from multiprocessing import Process
-
 from django.contrib.auth import authenticate, login
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.http import HttpResponse, FileResponse
@@ -309,15 +306,14 @@ def taskpdfplot(request, taskid):
         resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
         pdfpath = resultfilepath.with_suffix('.pdf')
 
-        # os.remove(pdfpath)  # force a refresh of all plots
+        # to force a refresh of all plots
+        # if os.path.exists(pdfpath):
+        #     os.remove(pdfpath)
 
         if not os.path.exists(pdfpath):
             # matplotlib needs to run in its own process or it will crash
-            p = Process(target=make_pdf_plot, kwargs=dict(
-                taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment))
-
-            p.start()
-            p.join()
+            make_pdf_plot(
+                taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment, separate_process=True)
 
         if os.path.exists(pdfpath):
             return FileResponse(open(pdfpath, 'rb'))
@@ -342,4 +338,3 @@ def taskresultdata(request, taskid):
                 return FileResponse(open(resultfilepath, 'rb'))
 
     return HttpResponseNotFound("Page not found")
-
