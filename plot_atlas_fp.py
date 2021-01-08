@@ -54,6 +54,7 @@ from operator import itemgetter
 from fundamentals.stats import rolling_window_sigma_clip
 from fundamentals.renderer import list_of_dictionaries
 import matplotlib.ticker as ticker
+mpl.use('svg')
 
 
 def main(arguments=None):
