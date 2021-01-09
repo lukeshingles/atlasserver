@@ -11,7 +11,6 @@ import mysql.connector
 import pandas as pd
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
-from multiprocessing import Process
 
 import atlasserver.settings as settings
 from forcephot.misc import make_pdf_plot
