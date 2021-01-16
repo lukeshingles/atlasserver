@@ -1,6 +1,7 @@
 from django import template
 from django.contrib.humanize.templatetags import humanize
 from rest_framework.utils.urls import remove_query_param, replace_query_param
+from django.utils.html import mark_safe
 import datetime
 
 register = template.Library()
@@ -15,6 +16,7 @@ def tasktimesince(value):
     return humanize.naturaltime(value)
 
 
+# the JavaScript will send a request with htmltaskframeonly=True, but the pagination links shouldn't keep this param
 @register.filter
 def removetaskboxqueryparam(value):
     return remove_query_param(value, 'htmltaskframeonly')
@@ -24,3 +26,19 @@ def removetaskboxqueryparam(value):
 def addtaskboxqueryparam(value):
     print(replace_query_param(value, 'htmltaskframeonly', 'true'))
     return replace_query_param(value, 'htmltaskframeonly', 'true')
+
+
+@register.simple_tag()
+def filterbuttons(request):
+    fullpath = request.get_full_path()
+    strhtml = '<ul id="taskfilters">'
+    links = [
+        (remove_query_param(fullpath, 'started'), 'All tasks'),
+        (replace_query_param(fullpath, 'started', 'true'), 'Running/Finished</a></li>'),
+    ]
+    for href, label in links:
+        strclass = 'btn-primary' if fullpath == href else 'btn-link'
+        strhtml += f'<li><a href="{href}" class="btn {strclass}">{label}</a></li>'
+    strhtml += '</ul>'
+
+    return mark_safe(strhtml)

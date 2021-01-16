@@ -15,6 +15,7 @@ from rest_framework.reverse import reverse
 from django.conf import settings as settings
 from pathlib import Path
 
+from forcephot.filters import TaskFilter
 from forcephot.forms import TaskForm, RegistrationForm
 from forcephot.misc import splitradeclist, date_to_mjd, make_pdf_plot
 from forcephot.models import Task
@@ -55,10 +56,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
     throttle_scope = 'forcephottasks'
-    filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     ordering_fields = ['timestamp', 'id']
+    filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
+    filterset_class = TaskFilter
     ordering = '-id'
-    filterset_fields = ['finishtimestamp']
+    # filterset_fields = ['finishtimestamp']
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):
