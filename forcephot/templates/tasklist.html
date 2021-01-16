@@ -68,7 +68,7 @@
                 $('li.task').each(function () {
                     taskid = $(this).attr('id').replace("task-", "");
                     if (newhtml.find('#task-' + taskid).length == 0) {
-                        console.log('task ' + taskid + ' is deleted');
+                        console.log('task ' + taskid + ' is deleted from page');
                         $('#task-' + taskid).replaceWith('');
                     }
                 });
@@ -89,10 +89,10 @@
                         }
                     } else {
                         if (prev_li_id == '-1') {
-                            console.log('task ' + taskid + ' is not on the page. adding to top');
+                            console.log('task ' + taskid + ' is not on the page. Adding to top');
                             $('li.task:first-child').before(servertaskhtml)
                         } else {
-                            console.log('task ' + taskid + ' is not on the page. adding after ' + prev_li_id);
+                            console.log('task ' + taskid + ' is not on the page. Adding after ' + prev_li_id);
                             $('#' + prev_li_id).after(servertaskhtml)
                         }
                     }
