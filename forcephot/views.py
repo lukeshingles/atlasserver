@@ -42,9 +42,14 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in ['PUT', 'PATCH']:  # and obj.started
             return False
 
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.user.is_staff:
+            return True
+
         # Instance owner must match current user
-        return request.user and request.user.is_authenticated and (obj.user.id == request.user.id)
-        # return obj.user == request.user
+        return obj.user.id == request.user.id
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):

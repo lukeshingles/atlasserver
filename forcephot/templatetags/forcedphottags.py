@@ -30,7 +30,7 @@ def addtaskboxqueryparam(value):
 
 @register.simple_tag()
 def filterbuttons(request):
-    fullpath = request.get_full_path()
+    fullpath = remove_query_param(request.get_full_path(), 'cursor')
     strhtml = '<ul id="taskfilters">'
     links = [
         (remove_query_param(fullpath, 'started'), 'All tasks'),
