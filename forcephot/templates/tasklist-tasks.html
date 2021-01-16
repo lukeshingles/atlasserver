@@ -11,7 +11,9 @@
       <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
     {% else %}
       <li class="task queued notstarted" id="task-{{task.id}}">
+      {% if task.user.id == request.user.id  or request.user.is_superuser %}
       <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+      {% endif %}
     {% endif %}
         <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
         {% if task.user.id != request.user.id %}
