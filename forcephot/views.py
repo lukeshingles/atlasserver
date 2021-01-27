@@ -252,7 +252,7 @@ def get_html_coordchart(tasks):
                   aspect_ratio=2,
                   background_fill_color='#440154',
                   active_scroll="wheel_zoom",
-                  title="Requested coordinates",
+                  title="Recently requested coordinates (30 days)",
                   x_axis_label="Right ascension (deg)",
                   y_axis_label="Declination (deg)",
                   x_range=(0, 360), y_range=(-90, 90),
