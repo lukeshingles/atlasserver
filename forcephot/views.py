@@ -258,7 +258,7 @@ def get_html_coordchart():
     #               fill_color=linear_cmap('counts', 'Viridis256', 0, max(bins.counts)))
     # r, bins = plot.hexbin(arr_ra, arr_dec, size=.5, hover_color="pink", hover_alpha=0.8)
 
-    r = plot.circle(arr_ra, arr_dec, color="white", size=12.5, hover_color="pink", hover_alpha=0.8)
+    r = plot.circle(arr_ra, arr_dec, color="white", size=2.5, hover_color="pink", hover_alpha=0.8)
 
     plot.add_tools(HoverTool(
         tooltips=[("(ra,dec)", "(@x, @y)")],  # ("count", "@c"),
