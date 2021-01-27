@@ -96,7 +96,7 @@ class Task(models.Model):
         return (f"{self.timestamp:%Y-%m-%d %H:%M %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
                 f" {'finished' if self.finishtimestamp else ''} " +
                 f" {'img_reduced' if self.use_reduced else 'img_difference'}" +
-                f" waittime: {self.waittime:.1f}s")
+                f" waittime: {self.waittime():.1f}s")
 
 
 class Result(models.Model):
