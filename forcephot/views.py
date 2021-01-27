@@ -276,7 +276,7 @@ def get_html_coordchart(tasks):
     return script, strhtml
 
 
-@cache_page(60 * 15)
+@cache_page(60)
 def stats(request):
     # from statistics import mean
     # from statistics import median
