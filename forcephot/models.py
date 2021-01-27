@@ -81,14 +81,14 @@ class Task(models.Model):
             timediff = self.starttimestamp - self.timestamp
             return timediff.total_seconds()
 
-        return None
+        return float('NaN')
 
     def runtime(self):
         if self.finished:
             timediff = self.finishtimestamp - self.starttimestamp
             return timediff.total_seconds()
 
-        return None
+        return float('NaN')
 
     def __str__(self):
         user = User.objects.get(id=self.user_id)

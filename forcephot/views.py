@@ -272,7 +272,8 @@ def get_html_coordchart():
 @cache_page(60 * 15)
 def stats(request):
     # from statistics import mean
-    from statistics import median
+    # from statistics import median
+    import numpy as np
     template_name = 'stats.html'
     dictparams = {'name': 'Usage Stats'}
 
@@ -281,8 +282,8 @@ def stats(request):
     dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
     dictparams['thirtydaytasks'] = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30)).count()
     dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
-    dictparams['avgwaittime'] = '{:.1f}s'.format(median([tsk.waittime() for tsk in Task.objects.filter(starttimestamp__isnull=False, finishtimestamp__isnull=False)]))
-    dictparams['avgruntime'] = '{:.1f}s'.format(median([tsk.runtime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)]))
+    dictparams['avgwaittime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.waittime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)])))
+    dictparams['avgruntime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.runtime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)])))
     htmlchartscript, htmlchart = get_html_coordchart()
     dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
 
