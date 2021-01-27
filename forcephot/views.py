@@ -290,8 +290,8 @@ def stats(request):
     dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
     dictparams['thirtydaytasks'] = thirtydaytasks.count()
     dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
-    dictparams['avgwaittime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.waittime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)])))
-    dictparams['avgruntime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.runtime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)])))
+    dictparams['avgwaittime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.waittime() for tsk in thirtydaytasks.filter(finishtimestamp__isnull=False)])))
+    dictparams['avgruntime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.runtime() for tsk in thirtydaytasks.filter(finishtimestamp__isnull=False)])))
     htmlchartscript, htmlchart = get_html_coordchart(tasks=thirtydaytasks)
     dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
 
