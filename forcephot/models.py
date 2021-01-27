@@ -76,7 +76,7 @@ class Task(models.Model):
         return True if self.finishtimestamp else False
 
     def waittime(self):
-        if self.starttimestamp:
+        if self.starttimestamp and self.timestamp:
             # now = datetime.datetime.utcnow().replace(tzinfo=utc)
             timediff = self.starttimestamp - self.timestamp
             return timediff.total_seconds()
@@ -84,7 +84,7 @@ class Task(models.Model):
         return float('NaN')
 
     def runtime(self):
-        if self.finished:
+        if self.finishtimestamp and self.self.starttimestamp:
             timediff = self.finishtimestamp - self.starttimestamp
             return timediff.total_seconds()
 
