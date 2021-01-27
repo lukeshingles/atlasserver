@@ -75,6 +75,21 @@ class Task(models.Model):
     def finished(self):
         return True if self.finishtimestamp else False
 
+    def waittime(self):
+        if self.starttimestamp:
+            # now = datetime.datetime.utcnow().replace(tzinfo=utc)
+            timediff = self.starttimestamp - self.timestamp
+            return timediff.total_seconds()
+
+        return None
+
+    def runtime(self):
+        if self.finished:
+            timediff = self.finishtimestamp - self.starttimestamp
+            return timediff.total_seconds()
+
+        return None
+
     def __str__(self):
         user = User.objects.get(id=self.user_id)
         userstr = f"{user.username} ({user.email})"

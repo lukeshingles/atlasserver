@@ -2,12 +2,14 @@ import datetime
 import os
 
 from django.contrib.auth import authenticate, login
+
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.http import HttpResponse, FileResponse
 # from django.http.response import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
-from django_filters.rest_framework import DjangoFilterBackend
+from django.views.decorators.cache import cache_page
 from django.http import HttpResponseNotFound
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, status, viewsets
 # from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
@@ -224,6 +226,67 @@ def apiguide(request):
 def faq(request):
     template_name = 'faq.html'
     return render(request, template_name, {'name': 'FAQ'})
+
+
+def get_html_coordchart():
+    import numpy as np
+    # from bokeh.io import output_file, show
+    # from bokeh.transform import linear_cmap
+    # from bokeh.util.hex import hexbin
+    from bokeh.embed import components
+    from bokeh.models import HoverTool
+    from bokeh.plotting import figure
+    # from bokeh.resources import CDN
+
+    # strhtml = 'PLOT GOES HERE'
+    # n = 50000
+    # x = np.random.standard_normal(n)
+    # y = np.random.standard_normal(n)
+    arr_ra = np.array([tsk.ra for tsk in Task.objects.filter(finishtimestamp__isnull=False)])
+    arr_dec = np.array([tsk.dec for tsk in Task.objects.filter(finishtimestamp__isnull=False)])
+    # print(arr_ra)
+    # print(arr_dec)
+
+    plot = figure(tools="pan,wheel_zoom,box_zoom,reset", match_aspect=True, background_fill_color='#440154',
+                  active_scroll="wheel_zoom",
+                  title="Requested coordinates",
+                  x_axis_label="Right ascension (deg)", y_axis_label="Declination (deg)")
+    plot.grid.visible = False
+
+    # bins = hexbin(arr_ra, arr_dec, 1.)
+    # plot.hex_tile(q="q", r="r", size=0.1, line_color=None, source=bins,
+    #               fill_color=linear_cmap('counts', 'Viridis256', 0, max(bins.counts)))
+    # r, bins = plot.hexbin(arr_ra, arr_dec, size=.5, hover_color="pink", hover_alpha=0.8)
+
+    r = plot.circle(arr_ra, arr_dec, color="white", size=12.5, hover_color="pink", hover_alpha=0.8)
+
+    plot.add_tools(HoverTool(
+        tooltips=[("(ra,dec)", "(@x, @y)")],  # ("count", "@c"),
+        mode="mouse", point_policy="follow_mouse", renderers=[r]
+    ))
+
+    script, strhtml = components(plot)
+    return script, strhtml
+
+
+@cache_page(60 * 15)
+def stats(request):
+    # from statistics import mean
+    from statistics import median
+    template_name = 'stats.html'
+    dictparams = {'name': 'Usage Stats'}
+
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    dictparams['sevendaytasks'] = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7)).count()
+    dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
+    dictparams['thirtydaytasks'] = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30)).count()
+    dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
+    dictparams['avgwaittime'] = '{:.1f}s'.format(median([tsk.waittime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)]))
+    dictparams['avgruntime'] = '{:.1f}s'.format(median([tsk.runtime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)]))
+    htmlchartscript, htmlchart = get_html_coordchart()
+    dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
+
+    return render(request, template_name, dictparams)
 
 
 def register(request):

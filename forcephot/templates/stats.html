@@ -1,0 +1,15 @@
+{% extends "rest_framework/base.html" %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p>{{ sevendaytasks }} tasks in the last 7 days ({{ sevendaytaskrate }})</p>
+    <p>{{ thirtydaytasks }} tasks in the last 30 days ({{ thirtydaytaskrate }})</p>
+    <p>Average queue waiting time: {{ avgwaittime }}</p>
+    <p>Average running time: {{ avgruntime }}</p>
+    {{ htmlchart | safe }}
+</div>
+{% endblock %}

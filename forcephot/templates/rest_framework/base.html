@@ -23,6 +23,7 @@
 
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/>
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/>
+
         <style>
           .collapsible {
             cursor: pointer;
@@ -237,6 +238,7 @@
                 <li><a href="{% url 'apiguide' %}">API Guide</a></li>
                 <li><a href="{% url 'faq' %}">FAQ</a></li>
                 <li><a href="https://github.com/lukeshingles/atlasserver/issues">Issues</a></li>
+                <li><a href="{% url 'stats' %}">Stats</a></li>
                 <!-- <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li> -->
             </ul>
 
@@ -527,11 +529,17 @@
       <script src="{% static "rest_framework/js/bootstrap.min.js" %}"></script>
       <script src="{% static "rest_framework/js/prettify-min.js" %}"></script>
       <script src="{% static "rest_framework/js/default.js" %}"></script>
+
+      <script src="http://cdn.pydata.org/bokeh/release/bokeh-2.2.3.min.js"></script>
+      <script src="http://cdn.pydata.org/bokeh/release/bokeh-widgets-2.2.3.min.js"></script>
+
       <script>
         $(document).ready(function() {
           $('form').ajaxForm();
         });
       </script>
+
+      {{ script | safe }}
     {% endblock %}
 
   </body>
