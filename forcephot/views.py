@@ -247,7 +247,9 @@ def get_html_coordchart():
     # print(arr_ra)
     # print(arr_dec)
 
-    plot = figure(tools="pan,wheel_zoom,box_zoom,reset", match_aspect=True, background_fill_color='#440154',
+    plot = figure(tools="pan,wheel_zoom,box_zoom,reset",
+                  # match_aspect=True,
+                  background_fill_color='#440154',
                   active_scroll="wheel_zoom",
                   title="Requested coordinates",
                   x_axis_label="Right ascension (deg)", y_axis_label="Declination (deg)")
