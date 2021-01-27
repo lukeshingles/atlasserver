@@ -84,7 +84,7 @@ class Task(models.Model):
         return float('NaN')
 
     def runtime(self):
-        if self.finishtimestamp and self.self.starttimestamp:
+        if self.finishtimestamp and self.starttimestamp:
             timediff = self.finishtimestamp - self.starttimestamp
             return timediff.total_seconds()
 
