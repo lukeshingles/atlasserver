@@ -158,7 +158,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
-                'form': form, 'name': 'Job Queue', 'htmltaskframeonly': htmltaskframeonly, 'singletaskdetail': False,
+                'form': form, 'name': 'Task Queue', 'htmltaskframeonly': htmltaskframeonly, 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': len(listqueryset)})
 
         if page is not None:
