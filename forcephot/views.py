@@ -228,7 +228,7 @@ def faq(request):
     return render(request, template_name, {'name': 'FAQ'})
 
 
-def get_html_coordchart():
+def get_html_coordchart(tasks):
     import numpy as np
     # from bokeh.io import output_file, show
     # from bokeh.transform import linear_cmap
@@ -242,17 +242,22 @@ def get_html_coordchart():
     # n = 50000
     # x = np.random.standard_normal(n)
     # y = np.random.standard_normal(n)
-    arr_ra = np.array([tsk.ra for tsk in Task.objects.filter(finishtimestamp__isnull=False)])
-    arr_dec = np.array([tsk.dec for tsk in Task.objects.filter(finishtimestamp__isnull=False)])
+    arr_ra = np.array([tsk.ra for tsk in tasks])
+    arr_dec = np.array([tsk.dec for tsk in tasks])
     # print(arr_ra)
     # print(arr_dec)
 
     plot = figure(tools="pan,wheel_zoom,box_zoom,reset",
                   # match_aspect=True,
+                  aspect_ratio=2,
                   background_fill_color='#440154',
                   active_scroll="wheel_zoom",
                   title="Requested coordinates",
-                  x_axis_label="Right ascension (deg)", y_axis_label="Declination (deg)")
+                  x_axis_label="Right ascension (deg)",
+                  y_axis_label="Declination (deg)",
+                  x_range=(0, 360), y_range=(-90, 90),
+                  # frame_width=600,
+                  sizing_mode='stretch_both')
     plot.grid.visible = False
 
     # bins = hexbin(arr_ra, arr_dec, 1.)
@@ -278,15 +283,16 @@ def stats(request):
     import numpy as np
     template_name = 'stats.html'
     dictparams = {'name': 'Usage Stats'}
-
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
+
     dictparams['sevendaytasks'] = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7)).count()
     dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
-    dictparams['thirtydaytasks'] = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30)).count()
+    dictparams['thirtydaytasks'] = thirtydaytasks.count()
     dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
     dictparams['avgwaittime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.waittime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)])))
     dictparams['avgruntime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.runtime() for tsk in Task.objects.filter(finishtimestamp__isnull=False)])))
-    htmlchartscript, htmlchart = get_html_coordchart()
+    htmlchartscript, htmlchart = get_html_coordchart(tasks=thirtydaytasks)
     dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
 
     return render(request, template_name, dictparams)
