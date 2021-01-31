@@ -106,6 +106,7 @@ def runforced(task, conn, logprefix='', **kwargs):
                          encoding='utf-8', bufsize=1, universal_newlines=True)
 
     starttime = time.perf_counter()
+    lastlogtime = 0
     cancelled = False
     while not cancelled:
         try:
@@ -113,7 +114,9 @@ def runforced(task, conn, logprefix='', **kwargs):
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(conn=conn, taskid=id)
-            log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ", end='\r')
+            if lastlogtime - time.perf_counter() > 5:
+                log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ")
+                lastlogtime = time.perf_counter()
         else:
             break
 
@@ -173,7 +176,7 @@ def runforced(task, conn, logprefix='', **kwargs):
         return False
 
     make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
-                  logprefix=logprefix, logfunc=log, separate_process=False)
+                  logprefix=logprefix, logfunc=log, separate_process=True)
 
     return localresultfile
 
@@ -407,7 +410,7 @@ def do_maintenance(maxtime=None):
                             f"{resultfilepath.relative_to(localresultdir)}")
 
                         make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix, logfunc=log,
-                                      separate_process=False)
+                                      separate_process=True)
 
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
