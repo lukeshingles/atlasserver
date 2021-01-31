@@ -404,16 +404,16 @@ def do_maintenance(maxtime=None):
                 if not task_exists(conn=conn, taskid=taskid):
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
                     remove_task_resultfiles(taskid)
-                elif resultfilepath.suffix == '.txt':
-                    if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
-                        # load the text file to check if it contains any data rows to be plotted
-                        df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#', skipinitialspace=True)
-                        if df:
-                            log(logprefix + "Creating missing PDF from result file "
-                                f"{resultfilepath.relative_to(localresultdir)}")
-
-                            make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix,
-                                          logfunc=log, separate_process=True)
+                # elif resultfilepath.suffix == '.txt':
+                #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
+                #         # load the text file to check if it contains any data rows to be plotted
+                #         df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#', skipinitialspace=True)
+                #         if df:
+                #             log(logprefix + "Creating missing PDF from result file "
+                #                 f"{resultfilepath.relative_to(localresultdir)}")
+                #
+                #             make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix,
+                #                           logfunc=log, separate_process=True)
 
             except ValueError:
                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
