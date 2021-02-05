@@ -14,7 +14,9 @@
         <li>Mean queue waiting time: {{ sevendayavgwaittime }}</li>
         <li>Mean task running time: {{ sevendayavgruntime }}</li>
     </ul>
-    In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}).
+
+    <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}).</p>
+
     {{ htmlchart | safe }}
 </div>
 {% endblock %}
