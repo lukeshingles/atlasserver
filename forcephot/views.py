@@ -289,20 +289,21 @@ def stats(request):
     sevendaytaskcount = int(sevendaytasks.count())
 
     dictparams['sevendaytasks'] = sevendaytaskcount
-    dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
+    dictparams['sevendaytaskrate'] = '{:.1f} per day'.format(dictparams['sevendaytasks'] / 7.)
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
     if sevendaytasks_finished.count() > 0:
-        dictparams['sevendayavgwaittime'] = '{:.1f}s'.format(np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])))
+        dictparams['sevendayavgwaittime'] = '{:.1f}s'.format(
+            np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])))
+
         sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
         dictparams['sevendayavgruntime'] = '{:.1f}s'.format(np.nanmean(sevenday_runtimes))
-        dictparams['sevendayqueuefactor'] = '{:.1f}%'.format(100. * sevendaytaskcount * np.nanmean(sevenday_runtimes) / (7 * 24. * 60 * 60))
-        dictparams['sevendayusagepercent'] = '{:.1f}%'.format(100. * np.sum(sevenday_runtimes) / (7 * 24. * 60 * 60))
+        dictparams['sevendayloadpercent'] = '{:.1f}%'.format(100. * sevendaytaskcount * np.nanmean(sevenday_runtimes) / (7 * 24. * 60 * 60))
+        # dictparams['sevendayusagepercent'] = '{:.1f}%'.format(100. * np.sum(sevenday_runtimes) / (7 * 24. * 60 * 60))
     else:
         dictparams.update({
             'sevendayavgwaittime': '-',
             'sevendayavgruntime': '-',
-            'sevendayqueuefactor': '0%',
-            'sevendayusagepercent': '0%',
+            'sevendayloadpercent': '0%',
         })
 
     dictparams['thirtydaytasks'] = thirtydaytasks.count()

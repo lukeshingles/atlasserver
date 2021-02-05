@@ -6,12 +6,15 @@
         <h1>{{ name }}</h1>
     </div>
 
-    <ul>
-        <li>{{ sevendaytasks }} tasks in the last 7 days ({{ sevendaytaskrate }}, usage: {{ sevendayusagepercent }}, queuefactor: {{ sevendayqueuefactor }})</li>
-        <li>{{ thirtydaytasks }} tasks in the last 30 days ({{ thirtydaytaskrate }})</li>
-        <li>Seven-day average queue waiting time: {{ sevendayavgwaittime }}</li>
-        <li>Seven-day average task running time: {{ sevendayavgruntime }}</li>
+    In the last seven days:
+    <ul style="padding-left: 2em">
+        <li>Task count: {{ sevendaytasks }}</li>
+        <li>Task rate: {{ sevendaytaskrate }}</li>
+        <li>Load factor: {{ sevendayloadpercent }}</li>
+        <li>Mean queue waiting time: {{ sevendayavgwaittime }}</li>
+        <li>Mean task running time: {{ sevendayavgruntime }}</li>
     </ul>
+    In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}).
     {{ htmlchart | safe }}
 </div>
 {% endblock %}
