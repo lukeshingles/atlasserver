@@ -285,11 +285,11 @@ def stats(request):
     dictparams = {'name': 'Usage Stats'}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
-    sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=8))
+    sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
     sevendaytaskcount = int(sevendaytasks.count())
 
     dictparams['sevendaytasks'] = sevendaytaskcount
-    dictparams['sevendaytaskrate'] = '{:.1f} per day'.format(dictparams['sevendaytasks'] / 7.)
+    dictparams['sevendaytaskrate'] = '{:.1f} / day'.format(dictparams['sevendaytasks'] / 7.)
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
     if sevendaytasks_finished.count() > 0:
         dictparams['sevendayavgwaittime'] = '{:.1f}s'.format(
