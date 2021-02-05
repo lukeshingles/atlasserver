@@ -7,10 +7,10 @@
     </div>
 
     <ul>
-        <li>{{ sevendaytasks }} tasks in the last 7 days ({{ sevendaytaskrate }})</li>
+        <li>{{ sevendaytasks }} tasks in the last 7 days ({{ sevendaytaskrate }}, usage: {{ sevendayusagepercent }}, queuefactor: {{ sevendayqueuefactor }})</li>
         <li>{{ thirtydaytasks }} tasks in the last 30 days ({{ thirtydaytaskrate }})</li>
-        <li>Average queue waiting time: {{ avgwaittime }}</li>
-        <li>Average task running time: {{ avgruntime }}</li>
+        <li>Seven-day average queue waiting time: {{ sevendayavgwaittime }}</li>
+        <li>Seven-day average task running time: {{ sevendayavgruntime }}</li>
     </ul>
     {{ htmlchart | safe }}
 </div>

@@ -252,7 +252,7 @@ def get_html_coordchart(tasks):
                   aspect_ratio=2,
                   background_fill_color='#440154',
                   active_scroll="wheel_zoom",
-                  title="Recently requested coordinates (30 days)",
+                  title="Recently requested coordinates (7 days)",
                   x_axis_label="Right ascension (deg)",
                   y_axis_label="Declination (deg)",
                   x_range=(0, 360), y_range=(-90, 90),
@@ -276,7 +276,7 @@ def get_html_coordchart(tasks):
     return script, strhtml
 
 
-@cache_page(60)
+@cache_page(60 * 5)
 def stats(request):
     # from statistics import mean
     # from statistics import median
@@ -285,14 +285,30 @@ def stats(request):
     dictparams = {'name': 'Usage Stats'}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
+    sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=8))
+    sevendaytaskcount = int(sevendaytasks.count())
 
-    dictparams['sevendaytasks'] = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7)).count()
+    dictparams['sevendaytasks'] = sevendaytaskcount
     dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
+    sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
+    if sevendaytasks_finished.count() > 0:
+        dictparams['sevendayavgwaittime'] = '{:.1f}s'.format(np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])))
+        sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
+        dictparams['sevendayavgruntime'] = '{:.1f}s'.format(np.nanmean(sevenday_runtimes))
+        dictparams['sevendayqueuefactor'] = '{:.1f}%'.format(100. * sevendaytaskcount * np.nanmean(sevenday_runtimes) / (7 * 24. * 60 * 60))
+        dictparams['sevendayusagepercent'] = '{:.1f}%'.format(100. * np.sum(sevenday_runtimes) / (7 * 24. * 60 * 60))
+    else:
+        dictparams.update({
+            'sevendayavgwaittime': '-',
+            'sevendayavgruntime': '-',
+            'sevendayqueuefactor': '0%',
+            'sevendayusagepercent': '0%',
+        })
+
     dictparams['thirtydaytasks'] = thirtydaytasks.count()
     dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
-    dictparams['avgwaittime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.waittime() for tsk in thirtydaytasks.filter(finishtimestamp__isnull=False)])))
-    dictparams['avgruntime'] = '{:.1f}s'.format(np.nanmedian(np.array([tsk.runtime() for tsk in thirtydaytasks.filter(finishtimestamp__isnull=False)])))
-    htmlchartscript, htmlchart = get_html_coordchart(tasks=thirtydaytasks)
+
+    htmlchartscript, htmlchart = get_html_coordchart(tasks=sevendaytasks)
     dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
 
     return render(request, template_name, dictparams)
