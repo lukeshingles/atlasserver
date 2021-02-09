@@ -94,7 +94,7 @@ class Task(models.Model):
         user = User.objects.get(id=self.user_id)
         userstr = f"{user.username} ({user.email})"
         strtask = (
-            f"{self.timestamp:%Y-%m-%d %H:%M %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
+            f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
             f" {'img_reduced' if self.use_reduced else 'img_diff'}" +
             f" {'finished' if self.finished() else 'queued'} ")
         if self.finished():
