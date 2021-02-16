@@ -402,6 +402,7 @@ def do_maintenance(maxtime=None):
     conn.commit()
     cur.close()
 
+    log(logprefix + "Checking for unassociated result files...")
     for resultfilepath in Path(localresultdir).glob('job*.*'):
         if resultfilepath.suffix in ['.txt', '.pdf']:
             try:
@@ -433,6 +434,7 @@ def do_maintenance(maxtime=None):
             break
 
     conn.close()
+    log(logprefix + "Complete.")
 
 
 def main():
