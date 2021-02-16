@@ -21,7 +21,7 @@ remoteServer = 'atlas'
 localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 logdir = Path('logs')
-TASKMAXTIME = 360
+TASKMAXTIME = 1000
 
 CONNKWARGS = {
     'host': settings.DATABASES['default']['HOST'],
