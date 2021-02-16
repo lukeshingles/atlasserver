@@ -399,7 +399,7 @@ def do_maintenance(maxtime=None):
     for resultfilepath in Path(localresultdir).glob('job*.*'):
         if resultfilepath.suffix in ['.txt', '.pdf']:
             try:
-                taskidstr = resultfilepath.stem[4:]
+                taskidstr = resultfilepath.stem[3:]
                 taskid = int(taskidstr)
                 if not task_exists(conn=conn, taskid=taskid):
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
