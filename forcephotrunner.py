@@ -402,7 +402,8 @@ def do_maintenance(maxtime=None):
                 taskidstr = resultfilepath.stem[4:]
                 taskid = int(taskidstr)
                 if not task_exists(conn=conn, taskid=taskid):
-                    log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)}")
+                    log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
+                        "because task {taskid} is not in the database")
                     remove_task_resultfiles(taskid)
                 # elif resultfilepath.suffix == '.txt':
                 #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
