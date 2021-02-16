@@ -51,6 +51,15 @@ def task_exists(conn, taskid):
     return exists
 
 
+def get_taskid_list(conn):
+    cur = conn.cursor(dictionary=False)
+    cur.execute("SELECT id FROM forcephot_task;")
+    taskid_list = [row[0] for row in cur.fetchall()]
+    conn.commit()
+    cur.close()
+    return taskid_list
+
+
 def remove_task_resultfiles(taskid):
     taskfiles = []  # possible result files that don't necessarily exist
 
@@ -402,16 +411,19 @@ def do_maintenance(maxtime=None):
     conn.commit()
     cur.close()
 
+    taskid_list = get_taskid_list(conn)
+
     log(logprefix + "Checking for unassociated result files...")
     for resultfilepath in Path(localresultdir).glob('job*.*'):
         if resultfilepath.suffix in ['.txt', '.pdf']:
             try:
-                taskidstr = resultfilepath.stem[3:]
-                taskid = int(taskidstr)
-                if not task_exists(conn=conn, taskid=taskid):
+                file_taskidstr = resultfilepath.stem[3:]
+                file_taskid = int(file_taskidstr)
+                assert task_exists(conn=conn, taskid=file_taskid) == (file_taskid in taskid_list)
+                if file_taskid not in taskid_list:
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
-                        f"because task {taskid} is not in the database")
-                    remove_task_resultfiles(taskid)
+                        f"because task {file_taskid} is not in the database")
+                    remove_task_resultfiles(file_taskid)
                 # elif resultfilepath.suffix == '.txt':
                 #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
                 #         # load the text file to check if it contains any data rows to be plotted
@@ -420,7 +432,7 @@ def do_maintenance(maxtime=None):
                 #             log(logprefix + "Creating missing PDF from result file "
                 #                 f"{resultfilepath.relative_to(localresultdir)}")
                 #
-                #             make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, logprefix=logprefix,
+                #             make_pdf_plot(taskid=file_taskid, localresultfile=resultfilepath, logprefix=logprefix,
                 #                           logfunc=log, separate_process=True)
 
             except ValueError:
@@ -434,7 +446,7 @@ def do_maintenance(maxtime=None):
             break
 
     conn.close()
-    log(logprefix + "Complete.")
+    log(logprefix + "Finished checking for unassociated result files")
 
 
 def main():
