@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
+import datetime
 import os
 import subprocess
 import time
-from datetime import datetime
 from pathlib import Path
 from signal import SIGINT, SIGTERM, signal
 
@@ -20,6 +20,7 @@ load_dotenv(override=True)
 remoteServer = 'atlas'
 localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
+logdir = Path('logs')
 
 CONNKWARGS = {
     'host': settings.DATABASES['default']['HOST'],
@@ -293,7 +294,12 @@ def handler(signal_received, frame):
 
 
 def log(msg, *args, **kwargs):
-    print(f'{datetime.utcnow()}  {msg}', *args, **kwargs)
+    dtnow = datetime.datetime.utcnow()
+    line = f'{dtnow}  {msg}'
+    print(line, *args, **kwargs)
+    logfile = Path(logdir, f'fprunnerlog_{dtnow.year}-{dtnow.month}-{dtnow.day}.txt')
+    with logfile.open("a+") as logfile:
+        logfile.write(line + '\n')
 
 
 def do_taskloop():
@@ -431,6 +437,8 @@ def do_maintenance(maxtime=None):
 
 def main():
     signal(SIGINT, handler)
+
+    logdir.mkdir(parents=True, exist_ok=True)
 
     last_maintenancetime = float('-inf')
     printedwaiting = False
