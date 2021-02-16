@@ -25,8 +25,8 @@ class Task(models.Model):
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     send_email = models.BooleanField("Email me when completed", default=True)
-    finishtimestamp = models.DateTimeField(null=True, default=None)
-    starttimestamp = models.DateTimeField(null=True, default=None)
+    finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
+    starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
 
     def localresultfile(self):
         if self.finishtimestamp:
