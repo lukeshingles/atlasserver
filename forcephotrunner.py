@@ -419,7 +419,7 @@ def do_maintenance(maxtime=None):
             try:
                 file_taskidstr = resultfilepath.stem[3:]
                 file_taskid = int(file_taskidstr)
-                assert task_exists(conn=conn, taskid=file_taskid) == (file_taskid in taskid_list)
+                # assert task_exists(conn=conn, taskid=file_taskid) == (file_taskid in taskid_list)
                 if file_taskid not in taskid_list:
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
                         f"because task {file_taskid} is not in the database")
