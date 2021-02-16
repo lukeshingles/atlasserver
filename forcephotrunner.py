@@ -297,7 +297,7 @@ def log(msg, *args, **kwargs):
     dtnow = datetime.datetime.utcnow()
     line = f'{dtnow}  {msg}'
     print(line, *args, **kwargs)
-    logfile = Path(logdir, f'fprunnerlog_{dtnow.year}-{dtnow.month}-{dtnow.day}.txt')
+    logfile = Path(logdir, f'fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}.txt')
     with logfile.open("a+") as logfile:
         logfile.write(line + '\n')
 
