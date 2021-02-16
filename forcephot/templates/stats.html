@@ -5,14 +5,14 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
-
+    <p>As of {% now "Y-m-d H:i:s" %} UTC, there are {{ queuedtaskcount }} unfinished tasks in the queue. The most recently completed task was at {{ lastfinishtime }}.</p>
     In the last seven days:
     <ul style="padding-left: 2em">
         <li>Task count: {{ sevendaytasks }}</li>
         <li>Task rate: {{ sevendaytaskrate }}</li>
-        <li>Load factor: {{ sevendayloadpercent }}</li>
-        <li>Mean queue waiting time: {{ sevendayavgwaittime }}</li>
-        <li>Mean task running time: {{ sevendayavgruntime }}</li>
+        <li>Load factor (arrival rate / completion rate): {{ sevendayloadpercent }}</li>
+        <li>Average queue waiting time: {{ sevendayavgwaittime }}</li>
+        <li>Average task running time: {{ sevendayavgruntime }}</li>
     </ul>
 
     <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}).</p>

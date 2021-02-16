@@ -276,7 +276,7 @@ def get_html_coordchart(tasks):
     return script, strhtml
 
 
-@cache_page(60 * 5)
+@cache_page(60 * 3)
 def stats(request):
     # from statistics import mean
     # from statistics import median
@@ -308,6 +308,11 @@ def stats(request):
 
     dictparams['thirtydaytasks'] = thirtydaytasks.count()
     dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
+
+    dictparams['queuedtaskcount'] = Task.objects.filter(finishtimestamp__isnull=True).count()
+    lastfinishtime = (Task.objects.filter(finishtimestamp__isnull=False)
+                      .order_by('finishtimestamp').last().finishtimestamp)
+    dictparams['lastfinishtime'] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
 
     htmlchartscript, htmlchart = get_html_coordchart(tasks=sevendaytasks)
     dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
