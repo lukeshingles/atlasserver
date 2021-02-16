@@ -21,6 +21,7 @@ remoteServer = 'atlas'
 localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 logdir = Path('logs')
+TASKMAXTIME = 360
 
 CONNKWARGS = {
     'host': settings.DATABASES['default']['HOST'],
@@ -118,25 +119,28 @@ def runforced(task, conn, logprefix='', **kwargs):
     starttime = time.perf_counter()
     lastlogtime = 0
     cancelled = False
-    while not cancelled:
+    timed_out = False
+    while not cancelled and not timed_out:
         try:
             p.communicate(timeout=1)
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(conn=conn, taskid=id)
-            if time.perf_counter() - lastlogtime >= 5:
+            timed_out = (time.perf_counter() - starttime) >= TASKMAXTIME
+            if (time.perf_counter() - lastlogtime) >= 5:
                 log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ")
                 lastlogtime = time.perf_counter()
         else:
             break
 
-    if cancelled:
-        log(logprefix + "                                                                                 ")
+    if cancelled or timed_out:
+        if timed_out:
+            log(logprefix + f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASKMAXTIME:.0f} seconds")
         os.kill(p.pid, SIGTERM)
         return False
 
     stdout, stderr = p.communicate()
-    log(logprefix + f'ssh ran for {time.perf_counter() - starttime:.1f} seconds                                       ')
+    log(logprefix + f'ssh finished after running for {time.perf_counter() - starttime:.1f} seconds')
 
     if stdout:
         stdoutlines = stdout.split('\n')
@@ -366,7 +370,7 @@ def do_taskloop():
             else:
                 runforced_duration = time.perf_counter() - runforced_starttime
 
-                log(logprefix + f"Task took {runforced_duration:.1f} seconds to complete")
+                log(logprefix + f"Task ran for {runforced_duration:.1f} seconds")
 
                 localresultfile = get_localresultfile(task['id'])
                 if localresultfile and os.path.exists(localresultfile):
@@ -378,9 +382,9 @@ def do_taskloop():
                     conn.commit()
                     cur2.close()
                 else:
-                    waittime = 10
-                    log(logprefix + f"ERROR: Task not completed successfully. Waiting {waittime} seconds "
-                        f"before retrying...")
+                    waittime = 5
+                    log(logprefix + f"ERROR: Task was not completed successfully. Waiting {waittime} seconds "
+                        f"before continuing...")
                     time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
                 if (taskload_thisuser >= USERTASKLOADLIMIT):
