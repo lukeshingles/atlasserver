@@ -102,6 +102,17 @@ class Task(models.Model):
             strtask += f" runtime: {self.runtime():.1f}s"
         return strtask
 
+    def delete(self):
+        # cleanup associated files when removing a task object from the database
+        if self.localresultfile():
+            localresultfullpath = os.path.join(settings.STATIC_ROOT, self.localresultfile())
+            if os.path.exists(localresultfullpath):
+                os.remove(localresultfullpath)
+            pdfpath = Path(localresultfullpath).with_suffix('.pdf')
+            if os.path.exists(pdfpath):
+                os.remove(pdfpath)
+        super().delete()
+
 
 class Result(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)

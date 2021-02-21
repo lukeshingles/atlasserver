@@ -126,15 +126,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'Location': reverse('task-list', request=request)})
         # return Response(status=status.HTTP_204_NO_CONTENT)
 
-    def perform_destroy(self, instance):
-        if instance.localresultfile():
-            localresultfullpath = os.path.join(settings.STATIC_ROOT, instance.localresultfile())
-            if os.path.exists(localresultfullpath):
-                os.remove(localresultfullpath)
-            pdfpath = Path(localresultfullpath).with_suffix('.pdf')
-            if os.path.exists(pdfpath):
-                os.remove(pdfpath)
-        instance.delete()
+    # def perform_destroy(self, instance):
+    #     instance.delete()
 
     def list(self, request, *args, **kwargs):
         listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
@@ -191,14 +184,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 def deleteTask(request, pk):
     try:
         item = Task.objects.get(id=pk)
-        if item.localresultfile():
-            localresultfullpath = os.path.join(settings.STATIC_ROOT, item.localresultfile())
-            if os.path.exists(localresultfullpath):
-                os.remove(localresultfullpath)
-            pdfpath = Path(localresultfullpath).with_suffix('.pdf')
-            if os.path.exists(pdfpath):
-                os.remove(pdfpath)
-
         item.delete()
     except ObjectDoesNotExist:
         pass
