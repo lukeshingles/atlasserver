@@ -318,7 +318,7 @@ def stats(request):
         dictparams['lastfinishtime'] = 'N/A'
 
     countrylist = thirtydaytasks.values_list('country_code').annotate(
-        task_count=Count('country_code')).order_by('-task_count')
+        task_count=Count('country_code')).order_by('-task_count', 'country_code')
 
     dictparams['countrylist'] = [
         (country_code_to_name(code), count) for code, count in countrylist if count > 0 and code != 'XX'][:15]
