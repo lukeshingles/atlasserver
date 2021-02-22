@@ -5,7 +5,7 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
-    <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent task completion at {{ lastfinishtime }} (as of {% now "Y-m-d H:i:s" %} UTC).</p>
+    <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent task completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
     In the last seven days:
     <ul style="padding-left: 2em">
         <li>Tasks: {{ sevendaytasks }} ({{ sevendaytaskrate }}) from {{ sevendayusers }} users</li>
