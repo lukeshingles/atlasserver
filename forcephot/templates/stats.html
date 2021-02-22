@@ -8,14 +8,13 @@
     <p>As of {% now "Y-m-d H:i:s" %} UTC, there are {{ queuedtaskcount }} unfinished tasks in the queue wth the most recently completed task at {{ lastfinishtime }}.</p>
     In the last seven days:
     <ul style="padding-left: 2em">
-        <li>Tasks: {{ sevendaytasks }} ({{ sevendaytaskrate }})</li>
-        <li>Active users: {{ sevendayusers }}</li>
+        <li>Tasks: {{ sevendaytasks }} ({{ sevendaytaskrate }}) from {{ sevendayusers }} users</li>
         <li>Load factor (arrival rate / completion rate): {{ sevendayloadpercent }}</li>
         <li>Average queue waiting time: {{ sevendayavgwaittime }}</li>
         <li>Average task running time: {{ sevendayavgruntime }}</li>
     </ul>
 
-    <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{thirtyddayusers}} users. The countries with the most tasks are:</p>
+    <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{ thirtyddayusers }} users. The countries with the most tasks are:</p>
     <ul style="padding-left: 2em">
     {% for row in countrylist %}
       <li>{{ row.0 }}: {{ row.1 }}</li>
