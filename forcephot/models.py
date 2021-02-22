@@ -17,6 +17,8 @@ def get_mjd_min_default():
 
 class Task(models.Model):
     timestamp = models.DateTimeField(default=timezone.now)
+    starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
+    finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     ra = models.FloatField(null=False, blank=False, default=None)
     dec = models.FloatField(null=False, blank=False, default=None)
@@ -25,10 +27,8 @@ class Task(models.Model):
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     send_email = models.BooleanField("Email me when completed", default=True)
-    is_archived = models.BooleanField(default=False)
-    finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
-    starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
     from_api = models.BooleanField(default=False)
+    is_archived = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
     city = models.CharField(default=None, null=True, blank=True, max_length=256)
