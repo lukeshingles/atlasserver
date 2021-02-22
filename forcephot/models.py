@@ -96,14 +96,16 @@ class Task(models.Model):
 
     def __str__(self):
         user = User.objects.get(id=self.user_id)
-        userstr = f"{user.username} ({user.email})"
         strtask = (
-            f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
-            f" {'img_reduced' if self.use_reduced else 'img_diff'}" +
-            f" {'finished' if self.finished() else 'queued'} "
+            f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} " +
+            f"{user.username} ({user.email})" +
+            (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "") +
+            f"{' API' if self.from_api else ''}" +
+            f" RA: {self.ra:09.4f} Dec: {self.dec:09.4f}" +
+            f" {'reducedimg' if self.use_reduced else 'diffimg'}" +
+            f" {'finished' if self.finished() else 'queued'} " +
             f"{' archived' if self.is_archived else ''}"
-            f"{' from_api' if self.from_api else ''}"
-            f" {country_code_to_name(self.country_code) if self.country_code else ''}")
+        )
 
         if self.finished():
             strtask += f" waittime: {self.waittime():.0f}s"
