@@ -29,7 +29,9 @@ class Task(models.Model):
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
     from_api = models.BooleanField(null=True, blank=True, default=None)
-    country_code = models.CharField(default=None, null=True, blank=True, max_length=4)
+    country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
+    region = models.CharField(default=None, null=True, blank=True, max_length=256)
+    city = models.CharField(default=None, null=True, blank=True, max_length=256)
 
     def localresultfile(self):
         if self.finishtimestamp:

@@ -5,7 +5,6 @@ import geoip2.errors
 
 from django.contrib.auth import authenticate, login
 from django.conf import settings as settings
-# from django.contrib.gis.geoip2 import GeoIP2
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models import Count
 from django.http import HttpResponse, FileResponse
@@ -112,13 +111,18 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     if (usertaskcount > 10):
         #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         #     serializer.save(user=self.request.user)
+        extra_fields = {}  # add computed field values (not user specified)
 
-        country_code = self.request.geo_data.country_code
+        extra_fields['user'] = self.request.user
+        extra_fields['timestamp'] = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
 
-        from_api = (self.request.accepted_renderer.format != 'html')
-        timestampnow = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
-        serializer.save(user=self.request.user, timestamp=timestampnow, country_code=country_code,
-                        from_api=from_api)
+        extra_fields['country_code'] = self.request.geo_data.country_code
+        extra_fields['region'] = self.request.geo_data.region
+        extra_fields['city'] = self.request.geo_data.city
+
+        extra_fields['from_api'] = (self.request.accepted_renderer.format != 'html')
+
+        serializer.save(**extra_fields)
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
