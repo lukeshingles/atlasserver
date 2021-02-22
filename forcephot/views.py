@@ -4,28 +4,27 @@ import os
 import geoip2.errors
 
 from django.contrib.auth import authenticate, login
-
+from django.conf import settings as settings
+# from django.contrib.gis.geoip2 import GeoIP2
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db.models import Count
 from django.http import HttpResponse, FileResponse
 # from django.http.response import HttpResponseRedirect
-from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.cache import cache_page
 from django.http import HttpResponseNotFound
+from django.views.decorators.cache import cache_page
+from django.shortcuts import get_object_or_404, redirect, render
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, status, viewsets
 # from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from django.conf import settings as settings
 from pathlib import Path
 
 from forcephot.filters import TaskFilter
 from forcephot.forms import TaskForm, RegistrationForm
-from forcephot.misc import splitradeclist, date_to_mjd, make_pdf_plot
+from forcephot.misc import country_code_to_name, splitradeclist, date_to_mjd, make_pdf_plot
 from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
-
-from django.contrib.gis.geoip2 import GeoIP2
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -114,18 +113,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         #     serializer.save(user=self.request.user)
 
-        # # might not work with reverse proxy setup?
         country_code = self.request.geo_data.country_code
-        # x_forwarded_for = self.request.META.get('HTTP_X_FORWARDED_FOR')
-        # if x_forwarded_for:
-        #     ip_address = x_forwarded_for.split(',')[0]
-        # else:
-        #     ip_address = self.request.META.get('REMOTE_ADDR')
-        # try:
-        #     country = GeoIP2().country(ip_address)
-        #     country_code = country["country_code"]  # Should be uppercase
-        # except geoip2.errors.GeoIP2Error:
-        #     country_code = 'XX'
 
         from_api = (self.request.accepted_renderer.format != 'html')
         timestampnow = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
@@ -295,6 +283,7 @@ def stats(request):
     sevendaytaskcount = int(sevendaytasks.count())
 
     dictparams['sevendaytasks'] = sevendaytaskcount
+    dictparams['sevendayusers'] = sevendaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
     dictparams['sevendaytaskrate'] = '{:.1f} / day'.format(dictparams['sevendaytasks'] / 7.)
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
     if sevendaytasks_finished.count() > 0:
@@ -316,9 +305,18 @@ def stats(request):
     dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
 
     dictparams['queuedtaskcount'] = Task.objects.filter(finishtimestamp__isnull=True).count()
-    lastfinishtime = (Task.objects.filter(finishtimestamp__isnull=False)
-                      .order_by('finishtimestamp').last().finishtimestamp)
-    dictparams['lastfinishtime'] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
+    try:
+        lastfinishtime = (Task.objects.filter(finishtimestamp__isnull=False)
+                          .order_by('finishtimestamp').last().finishtimestamp)
+        dictparams['lastfinishtime'] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
+    except AttributeError:
+        dictparams['lastfinishtime'] = 'N/A'
+
+    countrylist = thirtydaytasks.values_list('country_code').annotate(
+        task_count=Count('country_code')).order_by('-task_count')[:5]
+    dictparams['countrylist'] = [(country_code_to_name(code), count) for code, count in countrylist if count > 0]
+
+    dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
 
     htmlchartscript, htmlchart = get_html_coordchart(tasks=sevendaytasks)
     dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
