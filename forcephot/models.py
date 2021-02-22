@@ -99,7 +99,11 @@ class Task(models.Model):
         strtask = (
             f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} {userstr} RA: {self.ra:09.4f} DEC: {self.dec:09.4f}"
             f" {'img_reduced' if self.use_reduced else 'img_diff'}" +
-            f" {'finished' if self.finished() else 'queued'} ")
+            f" {'finished' if self.finished() else 'queued'} "
+            f"{' archived' if self.is_archived else ''}"
+            f"{' from_api' if self.from_api else ''}"
+            f" {self.country_code if self.country_code else ''}")
+
         if self.finished():
             strtask += f" waittime: {self.waittime():.1f}s"
             strtask += f" runtime: {self.runtime():.1f}s"
