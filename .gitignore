@@ -132,3 +132,4 @@ dmypy.json
 fprunnerlog.txt
 fprunnerlogstderr.txt
 logs/*.txt
+*.mmdb
