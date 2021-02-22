@@ -6,9 +6,8 @@
         <h1>{{ name }}</h1>
     </div>
     <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent task completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
-    In the last seven days:
+    In the last seven days there were {{ sevendaytasks }} tasks ({{ sevendaytaskrate }}) from {{ sevendayusers }} users. In this period:
     <ul style="padding-left: 2em">
-        <li>Tasks: {{ sevendaytasks }} ({{ sevendaytaskrate }}) from {{ sevendayusers }} users</li>
         <li>Load factor (arrival rate / completion rate): {{ sevendayloadpercent }}</li>
         <li>Average queue waiting time: {{ sevendayavgwaittime }}</li>
         <li>Average task running time: {{ sevendayavgruntime }}</li>
