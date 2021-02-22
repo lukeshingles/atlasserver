@@ -295,9 +295,10 @@ def stats(request):
             np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])))
 
         sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
-        dictparams['sevendayavgruntime'] = '{:.1f}s'.format(np.nanmean(sevenday_runtimes))
-        dictparams['sevendayloadpercent'] = '{:.1f}%'.format(100. * sevendaytaskcount * np.nanmean(sevenday_runtimes) / (7 * 24. * 60 * 60))
-        # dictparams['sevendayusagepercent'] = '{:.1f}%'.format(100. * np.sum(sevenday_runtimes) / (7 * 24. * 60 * 60))
+        sevenday_mean_runtime = np.nanmean(sevenday_runtimes)
+        dictparams['sevendayavgruntime'] = '{:.1f}s'.format(sevenday_mean_runtime)
+        dictparams['sevendayloadpercent'] = '{:.1f}%'.format(
+            100. * sevendaytaskcount * sevenday_mean_runtime / (7 * 24. * 60 * 60))
     else:
         dictparams.update({
             'sevendayavgwaittime': '-',
@@ -318,7 +319,8 @@ def stats(request):
 
     countrylist = thirtydaytasks.values_list('country_code').annotate(
         task_count=Count('country_code')).order_by('-task_count')
-    dictparams['countrylist'] = [(country_code_to_name(code), count) for code, count in countrylist if count > 0 and code != 'XX'][:10]
+    dictparams['countrylist'] = [
+        (country_code_to_name(code), count) for code, count in countrylist if count > 0 and code != 'XX'][:15]
 
     dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
 
