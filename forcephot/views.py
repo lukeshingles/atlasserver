@@ -1,6 +1,8 @@
 import datetime
 import os
 
+import geoip2.errors
+
 from django.contrib.auth import authenticate, login
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -22,6 +24,9 @@ from forcephot.forms import TaskForm, RegistrationForm
 from forcephot.misc import splitradeclist, date_to_mjd, make_pdf_plot
 from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
+
+from axes.helpers import get_client_ip_address
+from django.contrib.gis.geoip2 import GeoIP2
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -71,8 +76,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     template_name = 'tasklist.html'
 
     def create(self, request, *args, **kwargs):
-        # if not kwargs['form'].is_valid():
-        #     return self.list(request, *args, **kwargs)
         if request.accepted_renderer.format == 'html':
             form = TaskForm(request.POST)
             success = False
@@ -111,8 +114,20 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     if (usertaskcount > 10):
         #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         #     serializer.save(user=self.request.user)
+
+        # # might not work with reverse proxy setup?
+        # country_code = self.request.geo_data.country_code
+        ip_address = get_client_ip_address(self.request)
+        try:
+            country = GeoIP2().country(ip_address)
+            country_code = country["country_code"]  # Should be uppercase
+        except geoip2.errors.GeoIP2Error:
+            country_code = 'XX'
+
+        from_api = (self.request.accepted_renderer.format != 'html')
         timestampnow = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
-        serializer.save(user=self.request.user, timestamp=timestampnow)
+        serializer.save(user=self.request.user, timestamp=timestampnow, country_code=country_code,
+                        from_api=from_api)
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
@@ -130,7 +145,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     #     instance.delete()
 
     def list(self, request, *args, **kwargs):
-        listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=request.user))
+        listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
 
         page = self.paginate_queryset(listqueryset)
         if page is not None:
@@ -138,6 +153,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         else:
             serializer = self.get_serializer(listqueryset, many=True)
 
+        # taskframeonly is for javascript updates (no header/menubar)
         htmltaskframeonly = 'htmltaskframeonly' in request.GET
 
         if request.accepted_renderer.format == 'html' or htmltaskframeonly:
@@ -164,6 +180,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
+        if instance.is_archived:
+            return HttpResponseNotFound("Page not found")
         serializer = self.get_serializer(instance)
 
         if request.accepted_renderer.format == 'html':

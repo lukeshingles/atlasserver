@@ -27,6 +27,8 @@ class Task(models.Model):
     send_email = models.BooleanField("Email me when completed", default=True)
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
+    from_api = models.BooleanField(null=True, blank=True, default=None)
+    country_code = models.CharField(default=None, null=True, blank=True, max_length=4)
 
     def localresultfile(self):
         if self.finishtimestamp:
@@ -108,10 +110,17 @@ class Task(models.Model):
             localresultfullpath = os.path.join(settings.STATIC_ROOT, self.localresultfile())
             if os.path.exists(localresultfullpath):
                 os.remove(localresultfullpath)
-            pdfpath = Path(localresultfullpath).with_suffix('.pdf')
-            if os.path.exists(pdfpath):
-                os.remove(pdfpath)
-        super().delete()
+
+        if self.localresultpdfplotfile():
+            localresultpdffullpath = os.path.join(settings.STATIC_ROOT, self.localresultpdfplotfile())
+            if os.path.exists(localresultpdffullpath):
+                os.remove(localresultpdffullpath)
+
+        if self.finished():
+            self.is_archived = True
+            self.save()
+        else:
+            super().delete()
 
 
 class Result(models.Model):

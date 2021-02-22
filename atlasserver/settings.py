@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     'django_filters',
     'rest_framework',
     'rest_framework.authtoken',
+    'geoip2',
+    'axes',
 ]
 
 MIDDLEWARE = [
@@ -57,6 +59,14 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'geoip2_extras.middleware.GeoIP2Middleware',
+    # AxesMiddleware should be the last middleware in the MIDDLEWARE list.
+    # It only formats user lockout messages and renders Axes lockout responses
+    # on failed user authentication attempts from login views.
+    # If you do not want Axes to override the authentication response
+    # you can skip installing the middleware and use your own views.
+    'axes.middleware.AxesMiddleware',
 ]
 
 ROOT_URLCONF = 'atlasserver.urls'
@@ -118,6 +128,14 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME':
         'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
+]
+
+AUTHENTICATION_BACKENDS = [
+    # AxesBackend should be the first backend in the AUTHENTICATION_BACKENDS list.
+    'axes.backends.AxesBackend',
+
+    # Django ModelBackend is the default authentication backend.
+    'django.contrib.auth.backends.ModelBackend',
 ]
 
 # Internationalization
@@ -204,3 +222,5 @@ EMAIL_PORT = 587
 
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+
+GEOIP_PATH = os.path.dirname(__file__)
