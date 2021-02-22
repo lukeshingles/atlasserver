@@ -80,7 +80,6 @@ class Task(models.Model):
 
     def waittime(self):
         if self.starttimestamp and self.timestamp:
-            # now = datetime.datetime.utcnow().replace(tzinfo=utc)
             timediff = self.starttimestamp - self.timestamp
             return timediff.total_seconds()
 
@@ -105,8 +104,8 @@ class Task(models.Model):
             f" {country_code_to_name(self.country_code) if self.country_code else ''}")
 
         if self.finished():
-            strtask += f" waittime: {self.waittime():.1f}s"
-            strtask += f" runtime: {self.runtime():.1f}s"
+            strtask += f" waittime: {self.waittime():.0f}s"
+            strtask += f" runtime: {self.runtime():.0f}s"
         return strtask
 
     def delete(self):
