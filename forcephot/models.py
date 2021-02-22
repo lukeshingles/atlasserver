@@ -28,7 +28,7 @@ class Task(models.Model):
     is_archived = models.BooleanField(default=False)
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
-    from_api = models.BooleanField(null=True, blank=True, default=None)
+    from_api = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
     city = models.CharField(default=None, null=True, blank=True, max_length=256)
