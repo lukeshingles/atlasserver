@@ -280,7 +280,7 @@ def stats(request):
     # from statistics import median
     import numpy as np
     template_name = 'stats.html'
-    dictparams = {'name': 'Usage Stats'}
+    dictparams = {'name': 'Usage Statistics'}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
