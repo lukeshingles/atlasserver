@@ -5,7 +5,7 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
-    <p>As of {% now "Y-m-d H:i:s" %} UTC, there are {{ queuedtaskcount }} unfinished tasks in the queue. The most recently completed task was at {{ lastfinishtime }}.</p>
+    <p>As of {% now "Y-m-d H:i:s" %} UTC, there are {{ queuedtaskcount }} unfinished tasks in the queue wth the most recently completed task at {{ lastfinishtime }}.</p>
     In the last seven days:
     <ul style="padding-left: 2em">
         <li>Tasks: {{ sevendaytasks }} ({{ sevendaytaskrate }})</li>
@@ -16,7 +16,7 @@
     </ul>
 
     <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{thirtyddayusers}} users.</p>
-    <p>Top countries by number of requests:</p>
+    <p>Top countries by requests in the last 30 days:</p>
     <ul style="padding-left: 2em">
     {% for row in countrylist %}
       <li>{{ row.0 }}: {{ row.1 }}</li>

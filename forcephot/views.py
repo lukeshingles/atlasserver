@@ -284,7 +284,7 @@ def stats(request):
 
     dictparams['sevendaytasks'] = sevendaytaskcount
     dictparams['sevendayusers'] = sevendaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
-    dictparams['sevendaytaskrate'] = '{:.1f} / day'.format(dictparams['sevendaytasks'] / 7.)
+    dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
     if sevendaytasks_finished.count() > 0:
         dictparams['sevendayavgwaittime'] = '{:.1f}s'.format(
