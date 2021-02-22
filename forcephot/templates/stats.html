@@ -5,7 +5,7 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
-    <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent task completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
+    <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
     In the last seven days there were {{ sevendaytasks }} tasks ({{ sevendaytaskrate }}) from {{ sevendayusers }} users. In this period:
     <ul style="padding-left: 2em">
         <li>Load factor (arrival rate / completion rate): {{ sevendayloadpercent }}</li>
