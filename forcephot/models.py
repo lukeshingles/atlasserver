@@ -7,7 +7,7 @@ from django.contrib.auth.models import User
 from django.db import connection, models
 from django.utils import timezone
 from pathlib import Path
-from forcephot.misc import date_to_mjd
+from forcephot.misc import date_to_mjd, country_code_to_name
 
 
 def get_mjd_min_default():
@@ -102,7 +102,7 @@ class Task(models.Model):
             f" {'finished' if self.finished() else 'queued'} "
             f"{' archived' if self.is_archived else ''}"
             f"{' from_api' if self.from_api else ''}"
-            f" {self.country_code if self.country_code else ''}")
+            f" {country_code_to_name(self.country_code) if self.country_code else ''}")
 
         if self.finished():
             strtask += f" waittime: {self.waittime():.1f}s"
