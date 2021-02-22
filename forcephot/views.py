@@ -25,7 +25,6 @@ from forcephot.misc import splitradeclist, date_to_mjd, make_pdf_plot
 from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
 
-from axes.helpers import get_client_ip_address
 from django.contrib.gis.geoip2 import GeoIP2
 
 
@@ -116,13 +115,17 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     serializer.save(user=self.request.user)
 
         # # might not work with reverse proxy setup?
-        # country_code = self.request.geo_data.country_code
-        ip_address = get_client_ip_address(self.request)
-        try:
-            country = GeoIP2().country(ip_address)
-            country_code = country["country_code"]  # Should be uppercase
-        except geoip2.errors.GeoIP2Error:
-            country_code = 'XX'
+        country_code = self.request.geo_data.country_code
+        # x_forwarded_for = self.request.META.get('HTTP_X_FORWARDED_FOR')
+        # if x_forwarded_for:
+        #     ip_address = x_forwarded_for.split(',')[0]
+        # else:
+        #     ip_address = self.request.META.get('REMOTE_ADDR')
+        # try:
+        #     country = GeoIP2().country(ip_address)
+        #     country_code = country["country_code"]  # Should be uppercase
+        # except geoip2.errors.GeoIP2Error:
+        #     country_code = 'XX'
 
         from_api = (self.request.accepted_renderer.format != 'html')
         timestampnow = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
