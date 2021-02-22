@@ -25,6 +25,7 @@ class Task(models.Model):
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     send_email = models.BooleanField("Email me when completed", default=True)
+    is_archived = models.BooleanField(default=False)
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
     from_api = models.BooleanField(null=True, blank=True, default=None)
