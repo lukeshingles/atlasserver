@@ -274,7 +274,7 @@ def get_html_coordchart(tasks):
     return script, strhtml
 
 
-# @cache_page(60)
+@cache_page(60)
 def stats(request):
     # from statistics import mean
     # from statistics import median
@@ -326,14 +326,14 @@ def stats(request):
     dictparams['countrylist'] = [
         (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist if task_count > 0 and code != 'XX'][:15]
 
-    countrylist = thirtydaytasks.values_list('country_code').annotate(
-        task_count=Count('country_code')).order_by('-task_count', 'country_code')
-
-    regionlist = thirtydaytasks.values_list('country_code', 'region').annotate(
-        task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')
-
-    dictparams['regionlist'] = [
-        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist if task_count > 0]
+    # countrylist = thirtydaytasks.values_list('country_code').annotate(
+    #     task_count=Count('country_code')).order_by('-task_count', 'country_code')
+    #
+    # regionlist = thirtydaytasks.values_list('country_code', 'region').annotate(
+    #     task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')
+    #
+    # dictparams['regionlist'] = [
+    #     (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist if task_count > 0]
 
     dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
 
