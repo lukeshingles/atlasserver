@@ -201,8 +201,8 @@ def country_region_to_name(country_code, region_code):
         df = dfregions.query('country_code == @country_code and code == @country_code + "-" + @region_code', inplace=False)
 
         if not df.empty:
-            region_name = df.iloc[0]['subdivision_name'] + ', ' + strout
+            region_name = df.iloc[0]['subdivision_name']
         else:
             region_name = region_code
 
-    return region_name ', ' + country_code_to_name(country_code)
+    return region_name + ', ' + country_code_to_name(country_code)
