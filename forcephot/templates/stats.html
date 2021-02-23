@@ -14,11 +14,12 @@
     </ul>
 
     <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{ thirtyddayusers }} users. The most active countries are:</p>
-    <ul style="padding-left: 2em">
+    <table class="countrystats">
+        <tr><th></th><th>Tasks</th><th>Users</th></tr>
     {% for row in countrylist %}
-      <li>{{ row.0 }}: {{ row.1 }} tasks from {{ row.2 }} users</li>
+      <tr><td>{{ row.0 }}</td><td>{{ row.1 }}</td><td>{{ row.2 }}</td></tr>
     {% endfor %}
-    </ul>
+    </table>
 
     {{ htmlchart | safe }}
 </div>
