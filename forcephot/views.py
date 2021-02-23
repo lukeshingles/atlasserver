@@ -333,7 +333,7 @@ def stats(request):
         task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')
 
     dictparams['regionlist'] = [
-        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist if task_count > 0]
+        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist if task_count > 0][:15]
 
     dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
 
