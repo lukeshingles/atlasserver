@@ -317,23 +317,21 @@ def stats(request):
     except AttributeError:
         dictparams['lastfinishtime'] = 'N/A'
 
-    countrylist = thirtydaytasks.values_list('country_code').annotate(
-        task_count=Count('country_code')).order_by('-task_count', 'country_code')
+    countrylist = thirtydaytasks.filter(country_code__isnull=False).exclude(country_code='XX').values_list(
+        'country_code').annotate(task_count=Count('country_code')).order_by('-task_count', 'country_code')[:15]
 
     def country_activeusers(country_code):
         return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(task_count=Count('user_id')).count()
 
     dictparams['countrylist'] = [
-        (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist if task_count > 0 and code != 'XX'][:15]
+        (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist]
 
-    countrylist = thirtydaytasks.values_list('country_code').annotate(
-        task_count=Count('country_code')).order_by('-task_count', 'country_code')
-
-    regionlist = thirtydaytasks.values_list('country_code', 'region').annotate(
-        task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')
+    regionlist = thirtydaytasks.filter(country_code__isnull=False, region__isnull=False).exclude(
+        country_code='XX').values_list('country_code', 'region').annotate(
+        task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')[:15]
 
     dictparams['regionlist'] = [
-        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist if task_count > 0][:15]
+        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist]
 
     dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
 
