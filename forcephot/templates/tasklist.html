@@ -12,6 +12,7 @@
     </div>
 
     {% if not singletaskdetail %}
+    {% filterbuttons request %}
     <div class="newrequest">
         <div class="task">
         <h2>New request</h2>
@@ -34,7 +35,6 @@
         </form>
         </div>
     </div>
-    {% filterbuttons request %}
     {% endif %}
 
     {% include 'tasklist-frame.html' %}
