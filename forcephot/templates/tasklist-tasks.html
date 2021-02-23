@@ -36,7 +36,7 @@
         <a class="results btn btn-info getpdf" href="{% url 'taskpdfplot' task.id %}" target="_blank">PDF</a>
         <a class="results btn btn-info showplot" onclick="javascript:$.ajax({url: '{% url 'resultdatajs' task.id %}', cache: true, dataType: 'script'}); this.style='display: none;'">Show Plot</a>
         {% elif task.starttimestamp %}
-        <span style="color: red;">Started running {{task.starttimestamp|tasktimesince}}</span>
+        <span style="color: red;">Running (started {{task.starttimestamp|tasktimesince}})</span>
         {% else %}
         Queued ({{task.queuepos}} tasks ahead of this one)
         {% endif %}
