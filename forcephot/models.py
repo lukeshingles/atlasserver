@@ -20,18 +20,25 @@ class Task(models.Model):
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+
+    mpc_name = models.CharField(null=True, blank=True, default=None, max_length=300,
+                                verbose_name="Minor Planet Center object name (overrides RA/Dec)")
+
     ra = models.FloatField(null=False, blank=False, default=None)
     dec = models.FloatField(null=False, blank=False, default=None)
+
     mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default, verbose_name='MJD min')
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
     send_email = models.BooleanField("Email me when completed", default=True)
     from_api = models.BooleanField(default=False)
-    is_archived = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
     city = models.CharField(default=None, null=True, blank=True, max_length=256)
+    error_msg = models.CharField(null=True, blank=True, default=None, max_length=200,
+                                 verbose_name="Message describing possible error during task execution.")
+    is_archived = models.BooleanField(default=False)
 
     def localresultfile(self):
         if self.finishtimestamp:
@@ -131,29 +138,29 @@ class Task(models.Model):
             super().delete()
 
 
-class Result(models.Model):
-    timestamp = models.DateTimeField(auto_now_add=True)
-    ra = models.FloatField()
-    declination = models.FloatField()
-    mjd = models.FloatField()
-    m = models.FloatField()
-    dm = models.FloatField()
-    ujy = models.IntegerField()
-    dujy = models.IntegerField()
-    filter = models.CharField(max_length=1)
-    err = models.FloatField()
-    chi_over_n = models.FloatField()
-    x = models.FloatField()
-    y = models.FloatField()
-    maj = models.FloatField()
-    min = models.FloatField()
-    phi = models.FloatField()
-    sky = models.FloatField()
-    apfit = models.FloatField()
-    zp = models.FloatField()
-    obs = models.CharField(max_length=32)
-
-    use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
-
-    def __str__(self):
-        return f"RA: {self.ra:10.4f} DEC: {self.declination:10.4f} MJD {self.mjd} m {self.m}"
+# class Result(models.Model):
+#     timestamp = models.DateTimeField(auto_now_add=True)
+#     ra = models.FloatField()
+#     declination = models.FloatField()
+#     mjd = models.FloatField()
+#     m = models.FloatField()
+#     dm = models.FloatField()
+#     ujy = models.IntegerField()
+#     dujy = models.IntegerField()
+#     filter = models.CharField(max_length=1)
+#     err = models.FloatField()
+#     chi_over_n = models.FloatField()
+#     x = models.FloatField()
+#     y = models.FloatField()
+#     maj = models.FloatField()
+#     min = models.FloatField()
+#     phi = models.FloatField()
+#     sky = models.FloatField()
+#     apfit = models.FloatField()
+#     zp = models.FloatField()
+#     obs = models.CharField(max_length=32)
+#
+#     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
+#
+#     def __str__(self):
+#         return f"RA: {self.ra:10.4f} DEC: {self.declination:10.4f} MJD {self.mjd} m {self.m}"
