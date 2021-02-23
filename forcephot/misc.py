@@ -194,15 +194,15 @@ def country_code_to_name(country_code):
 
 
 def country_region_to_name(country_code, region_code):
-    strout = country_code_to_name(country_code)
+    region_name = 'Unknown'
 
     if region_code:
         dfregions = pd.read_csv(Path(Path(__file__).parent.absolute(), '../atlasserver/ip2location-iso3166-2/IP2LOCATION-ISO3166-2.CSV'))
         df = dfregions.query('country_code == @country_code and code == @country_code + "-" + @region_code', inplace=False)
 
         if not df.empty:
-            strout = df.iloc[0]['subdivision_name'] + ', ' + strout
+            region_name = df.iloc[0]['subdivision_name'] + ', ' + strout
         else:
-            strout = region_code + ', ' + strout
+            region_name = region_code
 
-    return strout
+    return region_name ', ' + country_code_to_name(country_code)
