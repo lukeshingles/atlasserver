@@ -21,6 +21,8 @@ class Task(models.Model):
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
+    # the task must specify either Minor Planet Center object name (overrides RA and Dec)
+    # or RA and Dec in floating-point degrees
     mpc_name = models.CharField(null=True, blank=True, default=None, max_length=300,
                                 verbose_name="Minor Planet Center object name (overrides RA/Dec)")
 
@@ -37,7 +39,7 @@ class Task(models.Model):
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
     city = models.CharField(default=None, null=True, blank=True, max_length=256)
     error_msg = models.CharField(null=True, blank=True, default=None, max_length=200,
-                                 verbose_name="Message describing possible error during task execution.")
+                                 verbose_name="Errors during execution")
     is_archived = models.BooleanField(default=False)
 
     def localresultfile(self):
