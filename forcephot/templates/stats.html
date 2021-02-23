@@ -21,13 +21,6 @@
     {% endfor %}
     </table>
 
-    <p>The most active regions are:</p>
-    <table class="countrystats">
-        <tr><th></th><th>Tasks</th></tr>
-    {% for row in regionlist %}
-      <tr><td>{{ row.0 }}</td><td>{{ row.1 }}</td></tr>
-    {% endfor %}
-    </table>
     {{ htmlchart | safe }}
 </div>
 {% endblock %}
