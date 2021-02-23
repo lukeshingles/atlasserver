@@ -320,8 +320,11 @@ def stats(request):
     countrylist = thirtydaytasks.values_list('country_code').annotate(
         task_count=Count('country_code')).order_by('-task_count', 'country_code')
 
+    def country_activeusers(country_code):
+        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(task_count=Count('user_id')).count()
+
     dictparams['countrylist'] = [
-        (country_code_to_name(code), count) for code, count in countrylist if count > 0 and code != 'XX'][:15]
+        (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist if task_count > 0 and code != 'XX'][:15]
 
     dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
 

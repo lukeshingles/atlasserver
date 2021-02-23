@@ -13,10 +13,10 @@
         <li>Average task running time: {{ sevendayavgruntime }}</li>
     </ul>
 
-    <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{ thirtyddayusers }} users. The top countries by number of tasks are:</p>
+    <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{ thirtyddayusers }} users. The most active countries are:</p>
     <ul style="padding-left: 2em">
     {% for row in countrylist %}
-      <li>{{ row.0 }}: {{ row.1 }}</li>
+      <li>{{ row.0 }}: {{ row.1 }} tasks from {{ row.2 }} users</li>
     {% endfor %}
     </ul>
 
