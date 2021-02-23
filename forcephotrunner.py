@@ -182,9 +182,6 @@ def runforced(task, conn, logprefix='', **kwargs):
         for line in stderr.split('\n'):
             log(logprefix + f"STDERR: {line}")
 
-        # task failed
-        return False
-
     if not os.path.exists(localresultfile):
         # task failed somehow
         return False
