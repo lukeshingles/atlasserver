@@ -212,8 +212,9 @@
           }
 
           table.countrystats {
-            font-size: smaller;
+            /* font-size: smaller; */
             margin-bottom: 2em;
+            margin-top: 0;
           }
 
           table.countrystats tr > * {
@@ -224,6 +225,10 @@
           table.countrystats tr > *:first-child {
             text-align: left;
             padding: 0.1em 0.1em;
+          }
+
+          table.countrystats th[scope="row"] {
+            font-weight: normal !important;
           }
 
         </style>

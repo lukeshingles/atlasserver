@@ -14,20 +14,25 @@
     </ul>
 
     <p>In the last 30 days, there were {{ thirtydaytasks }} tasks ({{ thirtydaytaskrate }}) from {{ thirtyddayusers }} users. The most active countries are:</p>
-    <table class="countrystats">
-        <tr><th></th><th>Tasks</th><th>Users</th></tr>
-    {% for row in countrylist %}
-      <tr><td>{{ row.0 }}</td><td>{{ row.1 }}</td><td>{{ row.2 }}</td></tr>
-    {% endfor %}
-    </table>
-
-    <p>The most active regions are:</p>
-    <table class="countrystats">
-        <tr><th></th><th>Tasks</th></tr>
-    {% for row in regionlist %}
-      <tr><td>{{ row.0 }}</td><td>{{ row.1 }}</td></tr>
-    {% endfor %}
-    </table>
+    <div>
+        <div style="float: left; width: 30em;">
+            <table class="countrystats">
+                <tr><th scope="col">Country</th><th scope="col">Tasks</th><th scope="col">Users</th></tr>
+            {% for row in countrylist %}
+              <tr><th scope="row">{{ row.0 }}</th><td>{{ row.1 }}</td><td>{{ row.2 }}</td></tr>
+            {% endfor %}
+            </table>
+        </div>
+        <div>
+            <table class="countrystats">
+                <tr><th scope="col">Region</th><th scope="col">Tasks</th></tr>
+            {% for row in regionlist %}
+              <tr><th scope="row">{{ row.0 }}</th><td>{{ row.1 }}</td></tr>
+            {% endfor %}
+            </table>
+        </div>
+    </div>
+    <div style="clear: both">&nbsp</div>
     {{ htmlchart | safe }}
 </div>
 {% endblock %}
