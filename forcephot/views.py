@@ -326,7 +326,7 @@ def stats(request):
     dictparams['countrylist'] = [
         (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist]
 
-    regionlist = thirtydaytasks.filter(country_code__isnull=False, region__isnull=False).exclude(
+    regionlist = thirtydaytasks.filter(country_code__isnull=False).exclude(
         country_code='XX').values_list('country_code', 'region').annotate(
         task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')[:15]
 

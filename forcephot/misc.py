@@ -210,7 +210,5 @@ def country_region_to_name(country_code, region_code):
         subdiv = pycountry.subdivisions.get(code=fullcode)
         if subdiv:
             region_name = subdiv.name
-        else:
-            region_name = 'Unknown'
 
     return region_name + ', ' + country_code_to_name(country_code)
