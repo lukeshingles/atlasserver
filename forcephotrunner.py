@@ -476,6 +476,8 @@ def main():
 
     logdir.mkdir(parents=True, exist_ok=True)
 
+    log('Starting forcephotrunner...')
+
     last_maintenancetime = float('-inf')
     printedwaiting = False
     while True:
