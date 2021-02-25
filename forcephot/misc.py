@@ -110,6 +110,14 @@ def splitradeclist(data, form=None):
         # lines = lines[:1]
 
     for index, line in enumerate(lines, 1):
+        if line.startswith('mpc_'):
+            newrow = formdata.copy()
+            newrow['mpc_name'] = line[4:].strip()
+            newrow['ra'] = None
+            newrow['dec'] = None
+            datalist.append(newrow)
+            continue
+
         if ',' in line:
             row = line.split(',')
         else:
