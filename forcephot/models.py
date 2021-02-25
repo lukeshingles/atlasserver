@@ -105,12 +105,16 @@ class Task(models.Model):
 
     def __str__(self):
         user = User.objects.get(id=self.user_id)
+        if self.mpc_name:
+            targetstr = " MPC[" + self.mpc_name + "]"
+        else:
+            targetstr = f" RA: {self.ra:09.4f} Dec: {self.dec:09.4f}"
         strtask = (
             f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} " +
             f"{user.username} ({user.email})" +
             (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "") +
             f"{' API' if self.from_api else ''}" +
-            f" RA: {self.ra:09.4f} Dec: {self.dec:09.4f}" +
+            targetstr +
             f" {'reducedimg' if self.use_reduced else 'diffimg'}" +
             f" {'finished' if self.finished() else 'queued'} " +
             f"{' archived' if self.is_archived else ''}"

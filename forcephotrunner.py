@@ -21,7 +21,7 @@ remoteServer = 'atlas'
 localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 logdir = Path('logs')
-TASKMAXTIME = 1000
+TASKMAXTIME = 1200
 
 CONNKWARGS = {
     'host': settings.DATABASES['default']['HOST'],
@@ -147,7 +147,7 @@ def runforced(task, conn, logprefix='', **kwargs):
         if timed_out:
             log(logprefix + f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASKMAXTIME:.0f} seconds")
         os.kill(p.pid, SIGTERM)
-        return False, False
+        return False, False  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = p.communicate()
     log(logprefix + f'ssh finished after running for {time.perf_counter() - starttime:.1f} seconds')
@@ -387,6 +387,7 @@ def do_taskloop():
 
                 # an error occured and the job should not be retried (e.g. invalid
                 # minor planet center object name or no data returned)
+                log(logprefix + f"error_msg: {error_msg}")
                 if error_msg:
                     cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW(), error_msg='{error_msg}' WHERE id={task['id']};")
                 else:

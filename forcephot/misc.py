@@ -84,6 +84,8 @@ def date_to_mjd(year, month, day):
 
 
 def splitradeclist(data, form=None):
+    from forcephot.serializers import ForcePhotTaskSerializer
+    from rest_framework import serializers
     if 'radeclist' not in data:
         return [data]
     # multi-add functionality with a list of RA,DEC coords
@@ -111,11 +113,21 @@ def splitradeclist(data, form=None):
 
     for index, line in enumerate(lines, 1):
         if line.startswith('mpc_'):
-            newrow = formdata.copy()
-            newrow['mpc_name'] = line[4:].strip()
-            newrow['ra'] = None
-            newrow['dec'] = None
-            datalist.append(newrow)
+            mpc_name = line[4:].strip()
+            if not mpc_name:
+                form.add_error('radeclist', f'Error on line {index}: MPC name is blank')
+            else:
+                newrow = formdata.copy()
+                newrow['mpc_name'] = mpc_name
+                newrow['ra'] = None
+                newrow['dec'] = None
+                datalist.append(newrow)
+
+                try:
+                    serializer = ForcePhotTaskSerializer(data=newrow, many=False)
+                    success = serializer.is_valid(raise_exception=True)
+                except serializers.ValidationError as e:
+                    form.add_error('radeclist', f'Error on line {index}: {str(e)}')
             continue
 
         if ',' in line:
