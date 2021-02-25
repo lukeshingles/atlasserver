@@ -385,10 +385,11 @@ def do_taskloop():
 
                 log(logprefix + f"Task ran for {runforced_duration:.1f} seconds")
 
-                # an error occured and the job should not be retried (e.g. invalid
-                # minor planet center object name or no data returned)
-                log(logprefix + f"Error_msg: {error_msg}")
                 if error_msg:
+                    # an error occured and the job should not be retried (e.g. invalid
+                    # minor planet center object name or no data returned)
+                    log(logprefix + f"Error_msg: {error_msg}")
+
                     send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
                     cur2 = conn.cursor()
