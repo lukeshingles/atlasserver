@@ -198,9 +198,9 @@ def runforced(task, conn, logprefix='', **kwargs):
 
     df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
 
-    if df.empty:
-        # file is just a header row without data
-        return localresultfile, 'No matching records returned'
+    # if df.empty:
+    #     # file is just a header row without data
+    #     return localresultfile, 'No matching records returned'
 
     make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
                   logprefix=logprefix, logfunc=log, separate_process=True)
