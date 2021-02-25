@@ -198,9 +198,9 @@ def runforced(task, conn, logprefix='', **kwargs):
 
     df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
 
-    # if df.empty:
-    #     # file is just a header row without data
-    #     return localresultfile, 'No matching records returned'
+    if df.empty:
+        # file is just a header row without data
+        return localresultfile, 'No data returned'
 
     make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
                   logprefix=logprefix, logfunc=log, separate_process=True)
@@ -387,7 +387,7 @@ def do_taskloop():
 
                 # an error occured and the job should not be retried (e.g. invalid
                 # minor planet center object name or no data returned)
-                log(logprefix + f"error_msg: {error_msg}")
+                log(logprefix + f"Error_msg: {error_msg}")
                 if error_msg:
                     cur2 = conn.cursor()
                     cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW(), error_msg='{error_msg}' WHERE id={task['id']};")
