@@ -389,7 +389,10 @@ def do_taskloop():
                 # minor planet center object name or no data returned)
                 log(logprefix + f"error_msg: {error_msg}")
                 if error_msg:
+                    cur2 = conn.cursor()
                     cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW(), error_msg='{error_msg}' WHERE id={task['id']};")
+                    conn.commit()
+                    cur2.close()
                 else:
                     localresultfile = get_localresultfile(task['id'])
                     if localresultfile and os.path.exists(localresultfile):
