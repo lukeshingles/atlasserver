@@ -26,8 +26,8 @@ class Task(models.Model):
     mpc_name = models.CharField(null=True, blank=True, default=None, max_length=300,
                                 verbose_name="Minor Planet Center object name (overrides RA/Dec)")
 
-    ra = models.FloatField(null=False, blank=False, default=None)
-    dec = models.FloatField(null=False, blank=False, default=None)
+    ra = models.FloatField(null=True, blank=True, default=None)
+    dec = models.FloatField(null=True, blank=True, default=None)
 
     mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default, verbose_name='MJD min')
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')

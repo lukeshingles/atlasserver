@@ -80,9 +80,15 @@ def remove_task_resultfiles(taskid):
 
 
 def runforced(task, conn, logprefix='', **kwargs):
+    # run the forced photometry on atlas sc01 and retrieve the result
+    # returns (resultfilename, error_msg)
+    # - resultfilename will be False if it could not be created due to an error
+    # - error_msg is False unless there was an error that would make retries pointless (e.g. invalid object name)
+
     id = task['id']
     ra = task['ra']
     dec = task['dec']
+    mpc_name = task['mpc_name']
     mjd_min = task['mjd_min']
     mjd_max = task['mjd_max']
 
@@ -95,7 +101,11 @@ def runforced(task, conn, logprefix='', **kwargs):
     localresultdir.mkdir(parents=True, exist_ok=True)
 
     atlascommand = "nice -n 19 "
-    atlascommand += f"/atlas/bin/force.sh {float(ra)} {float(dec)}"
+    if mpc_name:
+        atlascommand += f"/atlas/bin/ssforce.sh {mpc_name}"
+    else:
+        atlascommand += f"/atlas/bin/force.sh {float(ra)} {float(dec)}"
+
     if mjd_min:
         atlascommand += f" m0={float(mjd_min)}"
     if mjd_max:
@@ -137,7 +147,7 @@ def runforced(task, conn, logprefix='', **kwargs):
         if timed_out:
             log(logprefix + f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASKMAXTIME:.0f} seconds")
         os.kill(p.pid, SIGTERM)
-        return False
+        return False, False
 
     stdout, stderr = p.communicate()
     log(logprefix + f'ssh finished after running for {time.perf_counter() - starttime:.1f} seconds')
@@ -164,7 +174,7 @@ def runforced(task, conn, logprefix='', **kwargs):
     #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
     if not task_exists(conn=conn, taskid=id):  # check if job was cancelled
-        return False
+        return False, False
 
     copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"'
     log(logprefix + copycommand)
@@ -184,18 +194,24 @@ def runforced(task, conn, logprefix='', **kwargs):
 
     if not os.path.exists(localresultfile):
         # task failed somehow
-        return False
+        return False, False
+
+    df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
+
+    if df.empty:
+        # file is just a header row without data
+        return localresultfile, 'No matching records returned'
 
     make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
                   logprefix=logprefix, logfunc=log, separate_process=True)
 
-    return localresultfile
+    return localresultfile, False
 
 
 def send_email_if_needed(conn, task, logprefix=''):
     if task["send_email"] and task["email"]:
         # if we find an unfinished task in the same batch, hold off sending the email
-        # same batch here is defined as being queue by the same user within a few seconds of each other
+        # same batch here is defined as being queued by the same user with identical timestamps
         batchtasks_unfinished = 0
         batchtaskcount = 0
 
@@ -261,40 +277,40 @@ def send_email_if_needed(conn, task, logprefix=''):
         log(logprefix + f'User {task["username"]} did not request an email.')
 
 
-def ingest_results(localresultfile, conn, use_reduced=False):
-    df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
-    # df.rename(columns={'#MJD': 'MJD'})
-    cur = conn.cursor()
-    for _, pdrow in df.iterrows():
-        # print(pdrow.keys())
-        rowdict = {}
-        rowdict['timestamp'] = 'now()'
-        rowdict['mjd'] = str(pdrow['#MJD'])
-        rowdict['m'] = str(pdrow['m'])
-        rowdict['dm'] = str(pdrow['dm'])
-        rowdict['ujy'] = str(pdrow['uJy'])
-        rowdict['dujy'] = str(pdrow['duJy'])
-        rowdict['filter'] = f"'{pdrow['F']}'"
-        rowdict['err'] = str(pdrow['err'])
-        rowdict['chi_over_n'] = str(pdrow['chi/N'])
-        rowdict['ra'] = str(pdrow['RA'])
-        rowdict['declination'] = str(pdrow['Dec'])
-        rowdict['x'] = str(pdrow['x'])
-        rowdict['y'] = str(pdrow['y'])
-        rowdict['maj'] = str(pdrow['maj'])
-        rowdict['min'] = str(pdrow['min'])
-        rowdict['phi'] = str(pdrow['phi'])
-        rowdict['apfit'] = str(pdrow['apfit'])
-        rowdict['sky'] = str(pdrow['Sky'])
-        rowdict['zp'] = str(pdrow['ZP'])
-        rowdict['obs'] = f"'{pdrow['Obs']}'"
-        rowdict['use_reduced'] = "1" if use_reduced else "0"
-
-        strsql = f'INSERT INTO forcephot_result ({",".join(rowdict.keys())}) VALUES ({",".join(rowdict.values())});'
-        cur.execute(strsql)
-
-    conn.commit()
-    cur.close()
+# def ingest_results(localresultfile, conn, use_reduced=False):
+#     df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
+#     # df.rename(columns={'#MJD': 'MJD'})
+#     cur = conn.cursor()
+#     for _, pdrow in df.iterrows():
+#         # print(pdrow.keys())
+#         rowdict = {}
+#         rowdict['timestamp'] = 'now()'
+#         rowdict['mjd'] = str(pdrow['#MJD'])
+#         rowdict['m'] = str(pdrow['m'])
+#         rowdict['dm'] = str(pdrow['dm'])
+#         rowdict['ujy'] = str(pdrow['uJy'])
+#         rowdict['dujy'] = str(pdrow['duJy'])
+#         rowdict['filter'] = f"'{pdrow['F']}'"
+#         rowdict['err'] = str(pdrow['err'])
+#         rowdict['chi_over_n'] = str(pdrow['chi/N'])
+#         rowdict['ra'] = str(pdrow['RA'])
+#         rowdict['declination'] = str(pdrow['Dec'])
+#         rowdict['x'] = str(pdrow['x'])
+#         rowdict['y'] = str(pdrow['y'])
+#         rowdict['maj'] = str(pdrow['maj'])
+#         rowdict['min'] = str(pdrow['min'])
+#         rowdict['phi'] = str(pdrow['phi'])
+#         rowdict['apfit'] = str(pdrow['apfit'])
+#         rowdict['sky'] = str(pdrow['Sky'])
+#         rowdict['zp'] = str(pdrow['ZP'])
+#         rowdict['obs'] = f"'{pdrow['Obs']}'"
+#         rowdict['use_reduced'] = "1" if use_reduced else "0"
+#
+#         strsql = f'INSERT INTO forcephot_result ({",".join(rowdict.keys())}) VALUES ({",".join(rowdict.values())});'
+#         cur.execute(strsql)
+#
+#     conn.commit()
+#     cur.close()
 
 
 def handler(signal_received, frame):
@@ -356,10 +372,10 @@ def do_taskloop():
 
             runforced_starttime = time.perf_counter()
 
-            localresultfile = runforced(conn=conn, logprefix=logprefix, task=task)
+            localresultfile, error_msg = runforced(conn=conn, logprefix=logprefix, task=task)
 
             if not task_exists(conn=conn, taskid=task['id']):  # job was cancelled
-                log(logprefix + "Task was cancelled (no longer in database)")
+                log(logprefix + "Task was cancelled during execution (no longer in database)")
 
                 # in case a result file was created, delete it
                 if localresultfile and os.path.exists(localresultfile):
@@ -369,24 +385,29 @@ def do_taskloop():
 
                 log(logprefix + f"Task ran for {runforced_duration:.1f} seconds")
 
-                localresultfile = get_localresultfile(task['id'])
-                if localresultfile and os.path.exists(localresultfile):
-                    # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                    send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
-
-                    cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW() WHERE id={task['id']};")
-                    conn.commit()
-                    cur2.close()
+                # an error occured and the job should not be retried (e.g. invalid
+                # minor planet center object name or no data returned)
+                if error_msg:
+                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW(), error_msg='{error_msg}' WHERE id={task['id']};")
                 else:
-                    waittime = 5
-                    log(logprefix + f"ERROR: Task was not completed successfully. Waiting {waittime} seconds "
-                        f"before continuing...")
-                    time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
+                    localresultfile = get_localresultfile(task['id'])
+                    if localresultfile and os.path.exists(localresultfile):
+                        # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+                        send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
-                if (taskload_thisuser >= USERTASKLOADLIMIT):
-                    log(f"User {task['username']} has reached a task load of {taskload_thisuser} "
-                        f"above limit {usertaskload[task['user_id']]} for this pass.")
+                        cur2 = conn.cursor()
+                        cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW() WHERE id={task['id']};")
+                        conn.commit()
+                        cur2.close()
+                    else:
+                        waittime = 5
+                        log(logprefix + f"ERROR: Task was not completed successfully. Waiting {waittime} seconds "
+                            f"before continuing with next job...")
+                        time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
+
+            if (taskload_thisuser >= USERTASKLOADLIMIT):
+                log(f"User {task['username']} has reached a task load of {taskload_thisuser} "
+                    f"above limit {USERTASKLOADLIMIT} for this pass.")
 
     conn.commit()
     cur.close()
@@ -429,7 +450,7 @@ def do_maintenance(maxtime=None):
                 #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
                 #         # load the text file to check if it contains any data rows to be plotted
                 #         df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#', skipinitialspace=True)
-                #         if df:
+                #         if not df.empty:
                 #             log(logprefix + "Creating missing PDF from result file "
                 #                 f"{resultfilepath.relative_to(localresultdir)}")
                 #

@@ -17,8 +17,28 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return None
 
+    def validate(self, attrs):
+        print(attrs)
+        # raise serializers.ValidationError('This field must be an even number.')
+        if attrs.get('mpc_name', False):
+            mpc_name = attrs['mpc_name']
+            okchars = "012345789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            if any([c not in dict.fromkeys(okchars) for c in mpc_name]):
+                raise serializers.ValidationError(f'Invalid an mpc_name. May contain only: {okchars}')
+
+            if attrs.get('ra', False) or attrs.get('dec', False):
+                raise serializers.ValidationError(f'mpc_name was given but RA and Dec were not empty.')
+        else:
+            if not attrs.get('ra', False) and not attrs.get('dec', False):
+                raise serializers.ValidationError('Either an mpc_name or (ra, dec) must be specified')
+            elif not attrs.get('dec', False):
+                raise serializers.ValidationError('RA given but Dec is missing')
+            elif not attrs.get('ra', False):
+                raise serializers.ValidationError('Dec given but RA is missing')
+        return attrs
+
     class Meta:
         model = Task
-        fields = ['url', 'id', 'user', 'timestamp', 'ra', 'dec', 'mjd_min', 'mjd_max',
+        fields = ['url', 'id', 'user', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
                   'use_reduced', 'finished', 'result_url', 'comment', 'send_email', 'starttimestamp', 'finishtimestamp']
         read_only_fields = ['user', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp']

@@ -19,13 +19,13 @@ class TaskForm(forms.ModelForm):
     class Meta:
         model = Task
         # fields = '__all__'
-        fields = ('radeclist', 'mjd_min', 'mjd_max', 'comment', 'use_reduced', 'send_email')
+        fields = ('mpc_name', 'radeclist', 'mjd_min', 'mjd_max', 'comment', 'use_reduced', 'send_email')
 
     def clean(self):
         cleaned_data = super().clean()
 
         if 'radeclist' in cleaned_data and cleaned_data['radeclist']:
-            splitradeclist(cleaned_data, form=self)
+            splitradeclist(cleaned_data, form=self)  # doesn't use the output, just checks for errors
 
         return cleaned_data
 
@@ -38,7 +38,7 @@ class RegistrationForm(UserCreationForm):
     error_messages = {
         'password_mismatch': _('The two password fields didn’t match.'),
     }
-    email = forms.EmailField(max_length=254, help_text='Required. Inform a valid email address.')
+    email = forms.EmailField(max_length=254, help_text='Required. Give a valid email address.')
 
     class Meta:
         model = User
