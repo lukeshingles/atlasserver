@@ -389,6 +389,8 @@ def do_taskloop():
                 # minor planet center object name or no data returned)
                 log(logprefix + f"Error_msg: {error_msg}")
                 if error_msg:
+                    send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
+
                     cur2 = conn.cursor()
                     cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW(), error_msg='{error_msg}' WHERE id={task['id']};")
                     conn.commit()
