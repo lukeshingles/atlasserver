@@ -3,8 +3,9 @@ import os
 
 import geoip2.errors
 
-from django.contrib.auth import authenticate, login
 from django.conf import settings as settings
+from django.contrib.auth import authenticate, login
+from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models import Count
 from django.http import HttpResponse, FileResponse
@@ -274,7 +275,7 @@ def get_html_coordchart(tasks):
     return script, strhtml
 
 
-@cache_page(60)
+@cache_page(60 * 5)
 def stats(request):
     # from statistics import mean
     # from statistics import median

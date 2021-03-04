@@ -110,6 +110,7 @@ class Task(models.Model):
         else:
             targetstr = f" RA: {self.ra:09.4f} Dec: {self.dec:09.4f}"
         strtask = (
+            f"Task {self.id:d}: " +
             f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} " +
             f"{user.username} ({user.email})" +
             (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "") +
