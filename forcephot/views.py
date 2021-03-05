@@ -209,26 +209,22 @@ def deleteTask(request, pk):
     return redirect(redirurl, request=request)
 
 
-@cache_page(60 * 60 * 4)
 def index(request):
     template_name = 'index.html'
     # return redirect('/queue')
     return render(request, template_name)
 
 
-@cache_page(60 * 60 * 4)
 def resultdesc(request):
     template_name = 'resultdesc.html'
     return render(request, template_name, {'name': 'Output Description'})
 
 
-@cache_page(60 * 60 * 4)
 def apiguide(request):
     template_name = 'apiguide.html'
     return render(request, template_name, {'name': 'API Guide'})
 
 
-@cache_page(60 * 60 * 4)
 def faq(request):
     template_name = 'faq.html'
     return render(request, template_name, {'name': 'FAQ'})
