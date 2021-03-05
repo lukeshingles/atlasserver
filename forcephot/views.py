@@ -252,7 +252,7 @@ def statscoordchart(request):
             'ra': np.array([tsk.ra for tsk in tasks]),
             'dec':  np.array([tsk.dec for tsk in tasks]),
             'taskid':  np.array([tsk.id for tsk in tasks]),
-            'username': np.array([User.objects.get(id=tsk.user_id).username for tsk in tasks]),
+            # 'username': np.array([User.objects.get(id=tsk.user_id).username for tsk in tasks]),
     }
     source = ColumnDataSource(dictsource)
 
@@ -261,7 +261,7 @@ def statscoordchart(request):
                   aspect_ratio=2,
                   background_fill_color='#340154',
                   active_scroll="wheel_zoom",
-                  title="Recently requested coordinates (7 days)",
+                  title="Recently requested coordinates",
                   x_axis_label="Right ascension (deg)",
                   y_axis_label="Declination (deg)",
                   x_range=(0, 360), y_range=(-90, 90),
@@ -281,7 +281,7 @@ def statscoordchart(request):
         tooltips=[
             ("RA Dec", "@ra @dec"),
             ("Task", "@taskid"),
-            ("User", "@username"),
+            # ("User", "@username"),
         ],
         mode="mouse", point_policy="follow_mouse", renderers=[r]))
 
