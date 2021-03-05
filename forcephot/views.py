@@ -273,7 +273,7 @@ def statscoordchart(request):
     #               fill_color=linear_cmap('counts', 'Viridis256', 0, max(bins.counts)))
     # r, bins = plot.hexbin(arr_ra, arr_dec, size=.5, hover_color="pink", hover_alpha=0.8)
 
-    r = plot.circle('ra', 'dec', source=source, color="white", radius=0.5,
+    r = plot.circle('ra', 'dec', source=source, color="white", radius=0.2,
                     hover_color="orange", alpha=0.8, hover_alpha=1.0)
 
     plot.add_tools(HoverTool(
