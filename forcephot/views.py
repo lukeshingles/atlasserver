@@ -233,11 +233,10 @@ def faq(request):
 
 @cache_page(60 * 60 * 4)
 def statscoordchart(request):
-
     # now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     # tasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
 
-    tasks = Task.objects.all().order_by('-timestamp')[:10000]
+    tasks = Task.objects.all().order_by('-timestamp')[:10000].select_related('user')
 
     # from bokeh.io import output_file, show
     # from bokeh.transform import linear_cmap
@@ -252,14 +251,14 @@ def statscoordchart(request):
             'ra': np.array([tsk.ra for tsk in tasks]),
             'dec':  np.array([tsk.dec for tsk in tasks]),
             'taskid':  np.array([tsk.id for tsk in tasks]),
-            # 'username': np.array([User.objects.get(id=tsk.user_id).username for tsk in tasks]),
+            'username':  np.array([tsk.user.username for tsk in tasks]),
     }
     source = ColumnDataSource(dictsource)
 
     plot = figure(tools="pan,wheel_zoom,box_zoom,reset",
                   # match_aspect=True,
                   aspect_ratio=2,
-                  background_fill_color='#340154',
+                  background_fill_color='#140154',
                   active_scroll="wheel_zoom",
                   title="Recently requested coordinates",
                   x_axis_label="Right ascension (deg)",
@@ -274,15 +273,16 @@ def statscoordchart(request):
     #               fill_color=linear_cmap('counts', 'Viridis256', 0, max(bins.counts)))
     # r, bins = plot.hexbin(arr_ra, arr_dec, size=.5, hover_color="pink", hover_alpha=0.8)
 
-    r = plot.circle('ra', 'dec', source=source, color="white", size=7.,
-                    hover_color="orange", alpha=0.7, hover_alpha=1.0)
+    r = plot.circle('ra', 'dec', source=source, color="white", size=5.,
+                    hover_color="orange", alpha=0.8, hover_alpha=1.0)
 
     plot.add_tools(HoverTool(
-        tooltips=[
-            ("RA Dec", "@ra @dec"),
-            ("Task", "@taskid"),
-            # ("User", "@username"),
-        ],
+        tooltips="Task @taskid, RA Dec: @ra @dec, user: @username",
+        # tooltips=[
+        #     # ("RA Dec", "@ra @dec"),
+        #     # ("Task", "@taskid"),
+        #     # ("User", "@username"),
+        # ],
         mode="mouse", point_policy="follow_mouse", renderers=[r]))
 
     script, strhtml = components(plot)
