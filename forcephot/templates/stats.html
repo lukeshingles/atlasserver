@@ -6,13 +6,8 @@
         <h1>{{ name }}</h1>
     </div>
     <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
-    In the last seven days there were {{ sevendaytasks }} tasks ({{ sevendaytaskrate }}) from {{ sevendayusers }} users. In this period:
-    <ul style="padding-left: 2em">
-        <li>Load factor (arrival rate / completion rate): {{ sevendayloadpercent }}</li>
-        <li>Average queue waiting time: {{ sevendayavgwaittime }}</li>
-        <li>Average task running time: {{ sevendayavgruntime }}</li>
-    </ul>
 
+    <div id="statsshortterm">&nbsp;</div>
     <div id="statslongterm">&nbsp;</div>
     <div style="clear: both">&nbsp;</div>
     <div id="statscoordchart">&nbsp;</div>
@@ -25,16 +20,22 @@
   {{ block.super }}
   <script language="javascript" type="text/javascript">
     $.ajax({
-        url: "{% url 'statslongterm'|escapejs %}",
+        url: "{% url 'statsshortterm'|escapejs %}",
         success: function(result){
-          $('#statslongterm').html(result);
-      }});
+          $('#statsshortterm').html(result);
+    }});
+
+    $.ajax({
+      url: "{% url 'statslongterm'|escapejs %}",
+      success: function(result){
+        $('#statslongterm').html(result);
+    }});
 
     $.ajax({
         url: "{% url 'statscoordchart'|escapejs %}",
         success: function(result){
           $('#statscoordchart').html(result.div);
           $("head").append(result.script);
-      }});
+    }});
   </script>
 {% endblock %}

@@ -45,6 +45,7 @@ urlpatterns = [
     path('resultdesc/', views.resultdesc, name="resultdesc"),
 
     path('stats/', views.stats, name="stats"),
+    path('stats/shortterm.html', views.statsshortterm, name="statsshortterm"),
     path('stats/longterm.html', views.statslongterm, name="statslongterm"),
     path('stats/coordchart.json', views.statscoordchart, name="statscoordchart"),
 

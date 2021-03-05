@@ -321,12 +321,12 @@ def statslongterm(request):
     return render(request, 'statslongterm.html', dictparams)
 
 
-# @cache_page(60 * 5)
-def stats(request):
+@cache_page(60 * 15)
+def statsshortterm(request):
     # from statistics import mean
     # from statistics import median
     import numpy as np
-    dictparams = {'name': 'Usage Statistics'}
+    dictparams = {}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
     sevendaytaskcount = int(sevendaytasks.count())
@@ -350,6 +350,21 @@ def stats(request):
             'sevendayavgruntime': '-',
             'sevendayloadpercent': '0%',
         })
+
+    return render(request, 'statsshortterm.html', dictparams)
+
+
+# @cache_page(60 * 5)
+def stats(request):
+    dictparams = {'name': 'Usage Statistics'}
+
+    dictparams['queuedtaskcount'] = Task.objects.filter(finishtimestamp__isnull=True).count()
+    try:
+        lastfinishtime = (Task.objects.filter(finishtimestamp__isnull=False)
+                          .order_by('finishtimestamp').last().finishtimestamp)
+        dictparams['lastfinishtime'] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
+    except AttributeError:
+        dictparams['lastfinishtime'] = 'N/A'
 
     return render(request, 'stats.html', dictparams)
 
