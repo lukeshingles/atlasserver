@@ -209,22 +209,26 @@ def deleteTask(request, pk):
     return redirect(redirurl, request=request)
 
 
+@cache_page(60 * 60 * 4)
 def index(request):
     template_name = 'index.html'
     # return redirect('/queue')
     return render(request, template_name)
 
 
+@cache_page(60 * 60 * 4)
 def resultdesc(request):
     template_name = 'resultdesc.html'
     return render(request, template_name, {'name': 'Output Description'})
 
 
+@cache_page(60 * 60 * 4)
 def apiguide(request):
     template_name = 'apiguide.html'
     return render(request, template_name, {'name': 'API Guide'})
 
 
+@cache_page(60 * 60 * 4)
 def faq(request):
     template_name = 'faq.html'
     return render(request, template_name, {'name': 'FAQ'})
@@ -288,15 +292,47 @@ def statscoordchart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
+@cache_page(60 * 60 * 4)
+def statslongterm(request):
+    # from statistics import mean
+    # from statistics import median
+    # import numpy as np
+    dictparams = {}
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
+
+    dictparams['thirtydaytasks'] = thirtydaytasks.count()
+    dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
+
+    countrylist = thirtydaytasks.filter(country_code__isnull=False).exclude(country_code='XX').values_list(
+        'country_code').annotate(task_count=Count('country_code')).order_by('-task_count', 'country_code')[:15]
+
+    def country_activeusers(country_code):
+        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(
+            task_count=Count('user_id')).count()
+
+    dictparams['countrylist'] = [
+        (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist]
+
+    regionlist = thirtydaytasks.filter(country_code__isnull=False).exclude(
+        country_code='XX').values_list('country_code', 'region').annotate(
+        task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')[:15]
+
+    dictparams['regionlist'] = [
+        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist]
+
+    dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
+
+    return render(request, 'statslongterm.html', dictparams)
+
+
 # @cache_page(60 * 5)
 def stats(request):
     # from statistics import mean
     # from statistics import median
     import numpy as np
-    template_name = 'stats.html'
     dictparams = {'name': 'Usage Statistics'}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
     sevendaytaskcount = int(sevendaytasks.count())
 
@@ -320,37 +356,7 @@ def stats(request):
             'sevendayloadpercent': '0%',
         })
 
-    dictparams['thirtydaytasks'] = thirtydaytasks.count()
-    dictparams['thirtydaytaskrate'] = '{:.1f}/day'.format(dictparams['thirtydaytasks'] / 30.)
-
-    dictparams['queuedtaskcount'] = Task.objects.filter(finishtimestamp__isnull=True).count()
-    try:
-        lastfinishtime = (Task.objects.filter(finishtimestamp__isnull=False)
-                          .order_by('finishtimestamp').last().finishtimestamp)
-        dictparams['lastfinishtime'] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
-    except AttributeError:
-        dictparams['lastfinishtime'] = 'N/A'
-
-    countrylist = thirtydaytasks.filter(country_code__isnull=False).exclude(country_code='XX').values_list(
-        'country_code').annotate(task_count=Count('country_code')).order_by('-task_count', 'country_code')[:15]
-
-    def country_activeusers(country_code):
-        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(
-            task_count=Count('user_id')).count()
-
-    dictparams['countrylist'] = [
-        (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist]
-
-    regionlist = thirtydaytasks.filter(country_code__isnull=False).exclude(
-        country_code='XX').values_list('country_code', 'region').annotate(
-        task_count=Count('country_code')).order_by('-task_count', 'country_code', 'region')[:15]
-
-    dictparams['regionlist'] = [
-        (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist]
-
-    dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
-
-    return render(request, template_name, dictparams)
+    return render(request, 'stats.html', dictparams)
 
 
 def register(request):
