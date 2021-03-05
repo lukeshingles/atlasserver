@@ -5,12 +5,12 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
-    <p>There are {{ queuedtaskcount }} unfinished tasks in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
+    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
 
-    <div id="statsshortterm">&nbsp;</div>
-    <div id="statslongterm">&nbsp;</div>
+    <div id="statsshortterm">Loading short term stats...</div>
+    <div id="statslongterm">Loading long term stats...</div>
     <div style="clear: both">&nbsp;</div>
-    <div id="statscoordchart">&nbsp;</div>
+    <div id="statscoordchart">Loading recent coordinate chart...</div>
 </div>
 {% endblock %}
 
