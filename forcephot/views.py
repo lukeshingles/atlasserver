@@ -234,11 +234,6 @@ def faq(request):
     return render(request, template_name, {'name': 'FAQ'})
 
 
-def get_html_coordchart(tasks):
-
-    return script, strhtml
-
-
 @cache_page(60 * 60 * 4)
 def statscoordchart(request):
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
