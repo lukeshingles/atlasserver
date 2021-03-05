@@ -236,7 +236,7 @@ def statscoordchart(request):
     # now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     # tasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
 
-    tasks = Task.objects.all().order_by('-timestamp')[:30000].select_related('user')
+    tasks = Task.objects.all().order_by('-timestamp')[:20000].select_related('user')
 
     # from bokeh.io import output_file, show
     # from bokeh.transform import linear_cmap
