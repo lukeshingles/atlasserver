@@ -11,8 +11,11 @@ from django.db.models import Count
 from django.http import HttpResponse, FileResponse
 # from django.http.response import HttpResponseRedirect
 from django.http import HttpResponseNotFound
+from django.http import JsonResponse
 from django.views.decorators.cache import cache_page
-from django.shortcuts import get_object_or_404, redirect, render
+# from django.shortcuts import get_object_or_404
+from django.shortcuts import redirect
+from django.shortcuts import render
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, status, viewsets
 # from rest_framework.renderers import TemplateHTMLRenderer
@@ -228,6 +231,15 @@ def faq(request):
 
 
 def get_html_coordchart(tasks):
+
+    return script, strhtml
+
+
+@cache_page(60 * 60 * 4)
+def statscoordchart(request):
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    tasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
+
     import numpy as np
     # from bokeh.io import output_file, show
     # from bokeh.transform import linear_cmap
@@ -251,7 +263,7 @@ def get_html_coordchart(tasks):
                   aspect_ratio=2,
                   background_fill_color='#440154',
                   active_scroll="wheel_zoom",
-                  title="Recently requested coordinates (7 days)",
+                  title="Recently requested coordinates (30 days)",
                   x_axis_label="Right ascension (deg)",
                   y_axis_label="Declination (deg)",
                   x_range=(0, 360), y_range=(-90, 90),
@@ -272,10 +284,11 @@ def get_html_coordchart(tasks):
     ))
 
     script, strhtml = components(plot)
-    return script, strhtml
+
+    return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(60 * 5)
+# @cache_page(60 * 5)
 def stats(request):
     # from statistics import mean
     # from statistics import median
@@ -322,7 +335,8 @@ def stats(request):
         'country_code').annotate(task_count=Count('country_code')).order_by('-task_count', 'country_code')[:15]
 
     def country_activeusers(country_code):
-        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(task_count=Count('user_id')).count()
+        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(
+            task_count=Count('user_id')).count()
 
     dictparams['countrylist'] = [
         (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist]
@@ -335,9 +349,6 @@ def stats(request):
         (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist]
 
     dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
-
-    htmlchartscript, htmlchart = get_html_coordchart(tasks=sevendaytasks)
-    dictparams.update({'htmlchart': htmlchart, 'script': htmlchartscript})
 
     return render(request, template_name, dictparams)
 
@@ -358,7 +369,7 @@ def register(request):
     return render(request, 'registration/register.html', {'form': form})
 
 
-def resultdatajs(request, taskid):
+def resultplotdatajs(request, taskid):
     import pandas as pd
 
     if taskid:

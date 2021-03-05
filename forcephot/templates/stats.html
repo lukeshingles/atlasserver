@@ -33,6 +33,20 @@
         </div>
     </div>
     <div style="clear: both">&nbsp</div>
-    {{ htmlchart | safe }}
+    <div id="statscoordchart">&nbsp</div>
 </div>
+{% endblock %}
+
+
+
+{% block script %}
+  {{ block.super }}
+  <script language="javascript" type="text/javascript">
+    $.ajax({
+        url: "{% url 'statscoordchart'|escapejs %}",
+        success: function(result){
+          $('#statscoordchart').html(result.div);
+          $("head").append(result.script);
+      }});
+  </script>
 {% endblock %}

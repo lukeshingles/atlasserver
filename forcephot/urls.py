@@ -43,11 +43,13 @@ urlpatterns = [
     url(r'^register/$', views.register, name='register'),
     path('faq/', views.faq, name="faq"),
     path('resultdesc/', views.resultdesc, name="resultdesc"),
-    path('stats/', views.stats, name="stats"),
 
-    path('queue/<int:taskid>/resultdatajs/', views.resultdatajs, name='resultdatajs'),
-    path('queue/<int:taskid>/pdfplot/', views.taskpdfplot, name='taskpdfplot'),
-    path('queue/<int:taskid>/data/', views.taskresultdata, name='taskresultdata'),
+    path('stats/', views.stats, name="stats"),
+    path('stats/coordchart.json', views.statscoordchart, name="statscoordchart"),
+
+    path('queue/<int:taskid>/resultplotdata.js', views.resultplotdatajs, name='resultplotdatajs'),
+    path('queue/<int:taskid>/plot.pdf', views.taskpdfplot, name='taskpdfplot'),
+    path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
 
     path('apiguide/', views.apiguide, name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
