@@ -14,6 +14,16 @@
 
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
 
+      <!-- Global site tag (gtag.js) - Google Analytics -->
+      <script async src="https://www.googletagmanager.com/gtag/js?id=G-CK29QMXSZ9"></script>
+      <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-CK29QMXSZ9');
+      </script>
+
       {% block style %}
 
         {% block bootstrap_theme %}
