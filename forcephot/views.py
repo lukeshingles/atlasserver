@@ -307,8 +307,7 @@ def statslongterm(request):
         'country_code').annotate(task_count=Count('country_code')).order_by('-task_count', 'country_code')[:15]
 
     def country_activeusers(country_code):
-        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').annotate(
-            task_count=Count('user_id')).count()
+        return thirtydaytasks.filter(country_code=country_code).values_list('user_id').distinct().count()
 
     dictparams['countrylist'] = [
         (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist]
@@ -320,7 +319,7 @@ def statslongterm(request):
     dictparams['regionlist'] = [
         (country_region_to_name(country_code, region), task_count) for country_code, region, task_count in regionlist]
 
-    dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
+    dictparams['thirtyddayusers'] = thirtydaytasks.values_list('user_id').distinct().count()
 
     return render(request, 'statslongterm.html', dictparams)
 
@@ -333,9 +332,11 @@ def statsshortterm(request):
     sevendaytaskcount = int(sevendaytasks.count())
 
     dictparams['sevendaytasks'] = sevendaytaskcount
-    dictparams['sevendayusers'] = sevendaytasks.values_list('user_id').annotate(task_count=Count('user_id')).count()
+    dictparams['sevendayusers'] = sevendaytasks.values_list('user_id').distinct().count()
     dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
+
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
+
     if sevendaytasks_finished.count() > 0:
         dictparams['sevendayavgwaittime'] = '{:.1f}s'.format(
             np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])))

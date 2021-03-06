@@ -5,7 +5,7 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
-    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %} UTC).</p>
+    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %}).</p>
 
     <div id="statsshortterm">Loading short term stats...</div>
     <div id="statslongterm">Loading long term stats...</div>
