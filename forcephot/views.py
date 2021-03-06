@@ -243,6 +243,7 @@ def statscoordchart(request):
     # from bokeh.util.hex import hexbin
     from bokeh.embed import components
     from bokeh.models import HoverTool
+    from bokeh.models import Range1d
     from bokeh.plotting import figure
     from bokeh.plotting import ColumnDataSource
     # from bokeh.resources import CDN
@@ -263,7 +264,9 @@ def statscoordchart(request):
                   title="Recently requested coordinates",
                   x_axis_label="Right ascension (deg)",
                   y_axis_label="Declination (deg)",
-                  x_range=(0, 360), y_range=(-90, 90),
+                  # x_range=(0, 360), y_range=(-90, 90),
+                  x_range=Range1d(0, 360, bounds="auto"),
+                  y_range=Range1d(-90., 90., bounds="auto"),
                   # frame_width=600,
                   sizing_mode='stretch_both',
                   output_backend="webgl")
