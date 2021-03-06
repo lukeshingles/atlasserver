@@ -236,7 +236,7 @@ def statscoordchart(request):
     # now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     # tasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
 
-    tasks = Task.objects.all().order_by('-timestamp')[:20000].select_related('user')
+    tasks = Task.objects.all().order_by('-timestamp')[:30000].select_related('user')
 
     # from bokeh.io import output_file, show
     # from bokeh.transform import linear_cmap
@@ -277,7 +277,7 @@ def statscoordchart(request):
     #               fill_color=linear_cmap('counts', 'Viridis256', 0, max(bins.counts)))
     # r, bins = plot.hexbin(arr_ra, arr_dec, size=.5, hover_color="pink", hover_alpha=0.8)
 
-    r = plot.circle('ra', 'dec', source=source, color="white", radius=0.1,
+    r = plot.circle('ra', 'dec', source=source, color="white", radius=0.05,
                     hover_color="orange", alpha=0.7, hover_alpha=1.0)
 
     plot.add_tools(HoverTool(
