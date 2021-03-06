@@ -108,7 +108,15 @@ class Task(models.Model):
         if self.mpc_name:
             targetstr = " MPC[" + self.mpc_name + "]"
         else:
-            targetstr = f" RA: {self.ra:09.4f} Dec: {self.dec:09.4f}"
+            targetstr = f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
+
+        if self.finishtimestamp:
+            status = 'finished'
+        elif self.starttimestamp:
+            status = 'running'
+        else:
+            status = 'queued'
+
         strtask = (
             f"Task {self.id:d}: " +
             f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} " +
@@ -117,12 +125,13 @@ class Task(models.Model):
             f"{' API' if self.from_api else ''}" +
             targetstr +
             f" {'reducedimg' if self.use_reduced else 'diffimg'}" +
-            f" {'finished' if self.finished() else 'queued'} " +
+            f" {status} " +
             f"{' archived' if self.is_archived else ''}"
         )
 
-        if self.finished():
+        if self.starttimestamp:
             strtask += f" waittime: {self.waittime():.0f}s"
+        if self.finishtimestamp:
             strtask += f" runtime: {self.runtime():.0f}s"
         return strtask
 
