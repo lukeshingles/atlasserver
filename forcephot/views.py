@@ -265,7 +265,8 @@ def statscoordchart(request):
                   y_axis_label="Declination (deg)",
                   x_range=(0, 360), y_range=(-90, 90),
                   # frame_width=600,
-                  sizing_mode='stretch_both')
+                  sizing_mode='stretch_both',
+                  output_backend="webgl")
     plot.grid.visible = False
 
     # bins = hexbin(arr_ra, arr_dec, 1.)
