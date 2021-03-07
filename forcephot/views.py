@@ -306,19 +306,19 @@ def statsusagechart(request):
     today = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
 
-    tasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14)) \
+    waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True) \
         .annotate(queueday=Trunc('timestamp', 'day')) \
         .values('queueday') \
         .annotate(taskcount=Count('id'))
 
-    daycounts = {
-        (today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in tasks}
+    daywaitingcounts = {
+        (today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in waitingtasks}
 
     for d in range(14):
-        if d not in daycounts:
-            daycounts[d] = 0.
+        if d not in daywaitingcounts:
+            daywaitingcounts[d] = 0.
 
-    arr_queueday = sorted(daycounts.keys(), reverse=True)
+    arr_queueday = sorted(daywaitingcounts.keys(), reverse=True)
 
     finishedtasks = Task.objects.filter(
         timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=False) \
@@ -331,18 +331,18 @@ def statsusagechart(request):
 
     data = {
         'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
-        'taskcount': [daycounts.get(d, 0.) for d in arr_queueday],
+        'taskcount': [daywaitingcounts.get(d, 0.) for d in arr_queueday],
         'taskfinishcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
     }
 
-    x = [(d, s) for d in data['queueday'] for s in ['Q', 'F']]
+    x = [(d, s) for d in data['queueday'] for s in ['W', 'F']]
 
     # plot.xaxis.major_label_orientation = 3.14159 / 2.
     counts = sum(zip(data['taskcount'], data['taskfinishcount']), ())
 
-    colors = [s for d in data['queueday'] for s in ['black', 'green']]
-    day = [d for d in data['queueday'] for s in ['Queued', 'Finished']]
-    status = [s for d in data['queueday'] for s in ['Queued', 'Finished']]
+    colors = [s for d in data['queueday'] for s in ['red', 'green']]
+    day = [d for d in data['queueday'] for s in ['Waiting', 'Finished']]
+    status = [s for d in data['queueday'] for s in ['Waiting', 'Finished']]
     source = ColumnDataSource(data=dict(x=x, counts=counts, colors=colors, status=status, day=day))
 
     plot = figure(
