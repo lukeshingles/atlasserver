@@ -331,9 +331,11 @@ def statsusagechart(request):
                   title="Usage",
                   sizing_mode='stretch_both',
                   output_backend="webgl",
+                  y_axis_label="Tasks per day",
                   # plot_width=800, plot_height=200,
                   # x_axis_type=None,
-                  y_axis_type=None)
+                  # y_axis_type=None,
+                  )
 
     plot.grid.visible = False
     # plot.x_range.flipped = True
@@ -341,9 +343,9 @@ def statsusagechart(request):
     # xticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
     # xaxis = LinearAxis(ticker=xticker, axis_label='Days ago', axis_line_width=1)
     # plot.add_layout(xaxis, 'below')
-    yticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
-    yaxis = LinearAxis(ticker=yticker, axis_label='Tasks/day', axis_line_width=1)
-    plot.add_layout(yaxis, 'left')
+    # yticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
+    # yaxis = LinearAxis(ticker=yticker, axis_label='Tasks/day', axis_line_width=1)
+    # plot.add_layout(yaxis, 'left')
 
     # r = plot.line('queueday', 'taskcount', source=source, color="black",
     #               hover_color="orange", alpha=0.7, hover_alpha=1.0, line_width=2)
