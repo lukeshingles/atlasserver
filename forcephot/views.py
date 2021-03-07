@@ -317,7 +317,7 @@ def statsusagechart(request):
     arr_queueday = sorted(daycounts.keys(), reverse=True)
 
     dictsource = {
-        'queueday': [(today - datetime.timedelta(days=d)).strftime('%d %b') for d in arr_queueday],
+        'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
         'taskcount':  [daycounts[d] for d in arr_queueday],
     }
 
