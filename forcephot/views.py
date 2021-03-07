@@ -356,15 +356,14 @@ def statsusagechart(request):
 
     plot.grid.visible = False
 
-    _ = plot.vbar(x='x', top='counts', source=source, width=0.5,
-                  fill_color='colors')
+    r = plot.vbar(x='x', top='counts', source=source, width=0.3, fill_color='colors')
 
     plot.xaxis.major_label_orientation = 3.14159 / 2.
 
-    # plot.add_tools(HoverTool(
-    #     tooltips=[("Day", "@queueday"),
-    #               ("Tasks", "@taskcount")],
-    #     mode="mouse", point_policy="follow_mouse", renderers=[r]))
+    plot.add_tools(HoverTool(
+        tooltips=[("Day", "@x"),
+                  ("Tasks", "@counts")],
+        mode="mouse", point_policy="follow_mouse", renderers=[r]))
 
     script, strhtml = components(plot)
 
