@@ -335,11 +335,14 @@ def statsusagechart(request):
         'taskfinishcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
     }
 
-    x = [(day, status) for day in data['queueday'] for status in ['queued', 'finished']]
+    x = [(day, s) for day in data['queueday'] for s in ['Q', 'F']]
+
+    # plot.xaxis.major_label_orientation = 3.14159 / 2.
     counts = sum(zip(data['taskcount'], data['taskfinishcount']), ())
 
-    colors = [status for day in data['queueday'] for status in ['black', 'green']]
-    source = ColumnDataSource(data=dict(x=x, counts=counts, colors=colors))
+    colors = [s for day in data['queueday'] for s in ['black', 'green']]
+    status = [s for day in data['queueday'] for s in ['Queued', 'Finished']]
+    source = ColumnDataSource(data=dict(x=x, counts=counts, colors=colors, status=status))
 
     plot = figure(
         x_range=FactorRange(*x),
@@ -358,10 +361,8 @@ def statsusagechart(request):
 
     r = plot.vbar(x='x', top='counts', source=source, width=0.3, fill_color='colors')
 
-    plot.xaxis.major_label_orientation = 3.14159 / 2.
-
     plot.add_tools(HoverTool(
-        tooltips=[("Day", "@x"),
+        tooltips=[("Status", "@status"),
                   ("Tasks", "@counts")],
         mode="mouse", point_policy="follow_mouse", renderers=[r]))
 
