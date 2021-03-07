@@ -133,6 +133,7 @@ class Task(models.Model):
             strtask += f" waittime: {self.waittime():.0f}s"
         if self.finishtimestamp:
             strtask += f" runtime: {self.runtime():.0f}s"
+
         return strtask
 
     def delete(self):

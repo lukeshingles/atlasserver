@@ -48,6 +48,7 @@ urlpatterns = [
     path('stats/shortterm.html', views.statsshortterm, name="statsshortterm"),
     path('stats/longterm.html', views.statslongterm, name="statslongterm"),
     path('stats/coordchart.json', views.statscoordchart, name="statscoordchart"),
+    path('stats/usagechart.json', views.statsusagechart, name="statsusagechart"),
 
     path('queue/<int:taskid>/resultplotdata.js', views.resultplotdatajs, name='resultplotdatajs'),
     path('queue/<int:taskid>/plot.pdf', views.taskpdfplot, name='taskpdfplot'),

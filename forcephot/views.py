@@ -119,7 +119,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields = {}  # add computed field values (not user specified)
 
         extra_fields['user'] = self.request.user
-        extra_fields['timestamp'] = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+        extra_fields['timestamp'] = datetime.datetime.utcnow().replace(
+            tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
 
         extra_fields['country_code'] = self.request.geo_data.country_code
         extra_fields['region'] = self.request.geo_data.region
@@ -249,10 +250,10 @@ def statscoordchart(request):
     # from bokeh.resources import CDN
 
     dictsource = {
-            'ra': np.array([tsk.ra for tsk in tasks]),
-            'dec':  np.array([tsk.dec for tsk in tasks]),
-            'taskid':  np.array([tsk.id for tsk in tasks]),
-            'username':  np.array([tsk.user.username for tsk in tasks]),
+            'ra': [tsk.ra for tsk in tasks],
+            'dec':  [tsk.dec for tsk in tasks],
+            'taskid': [tsk.id for tsk in tasks],
+            'username': [tsk.user.username for tsk in tasks],
     }
     source = ColumnDataSource(dictsource)
 
@@ -272,21 +273,85 @@ def statscoordchart(request):
                   output_backend="webgl")
     plot.grid.visible = False
 
-    # bins = hexbin(arr_ra, arr_dec, 1.)
-    # plot.hex_tile(q="q", r="r", size=0.1, line_color=None, source=bins,
-    #               fill_color=linear_cmap('counts', 'Viridis256', 0, max(bins.counts)))
-    # r, bins = plot.hexbin(arr_ra, arr_dec, size=.5, hover_color="pink", hover_alpha=0.8)
-
     r = plot.circle('ra', 'dec', source=source, color="white", radius=0.05,
                     hover_color="orange", alpha=0.7, hover_alpha=1.0)
 
     plot.add_tools(HoverTool(
         tooltips="Task @taskid, RA Dec: @ra @dec, user: @username",
-        # tooltips=[
-        #     # ("RA Dec", "@ra @dec"),
-        #     # ("Task", "@taskid"),
-        #     # ("User", "@username"),
-        # ],
+        mode="mouse", point_policy="follow_mouse", renderers=[r]))
+
+    script, strhtml = components(plot)
+
+    return JsonResponse({"script": script, "div": strhtml})
+
+
+@cache_page(60 * 60 * 2)
+def statsusagechart(request):
+    from django.db.models.functions import Trunc
+    # from bokeh.io import output_file, show
+    # from bokeh.transform import linear_cmap
+    # from bokeh.util.hex import hexbin
+    from bokeh.embed import components
+    from bokeh.models import HoverTool
+    from bokeh.models import SingleIntervalTicker, LinearAxis
+    # from bokeh.models import Range1d
+    from bokeh.plotting import figure
+    from bokeh.plotting import ColumnDataSource
+    # from bokeh.resources import CDN
+
+    today = datetime.datetime.utcnow().replace(
+        tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
+
+    tasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14)) \
+        .annotate(queueday=Trunc('timestamp', 'day')) \
+        .values('queueday') \
+        .annotate(taskcount=Count('id'))
+
+    daycounts = {(today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in tasks}
+
+    for d in range(14):
+        if d not in daycounts:
+            daycounts[d] = 0.
+
+    print(daycounts.keys())
+    arr_queueday = sorted(daycounts.keys(), reverse=True)
+
+    dictsource = {
+        'queueday': [(today - datetime.timedelta(days=d)).strftime('%d %b') for d in arr_queueday],
+        'taskcount':  [daycounts[d] for d in arr_queueday],
+    }
+
+    source = ColumnDataSource(dictsource)
+
+    plot = figure(tools="",
+                  # match_aspect=True,
+                  x_range=dictsource['queueday'],
+                  aspect_ratio=5,
+                  background_fill_color='white',
+                  title="Usage",
+                  sizing_mode='stretch_both',
+                  output_backend="webgl",
+                  # plot_width=800, plot_height=200,
+                  # x_axis_type=None,
+                  y_axis_type=None)
+
+    plot.grid.visible = False
+    # plot.x_range.flipped = True
+    #
+    # xticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
+    # xaxis = LinearAxis(ticker=xticker, axis_label='Days ago', axis_line_width=1)
+    # plot.add_layout(xaxis, 'below')
+    yticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
+    yaxis = LinearAxis(ticker=yticker, axis_label='Tasks/day', axis_line_width=1)
+    plot.add_layout(yaxis, 'left')
+
+    # r = plot.line('queueday', 'taskcount', source=source, color="black",
+    #               hover_color="orange", alpha=0.7, hover_alpha=1.0, line_width=2)
+    r = plot.vbar(x='queueday', top='taskcount', source=source, width=0.6)
+
+    plot.add_tools(HoverTool(
+        tooltips=[("Days ago", "@queueday"),
+                  ("Tasks", "@taskcount")],
         mode="mouse", point_policy="follow_mouse", renderers=[r]))
 
     script, strhtml = components(plot)

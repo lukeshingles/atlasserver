@@ -6,7 +6,7 @@
         <h1>{{ name }}</h1>
     </div>
     <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %}).</p>
-
+    <div id="statsusagechart">Loading usage chart...</div>
     <div id="statsshortterm">Loading short term stats...</div>
     <div id="statslongterm">Loading long term stats...</div>
     <div style="clear: both">&nbsp;</div>
@@ -29,6 +29,13 @@
       url: "{% url 'statslongterm'|escapejs %}",
       success: function(result){
         $('#statslongterm').html(result);
+    }});
+
+    $.ajax({
+        url: "{% url 'statsusagechart'|escapejs %}",
+        success: function(result){
+          $('#statsusagechart').html(result.div);
+          $("head").append(result.script);
     }});
 
     $.ajax({
