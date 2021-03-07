@@ -320,8 +320,8 @@ def statsusagechart(request):
 
     arr_queueday = sorted(daycounts.keys(), reverse=True)
 
-    finishedtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14),
-                                        finishtimestamp__isnull=False) \
+    finishedtasks = Task.objects.filter(
+        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=False) \
         .annotate(queueday=Trunc('timestamp', 'day')) \
         .values('queueday') \
         .annotate(taskcount=Count('id'))
@@ -331,8 +331,8 @@ def statsusagechart(request):
 
     data = {
         'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
-        'taskcount':  [daycounts.get(d, 0.) for d in arr_queueday],
-        'taskfinishcount':  [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
+        'taskcount': [daycounts.get(d, 0.) for d in arr_queueday],
+        'taskfinishcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
     }
 
     x = [(day, status) for day in data['queueday'] for status in ['queued', 'finished']]
