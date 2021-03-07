@@ -286,7 +286,7 @@ def statscoordchart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(60 * 60 * 2)
+@cache_page(30)
 def statsusagechart(request):
     from django.db.models.functions import Trunc
     # from bokeh.io import output_file, show
@@ -294,19 +294,20 @@ def statsusagechart(request):
     # from bokeh.util.hex import hexbin
     from bokeh.embed import components
     from bokeh.models import HoverTool
-    from bokeh.models import SingleIntervalTicker, LinearAxis
+    # from bokeh.models import SingleIntervalTicker, LinearAxis
     # from bokeh.models import Range1d
     from bokeh.plotting import figure
     from bokeh.plotting import ColumnDataSource
     from bokeh.models import FactorRange
-    from bokeh.transform import dodge, factor_cmap
+    # from bokeh.transform import dodge, factor_cmap
 
     # from bokeh.resources import CDN
 
     today = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
 
-    waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True) \
+    waitingtasks = Task.objects.filter(
+        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)\
         .annotate(queueday=Trunc('timestamp', 'day')) \
         .values('queueday') \
         .annotate(taskcount=Count('id'))
