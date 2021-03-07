@@ -257,20 +257,21 @@ def statscoordchart(request):
     }
     source = ColumnDataSource(dictsource)
 
-    plot = figure(tools="pan,wheel_zoom,box_zoom,reset",
-                  # match_aspect=True,
-                  aspect_ratio=2,
-                  background_fill_color='#040154',
-                  active_scroll="wheel_zoom",
-                  title="Recently requested coordinates",
-                  x_axis_label="Right ascension (deg)",
-                  y_axis_label="Declination (deg)",
-                  # x_range=(0, 360), y_range=(-90, 90),
-                  x_range=Range1d(0, 360, bounds="auto"),
-                  y_range=Range1d(-90., 90., bounds="auto"),
-                  # frame_width=600,
-                  sizing_mode='stretch_both',
-                  output_backend="webgl")
+    plot = figure(
+        tools="pan,wheel_zoom,box_zoom,reset",
+        # match_aspect=True,
+        aspect_ratio=2,
+        background_fill_color='#040154',
+        active_scroll="wheel_zoom",
+        title="Recently requested coordinates",
+        x_axis_label="Right ascension (deg)",
+        y_axis_label="Declination (deg)",
+        x_range=Range1d(0, 360, bounds="auto"),
+        y_range=Range1d(-90., 90., bounds="auto"),
+        # frame_width=600,
+        sizing_mode='stretch_both',
+        output_backend="webgl")
+
     plot.grid.visible = False
 
     r = plot.circle('ra', 'dec', source=source, color="white", radius=0.05,
@@ -297,6 +298,9 @@ def statsusagechart(request):
     # from bokeh.models import Range1d
     from bokeh.plotting import figure
     from bokeh.plotting import ColumnDataSource
+    from bokeh.models import FactorRange
+    from bokeh.transform import dodge, factor_cmap
+
     # from bokeh.resources import CDN
 
     today = datetime.datetime.utcnow().replace(
@@ -307,54 +311,60 @@ def statsusagechart(request):
         .values('queueday') \
         .annotate(taskcount=Count('id'))
 
-    daycounts = {(today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in tasks}
+    daycounts = {
+        (today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in tasks}
 
     for d in range(14):
         if d not in daycounts:
             daycounts[d] = 0.
 
-    print(daycounts.keys())
     arr_queueday = sorted(daycounts.keys(), reverse=True)
 
-    dictsource = {
+    finishedtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14),
+                                        finishtimestamp__isnull=False) \
+        .annotate(queueday=Trunc('timestamp', 'day')) \
+        .values('queueday') \
+        .annotate(taskcount=Count('id'))
+
+    dayfinishedcounts = {
+        (today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in finishedtasks}
+
+    data = {
         'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
-        'taskcount':  [daycounts[d] for d in arr_queueday],
+        'taskcount':  [daycounts.get(d, 0.) for d in arr_queueday],
+        'taskfinishcount':  [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
     }
 
-    source = ColumnDataSource(dictsource)
+    x = [(day, status) for day in data['queueday'] for status in ['queued', 'finished']]
+    counts = sum(zip(data['taskcount'], data['taskfinishcount']), ())
 
-    plot = figure(tools="",
-                  # match_aspect=True,
-                  x_range=dictsource['queueday'],
-                  aspect_ratio=5,
-                  background_fill_color='white',
-                  title="Usage",
-                  sizing_mode='stretch_both',
-                  output_backend="webgl",
-                  y_axis_label="Tasks per day",
-                  # plot_width=800, plot_height=200,
-                  # x_axis_type=None,
-                  # y_axis_type=None,
-                  )
+    colors = [status for day in data['queueday'] for status in ['black', 'green']]
+    source = ColumnDataSource(data=dict(x=x, counts=counts, colors=colors))
+
+    plot = figure(
+        x_range=FactorRange(*x),
+        tools="",
+        # match_aspect=True,
+        # x_range=dictsource['queueday'],
+        aspect_ratio=5,
+        background_fill_color='white',
+        title="Usage",
+        sizing_mode='stretch_both',
+        output_backend="webgl",
+        y_axis_label="Tasks per day",
+    )
 
     plot.grid.visible = False
-    # plot.x_range.flipped = True
-    #
-    # xticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
-    # xaxis = LinearAxis(ticker=xticker, axis_label='Days ago', axis_line_width=1)
-    # plot.add_layout(xaxis, 'below')
-    # yticker = SingleIntervalTicker(interval=1, num_minor_ticks=0)
-    # yaxis = LinearAxis(ticker=yticker, axis_label='Tasks/day', axis_line_width=1)
-    # plot.add_layout(yaxis, 'left')
 
-    # r = plot.line('queueday', 'taskcount', source=source, color="black",
-    #               hover_color="orange", alpha=0.7, hover_alpha=1.0, line_width=2)
-    r = plot.vbar(x='queueday', top='taskcount', source=source, width=0.6)
+    _ = plot.vbar(x='x', top='counts', source=source, width=0.5,
+                  fill_color='colors')
 
-    plot.add_tools(HoverTool(
-        tooltips=[("Days ago", "@queueday"),
-                  ("Tasks", "@taskcount")],
-        mode="mouse", point_policy="follow_mouse", renderers=[r]))
+    plot.xaxis.major_label_orientation = 3.14159 / 2.
+
+    # plot.add_tools(HoverTool(
+    #     tooltips=[("Day", "@queueday"),
+    #               ("Tasks", "@taskcount")],
+    #     mode="mouse", point_policy="follow_mouse", renderers=[r]))
 
     script, strhtml = components(plot)
 
