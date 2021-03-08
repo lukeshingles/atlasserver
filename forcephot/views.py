@@ -286,7 +286,7 @@ def statscoordchart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(30)
+@cache_page(10)
 def statsusagechart(request):
     from django.db.models.functions import Trunc
     # from bokeh.io import output_file, show
@@ -332,43 +332,35 @@ def statsusagechart(request):
 
     data = {
         'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
-        'taskcount': [daywaitingcounts.get(d, 0.) for d in arr_queueday],
-        'taskfinishcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
+        'waitingtaskcount': [daywaitingcounts.get(d, 0.) for d in arr_queueday],
+        'finishedtaskcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
     }
 
-    x = [(d, s) for d in data['queueday'] for s in ['W', 'F']]
-
-    # plot.xaxis.major_label_orientation = 3.14159 / 2.
-    counts = sum(zip(data['taskcount'], data['taskfinishcount']), ())
-
-    colors = [s for d in data['queueday'] for s in ['red', 'green']]
-    day = [d for d in data['queueday'] for s in ['Waiting', 'Finished']]
-    status = [s for d in data['queueday'] for s in ['Waiting', 'Finished']]
-    source = ColumnDataSource(data=dict(x=x, counts=counts, colors=colors, status=status, day=day))
+    source = ColumnDataSource(data=data)
 
     plot = figure(
-        x_range=FactorRange(*x),
+        x_range=FactorRange(*data['queueday']),
         tools="",
-        # match_aspect=True,
-        # x_range=dictsource['queueday'],
         aspect_ratio=5,
-        # background_fill_color='white',
-        title="Waiting and finished tasks",
+        # title="Waiting and finished tasks",
         sizing_mode='stretch_both',
-        output_backend="webgl",
+        output_backend="svg",
         y_axis_label="Tasks per day",
     )
 
     plot.grid.visible = False
 
-    r = plot.vbar(x='x', top='counts', source=source, width=0.3, fill_color='colors')
+    r = plot.vbar_stack(['waitingtaskcount', 'finishedtaskcount'], x='queueday', source=source, color=['red', 'black'],
+                        legend_label=['Waiting', 'Finished'], width=0.3)
+
+    plot.legend.orientation = "horizontal"
 
     plot.add_tools(HoverTool(
         tooltips=[
-            ("Day", "@day"),
-            ("Status", "@status"),
-            ("Tasks", "@counts")],
-        mode="mouse", point_policy="follow_mouse", renderers=[r]))
+            ("Day", "@queueday"),
+            ("Finished", "@finishedtaskcount"),
+            ("Waiting", "@waitingtaskcount"),
+        ], mode="mouse", point_policy="follow_mouse", renderers=r))
 
     script, strhtml = components(plot)
 
