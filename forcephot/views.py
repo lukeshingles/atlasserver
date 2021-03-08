@@ -350,8 +350,8 @@ def statsusagechart(request):
 
     plot.grid.visible = False
 
-    r = plot.vbar_stack(['waitingtaskcount', 'finishedtaskcount'], x='queueday', source=source, color=['red', 'black'],
-                        legend_label=['Waiting', 'Finished'], width=0.3)
+    r = plot.vbar_stack(['waitingtaskcount', 'finishedtaskcount'], x='queueday', source=source, color=['red', 'grey'],
+                        line_width=0., legend_label=['Waiting', 'Finished'], width=0.3)
 
     plot.legend.orientation = "horizontal"
 

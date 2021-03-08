@@ -69,7 +69,8 @@ class Task(models.Model):
         posownerqueue = Task.objects.filter(id__lt=self.id, finishtimestamp__isnull=True, user=self.user).count()
 
         for tmpuser in User.objects.all():
-            tmpusertasks = Task.objects.filter(id__lt=self.id, finishtimestamp__isnull=True, user=tmpuser).order_by('id')
+            tmpusertasks = Task.objects.filter(
+                id__lt=self.id, finishtimestamp__isnull=True, user=tmpuser).order_by('id')
 
             if tmpusertasks.count() > posownerqueue:
                 # add the number of tasks from earlier full passes
