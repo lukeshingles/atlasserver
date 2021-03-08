@@ -296,6 +296,7 @@ def statsusagechart(request):
     from bokeh.models import HoverTool
     # from bokeh.models import SingleIntervalTicker, LinearAxis
     # from bokeh.models import Range1d
+    from bokeh.models import DataRange1d
     from bokeh.plotting import figure
     from bokeh.plotting import ColumnDataSource
     from bokeh.models import FactorRange
@@ -340,6 +341,7 @@ def statsusagechart(request):
 
     plot = figure(
         x_range=FactorRange(*data['queueday']),
+        y_range=DataRange1d(start=0.),
         tools="",
         aspect_ratio=5,
         # title="Waiting and finished tasks",
