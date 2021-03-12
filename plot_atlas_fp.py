@@ -696,12 +696,12 @@ class plotter():
         return summedMagnitudes
 
 
-def get_twin(ax, axis):
-
-    for sibling in siblings:
-        if sibling.bbox.bounds == ax.bbox.bounds and sibling is not ax:
-            return sibling
-    return None
+# def get_twin(ax, axis):
+#
+#     for sibling in siblings:
+#         if sibling.bbox.bounds == ax.bbox.bounds and sibling is not ax:
+#             return sibling
+#     return None
 
 
 def get_twin_axis(ax, axis):
