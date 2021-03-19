@@ -4,6 +4,8 @@
 # starting the apache instance. Run this script from THIS directory.
 APACHEPATH="/tmp/atlasforced"
 
+if [ -f .env ]; then chmod 600 .env; fi
+
 if [ -f $APACHEPATH/apachectl ]; then
     echo "Stopping Apache if already running"
     $APACHEPATH/apachectl stop
