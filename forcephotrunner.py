@@ -284,7 +284,7 @@ def send_email_if_needed(conn, task, logprefix=''):
 #     for _, pdrow in df.iterrows():
 #         # print(pdrow.keys())
 #         rowdict = {}
-#         rowdict['timestamp'] = 'now()'
+#         rowdict['timestamp'] = 'UTC_TIMESTAMP()'
 #         rowdict['mjd'] = str(pdrow['#MJD'])
 #         rowdict['m'] = str(pdrow['m'])
 #         rowdict['dm'] = str(pdrow['dm'])
@@ -361,7 +361,7 @@ def do_taskloop():
         if taskload_thisuser < USERTASKLOADLIMIT:
             logprefix = f"job{task['id']:05d}: "
             cur2 = conn.cursor()
-            cur2.execute(f"UPDATE forcephot_task SET starttimestamp=NOW() WHERE id={task['id']};")
+            cur2.execute(f"UPDATE forcephot_task SET starttimestamp=UTC_TIMESTAMP() WHERE id={task['id']};")
             conn.commit()
             cur2.close()
 
@@ -393,7 +393,7 @@ def do_taskloop():
                     send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
                     cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW(), error_msg='{error_msg}' WHERE id={task['id']};")
+                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=UTC_TIMESTAMP(), error_msg='{error_msg}' WHERE id={task['id']};")
                     conn.commit()
                     cur2.close()
                 else:
@@ -403,7 +403,7 @@ def do_taskloop():
                         send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
                         cur2 = conn.cursor()
-                        cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=NOW() WHERE id={task['id']};")
+                        cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=UTC_TIMESTAMP() WHERE id={task['id']};")
                         conn.commit()
                         cur2.close()
                     else:
@@ -433,7 +433,7 @@ def do_maintenance(maxtime=None):
 
     cur = conn.cursor(dictionary=True, buffered=True)
 
-    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp < NOW() - INTERVAL 30 DAY;")
+    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp < UTC_TIMESTAMP() - INTERVAL 30 DAY;")
     taskcount = cur.fetchone()['taskcount']
     log(logprefix + f"There are {taskcount} tasks that finished more than 30 days ago")
 
