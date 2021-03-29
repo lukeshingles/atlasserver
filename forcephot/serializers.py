@@ -22,7 +22,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         # raise serializers.ValidationError('This field must be an even number.')
         if attrs.get('mpc_name', False):
             mpc_name = attrs['mpc_name']
-            okchars = "012345789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
             if any([c not in dict.fromkeys(okchars) for c in mpc_name]):
                 raise serializers.ValidationError({'mpc_name': f'Invalid an mpc_name. May contain only: 0-9a-z[space]'})
 
