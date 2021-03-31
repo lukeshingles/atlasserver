@@ -134,5 +134,3 @@ fprunnerlog.txt
 fprunnerlogstderr.txt
 logs/*.txt
 *.mmdb
-
-migrations
