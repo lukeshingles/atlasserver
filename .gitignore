@@ -129,7 +129,10 @@ dmypy.json
 .pyre/
 
 .tags*
+logs
 fprunnerlog.txt
 fprunnerlogstderr.txt
 logs/*.txt
 *.mmdb
+
+migrations
