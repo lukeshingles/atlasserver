@@ -25,7 +25,10 @@
         {% if task.mpc_name %}
         MPC Object: {{task.mpc_name}}<br />
         {% else %}
-        RA Dec: {{task.ra}} {{task.dec}}<br/>
+        RA Dec: {{task.ra}} {{task.dec}} (J{{task.julian_epoch.normalize}})<br/>
+            {% if task.propermotion_ra > 0 or propermotion_dec > 0 %}
+            Proper motion [mas/yr]: {{task.propermotion_ra}} {{task.propermotion_dec}}<br/>
+            {% endif %}
         {% endif %}
         Images: {%if task.use_reduced %}Reduced{% else %}Difference{% endif %}<br />
 

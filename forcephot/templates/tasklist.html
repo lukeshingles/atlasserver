@@ -25,6 +25,9 @@
                 <a class="collapsible">Help</a><div style="display: none; clear: right; font-size: small;">Each line should consist of a right ascension and a declination coordinate in decimal or sexagesimal notation, separated by a space or a comma. Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
                 {{ form.radeclist.errors }}
                 </li>
+                <li>{{ form.julian_epoch.label_tag }}{{ form.julian_epoch }}{{ form.julian_epoch.errors }}</li>
+                <li><label for="id_propermotion_ra">PM RA [mas]</label>{{ form.propermotion_ra }}{{ form.propermotion_ra.errors }}</li>
+                <li><label for="id_propermotion_dec">PM Dec [mas]</label>{{ form.propermotion_dec }}{{ form.propermotion_dec.errors }}</li>
                 <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}</li>
                 <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}</li>
                 <li>{{ form.comment.label_tag }}{{ form.comment }}{{ form.comment.errors }}</li>

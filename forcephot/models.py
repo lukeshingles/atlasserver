@@ -26,8 +26,8 @@ class Task(models.Model):
     mpc_name = models.CharField(null=True, blank=True, default=None, max_length=300,
                                 verbose_name="Minor Planet Center object name (overrides RA/Dec)")
 
-    ra = models.FloatField(null=True, blank=True, default=None)
-    dec = models.FloatField(null=True, blank=True, default=None)
+    ra = models.FloatField(null=True, blank=True, default=None, verbose_name='Right Ascension (degrees)')
+    dec = models.FloatField(null=True, blank=True, default=None, verbose_name='Declination (degrees)')
 
     mjd_min = models.FloatField(null=True, blank=True, default=get_mjd_min_default, verbose_name='MJD min')
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name='MJD max')
@@ -41,6 +41,10 @@ class Task(models.Model):
     error_msg = models.CharField(null=True, blank=True, default=None, max_length=200,
                                  verbose_name="Error messages during execution")
     is_archived = models.BooleanField(default=False)
+    julian_epoch = models.DecimalField(default=2000, max_digits=7, decimal_places=1,
+                                       verbose_name='Julian epoch')
+    propermotion_ra = models.FloatField(null=True, blank=True, verbose_name='Proper motion RA (mas/yr)')
+    propermotion_dec = models.FloatField(null=True, blank=True, verbose_name='Proper motion Dec (mas/yr)')
 
     def localresultfile(self):
         if self.finishtimestamp:
