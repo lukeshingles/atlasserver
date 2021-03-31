@@ -106,23 +106,12 @@ def runforced(task, conn, logprefix='', **kwargs):
     else:
         atlascommand += f"/atlas/bin/force.sh {float(ra)} {float(dec)}"
 
-    if task['use_reduced']:
-        atlascommand += " red=1"
-
-    if task['julian_epoch']:
-        atlascommand += f" epoch={task['julian_epoch']}"
-
-    if task['propermotion_ra']:
-        atlascommand += f" pmra={task['propermotion_ra']}"
-
-    if task['propermotion_dec']:
-        atlascommand += f" pmdec={task['propermotion_dec']}"
-
     if mjd_min:
         atlascommand += f" m0={float(mjd_min)}"
     if mjd_max:
         atlascommand += f" m1={float(mjd_max)}"
-
+    if task['use_reduced']:
+        atlascommand += " red=1"
     atlascommand += " dodb=1 parallel=16"
 
     # for debugging because force.sh takes a long time to run

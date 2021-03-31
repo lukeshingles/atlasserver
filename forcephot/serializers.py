@@ -40,11 +40,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
 
-        fields = [
-            'url', 'id', 'user', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
-            'julian_epoch', 'propermotion_ra', 'propermotion_dec', 'use_reduced',
-            'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
-            'finishtimestamp', 'error_msg']
+        fields = ['url', 'id', 'user', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
+                  'use_reduced', 'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
+                  'finishtimestamp', 'error_msg']
 
-        read_only_fields = [
-            'user', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg']
+        read_only_fields = ['user', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg']
