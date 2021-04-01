@@ -27,12 +27,12 @@
                 {{ form.radeclist.errors }}
                 </li>
             </ul>
-            <div class="propermotioncheckbox" style="width: 100%">
-                <label data-toggle="collapse" data-target="#collapseOne" style="width: 100%;">
+            <div class="propermotion_checkboxdiv" style="width: 100%">
+                <label data-toggle="collapse" data-target="#propermotion_panel" style="width: 100%;">
                     <input type="checkbox" name="proper_motion_on" style="position: static; display: inline; width: 5em" /> Proper motion
                 </label>
             </div>
-            <div id="collapseOne" class="panel-collapse collapse" style="background: rgb(235,235,235);">
+            <div id="propermotion_panel" class="panel-collapse collapse" style="background: rgb(235,235,235);">
                 <p style="font-size: small;">If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
                 <ul>
                 <li>{{ form.radec_epoch_year.label_tag }}{{ form.radec_epoch_year }}{{ form.radec_epoch_year.errors }}</li>
