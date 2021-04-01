@@ -25,7 +25,7 @@
         {% if task.mpc_name %}
         MPC Object: {{task.mpc_name}}<br />
         {% else %}
-        RA Dec: {{task.ra}} {{task.dec}} (J{{task.julian_epoch.normalize}})<br/>
+        RA Dec{% if task.julian_epoch %}{% if task.julian_epoch < 1999 or task.julian_epoch > 2001 %} (J{{task.julian_epoch.normalize}}){% endif %}{% endif %}: {{task.ra}} {{task.dec}}<br/>
             {% if task.propermotion_ra > 0 or propermotion_dec > 0 %}
             Proper motion [mas/yr]: {{task.propermotion_ra}} {{task.propermotion_dec}}<br/>
             {% endif %}
