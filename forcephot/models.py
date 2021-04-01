@@ -41,8 +41,8 @@ class Task(models.Model):
     error_msg = models.CharField(null=True, blank=True, default=None, max_length=200,
                                  verbose_name="Error messages during execution")
     is_archived = models.BooleanField(default=False)
-    julian_epoch = models.DecimalField(default=2000, max_digits=7, decimal_places=1, verbose_name='Julian epoch')
-    radec_epoch_year = models.DecimalField(null=True, blank=True, max_digits=7, decimal_places=1, verbose_name='Epoch year')
+    radec_epoch_year = models.DecimalField(null=True, blank=True, max_digits=7, decimal_places=1,
+                                           verbose_name='Epoch year')
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name='Proper motion RA (mas/yr)')
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name='Proper motion Dec (mas/yr)')
 
