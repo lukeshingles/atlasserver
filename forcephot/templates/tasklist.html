@@ -27,8 +27,8 @@
                 {{ form.radeclist.errors }}
                 </li>
             </ul>
-            <div class="propermotion_checkboxdiv" style="width: 100%">
-                <label data-toggle="collapse" data-target="#propermotion_panel" style="width: 100%;">
+            <div id="propermotion_checkboxdiv" style="width: 100%">
+                <label data-target="#propermotion_panel" style="width: 100%;">
                     <input type="checkbox" name="proper_motion_on" style="position: static; display: inline; width: 5em" /> Proper motion
                 </label>
             </div>
@@ -62,6 +62,19 @@
     <script src="{% static 'js/plotly-latest.kws.js' %}"></script>
 
     <script language="javascript" type="text/javascript">
+
+    $("#propermotion_checkboxdiv :checkbox").bind('click dblclick', function(evt) {
+        // console.log(evt.type);
+
+        if ($(this).is(":checked")) {
+            // console.log('checked')
+            $('.collapse').slideDown('fast');
+        } else {
+            // console.log('not checked')
+            $('.collapse').slideUp('fast');
+        }
+    })
+
     var jslcdataglobal = new Object();
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
