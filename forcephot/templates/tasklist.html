@@ -22,12 +22,25 @@
             <ul>
                 <li>{{ form.radeclist.label_tag }}
                 {{ form.radeclist }}
-                <a class="collapsible">Help</a><div style="display: none; clear: right; font-size: small;">Each line should consist of a right ascension and a declination coordinate in decimal or sexagesimal notation, separated by a space or a comma. Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
+                <a class="collapsible" data-toggle="collapse" data-target="#radec_help">Help</a>
+                <div id="radec_help" style="display: none; clear: right; font-size: small;">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation, separated by a space or a comma. Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
                 {{ form.radeclist.errors }}
                 </li>
-                <li>{{ form.julian_epoch.label_tag }}{{ form.julian_epoch }}{{ form.julian_epoch.errors }}</li>
+            </ul>
+            <div class="propermotioncheckbox" style="width: 100%">
+                <label data-toggle="collapse" data-target="#collapseOne" style="width: 100%;">
+                    <input type="checkbox" name="proper_motion_on" style="position: static; display: inline; width: 5em" /> Proper motion
+                </label>
+            </div>
+            <div id="collapseOne" class="panel-collapse collapse" style="background: rgb(235,235,235);">
+                <p style="font-size: small;">If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
+                <ul>
+                <li>{{ form.radec_epoch_year.label_tag }}{{ form.radec_epoch_year }}{{ form.radec_epoch_year.errors }}</li>
                 <li><label for="id_propermotion_ra">PM RA [mas/yr]</label>{{ form.propermotion_ra }}{{ form.propermotion_ra.errors }}</li>
                 <li><label for="id_propermotion_dec">PM Dec [mas/yr]</label>{{ form.propermotion_dec }}{{ form.propermotion_dec.errors }}</li>
+                </ul>
+            </div>
+            <ul>
                 <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}</li>
                 <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}</li>
                 <li>{{ form.comment.label_tag }}{{ form.comment }}{{ form.comment.errors }}</li>

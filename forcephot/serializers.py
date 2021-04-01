@@ -42,7 +42,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         fields = [
             'url', 'id', 'user', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
-            'julian_epoch', 'propermotion_ra', 'propermotion_dec', 'use_reduced',
+            'radec_epoch_year', 'propermotion_ra', 'propermotion_dec', 'use_reduced',
             'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
             'finishtimestamp', 'error_msg']
 

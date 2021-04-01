@@ -109,8 +109,8 @@ def runforced(task, conn, logprefix='', **kwargs):
     if task['use_reduced']:
         atlascommand += " red=1"
 
-    if task['julian_epoch']:
-        atlascommand += f" epoch={task['julian_epoch']}"
+    if task['radec_epoch_year']:
+        atlascommand += f" epoch={task['radec_epoch_year']}"
 
     if task['propermotion_ra']:
         atlascommand += f" pmra={task['propermotion_ra']}"
