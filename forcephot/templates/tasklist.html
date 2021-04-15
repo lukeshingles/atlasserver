@@ -65,23 +65,30 @@
 
     $("#propermotion_checkboxdiv :checkbox").bind('click dblclick', function(evt) {
         // console.log(evt.type);
+        updatepropermotionpanel();
+    })
 
-        if ($(this).is(":checked")) {
+    function updatepropermotionpanel() {
+        if ($("#propermotion_checkboxdiv :checkbox").is(":checked")) {
             // console.log('checked')
             $('#propermotion_panel').slideDown('fast');
         } else {
             // console.log('not checked')
             $('#propermotion_panel').slideUp('fast');
         }
-    })
+    }
 
     var jslcdataglobal = new Object();
     var jslabelsglobal = new Object();
     var jslimitsglobal = new Object();
 
-    var updatequeuedtimer = setInterval(function(){updatePageTasks();}, 2000);
+    var updatequeuedtimer = setInterval(updatePageTasks, 2000);
+
+    $(document).ready(updatePageTasks);
 
     function updatePageTasks() {
+        updatepropermotionpanel();
+
         if (!window_active) {
             return;
         }
