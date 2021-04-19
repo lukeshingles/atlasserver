@@ -473,26 +473,26 @@ def resultplotdatajs(request, taskid):
     else:
         return HttpResponseNotFound("Page not found")
 
-    strjs = ''
+    jsout = []
     resultfile = item.localresultfile()
     if resultfile:
         df = pd.read_csv(os.path.join(settings.STATIC_ROOT, resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
         df.query("uJy > -1e10 and uJy < 1e10", inplace=True)
 
-        strjs += "var jslcdata = new Array();\n"
-        strjs += "var jslabels = new Array();\n"
+        jsout.append("var jslcdata = new Array();\n")
+        jsout.append("var jslabels = new Array();\n")
 
         divid = f'plotforcedflux-task-{taskid}'
 
         for color, filter in [(11, 'c'), (12, 'o')]:
             dffilter = df.query('F == @filter', inplace=False)
 
-            strjs += '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
+            jsout.append('\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n')
 
-            strjs += "jslcdata.push([" + (", ".join([
+            jsout.append("jslcdata.push([" + (", ".join([
                 f"[{mjd},{uJy},{duJy}]" for _, (mjd, uJy, duJy) in
-                dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n"
+                dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n")
 
         today = datetime.date.today()
         mjd_today = date_to_mjd(today.year, today.month, today.day)
@@ -501,20 +501,23 @@ def resultplotdatajs(request, taskid):
         ymin = max(-200, df.uJy.min())
         ymax = min(40000, df.uJy.max())
 
-        strjs += 'var jslclimits = {'
-        strjs += f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},'
-        strjs += f'"discoveryDate": {xmin},'
-        strjs += f'"today": {mjd_today},'
-        strjs += '};\n'
+        jsout.append('var jslclimits = {')
+        jsout.append(f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},')
+        jsout.append(f'"discoveryDate": {xmin},')
+        jsout.append(f'"today": {mjd_today},')
+        jsout.append('};\n')
 
-        strjs += f'jslimitsglobal["#{divid}"] = jslclimits;\n'
-        strjs += f'jslcdataglobal["#{divid}"] = jslcdata;\n'
-        strjs += f'jslabelsglobal["#{divid}"] = jslabels;\n'
+        jsout.append(f'jslimitsglobal["#{divid}"] = jslclimits;\n')
+        jsout.append(f'jslcdataglobal["#{divid}"] = jslcdata;\n')
+        jsout.append(f'jslabelsglobal["#{divid}"] = jslabels;\n')
 
-        strjs += f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n'
+        jsout.append(
+            f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n')
 
-        strjs += (
-            "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script'});")
+        jsout.append((
+            "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script'});"))
+
+    strjs = ''.join(jsout)
 
     return HttpResponse(strjs, content_type="text/javascript")
 
