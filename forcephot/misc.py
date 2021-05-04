@@ -112,7 +112,7 @@ def splitradeclist(data, form=None):
         # lines = lines[:1]
 
     for index, line in enumerate(lines, 1):
-        if line.startswith('mpc_'):
+        if line[:4] in ['mpc_', 'MPC_', 'mpc ', 'MPC ']:
             mpc_name = line[4:].strip()
             if not mpc_name:
                 form.add_error('radeclist', f'Error on line {index}: MPC name is blank')

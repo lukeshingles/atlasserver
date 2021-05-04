@@ -25,6 +25,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
             # if any([c not in dict.fromkeys(okchars) for c in mpc_name]):
             #     raise serializers.ValidationError({'mpc_name': f'Invalid an mpc_name. May contain only: 0-9a-z[space]'})
+            badchars = "'\";"
+            if any([c in dict.fromkeys(badchars) for c in mpc_name]):
+                raise serializers.ValidationError(
+                    {'mpc_name': f'Invalid an mpc_name. May not contain quotes or seimicolons'})
 
             if attrs.get('ra', False) or attrs.get('dec', False):
                 raise serializers.ValidationError({'mpc_name': 'mpc_name was given but RA and Dec were not empty.'})

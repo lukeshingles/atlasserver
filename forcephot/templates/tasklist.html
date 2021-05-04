@@ -23,7 +23,7 @@
                 <li>{{ form.radeclist.label_tag }}
                 {{ form.radeclist }}
                 <a class="collapsible" data-toggle="collapse" data-target="#radec_help">Help</a>
-                <div id="radec_help" style="display: none; clear: right; font-size: small;">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation, separated by a space or a comma. Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
+                <div id="radec_help" style="display: none; clear: right; font-size: small;">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
                 {{ form.radeclist.errors }}
                 </li>
             </ul>
