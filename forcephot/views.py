@@ -358,8 +358,8 @@ def statsusagechart(request):
     # plot.legend.orientation = "horizontal"
 
     legend = Legend(items=[
-        ("Waiting", [r[0]]),
         ("Finished", [r[1]]),
+        ("Waiting", [r[0]]),
     ], location="top", border_line_width=0)
 
     plot.add_layout(legend, 'right')
