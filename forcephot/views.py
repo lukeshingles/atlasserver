@@ -286,7 +286,7 @@ def statscoordchart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(10)
+@cache_page(30)
 def statsusagechart(request):
     from django.db.models.functions import Trunc
     # from bokeh.io import output_file, show
