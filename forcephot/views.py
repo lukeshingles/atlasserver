@@ -299,7 +299,7 @@ def statsusagechart(request):
     from bokeh.models import DataRange1d
     from bokeh.plotting import figure
     from bokeh.plotting import ColumnDataSource
-    from bokeh.models import FactorRange
+    from bokeh.models import FactorRange, Legend
     # from bokeh.transform import dodge, factor_cmap
 
     # from bokeh.resources import CDN
@@ -353,9 +353,16 @@ def statsusagechart(request):
     plot.grid.visible = False
 
     r = plot.vbar_stack(['waitingtaskcount', 'finishedtaskcount'], x='queueday', source=source, color=['red', 'grey'],
-                        line_width=0., legend_label=['Waiting', 'Finished'], width=0.3)
+                        line_width=0., width=0.3)
 
-    plot.legend.orientation = "horizontal"
+    # plot.legend.orientation = "horizontal"
+
+    legend = Legend(items=[
+        ("Waiting", [r[0]]),
+        ("Finished", [r[1]]),
+    ], location="top", border_line_width=0)
+
+    plot.add_layout(legend, 'right')
 
     plot.add_tools(HoverTool(
         tooltips=[
