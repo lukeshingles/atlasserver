@@ -54,7 +54,9 @@
               <div class="form-actions-no-box">
                 <input type="submit" name="submit" value="Log in" class="btn btn-primary form-control" id="submit-id-submit">
               </div>
-              <br /><a href ="{% url 'password_reset' %}">Forgot password?</p>
+                <br /><p>New user? <a href="{% url 'register' %}">Register for an account</a>
+                <br />Forgot password? <a href ="{% url 'password_reset' %}">Reset password</a></p>
+              </p>
             </form>
           </div>
         </div><!-- /.row-fluid -->
