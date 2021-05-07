@@ -5,6 +5,11 @@
     <div class="page-header">
         <h1>{{ name }}</h1>
     </div>
+
+    <p>If you notice any issues with the data or this website, please file <a href="https://github.com/lukeshingles/atlasserver/issues">an issue on GitHub</a>. Errors and downtime will be handled urgently, and feature requests will also be considered.</p>
+
+    <p>Historical uptime can viewed at <a href="https://statuspage.freshping.io/52636-ATLASForcedPhotometry">FreshPing.io</a></p>
+
     <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %}).</p>
     <div id="statsshortterm">Loading short term stats...</div>
     <div id="statsusagechart" style="max-width: 60em; padding-top: 1em; padding-bottom: 2em;">Loading usage chart...</div>

@@ -37,12 +37,13 @@ admin.site.site_title = "ATLAS Forced Photometry"
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path('', views.index, name="index"),
+    path('', views.simpleview('index.html'), name="index"),
     path('', include(router.urls)),
     path('queue/<str:pk>/delete/', views.deleteTask, name="delete"),
     url(r'^register/$', views.register, name='register'),
-    path('faq/', views.faq, name="faq"),
-    path('resultdesc/', views.resultdesc, name="resultdesc"),
+    path('faq/', views.simpleview('faq.html', {'name': 'FAQ'}), name="faq"),
+    path('resultdesc/', views.simpleview('resultdesc.html', {'name': 'Output Description'}),
+         name="resultdesc"),
 
     path('stats/', views.stats, name="stats"),
     path('stats/shortterm.html', views.statsshortterm, name="statsshortterm"),
@@ -54,6 +55,6 @@ urlpatterns = [
     path('queue/<int:taskid>/plot.pdf', views.taskpdfplot, name='taskpdfplot'),
     path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
 
-    path('apiguide/', views.apiguide, name="apiguide"),
+    path('apiguide/', views.simpleview('apiguide.html', {'name': 'API Guide'}), name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
 ]

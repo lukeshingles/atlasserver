@@ -211,25 +211,11 @@ def deleteTask(request, pk):
     return redirect(redirurl, request=request)
 
 
-def index(request):
-    template_name = 'index.html'
-    # return redirect('/queue')
-    return render(request, template_name)
+def simpleview(template, datadict={}):
+    def simpleview_inner(request):
+        return render(request, template, datadict)
 
-
-def resultdesc(request):
-    template_name = 'resultdesc.html'
-    return render(request, template_name, {'name': 'Output Description'})
-
-
-def apiguide(request):
-    template_name = 'apiguide.html'
-    return render(request, template_name, {'name': 'API Guide'})
-
-
-def faq(request):
-    template_name = 'faq.html'
-    return render(request, template_name, {'name': 'FAQ'})
+    return simpleview_inner
 
 
 @cache_page(60 * 60 * 24)
