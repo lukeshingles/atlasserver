@@ -293,7 +293,7 @@
                       <ul class="dropdown-menu dropdown-menu-right">
                         <li><a>{{request.user.email}}</a></li>
                         <li><a href="{% url 'password_change' %}">Change password</a></li>
-                        <li><a href='{% url 'logout' %}>Log out</a></li>
+                        <li><a href="{% url 'logout' %}">Log out</a></li>
                       </ul>
                     </li>
                 {% else %}
