@@ -10,7 +10,7 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist, ValidationError, PermissionDenied
 from django.db.models import Count
 from django.http import HttpResponse, FileResponse
-# from django.http.response import HttpResponseRedirect
+from django.http.response import HttpResponseRedirect
 from django.http import HttpResponseNotFound
 from django.http import JsonResponse
 from django.views.decorators.cache import cache_page
@@ -153,7 +153,18 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
         else:
             # listqueryset = Task.objects.none()
-            raise PermissionDenied()
+            # raise PermissionDenied()
+            try:
+                # login_url = request.build_absolute_uri(reverse('rest_framework:login'))
+                login_url = reverse('rest_framework:login')
+                request = context.get('request')
+                next = escape(request.path)
+                redirect_url = f"{login_url}?next={next}"
+
+            except NoReverseMatch:
+                redirect_url = '/'
+
+            return HttpResponseRedirect(redirect_url)
 
         page = self.paginate_queryset(listqueryset)
         if page is not None:
