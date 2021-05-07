@@ -152,19 +152,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         if request.user.is_authenticated:
             listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
         else:
-            # listqueryset = Task.objects.none()
-            # raise PermissionDenied()
-            try:
-                # login_url = request.build_absolute_uri(reverse('rest_framework:login'))
-                login_url = reverse('rest_framework:login')
-                request = context.get('request')
-                next = escape(request.path)
-                redirect_url = f"{login_url}?next={next}"
-
-            except NoReverseMatch:
-                redirect_url = '/'
-
-            return HttpResponseRedirect(redirect_url)
+            listqueryset = Task.objects.none()
+            raise PermissionDenied()
 
         page = self.paginate_queryset(listqueryset)
         if page is not None:
