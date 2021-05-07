@@ -20,7 +20,6 @@ from django.urls import include, path
 from rest_framework import routers, serializers, viewsets
 
 import forcephot
-from forcephot import views
 
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.

@@ -197,7 +197,9 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.TemplateHTMLRenderer',
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
-    )
+    ),
+
+    'EXCEPTION_HANDLER': 'forcephot.exception.custom_exception_handler',
 }
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

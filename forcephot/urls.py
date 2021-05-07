@@ -39,7 +39,7 @@ admin.site.site_title = "ATLAS Forced Photometry"
 urlpatterns = [
     path('', views.simpleview('index.html'), name="index"),
     path('', include(router.urls)),
-    path('queue/<str:pk>/delete/', views.deleteTask, name="delete"),
+    path('queue/<str:pk>/delete/', views.deletetask, name="delete"),
     url(r'^register/$', views.register, name='register'),
     path('faq/', views.simpleview('faq.html', {'name': 'FAQ'}), name="faq"),
     path('resultdesc/', views.simpleview('resultdesc.html', {'name': 'Output Description'}),

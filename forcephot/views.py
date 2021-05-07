@@ -7,7 +7,7 @@ import geoip2.errors
 from django.conf import settings as settings
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.models import User
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError, PermissionDenied
 from django.db.models import Count
 from django.http import HttpResponse, FileResponse
 # from django.http.response import HttpResponseRedirect
@@ -31,25 +31,28 @@ from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
 
 
-class IsOwnerOrReadOnly(permissions.BasePermission):
+class ForcePhotPermission(permissions.BasePermission):
+    message = 'You must be the owner of this object.'
+
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+
+        if request.method in ['PUT', 'PATCH'] and not request.user.is_authenticated:
+            return False
+
+        return True
+    #     return request.user and request.user.is_authenticated
+
     """
     Object-level permission to only allow owners of an object to edit it.
     Assumes the model instance has an `user` attribute.
     """
-
-    message = 'You must be the owner of this object.'
-
-    # def has_permission(self, request, view):
-    #     return request.user and request.user.is_authenticated
-
     def has_object_permission(self, request, view, obj):
         # Read permissions are allowed to any request,
         # so we'll always allow GET, HEAD or OPTIONS requests.
         if request.method in permissions.SAFE_METHODS:
             return True
-
-        if request.method in ['PUT', 'PATCH']:  # and obj.started
-            return False
 
         if not request.user or not request.user.is_authenticated:
             return False
@@ -68,7 +71,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all().order_by('-timestamp', '-id').select_related('user')
     serializer_class = ForcePhotTaskSerializer
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
+    permission_classes = [ForcePhotPermission]
     throttle_scope = 'forcephottasks'
     ordering_fields = ['timestamp', 'id']
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
@@ -146,7 +149,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     #     instance.delete()
 
     def list(self, request, *args, **kwargs):
-        listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
+        if request.user.is_authenticated:
+            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
+        else:
+            # listqueryset = Task.objects.none()
+            raise PermissionDenied()
 
         page = self.paginate_queryset(listqueryset)
         if page is not None:
@@ -200,10 +207,18 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-def deleteTask(request, pk):
+def deletetask(request, pk):
+    if not request.user.is_authenticated:
+        raise PermissionDenied()
+
     try:
         item = Task.objects.get(id=pk)
+
+        if item.user.id != request.user.id and not request.user.is_staff:
+            raise PermissionDenied()
+
         item.delete()
+
     except ObjectDoesNotExist:
         pass
 
