@@ -24,7 +24,7 @@
               {% endif %}
                   <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
                   {% if task.user.id != request.user.id %}
-                  User: {{task.user.username}} ({{task.user.email}})<br/>
+                  User: {{task.user.username}}<br/>
                   {% endif %}
                   {% if task.comment %}
                   Comment: <b>{{task.comment}}</b><br/>
