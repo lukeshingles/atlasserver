@@ -139,7 +139,7 @@
             }
         });
 
-        activate_first_plot();
+        activate_plots();
     }
 
 
@@ -154,7 +154,7 @@
       updatePageTasks();
     });
 
-    function activate_first_plot() {
+    function activate_plots() {
         $('li.task.finished').each(function () {
             // check that the plot has not already been created
             if ($(this).find('div.plot').html() == '') {
@@ -166,6 +166,6 @@
         });
     }
 
-    activate_first_plot();
+    activate_plots();
     </script>
 {% endblock %}
