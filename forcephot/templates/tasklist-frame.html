@@ -58,7 +58,7 @@
                   Queued ({{task.queuepos}} tasks ahead of this one)
                   {% endif %}
 
-                  {% if task.finishtimestamp %}
+                  {% if task.finishtimestamp and not task.error_msg %}
                   <div id="plotforcedflux-task-{{task.id}}" class="plot" style="width: 100%;"></div>
                   {% endif %}
                 </li>

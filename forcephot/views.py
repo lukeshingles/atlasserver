@@ -487,6 +487,9 @@ def resultplotdatajs(request, taskid):
     if resultfile:
         df = pd.read_csv(os.path.join(settings.STATIC_ROOT, resultfile), delim_whitespace=True, escapechar='#')
         # df.rename(columns={'#MJD': 'MJD'})
+        if df.empty:
+            return HttpResponseNotFound("Page not found")
+
         df.query("uJy > -1e10 and uJy < 1e10", inplace=True)
 
         jsout.append("var jslcdata = new Array();\n")
