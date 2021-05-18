@@ -160,7 +160,7 @@
             if ($(this).find('div.plot').html() == '') {
                 taskid = $(this).attr('id').replace("task-", "");
                 jsurl = '{% url 'resultplotdatajs' 9999 %}'.replace('9999', taskid)
-                console.log(taskid, jsurl)
+                // console.log(taskid, jsurl)
                 $.ajax({url: jsurl, cache: true, dataType: 'script', async: true});
             }
         });
