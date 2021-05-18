@@ -46,9 +46,12 @@ class Task(models.Model):
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name='Proper motion RA (mas/yr)')
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name='Proper motion Dec (mas/yr)')
 
+    def localresultfileprefix(self):
+        return f'results/job{int(self.id):05d}'
+
     def localresultfile(self):
         if self.finishtimestamp:
-            return f'results/job{int(self.id):05d}.txt'
+            return self.localresultfileprefix() + '.txt'
 
         return None
 
@@ -143,15 +146,9 @@ class Task(models.Model):
 
     def delete(self):
         # cleanup associated files when removing a task object from the database
-        if self.localresultfile():
-            localresultfullpath = os.path.join(settings.STATIC_ROOT, self.localresultfile())
-            if os.path.exists(localresultfullpath):
-                os.remove(localresultfullpath)
 
-        if self.localresultpdfplotfile():
-            localresultpdffullpath = os.path.join(settings.STATIC_ROOT, self.localresultpdfplotfile())
-            if os.path.exists(localresultpdffullpath):
-                os.remove(localresultpdffullpath)
+        for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
+            localfile.unlink(missing_ok=True)
 
         if self.finished():
             self.is_archived = True
