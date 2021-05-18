@@ -155,12 +155,15 @@
     });
 
     function activate_first_plot() {
-        first_finished = $('li.task.finished').filter(':first');
-        // make sure the plot has not already been created
-        if (first_finished.find('div.plot').html() == '') {
-            // automatically "click" the "show plot" button on the first completed task
-            first_finished.find('a.showplot').trigger('click');
-        }
+        $('li.task.finished').each(function () {
+            // check that the plot has not already been created
+            if ($(this).find('div.plot').html() == '') {
+                taskid = $(this).attr('id').replace("task-", "");
+                jsurl = '{% url 'resultplotdatajs' 9999 %}'.replace('9999', taskid)
+                console.log(taskid, jsurl)
+                $.ajax({url: jsurl, cache: true, dataType: 'script', async: false});
+            }
+        });
     }
 
     activate_first_plot();

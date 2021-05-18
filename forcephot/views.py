@@ -470,6 +470,7 @@ def register(request):
     return render(request, 'registration/register.html', {'form': form})
 
 
+@cache_page(60 * 10)
 def resultplotdatajs(request, taskid):
     import pandas as pd
 
@@ -523,7 +524,7 @@ def resultplotdatajs(request, taskid):
             f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n')
 
         jsout.append((
-            "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script'});"))
+            "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script', async: false});"))
 
     strjs = ''.join(jsout)
 
