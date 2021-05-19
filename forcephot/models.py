@@ -16,6 +16,10 @@ def get_mjd_min_default():
 
 
 class Task(models.Model):
+    class RequestType(models.TextChoices):
+        FP = 'FP', "Forced Photometry Data"
+        IMGZIP = 'IMGZIP', "Image Zip"
+
     timestamp = models.DateTimeField(default=timezone.now)
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
     finishtimestamp = models.DateTimeField(null=True, blank=True, default=None)
@@ -46,20 +50,76 @@ class Task(models.Model):
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name='Proper motion RA (mas/yr)')
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name='Proper motion Dec (mas/yr)')
 
-    def localresultfileprefix(self):
-        return f'results/job{int(self.id):05d}'
+    parent_task = models.ForeignKey('self',
+                                    related_name='imagerequest',
+                                    # on_delete=models.SET_NULL,
+                                    on_delete=models.CASCADE,
+                                    null=True, default=None,
+                                    limit_choices_to={'request_type': 'FP'})
+
+    request_type = models.CharField(
+        max_length=6,
+        choices=RequestType.choices,
+        default=RequestType.FP
+    )
+
+    def localresultfileprefix(self, use_parent=False):
+        """
+            return the relative path prefix for the job (no file extension)
+        """
+        if use_parent and self.parent_task:
+            int_id = int(self.parent_task.id)
+        else:
+            int_id = int(self.id)
+        return f'results/job{int_id:05d}'
 
     def localresultfile(self):
+        """
+            return the relative path to the FP data file if it the job is finished
+        """
         if self.finishtimestamp:
             return self.localresultfileprefix() + '.txt'
 
         return None
 
     def localresultpdfplotfile(self):
+        """
+            return the full local path to the PDF plot file if it exists, otherwise None
+        """
         if self.localresultfile():
             pdfplotfile = Path(self.localresultfile()).with_suffix('.pdf')
-            if os.path.exists(Path(settings.STATIC_ROOT, pdfplotfile)):
+            if Path(settings.STATIC_ROOT, pdfplotfile).exists():
                 return pdfplotfile
+
+        return None
+
+    def localresultjsplotfile(self):
+        """
+            return the full local path to the plotly javascript file if the FP data file exists, otherwise None
+        """
+        if self.localresultfile():
+            return Path(settings.STATIC_ROOT, self.localresultfile()).with_suffix('.js')
+
+        return None
+
+    def localresultimagezipfile(self):
+        """
+            return the full local path to the image zip file if it exists, otherwise None
+        """
+        imagezipfile = Path(self.localresultfileprefix(use_parent=True) + '.zip')
+        if Path(settings.STATIC_ROOT, imagezipfile).exists():
+            return imagezipfile
+
+        return None
+
+    def imagerequesttaskid(self):
+        """
+            return the task id of the image request task associated with this
+            forced photometry task if it exists, otherwise None
+        """
+        associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
+        if associated_tasks.count() > 0:
+            return associated_tasks[0].id
 
         return None
 
@@ -146,40 +206,17 @@ class Task(models.Model):
 
     def delete(self):
         # cleanup associated files when removing a task object from the database
-
-        for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
-            localfile.unlink(missing_ok=True)
+        if self.request_type == 'IMGZIP':
+            zipfile = self.localresultimagezipfile()
+            if zipfile:
+                Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
+        else:
+            # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
+            for ext in ['.txt', '.pdf', '.js']:
+                Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
 
         if self.finished():
             self.is_archived = True
             self.save()
         else:
             super().delete()
-
-
-# class Result(models.Model):
-#     timestamp = models.DateTimeField(auto_now_add=True)
-#     ra = models.FloatField()
-#     declination = models.FloatField()
-#     mjd = models.FloatField()
-#     m = models.FloatField()
-#     dm = models.FloatField()
-#     ujy = models.IntegerField()
-#     dujy = models.IntegerField()
-#     filter = models.CharField(max_length=1)
-#     err = models.FloatField()
-#     chi_over_n = models.FloatField()
-#     x = models.FloatField()
-#     y = models.FloatField()
-#     maj = models.FloatField()
-#     min = models.FloatField()
-#     phi = models.FloatField()
-#     sky = models.FloatField()
-#     apfit = models.FloatField()
-#     zp = models.FloatField()
-#     obs = models.CharField(max_length=32)
-#
-#     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
-#
-#     def __str__(self):
-#         return f"RA: {self.ra:10.4f} DEC: {self.declination:10.4f} MJD {self.mjd} m {self.m}"

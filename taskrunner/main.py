@@ -3,6 +3,7 @@
 import datetime
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from signal import SIGINT, SIGTERM, signal
@@ -12,6 +13,8 @@ import pandas as pd
 from django.core.mail import EmailMessage
 from dotenv import load_dotenv
 
+sys.path.insert(1, str(Path(sys.path[0]).parent.resolve()))
+
 import atlasserver.settings as settings
 from forcephot.misc import make_pdf_plot
 
@@ -20,7 +23,7 @@ load_dotenv(override=True)
 remoteServer = 'atlas'
 localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
-logdir = Path('logs')
+logdir = Path(__file__).resolve().parent / 'logs'
 TASKMAXTIME = 1200
 
 CONNKWARGS = {
@@ -38,9 +41,12 @@ CONNKWARGS = {
 USERTASKLOADLIMIT = 1
 
 
+def localresultfileprefix(id):
+    return str(Path(localresultdir / f'job{int(id):05d}'))
+
+
 def get_localresultfile(id):
-    filename = f'job{id:05d}.txt'
-    return Path(localresultdir, filename)
+    return localresultfileprefix + '.txt'
 
 
 def task_exists(conn, taskid):
@@ -62,12 +68,9 @@ def get_taskid_list(conn):
 
 
 def remove_task_resultfiles(taskid):
-    taskfiles = []  # possible result files that don't necessarily exist
+    # delete any associated result files from a deleted task
 
-    localresultfile = get_localresultfile(taskid)
-    taskfiles.append(localresultfile)
-    pdfpath = Path(localresultfile).with_suffix('.pdf')
-    taskfiles.append(pdfpath)
+    taskfiles = list(Path(localresultdir).glob(pattern=localresultfileprefix(taskid) + '.*'))
 
     for taskfile in taskfiles:
         if os.path.exists(taskfile):
@@ -79,57 +82,61 @@ def remove_task_resultfiles(taskid):
                 log(f"Deleted {Path(taskfile).relative_to(localresultdir)}")
 
 
-def runforced(task, conn, logprefix='', **kwargs):
+def runtask(task, conn, logprefix='', **kwargs):
     # run the forced photometry on atlas sc01 and retrieve the result
     # returns (resultfilename, error_msg)
     # - resultfilename will be False if it could not be created due to an error
     # - error_msg is False unless there was an error that would make retries pointless (e.g. invalid object name)
 
-    id = task['id']
-    ra = task['ra']
-    dec = task['dec']
-    mpc_name = task['mpc_name']
-    mjd_min = task['mjd_min']
-    mjd_max = task['mjd_max']
-
-    filename = f'job{id:05d}.txt'
+    if task['request_type'] == 'FP':
+        filename = f"job{task['id']:05d}.txt"
+    elif task['request_type'] == 'IMGZIP':
+        filename = f"job{task['parent_task_id']:05d}.zip"
+    else:
+        return False, False
 
     remoteresultdir = Path('~/atlasserver/results/')
     remoteresultfile = Path(remoteresultdir, filename)
 
-    localresultfile = get_localresultfile(id)
+    localresultfile = Path(localresultdir, filename)
     localresultdir.mkdir(parents=True, exist_ok=True)
 
     atlascommand = "nice -n 19 "
-    if mpc_name:
-        atlascommand += f"/atlas/bin/ssforce.sh {mpc_name}"
-    else:
-        atlascommand += f"/atlas/bin/force.sh {float(ra)} {float(dec)}"
+    if task['request_type'] == 'FP':
+        if task['mpc_name']:
+            atlascommand += f"/atlas/bin/ssforce.sh {task['mpc_name']}"
+        else:
+            atlascommand += f"/atlas/bin/force.sh {float(task['ra'])} {float(task['dec'])}"
 
-    if task['use_reduced']:
-        atlascommand += " red=1"
+        if task['use_reduced']:
+            atlascommand += " red=1"
 
-    if task['radec_epoch_year']:
-        atlascommand += f" epoch={task['radec_epoch_year']}"
+        if task['radec_epoch_year']:
+            atlascommand += f" epoch={task['radec_epoch_year']}"
 
-    if task['propermotion_ra']:
-        atlascommand += f" pmra={task['propermotion_ra']}"
+        if task['propermotion_ra']:
+            atlascommand += f" pmra={task['propermotion_ra']}"
 
-    if task['propermotion_dec']:
-        atlascommand += f" pmdec={task['propermotion_dec']}"
+        if task['propermotion_dec']:
+            atlascommand += f" pmdec={task['propermotion_dec']}"
 
-    if mjd_min:
-        atlascommand += f" m0={float(mjd_min)}"
-    if mjd_max:
-        atlascommand += f" m1={float(mjd_max)}"
+        if task['mjd_min']:
+            atlascommand += f" m0={float(task['mjd_min'])}"
+        if task['mjd_max']:
+            atlascommand += f" m1={float(task['mjd_max'])}"
 
-    atlascommand += " dodb=1 parallel=16"
+        atlascommand += " dodb=1 parallel=32"
 
-    # for debugging because force.sh takes a long time to run
-    # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
+        # for debugging because force.sh takes a long time to run
+        # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
-    atlascommand += " | sort -n"
-    atlascommand += f" | tee {remoteresultfile}"
+        atlascommand += " | sort -n"
+        atlascommand += f" | tee {remoteresultfile}"
+    elif task['request_type'] == 'IMGZIP':
+        remotedatafile = Path(remoteresultdir, f"job{task['parent_task_id']:05d}.txt")
+        atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
+
+        atlascommand += (" red" if task['use_reduced'] else " diff")
 
     log(logprefix + f"Executing on {remoteServer}: {atlascommand}")
 
@@ -146,7 +153,7 @@ def runforced(task, conn, logprefix='', **kwargs):
             p.communicate(timeout=1)
 
         except subprocess.TimeoutExpired:
-            cancelled = not task_exists(conn=conn, taskid=id)
+            cancelled = not task_exists(conn=conn, taskid=task['id'])
             timed_out = (time.perf_counter() - starttime) >= TASKMAXTIME
             if (time.perf_counter() - lastlogtime) >= 10:
                 log(logprefix + f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ")
@@ -184,10 +191,14 @@ def runforced(task, conn, logprefix='', **kwargs):
     #     if stderrline:
     #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
-    if not task_exists(conn=conn, taskid=id):  # check if job was cancelled
+    if not task_exists(conn=conn, taskid=task['id']):  # check if job was cancelled
         return False, False
 
-    copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"'
+    # make sure the large zip files are not kept around on the remote system
+    # but keep the data files there for possible image requests
+    copymethod = 'scp' if task['request_type'] == 'FP' else 'rsync --remove-source-files'
+    copycommand = f'{copymethod} {remoteServer}:{remoteresultfile} "{localresultfile}"'
+
     log(logprefix + copycommand)
 
     p = subprocess.Popen(copycommand,
@@ -207,14 +218,16 @@ def runforced(task, conn, logprefix='', **kwargs):
         # task failed somehow
         return False, False
 
-    df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
+    if task['request_type'] == 'FP':
+        df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
 
-    if df.empty:
-        # file is just a header row without data
-        return localresultfile, 'No data returned'
+        if df.empty:
+            # file is just a header row without data
+            return localresultfile, 'No data returned'
 
-    make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
-                  logprefix=logprefix, logfunc=log, separate_process=True)
+        # if not task['from_api']:
+        #     make_pdf_plot(taskid=task['id'], taskcomment=task['comment'], localresultfile=localresultfile,
+        #                   logprefix=logprefix, logfunc=log, separate_process=True)
 
     return localresultfile, False
 
@@ -288,45 +301,9 @@ def send_email_if_needed(conn, task, logprefix=''):
         log(logprefix + f'User {task["username"]} did not request an email.')
 
 
-# def ingest_results(localresultfile, conn, use_reduced=False):
-#     df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar='#', skipinitialspace=True)
-#     # df.rename(columns={'#MJD': 'MJD'})
-#     cur = conn.cursor()
-#     for _, pdrow in df.iterrows():
-#         # print(pdrow.keys())
-#         rowdict = {}
-#         rowdict['timestamp'] = 'UTC_TIMESTAMP()'
-#         rowdict['mjd'] = str(pdrow['#MJD'])
-#         rowdict['m'] = str(pdrow['m'])
-#         rowdict['dm'] = str(pdrow['dm'])
-#         rowdict['ujy'] = str(pdrow['uJy'])
-#         rowdict['dujy'] = str(pdrow['duJy'])
-#         rowdict['filter'] = f"'{pdrow['F']}'"
-#         rowdict['err'] = str(pdrow['err'])
-#         rowdict['chi_over_n'] = str(pdrow['chi/N'])
-#         rowdict['ra'] = str(pdrow['RA'])
-#         rowdict['declination'] = str(pdrow['Dec'])
-#         rowdict['x'] = str(pdrow['x'])
-#         rowdict['y'] = str(pdrow['y'])
-#         rowdict['maj'] = str(pdrow['maj'])
-#         rowdict['min'] = str(pdrow['min'])
-#         rowdict['phi'] = str(pdrow['phi'])
-#         rowdict['apfit'] = str(pdrow['apfit'])
-#         rowdict['sky'] = str(pdrow['Sky'])
-#         rowdict['zp'] = str(pdrow['ZP'])
-#         rowdict['obs'] = f"'{pdrow['Obs']}'"
-#         rowdict['use_reduced'] = "1" if use_reduced else "0"
-#
-#         strsql = f'INSERT INTO forcephot_result ({",".join(rowdict.keys())}) VALUES ({",".join(rowdict.values())});'
-#         cur.execute(strsql)
-#
-#     conn.commit()
-#     cur.close()
-
-
 def handler(signal_received, frame):
     # Handle any cleanup here
-    print('SIGINT or CTRL-C detected. Exiting gracefully')
+    print('SIGINT or CTRL-C detected. Exiting')
     exit(0)
 
 
@@ -354,7 +331,7 @@ def do_taskloop():
     if taskcount == 0:
         return 0
     else:
-        log(f'Unfinished jobs in queue: {taskcount}')
+        log(f'Unfinished tasks in queue: {taskcount}')
 
     cur.execute(
         "SELECT t.*, a.email, a.username FROM forcephot_task AS t LEFT JOIN auth_user AS a"
@@ -364,40 +341,39 @@ def do_taskloop():
         task = dict(taskrow)
 
         if not task_exists(conn=conn, taskid=task['id']):
-            log(f"job{task['id']:05d} (user {task['username']}): was cancelled.")
+            log(f"task {task['id']} (user {task['username']}): was cancelled.")
             continue
 
         taskload_thisuser = usertaskload.get(task['user_id'], 0)
 
         if taskload_thisuser < USERTASKLOADLIMIT:
-            logprefix = f"job{task['id']:05d}: "
+            logprefix = f"task{task['id']:05d}: "
             cur2 = conn.cursor()
             cur2.execute(f"UPDATE forcephot_task SET starttimestamp=UTC_TIMESTAMP() WHERE id={task['id']};")
             conn.commit()
             cur2.close()
 
-            log(logprefix + f"Starting job for {task['username']} (who has run {taskload_thisuser} tasks "
+            log(logprefix + f"Starting task for {task['username']} (who has run {taskload_thisuser} tasks "
                 "in this pass so far):")
             log(logprefix + str(task))
             usertaskload[task['user_id']] = taskload_thisuser + 1
 
-            runforced_starttime = time.perf_counter()
+            runtask_starttime = time.perf_counter()
 
-            localresultfile, error_msg = runforced(conn=conn, logprefix=logprefix, task=task)
+            localresultfile, error_msg = runtask(conn=conn, logprefix=logprefix, task=task)
 
-            if not task_exists(conn=conn, taskid=task['id']):  # job was cancelled
+            if not task_exists(conn=conn, taskid=task['id']):  # task was cancelled
                 log(logprefix + "Task was cancelled during execution (no longer in database)")
 
                 # in case a result file was created, delete it
-                if localresultfile and os.path.exists(localresultfile):
-                    remove_task_resultfiles(taskid=task['id'])
+                remove_task_resultfiles(taskid=task['id'])
             else:
-                runforced_duration = time.perf_counter() - runforced_starttime
+                runtask_duration = time.perf_counter() - runtask_starttime
 
-                log(logprefix + f"Task ran for {runforced_duration:.1f} seconds")
+                log(logprefix + f"Task ran for {runtask_duration:.1f} seconds")
 
                 if error_msg:
-                    # an error occured and the job should not be retried (e.g. invalid
+                    # an error occured and the task should not be retried (e.g. invalid
                     # minor planet center object name or no data returned)
                     log(logprefix + f"Error_msg: {error_msg}")
 
@@ -408,7 +384,6 @@ def do_taskloop():
                     conn.commit()
                     cur2.close()
                 else:
-                    localresultfile = get_localresultfile(task['id'])
                     if localresultfile and os.path.exists(localresultfile):
                         # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
                         send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
@@ -420,7 +395,7 @@ def do_taskloop():
                     else:
                         waittime = 5
                         log(logprefix + f"ERROR: Task was not completed successfully. Waiting {waittime} seconds "
-                            f"before continuing with next job...")
+                            f"before continuing with next task...")
                         time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
             if (taskload_thisuser >= USERTASKLOADLIMIT):
@@ -435,27 +410,12 @@ def do_taskloop():
     return taskcount
 
 
-def do_maintenance(maxtime=None):
-    start_maintenancetime = time.perf_counter()
-
-    logprefix = "Maintenance: "
-
-    conn = mysql.connector.connect(**CONNKWARGS)
-
-    cur = conn.cursor(dictionary=True, buffered=True)
-
-    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp < UTC_TIMESTAMP() - INTERVAL 30 DAY;")
-    taskcount = cur.fetchone()['taskcount']
-    log(logprefix + f"There are {taskcount} tasks that finished more than 30 days ago")
-
-    conn.commit()
-    cur.close()
+def rm_unassociated_files(conn, logprefix, start_maintenancetime, maxtime):
+    log(logprefix + "Checking for unassociated result files...")
 
     taskid_list = get_taskid_list(conn)
-
-    log(logprefix + "Checking for unassociated result files...")
     for resultfilepath in Path(localresultdir).glob('job*.*'):
-        if resultfilepath.suffix in ['.txt', '.pdf']:
+        if resultfilepath.suffix in ['.txt', '.pdf', '.js', '.zip']:
             try:
                 file_taskidstr = resultfilepath.stem[3:]
                 file_taskid = int(file_taskidstr)
@@ -485,8 +445,30 @@ def do_maintenance(maxtime=None):
                 f"(above limit of {maxtime:.0f}). Resuming normal tasks...")
             break
 
-    conn.close()
     log(logprefix + "Finished checking for unassociated result files")
+
+
+def do_maintenance(maxtime=None):
+    start_maintenancetime = time.perf_counter()
+
+    logprefix = "Maintenance: "
+
+    conn = mysql.connector.connect(**CONNKWARGS)
+
+    cur = conn.cursor(dictionary=True, buffered=True)
+
+    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task "
+                "WHERE finishtimestamp < UTC_TIMESTAMP() - INTERVAL 30 DAY;")
+    taskcount = cur.fetchone()['taskcount']
+    log(logprefix + f"There are {taskcount} tasks that finished more than 30 days ago")
+
+    conn.commit()
+    cur.close()
+
+    # this can get very slow
+    # rm_unassociated_files(conn, logprefix, start_maintenancetime, maxtime)
+
+    conn.close()
 
 
 def main():
@@ -499,10 +481,10 @@ def main():
     last_maintenancetime = float('-inf')
     printedwaiting = False
     while True:
-        if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
-            last_maintenancetime = time.perf_counter()
-            do_maintenance(maxtime=300)
-            printedwaiting = False
+        # if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
+        #     last_maintenancetime = time.perf_counter()
+        #     do_maintenance(maxtime=300)
+        #     printedwaiting = False
 
         queuedtaskcount = do_taskloop()
         if queuedtaskcount == 0:

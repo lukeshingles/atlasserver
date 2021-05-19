@@ -40,6 +40,7 @@ urlpatterns = [
     path('', views.simpleview('index.html'), name="index"),
     path('', include(router.urls)),
     path('queue/<str:pk>/delete/', views.deletetask, name="delete"),
+    path('queue/<str:pk>/requestimages/', views.requestimages, name="requestimages"),
     url(r'^register/$', views.register, name='register'),
     path('faq/', views.simpleview('faq.html', {'name': 'FAQ'}), name="faq"),
     path('resultdesc/', views.simpleview('resultdesc.html', {'name': 'Output Description'}),
@@ -54,6 +55,7 @@ urlpatterns = [
     path('queue/<int:taskid>/resultplotdata.js', views.resultplotdatajs, name='resultplotdatajs'),
     path('queue/<int:taskid>/plot.pdf', views.taskpdfplot, name='taskpdfplot'),
     path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
+    path('queue/<int:taskid>/images.zip', views.taskimagezip, name='taskimagezip'),
 
     path('apiguide/', views.simpleview('apiguide.html', {'name': 'API Guide'}), name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),

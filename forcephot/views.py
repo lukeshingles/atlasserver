@@ -9,6 +9,7 @@ from django.contrib.auth import authenticate, login
 from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist, ValidationError, PermissionDenied
 from django.db.models import Count
+from django.forms import model_to_dict
 from django.http import HttpResponse, FileResponse
 from django.http.response import HttpResponseRedirect
 from django.http import HttpResponseNotFound
@@ -223,6 +224,47 @@ def deletetask(request, pk):
         pass
 
     redirurl = request.META.get('HTTP_REFERER', reverse('task-list'))
+    if f'/{pk}/' in redirurl:  # if referrer was the single-task view, it will not exist anymore
+        redirurl = reverse('task-list')
+
+    return redirect(redirurl, request=request)
+
+
+def requestimages(request, pk):
+    if not request.user.is_authenticated:
+        raise PermissionDenied()
+
+    try:
+        parent_task = Task.objects.get(id=pk)
+
+        if parent_task.user.id != request.user.id and not request.user.is_staff:
+            raise PermissionDenied()
+
+    except ObjectDoesNotExist:
+        return HttpResponseNotFound("Page not found")
+
+    if not parent_task.error_msg and parent_task.finishtimestamp:
+        data = model_to_dict(parent_task, exclude=['id'])
+        data['parent_task_id'] = parent_task.id
+        data['request_type'] = Task.RequestType.IMGZIP
+        data['user'] = request.user
+        data['timestamp'] = datetime.datetime.utcnow().replace(
+            tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
+        data['starttimestamp'] = None
+        data['finishtimestamp'] = None
+
+        data['country_code'] = request.geo_data.country_code
+        data['region'] = request.geo_data.region
+        data['city'] = request.geo_data.city
+
+        data['from_api'] = False
+        data['send_email'] = False
+
+        newtask = Task(**data)
+        newtask.save()
+
+    # redirurl = reverse('task-detail', args=(newtask.id,))
+    redirurl = reverse('task-list')
     return redirect(redirurl, request=request)
 
 
@@ -482,56 +524,75 @@ def resultplotdatajs(request, taskid):
     else:
         return HttpResponseNotFound("Page not found")
 
-    jsout = []
-    resultfile = item.localresultfile()
-    if resultfile:
-        df = pd.read_csv(os.path.join(settings.STATIC_ROOT, resultfile), delim_whitespace=True, escapechar='#')
-        # df.rename(columns={'#MJD': 'MJD'})
-        if df.empty:
-            return HttpResponseNotFound("Page not found")
+    jsplotfile = item.localresultjsplotfile()
+    if not jsplotfile:
+        return HttpResponseNotFound("Page not found")
 
-        df.query("uJy > -1e10 and uJy < 1e10", inplace=True)
+    if not Path(jsplotfile).exists():
+        jsout = []
+        resultfile = item.localresultfile()
+        if resultfile:
+            resultfilepath = os.path.join(settings.STATIC_ROOT, resultfile)
+            if not os.path.exists(resultfilepath):
+                return HttpResponseNotFound("Page not found")
 
-        jsout.append("var jslcdata = new Array();\n")
-        jsout.append("var jslabels = new Array();\n")
+            df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#')
+            # df.rename(columns={'#MJD': 'MJD'})
+            if df.empty:
+                return HttpResponseNotFound("Page not found")
 
-        divid = f'plotforcedflux-task-{taskid}'
+            df.query("uJy > -1e10 and uJy < 1e10", inplace=True)
 
-        for color, filter in [(11, 'c'), (12, 'o')]:
-            dffilter = df.query('F == @filter', inplace=False)
+            jsout.append("var jslcdata = new Array();\n")
+            jsout.append("var jslabels = new Array();\n")
 
-            jsout.append('\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n')
+            divid = f'plotforcedflux-task-{taskid}'
 
-            jsout.append("jslcdata.push([" + (", ".join([
-                f"[{mjd},{uJy},{duJy}]" for _, (mjd, uJy, duJy) in
-                dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n")
+            for color, filter in [(11, 'c'), (12, 'o')]:
+                dffilter = df.query('F == @filter', inplace=False)
 
-        today = datetime.date.today()
-        mjd_today = date_to_mjd(today.year, today.month, today.day)
-        xmin = df['#MJD'].min()
-        xmax = df['#MJD'].max()
-        ymin = max(-200, df.uJy.min())
-        ymax = min(40000, df.uJy.max())
+                jsout.append(
+                    '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n')
 
-        jsout.append('var jslclimits = {')
-        jsout.append(f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},')
-        jsout.append(f'"discoveryDate": {xmin},')
-        jsout.append(f'"today": {mjd_today},')
-        jsout.append('};\n')
+                jsout.append("jslcdata.push([" + (", ".join([
+                    f"[{mjd},{uJy},{duJy}]" for _, (mjd, uJy, duJy) in
+                    dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n")
 
-        jsout.append(f'jslimitsglobal["#{divid}"] = jslclimits;\n')
-        jsout.append(f'jslcdataglobal["#{divid}"] = jslcdata;\n')
-        jsout.append(f'jslabelsglobal["#{divid}"] = jslabels;\n')
+            today = datetime.date.today()
+            mjd_today = date_to_mjd(today.year, today.month, today.day)
+            xmin = df['#MJD'].min()
+            xmax = df['#MJD'].max()
+            ymin = max(-200, df.uJy.min())
+            ymax = min(40000, df.uJy.max())
 
-        jsout.append(
-            f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n')
+            jsout.append('var jslclimits = {')
+            jsout.append(f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},')
+            jsout.append(f'"discoveryDate": {xmin},')
+            jsout.append(f'"today": {mjd_today},')
+            jsout.append('};\n')
 
-        jsout.append((
-            "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', cache: true, dataType: 'script', async: false});"))
+            jsout.append(f'jslimitsglobal["#{divid}"] = jslclimits;\n')
+            jsout.append(f'jslcdataglobal["#{divid}"] = jslcdata;\n')
+            jsout.append(f'jslabelsglobal["#{divid}"] = jslabels;\n')
 
-    strjs = ''.join(jsout)
+            jsout.append(
+                f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n')
 
-    return HttpResponse(strjs, content_type="text/javascript")
+            jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.js').open('rt').readlines()))
+            # jsout.append((
+            #     "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', "
+            #     "cache: true, dataType: 'script'});"))
+
+        # strjs = ''.join(jsout)
+        # return HttpResponse(strjs, content_type="text/javascript")
+
+        with jsplotfile.open('w') as f:
+            f.writelines(jsout)
+
+    if os.path.exists(jsplotfile):
+        return FileResponse(open(jsplotfile, 'rb'))
+
+    return HttpResponseNotFound("ERROR: Could not create javascript file.")
 
 
 def taskpdfplot(request, taskid):
@@ -573,6 +634,25 @@ def taskresultdata(request, taskid):
 
     if item:
         resultfile = item.localresultfile()
+        if resultfile:
+            resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
+
+            if os.path.exists(resultfilepath):
+                return FileResponse(open(resultfilepath, 'rb'))
+
+    return HttpResponseNotFound("Page not found")
+
+
+def taskimagezip(request, taskid):
+    item = None
+    if taskid:
+        try:
+            item = Task.objects.get(id=taskid)
+        except ObjectDoesNotExist:
+            return HttpResponseNotFound("Page not found")
+
+    if item:
+        resultfile = item.localresultimagezipfile()
         if resultfile:
             resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
 

@@ -2,6 +2,7 @@ from django import template
 from django.contrib.humanize.templatetags import humanize
 from rest_framework.utils.urls import remove_query_param, replace_query_param
 from django.utils.html import mark_safe
+from django.urls import reverse
 import datetime
 
 register = template.Library()
@@ -24,7 +25,6 @@ def removetaskboxqueryparam(value):
 
 @register.filter
 def addtaskboxqueryparam(value):
-    print(replace_query_param(value, 'htmltaskframeonly', 'true'))
     return replace_query_param(value, 'htmltaskframeonly', 'true')
 
 
@@ -40,5 +40,27 @@ def filterbuttons(request):
         strclass = 'btn-primary' if fullpath == href else 'btn-link'
         strhtml += f'<li><a href="{href}" class="btn {strclass}">{label}</a></li>'
     strhtml += '</ul>'
+
+    return mark_safe(strhtml)
+
+
+@register.simple_tag()
+def get_or_request_imagezip(task):
+    strhtml = ''
+    if task.request_type == 'IMGZIP':
+        if task.localresultimagezipfile():
+            # direct link to zip file
+            url = reverse('taskimagezip', args=(task.parent_task_id,))
+            strhtml = f'<a class="results btn btn-info getimages" href="{url}">Download images (ZIP)</a>'
+    else:
+        imgreq_taskid = task.imagerequesttaskid()
+        if imgreq_taskid:
+            url = reverse('task-detail', args=(imgreq_taskid,))
+            strtext = 'Images ready' if task.localresultimagezipfile() else 'Images requested'
+
+            strhtml = f'<a class="results btn btn-info getimages" href="{url}">{strtext}</a>'
+        else:
+            url = reverse('requestimages', args=(task.id,))
+            strhtml = f'<a class="results btn btn-info getimages" href="{url}">Request images</a>'
 
     return mark_safe(strhtml)
