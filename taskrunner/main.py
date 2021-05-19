@@ -46,7 +46,7 @@ def localresultfileprefix(id):
 
 
 def get_localresultfile(id):
-    return localresultfileprefix() + '.txt'
+    return localresultfileprefix(id) + '.txt'
 
 
 def task_exists(conn, taskid):
