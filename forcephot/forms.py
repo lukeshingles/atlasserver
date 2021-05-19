@@ -13,7 +13,7 @@ from forcephot.models import Task
 
 
 class TaskForm(forms.ModelForm):
-    radeclist = forms.CharField(label="RA Dec list", required=True,
+    radeclist = forms.CharField(label="RA Dec / MPC names", required=True,
                                 widget=forms.Textarea(attrs={"rows": 3, "cols": ""}))
 
     class Meta:
