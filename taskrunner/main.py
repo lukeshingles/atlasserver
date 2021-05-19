@@ -67,10 +67,14 @@ def get_taskid_list(conn):
     return taskid_list
 
 
-def remove_task_resultfiles(taskid):
+def remove_task_resultfiles(taskid, parent_task_id=None, request_type=None):
     # delete any associated result files from a deleted task
-
-    taskfiles = list(Path(localresultdir).glob(pattern=localresultfileprefix(taskid) + '.*'))
+    if request_type == 'FP':
+        taskfiles = [Path(localresultdir, localresultfileprefix(taskid) + '.txt')]
+    elif request_type == 'IMGZIP' and parent_task_id is not None:
+        taskfiles = [Path(localresultdir, localresultfileprefix(parent_task_id) + '.zip')]
+    else:
+        taskfiles = list(Path(localresultdir).glob(pattern=localresultfileprefix(taskid) + '.*'))
 
     for taskfile in taskfiles:
         if os.path.exists(taskfile):
@@ -366,7 +370,8 @@ def do_taskloop():
                 log(logprefix + "Task was cancelled during execution (no longer in database)")
 
                 # in case a result file was created, delete it
-                remove_task_resultfiles(taskid=task['id'])
+                remove_task_resultfiles(taskid=task['id'], parent_task_id=task['parent_task_id'],
+                                        request_type=task['request_type'])
             else:
                 runtask_duration = time.perf_counter() - runtask_starttime
 
@@ -423,7 +428,7 @@ def rm_unassociated_files(conn, logprefix, start_maintenancetime, maxtime):
                 if file_taskid not in taskid_list:
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
                         f"because task {file_taskid} is not in the database")
-                    remove_task_resultfiles(file_taskid)
+                    resultfilepath.unlink(missing_ok=True)
                 # elif resultfilepath.suffix == '.txt':
                 #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
                 #         # load the text file to check if it contains any data rows to be plotted
