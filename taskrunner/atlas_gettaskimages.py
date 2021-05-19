@@ -31,14 +31,14 @@ def main():
         fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'  # assumes diff image not reduced
         fitsoutpath = Path(tmpfolder / f'{obs}.fits')
         commands.append(
+            f"echo Image {index + 1:04d} of {rowcount}: {obs}; "
             "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
             f"{fitsinput} {fitsoutpath} "
             f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 101"
-            f"; echo {index:04d}/{rowcount}: {obs}"
             "\n"
         )
 
-    commandfile = tmpfolder / 'commands.txt'
+    commandfile = tmpfolder / 'commandlist.sh'
     with commandfile.open('w') as f:
         f.writelines(commands)
 
