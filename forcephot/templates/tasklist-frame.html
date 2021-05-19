@@ -24,13 +24,14 @@
               {% endif %}
                   <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
                   {% if task.parent_task %}
-                  <p>Source image request for
+                  <p>Image request for
                     {% if task.parent_task.is_archived %}
                     Task {{task.parent_task.id}} (deleted)
                     {% else %}
                     <a href="{% url 'task-detail' task.parent_task.id %}">Task {{task.parent_task.id}}</a>
                     {% endif %}
                   </p>
+                  <p>Up to the first 500 images will be retrieved. The image request and download link may expire after one week.</p>
                   {% endif %}
 
                   {% if task.user.id != request.user.id %}
