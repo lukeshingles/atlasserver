@@ -59,9 +59,9 @@ def get_or_request_imagezip(task):
             if task.localresultimagezipfile():
                 strhtml = f'<a class="btn btn-primary" href="{url}">Images ready</a>'
             else:
-                strhtml = f'<a class="btn btn-info" href="{url}">Images requested</a>'
+                strhtml = f'<a class="btn btn-warning" href="{url}">Images requested</a>'
         else:
             url = reverse('requestimages', args=(task.id,))
-            strhtml = f'<a class="btn btn-warning" href="{url}" title="Download FITS and JPEG images for up to the first 500 observations.">Request images</a>'
+            strhtml = f'<a class="btn btn-info" href="{url}" title="Download FITS and JPEG images for up to the first 500 observations.">Request images</a>'
 
     return mark_safe(strhtml)
