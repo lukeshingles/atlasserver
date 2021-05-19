@@ -624,7 +624,7 @@ def taskpdfplot(request, taskid):
         if os.path.exists(pdfpath):
             return FileResponse(open(pdfpath, 'rb'))
 
-    return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps no data points?)")
+    return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps a lack of data points?)")
 
 
 def taskresultdata(request, taskid):
