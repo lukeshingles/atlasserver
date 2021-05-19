@@ -460,6 +460,9 @@ def statsshortterm(request):
     dictparams['sevendayusers'] = sevendaytasks.values_list('user_id').distinct().count()
     dictparams['sevendaytaskrate'] = '{:.1f}/day'.format(dictparams['sevendaytasks'] / 7.)
 
+    dictparams['sevendaympctasks'] = int(sevendaytasks.filter(mpc_name__isnull=False).count())
+    dictparams['sevendayimgtasks'] = int(sevendaytasks.filter(request_type='IMGZIP').count())
+
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
     if sevendaytasks_finished.count() > 0:
