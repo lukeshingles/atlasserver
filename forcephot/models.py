@@ -1,6 +1,5 @@
 import datetime
-import math
-import os
+# import os
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -209,11 +208,17 @@ class Task(models.Model):
         if self.request_type == 'IMGZIP':
             zipfile = self.localresultimagezipfile()
             if zipfile:
-                Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
+                try:
+                    Path(settings.STATIC_ROOT, zipfile).unlink()
+                except FileNotFoundError:
+                    pass
         else:
             # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
             for ext in ['.txt', '.pdf', '.js']:
-                Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
+                try:
+                    Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink()
+                except FileNotFoundError:
+                    pass
 
         if self.finished():
             self.is_archived = True

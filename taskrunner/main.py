@@ -428,7 +428,7 @@ def rm_unassociated_files(conn, logprefix, start_maintenancetime, maxtime):
                 if file_taskid not in taskid_list:
                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
                         f"because task {file_taskid} is not in the database")
-                    resultfilepath.unlink(missing_ok=True)
+                    resultfilepath.unlink()
                 # elif resultfilepath.suffix == '.txt':
                 #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
                 #         # load the text file to check if it contains any data rows to be plotted
