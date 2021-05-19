@@ -65,7 +65,9 @@
                           <a class="results btn btn-info getdata" href="{% url 'taskresultdata' task.id %}" target="_blank">Data</a>
                           <a class="results btn btn-info getpdf" href="{% url 'taskpdfplot' task.id %}" target="_blank">PDF</a>
                         {% endif %}
+                        {% if task.user.id == request.user.id %}
                         {% get_or_request_imagezip task %}
+                        {% endif %}
                       {% endif %}
                   {% elif task.starttimestamp %}
                   <br /><span style="color: red; font-style: italic">Running (started {{task.starttimestamp|tasktimesince}})</span>
