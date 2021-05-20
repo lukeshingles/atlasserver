@@ -202,8 +202,9 @@ class Task(models.Model):
             f"{user.username} ({user.email})" +
             (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "") +
             f"{' API' if self.from_api else ''}" +
+            f" {self.request_type}" +
             targetstr +
-            f" {'reducedimg' if self.use_reduced else 'diffimg'}" +
+            f" {'redimg' if self.use_reduced else 'diffimg'}" +
             f" {status} " +
             f"{' archived' if self.is_archived else ''}"
         )
