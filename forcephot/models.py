@@ -87,7 +87,7 @@ class Task(models.Model):
             return the full local path to the image file if it exists, otherwise None
         """
         if self.localresultfile():
-            imagefile = Path(self.localresultfile()).with_suffix('.jpg')
+            imagefile = self.localresultfileprefix(use_parent=True) + '.jpg'
             if Path(settings.STATIC_ROOT, imagefile).exists():
                 return imagefile
 
