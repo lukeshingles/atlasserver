@@ -34,7 +34,7 @@ def main():
             f"echo Image {index + 1:04d} of {rowcount}: {obs}; "
             "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
             f"{fitsinput} {fitsoutpath} "
-            f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 201"
+            f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 200"
             "\n"
         )
 

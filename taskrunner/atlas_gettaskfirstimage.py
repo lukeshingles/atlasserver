@@ -35,7 +35,7 @@ def main():
     os.system(
         "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
         f"{fitsinput} {fitsoutpath} "
-        f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 101"
+        f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 100"
         "\n"
     )
 
