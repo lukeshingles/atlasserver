@@ -204,7 +204,7 @@ def runtask(task, conn, logprefix='', **kwargs):
     # but keep the data files there for possible image requests
     if task['request_type'] == 'FP':
         copycommands = [f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"',
-                        'rsync --remove-source-files {remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")} {localresultdir}']
+                        f'rsync --remove-source-files {remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")} {localresultdir}']
     else:
         copycommands = [f'rsync --remove-source-files {remoteServer}:{remoteresultfile} {localresultdir}']
 
