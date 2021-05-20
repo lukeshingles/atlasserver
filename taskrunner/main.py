@@ -203,24 +203,26 @@ def runtask(task, conn, logprefix='', **kwargs):
     # make sure the large zip files are not kept around on the remote system
     # but keep the data files there for possible image requests
     if task['request_type'] == 'FP':
-        copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"; rsync --remove-source-files {remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")} {localresultdir}'
+        copycommands = [f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"',
+                        'rsync --remove-source-files {remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")} {localresultdir}']
     else:
-        copycommand = f'rsync --remove-source-files {remoteServer}:{remoteresultfile} {localresultdir}'
+        copycommands = [f'rsync --remove-source-files {remoteServer}:{remoteresultfile} {localresultdir}']
 
-    log(logprefix + copycommand)
+    for copycommand in copycommands:
+        log(logprefix + copycommand)
 
-    p = subprocess.Popen(copycommand,
-                         shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         encoding='utf-8', bufsize=1, universal_newlines=True)
-    stdout, stderr = p.communicate()
+        p = subprocess.Popen(copycommand,
+                             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             encoding='utf-8', bufsize=1, universal_newlines=True)
+        stdout, stderr = p.communicate()
 
-    if stdout:
-        for line in stdout.split('\n'):
-            log(logprefix + f"STDOUT: {line}")
+        if stdout:
+            for line in stdout.split('\n'):
+                log(logprefix + f"STDOUT: {line}")
 
-    if stderr:
-        for line in stderr.split('\n'):
-            log(logprefix + f"STDERR: {line}")
+        if stderr:
+            for line in stderr.split('\n'):
+                log(logprefix + f"STDERR: {line}")
 
     if not os.path.exists(localresultfile):
         # task failed somehow
