@@ -11,15 +11,18 @@
 
           {% for task in tasks %}
               {% if task.finishtimestamp %}
-                <li class="task finished" id="task-{{task.id}}"><div class="updatable">
+                <li class="task finished" id="task-{{task.id}}"><div class="updatable"><div class="rightside">
                 <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
+                {% if task.localresultpreviewimagefile %}
+                <img src="{% static task.localresultpreviewimagefile %}" style="display:block; margin-top: 1em;" />
+                {% endif %}</div>
               {% elif task.starttimestamp %}
                 <li class="task queued started" id="task-{{task.id}}"><div class="updatable">
-                <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+                <div class="rightside"><a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a></div>
               {% else %}
                 <li class="task queued notstarted" id="task-{{task.id}}"><div class="updatable">
                 {% if task.user.id == request.user.id  or request.user.is_superuser %}
-                <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a>
+                <div class="rightside"><a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a></div>
                 {% endif %}
               {% endif %}
                   <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>

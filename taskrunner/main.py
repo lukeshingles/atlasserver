@@ -135,11 +135,13 @@ def runtask(task, conn, logprefix='', **kwargs):
         # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
         atlascommand += " | sort -n"
-        atlascommand += f" | tee {remoteresultfile}"
+        atlascommand += f" | tee {remoteresultfile}; "
+        atlascommand += f"~/atlas_gettaskfirstimage.py {remoteresultfile}"
+        atlascommand += (" red" if task['use_reduced'] else " diff")
+
     elif task['request_type'] == 'IMGZIP':
         remotedatafile = Path(remoteresultdir, f"job{task['parent_task_id']:05d}.txt")
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
-
         atlascommand += (" red" if task['use_reduced'] else " diff")
 
     log(logprefix + f"Executing on {remoteServer}: {atlascommand}")
@@ -200,8 +202,10 @@ def runtask(task, conn, logprefix='', **kwargs):
 
     # make sure the large zip files are not kept around on the remote system
     # but keep the data files there for possible image requests
-    copymethod = 'scp' if task['request_type'] == 'FP' else 'rsync --remove-source-files'
-    copycommand = f'{copymethod} {remoteServer}:{remoteresultfile} "{localresultfile}"'
+    if task['request_type'] == 'FP':
+        copycommand = f'scp {remoteServer}:{remoteresultfile} "{localresultfile}"; rsync --remove-source-files {remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")} {localresultdir}'
+    else:
+        copycommand = f'rsync --remove-source-files {remoteServer}:{remoteresultfile} {localresultdir}'
 
     log(logprefix + copycommand)
 

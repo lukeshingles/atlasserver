@@ -81,6 +81,18 @@ class Task(models.Model):
 
         return None
 
+    @property
+    def localresultpreviewimagefile(self):
+        """
+            return the full local path to the image file if it exists, otherwise None
+        """
+        if self.localresultfile():
+            imagefile = Path(self.localresultfile()).with_suffix('.jpg')
+            if Path(settings.STATIC_ROOT, imagefile).exists():
+                return imagefile
+
+        return None
+
     def localresultpdfplotfile(self):
         """
             return the full local path to the PDF plot file if it exists, otherwise None
@@ -214,7 +226,7 @@ class Task(models.Model):
                     pass
         else:
             # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
-            for ext in ['.txt', '.pdf', '.js']:
+            for ext in ['.txt', '.pdf', '.js', '.jpg']:
                 try:
                     Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink()
                 except FileNotFoundError:

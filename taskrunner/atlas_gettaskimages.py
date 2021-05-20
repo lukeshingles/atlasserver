@@ -26,9 +26,9 @@ def main():
     commands = []
     for index, row in df[:500].iterrows():
         obs = row['Obs']  # looks like '01a59309o0235c'
-        imgfolder = 'red' if reduced else 'diff'
+        imgfolder = 'red' if reduced else 'diff'  # difference or reduced image
         fitsext = 'fits' if reduced else 'diff'
-        fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'  # assumes diff image not reduced
+        fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'
         fitsoutpath = Path(tmpfolder / f'{obs}.fits')
         commands.append(
             f"echo Image {index + 1:04d} of {rowcount}: {obs}; "
