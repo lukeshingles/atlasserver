@@ -34,7 +34,7 @@
                     <a href="{% url 'task-detail' task.parent_task.id %}">Task {{task.parent_task.id}}</a>
                     {% endif %}
                   </p>
-                  <p>Up to the first 500 images will be retrieved. The image request and download link may expire after one week.</p>
+                  <p>Up to the first 500 {%if task.use_reduced %}reduced{% else %}difference{% endif %} images will be retrieved. The image request and download link may expire after one week.</p>
                   {% endif %}
 
                   {% if task.user.id != request.user.id %}
