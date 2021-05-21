@@ -21,7 +21,8 @@ def main():
     reduced = (sys.argv[2] == 'red')
     df = pd.read_csv(datafile, delim_whitespace=True, escapechar='#')
 
-    firstfitsoutpath = None
+    firstfitsoutpath_c = None
+    firstfitsoutpath_o = None
     tmpfolder = Path(tempfile.mkdtemp())
     rowcount = len(df)
     commands = []
@@ -31,8 +32,13 @@ def main():
         fitsext = 'fits' if reduced else 'diff'
         fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'
         fitsoutpath = Path(tmpfolder / f'{obs}.fits')
-        if firstfitsoutpath is None:
-            firstfitsoutpath = fitsoutpath
+
+        if firstfitsoutpath_c is None and obs.endswith('c'):
+            firstfitsoutpath_c = fitsoutpath
+
+        if firstfitsoutpath_o is None and obs.endswith('o'):
+            firstfitsoutpath_o = fitsoutpath
+
         commands.append(
             f"echo Image {index + 1:04d} of {rowcount}: {obs}; "
             "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
@@ -47,13 +53,14 @@ def main():
 
     os.system(f'parallel --jobs 32 < {commandfile}')
 
-    if firstfitsoutpath is not None:
-        refoutputpath = str(firstfitsoutpath).replace('.fits', '_ref.fits')
-        command_getref = f'/atlas/bin/wpwarp2 -novar -nomask -nozerosat -wp {refoutputpath} {firstfitsoutpath}\n'
-        with commandfile.open('a') as f:
-            f.write(command_getref)
-        print(command_getref)
-        os.system(command_getref)
+    for firstfitsoutpath in [firstfitsoutpath_c, firstfitsoutpath_o]:
+        if firstfitsoutpath is not None:
+            refoutputpath = str(firstfitsoutpath).replace('.fits', '_ref.fits')
+            command_getref = f'/atlas/bin/wpwarp2 -novar -nomask -nozerosat -wp {refoutputpath} {firstfitsoutpath}\n'
+            with commandfile.open('a') as f:
+                f.write(command_getref)
+            print(command_getref)
+            os.system(command_getref)
 
     zipoutpath = Path(datafile).with_suffix('.zip').resolve()
 
