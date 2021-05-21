@@ -45,7 +45,7 @@ def filterbuttons(request):
 
 
 @register.simple_tag()
-def get_or_request_imagezip(task):
+def get_or_request_imagezip(task, request):
     strhtml = ''
     if task.request_type == 'IMGZIP':
         if task.localresultimagezipfile():
@@ -60,7 +60,7 @@ def get_or_request_imagezip(task):
                 strhtml = f'<a class="btn btn-primary" href="{url}">Images ready</a>'
             else:
                 strhtml = f'<a class="btn btn-warning" href="{url}">Images requested</a>'
-        else:
+        elif task.user.id == request.user.id:  # only the task's owner can request images
             url = reverse('requestimages', args=(task.id,))
             strhtml = f'<a class="btn btn-info" href="{url}" title="Download FITS and JPEG images for up to the first 500 observations.">Request {"reduced" if task.use_reduced else "difference"} images</a>'
 
