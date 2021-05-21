@@ -165,11 +165,11 @@ CSRF_TRUSTED_ORIGINS = ['.qub.ac.uk', 'fallingstar-data.com']
 # in a POST request to be lost.
 APPEND_SLASH = True
 
-LOGIN_URL = PATHPREFIX + '/api-auth/login/'
+LOGIN_URL = 'login'
 
-LOGIN_REDIRECT_URL = PATHPREFIX + '/queue'
+LOGIN_REDIRECT_URL = 'task-list'
 
-LOGOUT_REDIRECT_URL = PATHPREFIX + '/'
+LOGOUT_REDIRECT_URL = 'index'
 
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
