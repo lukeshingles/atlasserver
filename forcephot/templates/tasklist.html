@@ -135,7 +135,14 @@
     function updatePageTasks() {
         updatepropermotionpanel();
 
-        $.get('{{ request.get_full_path|addtaskboxqueryparam|escapejs }}').done(function(data, status) {
+        $.get({url: '{{ request.get_full_path|addtaskboxqueryparam|escapejs }}',
+        statusCode: {
+            404: function(responseObject, textStatus, jqXHR) {
+                // No content found (404)
+                window.location.href = '{% url 'task-list' %}';
+            }
+        }})
+        .done(function(data, status) {
             if (status == 'success') {
                 console.log('Updating page tasks...')
                 newhtml = jQuery(data);
@@ -204,7 +211,9 @@
                     prev_li_id = li_id
                 });
 
-                $('#paginator').replaceWith(newhtml.find('#paginator').get(0).outerHTML);
+                if (newhtml.find('#paginator').length > 0) {
+                    $('#paginator').replaceWith(newhtml.find('#paginator').get(0).outerHTML);
+                }
             }
         });
 
@@ -237,15 +246,17 @@
     }
 
     updatepropermotionpanel();
-    var newids = $.urlParam('newids').split('%2C');
-    newids.forEach(function(taskid) {
-        console.log(taskid)
-        li_id = '#task-' + taskid
-        $(li_id).hide();
-        $(li_id).show(700);
-        // remove the newids GET parameter from the URL box
-        window.history.replaceState({}, document.title, '{{ request.get_full_path|removetaskboxqueryparam }}' );
-    });
+    var newids = $.urlParam('newids');
+    if (newids != null) {
+        newids.split('%2C').forEach(function(taskid) {
+            console.log(taskid)
+            li_id = '#task-' + taskid
+            $(li_id).hide();
+            $(li_id).show(700);
+            // remove the newids GET parameter from the URL box
+            window.history.replaceState({}, document.title, '{{ request.get_full_path|removetaskboxqueryparam }}' );
+        });
+    }
 
     $( document ).ready(function() {
         activate_plots();
