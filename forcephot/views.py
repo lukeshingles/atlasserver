@@ -2,16 +2,19 @@ import datetime
 import os
 
 import numpy as np
-import geoip2.errors
+# import geoip2.errors
 
 from django.conf import settings as settings
 from django.contrib.auth import authenticate, login
-from django.contrib.auth.models import User
-from django.core.exceptions import ObjectDoesNotExist, ValidationError, PermissionDenied
+# from django.contrib.auth.models import User
+from django.core.exceptions import ObjectDoesNotExist
+# from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied
 from django.db.models import Count
 from django.forms import model_to_dict
-from django.http import HttpResponse, FileResponse
-from django.http.response import HttpResponseRedirect
+# from django.http import HttpResponse
+from django.http import FileResponse
+# from django.http.response import HttpResponseRedirect
 from django.http import HttpResponseNotFound
 from django.http import JsonResponse
 from django.views.decorators.cache import cache_page
@@ -137,14 +140,14 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        self.perform_destroy(instance)
-        # print(reverse('task-list', request=request))
-        # if request.accepted_renderer.format == 'html':
-        return Response(status=status.HTTP_303_SEE_OTHER, headers={
-                'Location': reverse('task-list', request=request)})
-        # return Response(status=status.HTTP_204_NO_CONTENT)
+    # def destroy(self, request, *args, **kwargs):
+    #     instance = self.get_object()
+    #     self.perform_destroy(instance)
+    #     # print(reverse('task-list', request=request))
+    #     # if request.accepted_renderer.format == 'html':
+    #     # return Response(status=status.HTTP_303_SEE_OTHER, headers={
+    #     #         'Location': reverse('task-list', request=request)})
+    #     return Response(status=status.HTTP_204_NO_CONTENT)
 
     # def perform_destroy(self, instance):
     #     instance.delete()
@@ -266,13 +269,6 @@ def requestimages(request, pk):
     # redirurl = reverse('task-detail', args=(newtask.id,))
     redirurl = reverse('task-list')
     return redirect(redirurl, request=request)
-
-
-def simpleview(template, datadict={}):
-    def simpleview_inner(request):
-        return render(request, template, datadict)
-
-    return simpleview_inner
 
 
 @cache_page(60 * 60 * 24)

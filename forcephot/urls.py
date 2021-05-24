@@ -21,6 +21,7 @@ from django.contrib import admin
 from django.urls import include, path
 # from django.contrib.auth.models import User
 # from django.contrib.auth.decorators import login_required
+from django.views.generic.base import TemplateView
 from rest_framework import routers
 # from rest_framework import serializers, viewsets
 
@@ -37,13 +38,14 @@ admin.site.site_title = "ATLAS Forced Photometry"
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path('', views.simpleview('index.html'), name="index"),
+    path('', TemplateView.as_view(template_name='index.html'), name="index"),
     path('', include(router.urls)),
     path('queue/<str:pk>/delete/', views.deletetask, name="delete"),
     path('queue/<str:pk>/requestimages/', views.requestimages, name="requestimages"),
     url(r'^register/$', views.register, name='register'),
-    path('faq/', views.simpleview('faq.html', {'name': 'FAQ'}), name="faq"),
-    path('resultdesc/', views.simpleview('resultdesc.html', {'name': 'Output Description'}),
+    path('faq/', TemplateView.as_view(template_name='faq.html', extra_context={'name': 'FAQ'}), name="faq"),
+    path('resultdesc/',
+         TemplateView.as_view(template_name='resultdesc.html', extra_context={'name': 'Output Description'}),
          name="resultdesc"),
 
     path('stats/', views.stats, name="stats"),
@@ -57,6 +59,7 @@ urlpatterns = [
     path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
     path('queue/<int:taskid>/images.zip', views.taskimagezip, name='taskimagezip'),
 
-    path('apiguide/', views.simpleview('apiguide.html', {'name': 'API Guide'}), name="apiguide"),
+    path('apiguide/',
+         TemplateView.as_view(template_name='apiguide.html', extra_context={'name': 'API Guide'}), name="apiguide"),
     path('api-token-auth/', rest_framework.authtoken.views.obtain_auth_token),
 ]

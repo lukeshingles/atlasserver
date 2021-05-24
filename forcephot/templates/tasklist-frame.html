@@ -9,22 +9,25 @@
     {% else %}
         <ul class="tasks">
 
-          {% for task in tasks %}
+            {% for task in tasks %}
+
               {% if task.finishtimestamp %}
-                <li class="task finished" id="task-{{task.id}}"><div class="updatable"><div class="rightside">
-                <a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Delete</a>
-                {% if task.localresultpreviewimagefile %}
-                <img src="{% static task.localresultpreviewimagefile %}" style="display:block; margin-top: 1em;" />
-                {% endif %}</div>
+                <li class="task finished" id="task-{{task.id}}">
               {% elif task.starttimestamp %}
-                <li class="task queued started" id="task-{{task.id}}"><div class="updatable">
-                <div class="rightside"><a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a></div>
+                <li class="task queued started" id="task-{{task.id}}">
               {% else %}
-                <li class="task queued notstarted" id="task-{{task.id}}"><div class="updatable">
-                {% if task.user.id == request.user.id  or request.user.is_superuser %}
-                <div class="rightside"><a class="btn btn-sm btn-danger" href="{% url 'delete' task.id %}">Cancel</a></div>
-                {% endif %}
+                <li class="task queued notstarted" id="task-{{task.id}}">
               {% endif %}
+
+              <div class="updatable">
+                  <div class="rightside">
+                      {% if task.user.id == request.user.id  or request.user.is_superuser %}
+                        <button class="btn btn-sm btn-danger" onclick="$.ajax({url: '{% url 'task-detail' task.id %}', method: 'delete', success: function (result) {console.log(result); updatePageTasks();}}); ">{% if task.finishtimestamp %}Delete{% else %}Cancel{% endif %}</button>
+                      {% endif %}
+                      {% if task.localresultpreviewimagefile %}
+                      <img src="{% static task.localresultpreviewimagefile %}" style="display:block; margin-top: 1em;" />
+                      {% endif %}
+                  </div>
                   <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
                   {% if task.parent_task %}
                   <p>Image request for
@@ -81,10 +84,11 @@
                   <div id="plotforcedflux-task-{{task.id}}" class="plot" style="width: 100%; height: 300px"></div>
                   {% endif %}
                 </li>
-          {% endfor %}
 
+            {% endfor %}
         </ul>
     {% endif %}
+
     {% if paginator %}
     <div id="paginator">
         <p id="taskcount">{% if tasks %}Showing {{tasks|length}} of {{usertaskcount}} tasks{% endif %}</p>

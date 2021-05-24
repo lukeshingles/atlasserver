@@ -3,7 +3,7 @@ import datetime
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.db import connection, models
+from django.db import models
 from django.utils import timezone
 from pathlib import Path
 from forcephot.misc import date_to_mjd, country_code_to_name
@@ -233,6 +233,7 @@ class Task(models.Model):
                 except FileNotFoundError:
                     pass
 
+        # keep finished jobs in the database but mark them as archived and hide them from the website
         if self.finished():
             self.is_archived = True
             self.save()

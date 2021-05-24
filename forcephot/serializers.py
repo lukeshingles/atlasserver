@@ -1,7 +1,7 @@
-from django.contrib.auth.models import Group, User
+# from django.contrib.auth.models import Group, User
 from rest_framework import serializers
 from rest_framework.reverse import reverse
-from django.conf import settings
+# from django.conf import settings
 
 from forcephot.models import Task
 

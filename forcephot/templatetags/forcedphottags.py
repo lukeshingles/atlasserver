@@ -62,6 +62,6 @@ def get_or_request_imagezip(task, request):
                 strhtml = f'<a class="btn btn-warning" href="{url}">Images requested</a>'
         elif task.user.id == request.user.id:  # only the task's owner can request images
             url = reverse('requestimages', args=(task.id,))
-            strhtml = f'<a class="btn btn-info" href="{url}" title="Download FITS and JPEG images for up to the first 500 observations.">Request {"reduced" if task.use_reduced else "difference"} images</a>'
+            strhtml = f'<a class="btn btn-info" href="{url}" title="Download FITS and JPEG images for up to the first 500 observations.">Request {"reduced" if task.use_reduced else "diff"} images</a>'
 
     return mark_safe(strhtml)
