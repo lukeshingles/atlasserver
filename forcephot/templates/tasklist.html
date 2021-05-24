@@ -237,14 +237,15 @@
     }
 
     updatepropermotionpanel();
+    var newids = $.urlParam('newids').split('%2C');
+    newids.forEach(function(taskid) {
+        console.log(taskid)
+        li_id = '#task-' + taskid
+        $(li_id).hide();
+        $(li_id).show(700);
+    });
+
     $( document ).ready(function() {
-        var newids = $.urlParam('newids').split('%2C');
-        newids.forEach(function(taskid) {
-            console.log(taskid)
-            li_id = '#task-' + taskid
-            $(li_id).hide();
-            $(li_id).show(700);
-        });
         activate_plots();
     });
     </script>
