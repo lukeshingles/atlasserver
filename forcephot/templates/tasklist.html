@@ -154,7 +154,7 @@
                     prev_li_id = li_id
                 });
 
-                $('#paginator').replaceWith(newhtml.find('#paginator').html());
+                $('#paginator').replaceWith(newhtml.find('#paginator').get(0).outerHTML);
             }
         });
 
