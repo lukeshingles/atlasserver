@@ -243,6 +243,8 @@
         li_id = '#task-' + taskid
         $(li_id).hide();
         $(li_id).show(700);
+        // remove the newids GET parameter from the URL box
+        window.history.replaceState({}, document.title, '{{ request.get_full_path|removetaskboxqueryparam }}' );
     });
 
     $( document ).ready(function() {
