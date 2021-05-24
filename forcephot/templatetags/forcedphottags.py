@@ -45,6 +45,15 @@ def filterbuttons(request):
 
 
 @register.simple_tag()
+def start_hidden(task, request):
+    newids = request.GET['newids'].split(',') if 'newids' in request.GET else []
+    if str(task.id) in newids:
+        return mark_safe(' style="display: none"')
+
+    return ''
+
+
+@register.simple_tag()
 def get_or_request_imagezip(task, request):
     strhtml = ''
     if task.request_type == 'IMGZIP':

@@ -12,11 +12,11 @@
             {% for task in tasks %}
 
               {% if task.finishtimestamp %}
-                <li class="task finished" id="task-{{task.id}}">
+                <li class="task finished" id="task-{{task.id}}"{% start_hidden task request %}>
               {% elif task.starttimestamp %}
-                <li class="task queued started" id="task-{{task.id}}">
+                <li class="task queued started" id="task-{{task.id}}"{% start_hidden task request %}>
               {% else %}
-                <li class="task queued notstarted" id="task-{{task.id}}">
+                <li class="task queued notstarted" id="task-{{task.id}}"{% start_hidden task request %}>
               {% endif %}
 
               <div class="updatable">
