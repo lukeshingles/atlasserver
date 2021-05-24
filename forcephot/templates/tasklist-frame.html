@@ -25,7 +25,7 @@
                         <button class="btn btn-sm btn-danger" onclick="$.ajax({url: '{% url 'task-detail' task.id %}', method: 'delete', success: function (result) {console.log(result); updatePageTasks();}}); ">{% if task.finishtimestamp %}Delete{% else %}Cancel{% endif %}</button>
                       {% endif %}
                       {% if task.localresultpreviewimagefile %}
-                      <img src="{% static task.localresultpreviewimagefile %}" style="display:block; margin-top: 1em;" />
+                      <img src="{% static task.localresultpreviewimagefile %}" style="display:block; margin-top: 1em; margin-left: 1em;" />
                       {% endif %}
                   </div>
                   <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
