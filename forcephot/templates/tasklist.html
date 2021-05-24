@@ -103,7 +103,13 @@
                     taskid = $(this).attr('id').replace("task-", "");
                     if (newhtml.find('#task-' + taskid).length == 0) {
                         console.log('task ' + taskid + ' is deleted from page');
-                        $('#task-' + taskid).replaceWith('');
+
+                        // instant removal
+                        // $('#task-' + taskid).replaceWith('');
+
+                        // animated removal
+                        // $('#task-' + taskid).fadeOut(300, function(){ $(this).remove();});
+                        $('#task-' + taskid).hide(300, function(){ $(this).remove(); })
                     }
                 });
 
