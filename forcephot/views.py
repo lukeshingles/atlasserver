@@ -26,6 +26,7 @@ from rest_framework import filters, permissions, status, viewsets
 # from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
+from rest_framework.utils.urls import replace_query_param
 from pathlib import Path
 
 from forcephot.filters import TaskFilter
@@ -105,7 +106,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     success = False
 
             if success:
-                from rest_framework.utils.urls import replace_query_param
                 strnewids = ','.join([str(item['id']) for item in serializer.data])
                 redirurl = replace_query_param(reverse('task-list'), 'newids', strnewids)
                 return redirect(redirurl, status=status.HTTP_201_CREATED, headers=kwargs['headers'])
@@ -249,6 +249,8 @@ def requestimages(request, pk):
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Page not found")
 
+    redirurl = reverse('task-list')
+
     if not parent_task.error_msg and parent_task.finishtimestamp:
         data = model_to_dict(parent_task, exclude=['id'])
         data['parent_task_id'] = parent_task.id
@@ -269,8 +271,8 @@ def requestimages(request, pk):
         newtask = Task(**data)
         newtask.save()
 
-    # redirurl = reverse('task-detail', args=(newtask.id,))
-    redirurl = reverse('task-list')
+        redirurl = replace_query_param(reverse('task-list'), 'newids', str(newtask.id))
+
     return redirect(redirurl, request=request)
 
 
