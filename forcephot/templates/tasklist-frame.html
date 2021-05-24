@@ -21,7 +21,7 @@
 
               <div class="updatable">
                   <div class="rightside">
-                      {% if task.user.id == request.user.id  or request.user.is_superuser %}
+                      {% if task.user.id == request.user.id %}
                         <button class="btn btn-sm btn-danger" onclick="$.ajax({url: '{% url 'task-detail' task.id %}', method: 'delete', success: function (result) {console.log(result); updatePageTasks();}}); ">{% if task.finishtimestamp %}Delete{% else %}Cancel{% endif %}</button>
                       {% endif %}
                       {% if task.localresultpreviewimagefile %}
