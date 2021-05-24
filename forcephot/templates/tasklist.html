@@ -199,7 +199,7 @@
                             $('#' + prev_li_id).after(servertaskhtml);
                         }
                         $('#' + li_id).hide();
-                        $('#' + li_id).show(200);
+                        $('#' + li_id).show(300);
                     }
                     prev_li_id = li_id
                 });
@@ -228,8 +228,23 @@
         });
     }
 
+    $.urlParam = function(name){
+        var results = new RegExp('[\?&]' + name + '=([^&#]*)').exec(window.location.href);
+        if (results==null) {
+           return null;
+        }
+        return decodeURI(results[1]) || 0;
+    }
+
     updatepropermotionpanel();
     $( document ).ready(function() {
+        var newids = $.urlParam('newids').split('%2C');
+        newids.forEach(function(taskid) {
+            console.log(taskid)
+            li_id = '#task-' + taskid
+            $(li_id).hide();
+            $(li_id).show(300);
+        });
         activate_plots();
     });
     </script>

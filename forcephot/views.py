@@ -105,7 +105,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     success = False
 
             if success:
-                return redirect(reverse('task-list'), status=status.HTTP_201_CREATED, headers=kwargs['headers'])
+                from rest_framework.utils.urls import replace_query_param
+                strnewids = ','.join([str(item['id']) for item in serializer.data])
+                redirurl = replace_query_param(reverse('task-list'), 'newids', strnewids)
+                return redirect(redirurl, status=status.HTTP_201_CREATED, headers=kwargs['headers'])
 
             kwargs['form'] = form
             return self.list(request, *args, **kwargs)

@@ -20,17 +20,17 @@ def tasktimesince(value):
 # the JavaScript will send a request with htmltaskframeonly=True, but the pagination links shouldn't keep this param
 @register.filter
 def removetaskboxqueryparam(value):
-    return remove_query_param(value, 'htmltaskframeonly')
+    return remove_query_param(remove_query_param(value, 'htmltaskframeonly'), 'newids')
 
 
 @register.filter
 def addtaskboxqueryparam(value):
-    return replace_query_param(value, 'htmltaskframeonly', 'true')
+    return remove_query_param(replace_query_param(value, 'htmltaskframeonly', 'true'), 'newids')
 
 
 @register.simple_tag()
 def filterbuttons(request):
-    fullpath = remove_query_param(request.get_full_path(), 'cursor')
+    fullpath = remove_query_param(remove_query_param(request.get_full_path(), 'cursor'), 'newids')
     strhtml = '<ul id="taskfilters">'
     links = [
         (remove_query_param(fullpath, 'started'), 'All tasks'),
