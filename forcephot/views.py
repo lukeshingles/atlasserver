@@ -169,7 +169,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(listqueryset, many=True)
 
         # taskframeonly is for javascript updates (no header/menubar)
-        htmltaskframeonly = 'htmltaskframeonly' in request.GET
+        htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
 
         if request.accepted_renderer.format == 'html' or htmltaskframeonly:
             if not page and listqueryset:
@@ -184,7 +184,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
-                'form': form, 'name': 'Task Queue', 'htmltaskframeonly': htmltaskframeonly, 'singletaskdetail': False,
+                'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count()})
 
         if page is not None:
@@ -199,17 +199,19 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return HttpResponseNotFound("Page not found")
         serializer = self.get_serializer(instance)
 
-        if request.accepted_renderer.format == 'html':
+        htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
+
+        if request.accepted_renderer.format == 'html' or htmltaskframeonly:
             # return redirect('/')
             # queryset = self.filter_queryset(self.get_queryset())
             # serializer = self.get_serializer(queryset, many=True)
 
-            htmltaskframeonly = 'htmltaskframeonly' in request.GET
+            template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
             tasks = [instance]
             form = TaskForm()
-            return Response({'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
-                             'name': f'Task {self.get_object().id}', 'htmltaskframeonly': htmltaskframeonly,
-                             'singletaskdetail': True})
+            return Response(template_name=template, data={
+                'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
+                'name': f'Task {self.get_object().id}', 'singletaskdetail': True})
 
         return Response(serializer.data)
 
