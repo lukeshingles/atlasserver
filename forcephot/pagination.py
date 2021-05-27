@@ -18,3 +18,12 @@ class TaskPagination(CursorPagination):
     cursor_query_param = 'cursor'
     ordering = ['-id']
     template = 'rest_framework/pagination/older_and_newer.html'
+
+    def get_paginated_response(self, data):
+        return Response({
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'taskcount': len(data),
+            'results': data,
+        })
+

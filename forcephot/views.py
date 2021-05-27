@@ -181,11 +181,15 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 form = TaskForm()
 
             template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
+            if 'usereact' in request.GET:
+                template = 'tasklist-react.html'
 
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
-                'paginator': self.paginator, 'usertaskcount': listqueryset.count()})
+                'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
+                'apiurl': request.build_absolute_uri(reverse('task-list')),
+            })
 
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -207,16 +211,20 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             # serializer = self.get_serializer(queryset, many=True)
 
             template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
+            if 'usereact' in request.GET:
+                template = 'tasklist-react.html'
             tasks = [instance]
             form = TaskForm()
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
-                'name': f'Task {self.get_object().id}', 'singletaskdetail': True})
+                'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
+                'apiurl': request.build_absolute_uri(reverse('task-detail', args=[instance.id]))})
 
         return Response(serializer.data)
 
 
 def deletetask(request, pk):
+    """ deprecated! remove when sure that this is not used anymore """
     if not request.user.is_authenticated:
         raise PermissionDenied()
 
@@ -236,6 +244,20 @@ def deletetask(request, pk):
         redirurl = reverse('task-list')
 
     return redirect(redirurl, request=request)
+
+
+def reactqueue(request, *args, **kwargs):
+    if not request.user.is_authenticated:
+        raise PermissionDenied()
+
+    if 'form' in kwargs:
+        form = kwargs['form']
+    else:
+        form = TaskForm()
+
+    return render(request, 'tasklist-react.html', {
+        'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
+        'apiurl': request.build_absolute_uri(reverse('task-list'))})
 
 
 def requestimages(request, pk):

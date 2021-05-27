@@ -74,7 +74,7 @@ class Task(models.Model):
 
     def localresultfile(self):
         """
-            return the relative path to the FP data file if it the job is finished
+            return the relative path to the FP data file if the job is finished
         """
         if self.finishtimestamp:
             return self.localresultfileprefix() + '.txt'
@@ -86,21 +86,20 @@ class Task(models.Model):
         """
             return the full local path to the image file if it exists, otherwise None
         """
-        if self.localresultfile():
+        if self.finishtimestamp:
             imagefile = self.localresultfileprefix(use_parent=True) + '.jpg'
             if Path(settings.STATIC_ROOT, imagefile).exists():
                 return imagefile
 
         return None
 
+    @property
     def localresultpdfplotfile(self):
         """
-            return the full local path to the PDF plot file if it exists, otherwise None
+            return the full local path to the PDF plot file if the job is finished
         """
-        if self.localresultfile():
-            pdfplotfile = Path(self.localresultfile()).with_suffix('.pdf')
-            if Path(settings.STATIC_ROOT, pdfplotfile).exists():
-                return pdfplotfile
+        if self.finishtimestamp:
+            return self.localresultfileprefix() + '.pdf'
 
         return None
 

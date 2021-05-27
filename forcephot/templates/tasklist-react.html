@@ -1,0 +1,141 @@
+{% extends "rest_framework/base.html" %}
+{% load static %}
+{% load i18n %}
+{% load rest_framework %}
+{% load forcedphottags %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+
+    <div class="page-header">
+    <h1>{{name}}</h1>
+    </div>
+
+    {% if not singletaskdetail %}
+    {% filterbuttons request %}
+    {% include 'new-task.html' %}
+    {% endif %}
+
+    <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>Loading tasks...</div>
+{% endblock %}
+
+{% block script %}
+    {{ block.super }}
+
+    <script language="javascript" type="text/javascript">
+        const apiURL = '{{ apiurl }}';
+        const userid = {{ request.user.id|escapejs }};
+    </script>
+
+    <!-- <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script> -->
+
+    <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script>
+    <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
+
+    <script type="text/babel" src="{% static 'tasklist.jsx' %}"></script>
+
+    <script src="{% static 'js/plotly-latest.kws.js' %}"></script>
+
+    <script language="javascript" type="text/javascript">
+
+    $("#propermotion_checkboxdiv :checkbox").bind('click dblclick', function(evt) {
+        // console.log(evt.type);
+        updatepropermotionpanel();
+    })
+
+    function updatepropermotionpanel() {
+        if ($("#propermotion_checkboxdiv :checkbox").is(":checked")) {
+            // console.log('checked')
+            $('#propermotion_panel').slideDown('fast');
+        } else {
+            // console.log('not checked')
+            $('#propermotion_panel').slideUp('fast');
+        }
+    }
+
+    var jslcdataglobal = new Object();
+    var jslabelsglobal = new Object();
+    var jslimitsglobal = new Object();
+
+    var activated_plots = [];
+
+    // Set the name of the hidden property and the change event for visibility
+    var hidden, visibilityChange;
+    if (typeof document.hidden !== "undefined") { // Opera 12.10 and Firefox 18 and later support
+      hidden = "hidden";
+      visibilityChange = "visibilitychange";
+    } else if (typeof document.msHidden !== "undefined") {
+      hidden = "msHidden";
+      visibilityChange = "msvisibilitychange";
+    } else if (typeof document.webkitHidden !== "undefined") {
+      hidden = "webkitHidden";
+      visibilityChange = "webkitvisibilitychange";
+    }
+
+    var updateInterval = 950;
+    var updatequeuedtimer = setInterval(updatePageTasks, updateInterval);
+
+    function handleVisibilityChange() {
+      clearInterval(updatequeuedtimer);
+      if (document[hidden]) {
+        updatequeuedtimer = null;
+      } else {
+        updatequeuedtimer = setInterval(updatePageTasks, updateInterval);
+        updatePageTasks();
+      }
+    }
+
+    // Warn if the browser doesn't support addEventListener or the Page Visibility API
+    if (typeof document.addEventListener === "undefined" || hidden === undefined) {
+      console.log("This demo requires a browser, such as Google Chrome or Firefox, that supports the Page Visibility API.");
+    } else {
+      // Handle page visibility change
+      document.addEventListener(visibilityChange, handleVisibilityChange, false);
+    }
+
+    // window may be visible onscreen but not focused - reduce the update rate in this case
+    $(window).blur(function() {
+      clearInterval(updatequeuedtimer);
+      updatequeuedtimer = setInterval(updatePageTasks, 2 * updateInterval);
+      window_focused = false;
+    });
+
+    $(window).focus(function() {
+      clearInterval(updatequeuedtimer);
+      updatequeuedtimer = setInterval(updatePageTasks, updateInterval);
+      updatePageTasks();
+    });
+
+
+    function updatePageTasks() {
+        updatepropermotionpanel();
+        activate_plots();
+    }
+
+    function activate_plots() {
+        $('li.task.finished').each(function () {
+            // check that the plot has not already been created
+            if ($(this).find('div.plot').length > 0 && $(this).find('div.plot').html() == '') {
+                taskid = $(this).attr('id').replace("task-", "");
+                if (activated_plots.includes(taskid)) {
+                    console.log('plot ', taskid, ' already activating')
+                } else {
+                    console.log('activating plot ', taskid)
+                    jsurl = '{% url 'resultplotdatajs' 9999 %}'.replace('9999', taskid);
+                    $.ajax({url: jsurl, cache: true, dataType: 'script'});
+                    activated_plots.push(taskid)
+                }
+            }
+        });
+    }
+
+    updatepropermotionpanel();
+
+    $( document ).ready(function() {
+        activate_plots();
+    });
+    </script>
+{% endblock %}

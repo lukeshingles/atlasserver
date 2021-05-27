@@ -1,7 +1,7 @@
 # from django.contrib.auth.models import Group, User
 from rest_framework import serializers
 from rest_framework.reverse import reverse
-# from django.conf import settings
+from django.conf import settings
 
 from forcephot.models import Task
 
@@ -10,10 +10,38 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     result_url = serializers.SerializerMethodField('get_result_url')
 
     def get_result_url(self, obj):
-        if obj.localresultfile():
+        if obj.localresultfile() and not obj.error_msg:
             request = self.context.get('request')
             # return request.build_absolute_uri(settings.STATIC_URL + obj.localresultfile())
             return request.build_absolute_uri(reverse('taskresultdata', args=[obj.id]))
+
+        return None
+
+    parent_task_url = serializers.SerializerMethodField('get_parent_task_url')
+
+    def get_parent_task_url(self, obj):
+        if obj.parent_task_id:
+            request = self.context.get('request')
+            return request.build_absolute_uri(reverse('task-detail', args=[obj.parent_task_id]))
+
+        return None
+
+    pdfplot_url = serializers.SerializerMethodField('get_pdfplot_url')
+
+    def get_pdfplot_url(self, obj):
+        if obj.localresultfile() and not obj.error_msg:
+            request = self.context.get('request')
+            return request.build_absolute_uri(reverse('taskpdfplot', args=[obj.id]))
+
+        return None
+
+    previewimage_url = serializers.SerializerMethodField('get_previewimage_url')
+
+    def get_previewimage_url(self, obj):
+        if obj.localresultfile():
+            request = self.context.get('request')
+            return request.build_absolute_uri(settings.STATIC_URL + obj.localresultpreviewimagefile)
+            # return request.build_absolute_uri(reverse('taskpreviewimage', args=[obj.id]))
 
         return None
 
@@ -45,10 +73,11 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         model = Task
 
         fields = [
-            'url', 'id', 'user', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
+            'url', 'id', 'user_id', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
             'radec_epoch_year', 'propermotion_ra', 'propermotion_dec', 'use_reduced',
             'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
-            'finishtimestamp', 'error_msg']
+            'finishtimestamp', 'error_msg', 'previewimage_url', 'parent_task_id', 'parent_task_url', 'request_type',
+            'pdfplot_url', 'queuepos']
 
         read_only_fields = [
-            'user', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg']
+            'user_id', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg', 'parent_task_url', 'previewimage_url', 'pdfplot_url', 'queuepos']

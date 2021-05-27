@@ -13,44 +13,7 @@
 
     {% if not singletaskdetail %}
     {% filterbuttons request %}
-    <div class="newrequest">
-        <div class="task">
-        <h2>New request</h2>
-        <form method="POST" action="{% url 'task-list' %}" id="newrequest">
-            {% csrf_token %}
-            {{ form.non_field_errors }}
-            <ul>
-                <li>{{ form.radeclist.label_tag }}
-                {{ form.radeclist }}
-                <a class="collapsible" data-toggle="collapse" data-target="#radec_help">Help</a>
-                <div id="radec_help" style="display: none; clear: right; font-size: small;">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div>
-                {{ form.radeclist.errors }}
-                </li>
-            </ul>
-            <div id="propermotion_checkboxdiv" style="width: 100%">
-                <label data-target="#propermotion_panel" style="width: 100%;">
-                    <input type="checkbox" name="proper_motion_on" onclick="updatepropermotionpanel()" style="position: static; display: inline; width: 5em" /> Proper motion
-                </label>
-            </div>
-            <div id="propermotion_panel" class="panel-collapse collapse" style="background: rgb(235,235,235);">
-                <p style="font-size: small;">If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
-                <ul>
-                <li>{{ form.radec_epoch_year.label_tag }}{{ form.radec_epoch_year }}{{ form.radec_epoch_year.errors }}</li>
-                <li><label for="id_propermotion_ra">PM RA [mas/yr]</label>{{ form.propermotion_ra }}{{ form.propermotion_ra.errors }}</li>
-                <li><label for="id_propermotion_dec">PM Dec [mas/yr]</label>{{ form.propermotion_dec }}{{ form.propermotion_dec.errors }}</li>
-                </ul>
-            </div>
-            <ul>
-                <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}</li>
-                <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}</li>
-                <li>{{ form.comment.label_tag }}{{ form.comment }}{{ form.comment.errors }}</li>
-                <li>{{ form.use_reduced }}<label for="id_use_reduced">Use reduced instead of difference images</label></li>
-                <li>{{ form.send_email }}<label for="id_send_email">Email me when completed</label></li>
-            </ul>
-            <input class="btn btn-info" type="submit" value="Request" />
-        </form>
-        </div>
-    </div>
+    {% include 'new-task.html' %}
     {% endif %}
 
     {% include 'tasklist-frame.html' %}
