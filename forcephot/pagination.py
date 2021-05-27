@@ -18,12 +18,16 @@ class TaskPagination(CursorPagination):
     cursor_query_param = 'cursor'
     ordering = ['-id']
     template = 'rest_framework/pagination/older_and_newer.html'
+    querysetcount = 0
+
+    def paginate_queryset(self, queryset, request, view=None):
+        self.querysetcount = queryset.count()
+        return super().paginate_queryset(queryset=queryset, request=request, view=view)
 
     def get_paginated_response(self, data):
-        return Response({
-            'next': self.get_next_link(),
-            'previous': self.get_previous_link(),
-            'taskcount': len(data),
-            'results': data,
-        })
-
+        return Response(OrderedDict([
+            ('next', self.get_next_link()),
+            ('previous', self.get_previous_link()),
+            ('taskcount', self.querysetcount),
+            ('results', data)
+        ]))

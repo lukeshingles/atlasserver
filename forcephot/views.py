@@ -246,20 +246,6 @@ def deletetask(request, pk):
     return redirect(redirurl, request=request)
 
 
-def reactqueue(request, *args, **kwargs):
-    if not request.user.is_authenticated:
-        raise PermissionDenied()
-
-    if 'form' in kwargs:
-        form = kwargs['form']
-    else:
-        form = TaskForm()
-
-    return render(request, 'tasklist-react.html', {
-        'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
-        'apiurl': request.build_absolute_uri(reverse('task-list'))})
-
-
 def requestimages(request, pk):
     if not request.user.is_authenticated:
         raise PermissionDenied()

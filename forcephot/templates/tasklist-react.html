@@ -23,8 +23,8 @@
     {{ block.super }}
 
     <script language="javascript" type="text/javascript">
-        const apiURL = '{{ apiurl }}';
-        const userid = {{ request.user.id|escapejs }};
+        const api_url = '{{ request.build_absolute_uri|escapejs }}';
+        const user_id = {{ request.user.id|escapejs }};
     </script>
 
     <!-- <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
@@ -56,12 +56,6 @@
         }
     }
 
-    var jslcdataglobal = new Object();
-    var jslabelsglobal = new Object();
-    var jslimitsglobal = new Object();
-
-    var activated_plots = [];
-
     // Set the name of the hidden property and the change event for visibility
     var hidden, visibilityChange;
     if (typeof document.hidden !== "undefined") { // Opera 12.10 and Firefox 18 and later support
@@ -75,16 +69,10 @@
       visibilityChange = "webkitvisibilitychange";
     }
 
-    var updateInterval = 950;
-    var updatequeuedtimer = setInterval(updatePageTasks, updateInterval);
-
     function handleVisibilityChange() {
       clearInterval(updatequeuedtimer);
-      if (document[hidden]) {
-        updatequeuedtimer = null;
-      } else {
-        updatequeuedtimer = setInterval(updatePageTasks, updateInterval);
-        updatePageTasks();
+      if (!document[hidden]) {
+        updatepropermotionpanel();
       }
     }
 
@@ -96,46 +84,15 @@
       document.addEventListener(visibilityChange, handleVisibilityChange, false);
     }
 
-    // window may be visible onscreen but not focused - reduce the update rate in this case
-    $(window).blur(function() {
-      clearInterval(updatequeuedtimer);
-      updatequeuedtimer = setInterval(updatePageTasks, 2 * updateInterval);
-      window_focused = false;
-    });
-
     $(window).focus(function() {
-      clearInterval(updatequeuedtimer);
-      updatequeuedtimer = setInterval(updatePageTasks, updateInterval);
-      updatePageTasks();
+      updatepropermotionpanel();
     });
 
 
     function updatePageTasks() {
         updatepropermotionpanel();
-        activate_plots();
-    }
-
-    function activate_plots() {
-        $('li.task.finished').each(function () {
-            // check that the plot has not already been created
-            if ($(this).find('div.plot').length > 0 && $(this).find('div.plot').html() == '') {
-                taskid = $(this).attr('id').replace("task-", "");
-                if (activated_plots.includes(taskid)) {
-                    console.log('plot ', taskid, ' already activating')
-                } else {
-                    console.log('activating plot ', taskid)
-                    jsurl = '{% url 'resultplotdatajs' 9999 %}'.replace('9999', taskid);
-                    $.ajax({url: jsurl, cache: true, dataType: 'script'});
-                    activated_plots.push(taskid)
-                }
-            }
-        });
     }
 
     updatepropermotionpanel();
-
-    $( document ).ready(function() {
-        activate_plots();
-    });
     </script>
 {% endblock %}
