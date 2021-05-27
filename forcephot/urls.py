@@ -58,7 +58,7 @@ urlpatterns = [
     path('queue/<int:taskid>/plot.pdf', views.taskpdfplot, name='taskpdfplot'),
     path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
     path('queue/<int:taskid>/images.zip', views.taskimagezip, name='taskimagezip'),
-    path('reactqueue/', views.reactqueue, name='reactqueue'),
+    path('reactqueue/', views.reactqueue, name='task-list-react'),
 
     path('apiguide/',
          TemplateView.as_view(template_name='apiguide.html', extra_context={'name': 'API Guide'}), name="apiguide"),
