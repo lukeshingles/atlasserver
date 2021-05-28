@@ -23,19 +23,22 @@
     {{ block.super }}
 
     <script language="javascript" type="text/javascript">
-        const api_url = '{{ request.build_absolute_uri|escapejs }}';
+        const api_url = '{{ api_url|escapejs }}';
+        const api_url_base = '{{ api_url_base|escapejs }}';
         const user_id = {{ request.user.id|escapejs }};
     </script>
 
-    <!-- <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+    <!-- production -->
+    <!-- <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script> -->
     <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script> -->
+    <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
+    <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}"></script>
 
-    <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script>
-    <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
-
-    <script type="text/babel" src="{% static 'tasklist.jsx' %}"></script>
+    <!-- development -->
+    <!-- <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script> -->
+    <!-- <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script> -->
+    <!-- <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script> -->
+    <!-- <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script> -->
 
     <script src="{% static 'js/plotly-latest.kws.js' %}"></script>
 

@@ -33,7 +33,7 @@ class Task extends React.Component {
   }
 
   deleteTask() {
-    $.ajax({url: this.state.url, method: 'delete', success: function (result) {updatePageTasks();}});
+    $.ajax({url: this.state.url, method: 'delete', success: (result) => {this.props.fetchData()}});
   }
 
   static getDerivedStateFromProps(props, state) {
@@ -267,6 +267,7 @@ class TaskList extends React.Component {
     };
 
     this.updateCursor = this.updateCursor.bind(this);
+    this.fetchData = this.fetchData.bind(this);
   }
 
   updateCursor(new_cursor) {
@@ -327,12 +328,12 @@ class TaskList extends React.Component {
     } else {
       var pagetaskcount = (this.state.results != null) ? this.state.results.length : null;
       return (
-        <>
+        <div>
           <ul key="tasklist" className="tasks">
-          {this.state.results.map((task) => (<Task key={task.id} taskdata={task} />))}
+          {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} />))}
           </ul>
           <Pager key='pager' previous={this.state.previous} next={this.state.next} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
-        </>
+        </div>
       );
     }
   }

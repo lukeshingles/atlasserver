@@ -51,26 +51,3 @@ def start_hidden(task, request):
         return mark_safe(' style="display: none"')
 
     return ''
-
-
-@register.simple_tag()
-def get_or_request_imagezip(task, request):
-    strhtml = ''
-    if task.request_type == 'IMGZIP':
-        if task.localresultimagezipfile():
-            # direct link to zip file
-            url = reverse('taskimagezip', args=(task.parent_task_id,))
-            strhtml = f'<a class="results btn btn-info" href="{url}">Download images (ZIP)</a>'
-    else:
-        imgreq_taskid = task.imagerequesttaskid()
-        if imgreq_taskid:
-            url = reverse('task-detail', args=(imgreq_taskid,))
-            if task.localresultimagezipfile():
-                strhtml = f'<a class="btn btn-primary" href="{url}">Images ready</a>'
-            else:
-                strhtml = f'<a class="btn btn-warning" href="{url}">Images requested</a>'
-        elif task.user.id == request.user.id:  # only the task's owner can request images
-            url = reverse('requestimages', args=(task.id,))
-            strhtml = f'<a class="btn btn-info" href="{url}" title="Download FITS and JPEG images for up to the first 500 observations.">Request {"reduced" if task.use_reduced else "diff"} images</a>'
-
-    return mark_safe(strhtml)

@@ -188,7 +188,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
-                'apiurl': request.build_absolute_uri(reverse('task-list')),
+                'api_url': request.build_absolute_uri(reverse('task-list')),
+                'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
         if page is not None:
@@ -218,7 +219,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                 'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
-                'apiurl': request.build_absolute_uri(reverse('task-detail', args=[instance.id]))})
+                'api_url': request.build_absolute_uri(reverse('task-detail', args=[instance.id])),
+                'api_url_base': request.build_absolute_uri(reverse('index')),
+            })
 
         return Response(serializer.data)
 
@@ -244,6 +247,22 @@ def deletetask(request, pk):
         redirurl = reverse('task-list')
 
     return redirect(redirurl, request=request)
+
+
+def reactqueue(request, *args, **kwargs):
+    if not request.user.is_authenticated:
+        raise PermissionDenied()
+
+    if 'form' in kwargs:
+        form = kwargs['form']
+    else:
+        form = TaskForm()
+
+    return render(request, 'tasklist-react.html', {
+        'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
+        'api_url': request.build_absolute_uri(reverse('task-list')),
+        'api_url_base': request.build_absolute_uri(reverse('index')),
+    })
 
 
 def requestimages(request, pk):

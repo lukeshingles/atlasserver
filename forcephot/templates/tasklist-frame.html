@@ -62,17 +62,33 @@
                   {% endif %}
 
                   Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
+
                   {% if task.finishtimestamp %}
-                  Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br />
-                      {% if task.error_msg %}
-                          <br/><span style="color: black; font-weight: bold;">Error: {{ task.error_msg }}</span>
-                      {% else %}
-                        {% if task.request_type == 'FP' %}
-                          <a class="results btn btn-info getdata" href="{% url 'taskresultdata' task.id %}" target="_blank">Data</a>
-                          <a class="results btn btn-info getpdf" href="{% url 'taskpdfplot' task.id %}" target="_blank">PDF</a>
-                        {% endif %}
-                        {% get_or_request_imagezip task request %}
+                    Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br />
+
+                    {% if task.error_msg %}
+                        <br/><span style="color: black; font-weight: bold;">Error: {{ task.error_msg }}</span>
+                    {% else %}
+                      {% if task.request_type == 'FP' %}
+                        <a class="results btn btn-info getdata" href="{% url 'taskresultdata' task.id %}" target="_blank">Data</a>
+                        <a class="results btn btn-info getpdf" href="{% url 'taskpdfplot' task.id %}" target="_blank">PDF</a>
                       {% endif %}
+
+                      {% if task.request_type == 'IMGZIP' %}
+                          {% if task.localresultimagezipfile %}
+                              <a class="results btn btn-info" href="{% url 'taskimagezip' task.parent_task_id}">Download images (ZIP)</a>
+                          {% endif %}
+                      {% elif task.imagerequest_taskid %}
+                          {% if task.localresultimagezipfile %}
+                              <a class="btn btn-primary" href="{% url 'task-detail' task.imagerequest_taskid %}">Images ready</a>
+                          {% else %}
+                              <a class="btn btn-warning" href="{% url 'task-detail' task.imagerequest_taskid %}">Images requested</a>
+                          {% endif %}
+                      {% elif task.user.id == request.user.id %}
+                          <a class="btn btn-info" href="{% url 'requestimages' task.id %}" title="Download FITS and JPEG images for up to the first 500 observations.">Request {% if task.use_reduced %}reduced{% else %}diff{% endif %} images</a>
+                      {% endif %}
+
+                    {% endif %}
                   {% elif task.starttimestamp %}
                   <br /><span style="color: red; font-style: italic">Running (started {{task.starttimestamp|tasktimesince}})</span>
                   {% else %}

@@ -112,6 +112,7 @@ class Task(models.Model):
 
         return None
 
+    @property
     def localresultimagezipfile(self):
         """
             return the full local path to the image zip file if it exists, otherwise None
@@ -122,7 +123,7 @@ class Task(models.Model):
 
         return None
 
-    def imagerequesttaskid(self):
+    def imagerequest_taskid(self):
         """
             return the task id of the image request task associated with this
             forced photometry task if it exists, otherwise None
@@ -130,6 +131,17 @@ class Task(models.Model):
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         if associated_tasks.count() > 0:
             return associated_tasks[0].id
+
+        return None
+
+    def imagerequest_finished(self):
+        """
+            return the task id of the image request task associated with this
+            forced photometry task if it exists, otherwise None
+        """
+        associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
+        if associated_tasks.count() > 0:
+            return True if associated_tasks[0].finishtimestamp else False
 
         return None
 
