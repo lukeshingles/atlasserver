@@ -31,7 +31,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         return None
 
     def get_previewimage_url(self, obj):
-        if obj.localresultfile():
+        if obj.localresultpreviewimagefile:
             request = self.context.get('request')
             return request.build_absolute_uri(settings.STATIC_URL + obj.localresultpreviewimagefile)
             # return request.build_absolute_uri(reverse('taskpreviewimage', args=[obj.id]))

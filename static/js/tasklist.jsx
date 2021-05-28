@@ -27,60 +27,64 @@ class TaskPlot extends React.Component {
 class Task extends React.Component {
   constructor(props) {
     super(props);
-    this.state = props.taskdata
     this.deleteTask = this.deleteTask.bind(this);
+    this.state = {}
+    this.state.updateTimeElapsed = this.updateTimeElapsed.bind(this);
+    this.state.interval = null;
     this.state.timeelapsed = -1;
   }
 
   deleteTask() {
-    $.ajax({url: this.state.url, method: 'delete', success: (result) => {this.props.fetchData()}});
+    $.ajax({url: this.props.taskdata.url, method: 'delete', success: (result) => {this.props.fetchData()}});
   }
 
   static getDerivedStateFromProps(props, state) {
-
+    var statechanges = {};
     if (props.taskdata.starttimestamp != null && props.taskdata.finishtimestamp == null) {
-      var starttime = new Date( props.taskdata.starttimestamp ).getTime();
-      var now = new Date().getTime();
-      var timeelapsed = (now - starttime) / 1000.;
-      props.taskdata.timeelapsed = timeelapsed.toFixed(1);
+      if (state.interval == null) {
+        var starttime = new Date(props.taskdata.starttimestamp).getTime();
+        var timeelapsed = (new Date().getTime() - starttime) / 1000.;
+        return {
+          'interval': setInterval(() => {state.updateTimeElapsed()}, 100),
+          'timeelapsed': timeelapsed.toFixed(1)
+        };
+      }
     }
 
-    if (JSON.stringify(props.taskdata) != JSON.stringify(state))
-    {
-      // console.log('Task ' + this.state.id + ' changed');
-      return props.taskdata;
-    }
     return null;
   }
 
 
   componentDidMount() {
-    if (this.state.starttimestamp != null && this.state.finishtimestamp == null) {
-      console.log(this.state.starttimestamp);
-      this.interval = setInterval(() => this.updateTimeElapsed(), 300);
-    }
+    // state.updateTimeElapsed();
+    // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);
   }
 
   componentWillUnmount() {
-    clearInterval(this.interval);
+    clearInterval(this.state.interval);
+    // this.state.interval = null;
   }
 
   updateTimeElapsed() {
-    if (this.state.starttimestamp != null && this.state.finishtimestamp == null) {
-      var starttime = new Date( this.state.starttimestamp ).getTime();
-      var now = new Date().getTime();
-      var timeelapsed = (now - starttime) / 1000.;
+    if (this.props.taskdata.starttimestamp != null && this.props.taskdata.finishtimestamp == null) {
+      var starttime = new Date(this.props.taskdata.starttimestamp).getTime();
+      var timeelapsed = (new Date().getTime() - starttime) / 1000.;
       this.setState({'timeelapsed': timeelapsed.toFixed(1)});
-    } else {
-      clearInterval(this.interval);
+    } else if (this.state.interval != null) {
+      clearInterval(this.state.interval);
+      this.setState({'interval': null});
     }
   }
 
   shouldComponentUpdate(nextProps, nextState) {
-    if (this.state.starttimestamp != null && this.state.finishtimestamp == null) {
+    if (nextState.interval != null)
+    {
       return true;
     }
-    if (JSON.stringify(nextState) == JSON.stringify(this.state)) {
+    // if (nextProps.taskdata.starttimestamp != null && nextProps.taskdata.finishtimestamp == null) {
+    //   return true;
+    // }
+    if (JSON.stringify(nextProps) == JSON.stringify(this.props)) {
       return false;
     } else {
       return true;
@@ -88,7 +92,7 @@ class Task extends React.Component {
   }
 
   render() {
-    var task = this.state;
+    var task = this.props.taskdata;
     var statusclass = 'none';
     var buttontext = 'none';
     if (task.finishtimestamp != null) {
