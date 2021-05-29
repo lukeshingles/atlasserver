@@ -28,18 +28,6 @@
         const user_id = {{ request.user.id|escapejs }};
     </script>
 
-    <!-- production -->
-    <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
-    <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}"></script>
-
-    <!-- development -->
-    <!-- <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script> -->
-    <!-- <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script> -->
-    <!-- <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script> -->
-
-    <!-- <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script> -->
-
     <script src="{% static 'js/plotly-latest.kws.js' %}"></script>
 
     <script language="javascript" type="text/javascript">
@@ -97,4 +85,16 @@
 
     updatepropermotionpanel();
     </script>
+
+    <!-- production -->
+    <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
+    <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}"></script>
+
+    <!-- development -->
+    <!-- <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script> -->
+    <!-- <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script> -->
+    <!-- <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script> -->
+
+    <!-- <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script> -->
 {% endblock %}
