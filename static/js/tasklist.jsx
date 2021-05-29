@@ -159,7 +159,7 @@ class Task extends React.Component {
 
         if (task.request_type == 'IMGZIP') {
           if (task.result_imagezip_url != null) {
-            taskbox.push(<a key="imgdownload" className="results btn btn-info" href="{% url 'taskimagezip' task.parent_task_id}">Download images (ZIP)</a>);
+            taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagezip_url}>Download images (ZIP)</a>);
           }
         } else if (task.imagerequest_taskid != null) {
           if (task.imagerequest_finished) {
