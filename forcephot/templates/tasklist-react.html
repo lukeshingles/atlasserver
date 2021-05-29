@@ -23,7 +23,7 @@
     {{ block.super }}
 
     <script language="javascript" type="text/javascript">
-        const api_url = '{{ api_url|escapejs }}';
+        const api_url = window.location.href;
         const api_url_base = '{{ api_url_base|escapejs }}';
         const user_id = {{ request.user.id|escapejs }};
     </script>
@@ -80,7 +80,7 @@
 
 
     function updatePageTasks() {
-        updatepropermotionpanel();
+      updatepropermotionpanel();
     }
 
     updatepropermotionpanel();

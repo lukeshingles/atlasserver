@@ -145,7 +145,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
             if success:
                 strnewids = ','.join([str(item['id']) for item in serializer.data])
-                redirurl = replace_query_param(reverse('task-list'), 'newids', strnewids)
+                redirurl = request.META['HTTP_REFERER'] if 'HTTP_REFERER' in request.META else reverse('task-list')
+                redirurl = replace_query_param(redirurl, 'newids', strnewids)
                 return redirect(redirurl, status=status.HTTP_201_CREATED, headers=kwargs['headers'])
 
             kwargs['form'] = form
@@ -228,7 +229,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
-                'api_url': request.build_absolute_uri(reverse('task-list')),
                 'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
@@ -259,7 +259,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                 'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
-                'api_url': request.build_absolute_uri(reverse('task-detail', args=[instance.id])),
                 'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
@@ -289,26 +288,6 @@ def deletetask(request, pk):
         redirurl = reverse('task-list')
 
     return redirect(redirurl, request=request)
-
-
-def reactqueue(request, *args, **kwargs):
-    if not request.user.is_authenticated:
-        raise PermissionDenied()
-
-    if 'form' in kwargs:
-        form = kwargs['form']
-    else:
-        form = TaskForm()
-
-    api_url = request.build_absolute_uri(reverse('task-list'))
-    if 'cursor' in request.GET:
-        api_url += '?cursor=' + request.GET['cursor']
-
-    return render(request, 'tasklist-react.html', {
-        'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
-        'api_url': api_url,
-        'api_url_base': request.build_absolute_uri(reverse('index')),
-    })
 
 
 def requestimages(request, pk):

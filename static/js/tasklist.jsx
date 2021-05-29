@@ -303,7 +303,7 @@ class TaskList extends React.Component {
 
   updateCursor(new_cursor) {
     console.log('Task list cursor changed to ', new_cursor);
-    var new_api_url = new URL(api_url_base + 'queue/');
+    var new_api_url = new URL(this.state.api_url);
     if (new_cursor != null) {
       new_api_url.searchParams.set('cursor', new_cursor);
     }
