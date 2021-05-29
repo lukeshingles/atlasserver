@@ -85,7 +85,7 @@
     // window may be visible onscreen but not focused - reduce the update rate in this case
     $(window).blur(function() {
       clearInterval(updatequeuedtimer);
-      updatequeuedtimer = setInterval(updatePageTasks, 2 * updateInterval);
+      updatequeuedtimer = setInterval(updatePageTasks, 4 * updateInterval);
       window_focused = false;
     });
 
