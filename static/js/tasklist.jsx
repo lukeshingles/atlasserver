@@ -159,7 +159,7 @@ class Task extends React.Component {
 
         if (task.request_type == 'IMGZIP') {
           if (task.result_imagezip_url != null) {
-            taskbox.push(<a key="imgdownload" class="results btn btn-info" href="{% url 'taskimagezip' task.parent_task_id}">Download images (ZIP)</a>);
+            taskbox.push(<a key="imgdownload" className="results btn btn-info" href="{% url 'taskimagezip' task.parent_task_id}">Download images (ZIP)</a>);
           }
         } else if (task.imagerequest_taskid != null) {
           if (task.imagerequest_finished) {
@@ -303,7 +303,7 @@ class TaskList extends React.Component {
 
   updateCursor(new_cursor) {
     console.log('Task list cursor changed to ', new_cursor);
-    var new_api_url = new URL(window.location.href);
+    var new_api_url = new URL(api_url_base + 'queue/');
     if (new_cursor != null) {
       new_api_url.searchParams.set('cursor', new_cursor);
     }
