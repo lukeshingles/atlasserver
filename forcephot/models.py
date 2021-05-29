@@ -74,10 +74,13 @@ class Task(models.Model):
 
     def localresultfile(self):
         """
-            return the relative path to the FP data file if the job is finished
+            return the relative path to the FP data file if the job is finished,
+            and the file exists
         """
         if self.finishtimestamp:
-            return self.localresultfileprefix() + '.txt'
+            resultfile = self.localresultfileprefix() + '.txt'
+            if Path(settings.STATIC_ROOT, resultfile).exists():
+                return resultfile
 
         return None
 
