@@ -4,6 +4,8 @@ var jslcdataglobal = new Object();
 var jslabelsglobal = new Object();
 var jslimitsglobal = new Object();
 
+var api_request_active = false;
+
 class TaskPlot extends React.Component {
   constructor(props) {
     super(props);
@@ -320,6 +322,13 @@ class TaskList extends React.Component {
     if (document[hidden]) {
       return;
     }
+
+    if (api_request_active) {
+      console.log('prevent overlapping GET requests');
+      return;
+    }
+
+    api_request_active = true;
     console.log('Fetching task list from ', this.state.api_url);
     fetch(this.state.api_url,
     {
@@ -328,7 +337,7 @@ class TaskList extends React.Component {
         'Content-Type': 'application/json'
       }
     })
-    .then((response) => response.json())
+    .then((response) => {api_request_active = false; return response.json()})
     .then((data) => {
       if (data.hasOwnProperty('results')) {
         this.setState(data);
