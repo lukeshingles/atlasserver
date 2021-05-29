@@ -1,7 +1,6 @@
 {% load static %}
 {% load i18n %}
 {% load rest_framework %}
-{% load spaceless %}
 {% load forcedphottags %}
 <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
     {% if not tasks and usertaskcount == 0 %}
@@ -61,7 +60,6 @@
 
                   Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
 
-                  {% spaceless %}
                   {% if task.finishtimestamp %}
                     Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br />
 
@@ -92,7 +90,6 @@
                   {% else %}
                   Waiting{% if task.queuepos > -1 %} ({{task.queuepos}} tasks ahead of this one){% if task.queuepos > -1 %}{% endif %}
                   {% endif %}
-                  {% endspaceless %}
                   </div>
 
                   {% if task.finishtimestamp and not task.error_msg and task.request_type == 'FP' %}
