@@ -148,6 +148,7 @@ class Task(models.Model):
         return None
 
     def queuepos(self):
+        return -1  # disable for performance reasons
         if self.finishtimestamp:
             return -1
 
