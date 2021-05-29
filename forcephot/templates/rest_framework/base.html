@@ -13,7 +13,11 @@
       {% endblock %}
 
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
+
+      <!-- force refresh every 24 hours in case the javascript code needs an update -->
+      <meta http-equiv="refresh" content="86400" />
       <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
+
       <!-- Global site tag (gtag.js) - Google Analytics -->
       <script async src="https://www.googletagmanager.com/gtag/js?id=G-CK29QMXSZ9"></script>
       <script>
