@@ -182,7 +182,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'],
     'DEFAULT_PAGINATION_CLASS': 'forcephot.pagination.TaskPagination',
-    'PAGE_SIZE': 8,
+    'PAGE_SIZE': 6,
     'DEFAULT_THROTTLE_CLASSES': [
         # 'rest_framework.throttling.ScopedRateThrottle',
         'forcephot.throttles.ForcedPhotRateThrottle',
