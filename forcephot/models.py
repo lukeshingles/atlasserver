@@ -123,6 +123,7 @@ class Task(models.Model):
 
         return None
 
+    @property
     def imagerequest_taskid(self):
         """
             return the task id of the image request task associated with this
@@ -134,6 +135,7 @@ class Task(models.Model):
 
         return None
 
+    @property
     def imagerequest_finished(self):
         """
             return the task id of the image request task associated with this
@@ -230,7 +232,7 @@ class Task(models.Model):
     def delete(self):
         # cleanup associated files when removing a task object from the database
         if self.request_type == 'IMGZIP':
-            zipfile = self.localresultimagezipfile()
+            zipfile = self.localresultimagezipfile
             if zipfile:
                 try:
                     Path(settings.STATIC_ROOT, zipfile).unlink()

@@ -125,12 +125,13 @@ ul.tasks div.rightside {
     text-align: right;
 }
 
-a.results {
+.results {
   background-color: #ef4e19;
   border-color: #e59400;
 }
 
-li.task a.btn:not(.btn-sm) {
+li.task .btn:not(.btn-sm) {
+    margin-right: 0.4em;
     /* background-color: #6BA3E8; */
     color: white;
     /* display: block; */

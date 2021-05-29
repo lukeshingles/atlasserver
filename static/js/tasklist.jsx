@@ -1,7 +1,5 @@
 'use strict';
 
-// const api_url = 'http://127.0.0.1:8000/';
-
 var jslcdataglobal = new Object();
 var jslabelsglobal = new Object();
 var jslimitsglobal = new Object();
@@ -14,7 +12,7 @@ class TaskPlot extends React.Component {
 
   componentDidMount() {
     console.log('activating plot', this.props.taskid)
-    $.ajax({url: '/queue/' + this.props.taskid + '/resultplotdata.js', cache: true, dataType: 'script'});
+    $.ajax({url: api_url_base + 'queue/' + this.props.taskid + '/resultplotdata.js', cache: true, dataType: 'script'});
   }
 
   render() {
@@ -27,6 +25,7 @@ class TaskPlot extends React.Component {
 class Task extends React.Component {
   constructor(props) {
     super(props);
+    this.requestImages = this.requestImages.bind(this);
     this.deleteTask = this.deleteTask.bind(this);
     this.state = {}
     this.state.updateTimeElapsed = this.updateTimeElapsed.bind(this);
@@ -38,17 +37,20 @@ class Task extends React.Component {
     $.ajax({url: this.props.taskdata.url, method: 'delete', success: (result) => {this.props.fetchData()}});
   }
 
+  requestImages() {
+    $.ajax({url: this.props.taskdata.url + 'requestimages', method: 'get', success: (result) => {this.props.fetchData()}});
+  }
+
   static getDerivedStateFromProps(props, state) {
     var statechanges = {};
     if (props.taskdata.starttimestamp != null && props.taskdata.finishtimestamp == null) {
       if (state.interval == null) {
         var starttime = new Date(props.taskdata.starttimestamp).getTime();
         var timeelapsed = (new Date().getTime() - starttime) / 1000.;
-        return {
-          'interval': setInterval(() => {state.updateTimeElapsed()}, 100),
-          'timeelapsed': timeelapsed.toFixed(1)
-        };
+        return {'interval': setInterval(state.updateTimeElapsed, 1000), 'timeelapsed': timeelapsed.toFixed(0)};
       }
+    } else if (state.interval != null) {
+      return {'interval': null};
     }
 
     return null;
@@ -56,7 +58,7 @@ class Task extends React.Component {
 
 
   componentDidMount() {
-    // state.updateTimeElapsed();
+    this.updateTimeElapsed();
     // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);
   }
 
@@ -69,7 +71,7 @@ class Task extends React.Component {
     if (this.props.taskdata.starttimestamp != null && this.props.taskdata.finishtimestamp == null) {
       var starttime = new Date(this.props.taskdata.starttimestamp).getTime();
       var timeelapsed = (new Date().getTime() - starttime) / 1000.;
-      this.setState({'timeelapsed': timeelapsed.toFixed(1)});
+      this.setState({'timeelapsed': timeelapsed.toFixed(0)});
     } else if (this.state.interval != null) {
       clearInterval(this.state.interval);
       this.setState({'interval': null});
@@ -77,18 +79,14 @@ class Task extends React.Component {
   }
 
   shouldComponentUpdate(nextProps, nextState) {
-    if (nextState.interval != null)
-    {
+    if (nextProps.taskdata.starttimestamp != null && nextProps.taskdata.finishtimestamp == null) {
       return true;
     }
-    // if (nextProps.taskdata.starttimestamp != null && nextProps.taskdata.finishtimestamp == null) {
-    //   return true;
-    // }
-    if (JSON.stringify(nextProps) == JSON.stringify(this.props)) {
-      return false;
-    } else {
+    if (JSON.stringify(nextProps) != JSON.stringify(this.props)) {
       return true;
     }
+
+    return false;
   }
 
   render() {
@@ -113,7 +111,7 @@ class Task extends React.Component {
       </div>
     ];
 
-    taskbox.push(<div key="tasknum"><a key="tasklink" href={task.url + '?usereact'}>Task {task.id}</a></div>);
+    taskbox.push(<div key="tasknum"><a key="tasklink" onClick={() => this.props.setSingleTaskView(task.url)}>Task {task.id}</a></div>);
 
     if (task.parent_task_url) {
       taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url + '?usereact'}>Task {task.parent_task_id}</a></p>);
@@ -150,11 +148,25 @@ class Task extends React.Component {
     if (task.finishtimestamp != null) {
       taskbox.push(<div key="status">Finished at {task.finishtimestamp}</div>);
       if (task.error_msg != null) {
-        taskbox.push(<p style={{color: 'black', fontWeight: 'bold'}}>Error: {task.error_msg}</p>);
+        taskbox.push(<p key="error_msg" style={{color: 'black', fontWeight: 'bold'}}>Error: {task.error_msg}</p>);
       } else {
         if (task.request_type == 'FP') {
           taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank">Data</a>);
           taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank">PDF</a>);
+        }
+
+        if (task.request_type == 'IMGZIP') {
+          if (task.localresultimagezipfile != null) {
+            taskbox.push(<a key="imgdownload" class="results btn btn-info" href="{% url 'taskimagezip' task.parent_task_id}">Download images (ZIP)</a>);
+          }
+        } else if (task.imagerequest_taskid != null) {
+          if (task.imagerequest_finished) {
+            taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url}>Images ready</a>);
+          } else {
+            taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url}>Images requested</a>);
+          }
+        } else if (user_id == task.user_id) {
+            taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={this.requestImages} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
         }
       }
     } else if (task.starttimestamp != null) {
@@ -270,12 +282,25 @@ class TaskList extends React.Component {
       'api_url': props.api_url,
     };
 
+    this.setSingleTaskView = this.setSingleTaskView.bind(this);
     this.updateCursor = this.updateCursor.bind(this);
     this.fetchData = this.fetchData.bind(this);
   }
 
+  setSingleTaskView(task_url) {
+    console.log('Task list changed to single task view for ', task_url);
+
+    this.setState({'api_url': task_url});
+
+    window.history.pushState({}, document.title, task_url);
+    this.fetchData(true);
+
+    $('#tasklist').addClass('singletaskdetail');
+    $('.newrequest').hide();
+  }
+
   updateCursor(new_cursor) {
-    console.log('TaskList cursor changed to ', new_cursor);
+    console.log('Task list cursor changed to ', new_cursor);
     var new_api_url = new URL(window.location.href);
     if (new_cursor != null) {
       new_api_url.searchParams.set('cursor', new_cursor);
@@ -287,12 +312,15 @@ class TaskList extends React.Component {
       new_page_url.searchParams.set('cursor', new_cursor);
     }
 
-    window.history.pushState({}, document.title, new_page_url );
+    window.history.pushState({}, document.title, new_page_url);
     this.fetchData(true);
   }
 
   fetchData(scrollUpAfter) {
-    console.log('Fetching data from ', this.state.api_url);
+    if (document[hidden]) {
+      return;
+    }
+    console.log('Fetching task list from ', this.state.api_url);
     fetch(this.state.api_url,
     {
       headers: {
@@ -334,7 +362,7 @@ class TaskList extends React.Component {
       return (
         <div>
           <ul key="tasklist" className="tasks">
-          {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} />))}
+          {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} />))}
           </ul>
           <Pager key='pager' previous={this.state.previous} next={this.state.next} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
         </div>

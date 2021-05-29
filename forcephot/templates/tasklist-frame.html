@@ -2,7 +2,6 @@
 {% load i18n %}
 {% load rest_framework %}
 {% load forcedphottags %}
-
 <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>
     {% if not tasks and usertaskcount == 0 %}
     <p>There are no tasks.</p>
@@ -28,6 +27,7 @@
                       <img src="{% static task.localresultpreviewimagefile %}" style="display:block; margin-top: 1em; margin-left: 1em;" />
                       {% endif %}
                   </div>
+
                   <a href="{% url 'task-detail' task.id %}">Task {{task.id}}</a><br/>
                   {% if task.parent_task %}
                   <p>Image request for
@@ -40,12 +40,9 @@
                   <p>Up to the first 500 {%if task.use_reduced %}reduced{% else %}difference{% endif %} images will be retrieved. The image request and download link may expire after one week.</p>
                   {% endif %}
 
-                  {% if task.user.id != request.user.id %}
-                  User: {{task.user.username}}<br/>
-                  {% endif %}
-                  {% if task.comment %}
-                  Comment: <b>{{task.comment}}</b><br/>
-                  {% endif %}
+                  {% if task.user.id != request.user.id %}User: {{task.user.username}}<br/>{% endif %}
+
+                  {% if task.comment %}Comment: <b>{{task.comment}}</b><br/>{% endif %}
 
                   {% if task.mpc_name %}
                   MPC Object: {{task.mpc_name}}<br />
@@ -63,6 +60,7 @@
 
                   Queued at {{task.timestamp|date:'Y-m-d H:i:s e'}}<br/>
 
+                  {% spaceless %}
                   {% if task.finishtimestamp %}
                     Finished{% if task.finishtimestamp %} at {{task.finishtimestamp|date:'Y-m-d H:i:s e'}}{% endif %}<br />
 
@@ -73,7 +71,6 @@
                         <a class="results btn btn-info getdata" href="{% url 'taskresultdata' task.id %}" target="_blank">Data</a>
                         <a class="results btn btn-info getpdf" href="{% url 'taskpdfplot' task.id %}" target="_blank">PDF</a>
                       {% endif %}
-
                       {% if task.request_type == 'IMGZIP' %}
                           {% if task.localresultimagezipfile %}
                               <a class="results btn btn-info" href="{% url 'taskimagezip' task.parent_task_id}">Download images (ZIP)</a>
@@ -94,6 +91,7 @@
                   {% else %}
                   Waiting ({{task.queuepos}} tasks ahead of this one)
                   {% endif %}
+                  {% endspaceless %}
                   </div>
 
                   {% if task.finishtimestamp and not task.error_msg and task.request_type == 'FP' %}

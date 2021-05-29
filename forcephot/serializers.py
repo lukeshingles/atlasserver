@@ -38,10 +38,18 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return None
 
+    def get_imagerequest_url(self, obj):
+        if obj.imagerequest_taskid:
+            request = self.context.get('request')
+            return request.build_absolute_uri(reverse('task-detail', args=[obj.imagerequest_taskid]))
+
+        return None
+
     result_url = serializers.SerializerMethodField('get_result_url')
     parent_task_url = serializers.SerializerMethodField('get_parent_task_url')
     pdfplot_url = serializers.SerializerMethodField('get_pdfplot_url')
     previewimage_url = serializers.SerializerMethodField('get_previewimage_url')
+    imagerequest_url = serializers.SerializerMethodField('get_imagerequest_url')
 
     def validate(self, attrs):
         # print(attrs)
@@ -75,8 +83,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             'radec_epoch_year', 'propermotion_ra', 'propermotion_dec', 'use_reduced',
             'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
             'finishtimestamp', 'error_msg', 'previewimage_url', 'parent_task_id', 'parent_task_url', 'request_type',
-            'pdfplot_url', 'queuepos', 'imagerequest_taskid', 'imagerequest_finished']
+            'pdfplot_url', 'queuepos', 'imagerequest_taskid', 'imagerequest_url', 'imagerequest_finished']
 
         read_only_fields = [
             'user_id', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg',
-            'parent_task_url', 'previewimage_url', 'pdfplot_url', 'queuepos', 'imagerequest_taskid', 'imagerequest_finished']
+            'parent_task_url', 'previewimage_url', 'pdfplot_url', 'queuepos',
+            'imagerequest_taskid', 'imagerequest_url', 'imagerequest_finished']
