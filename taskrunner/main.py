@@ -51,7 +51,7 @@ def get_localresultfile(id):
 
 def task_exists(conn, taskid):
     cur = conn.cursor(dictionary=True)
-    cur.execute(f"SELECT COUNT(*) as taskcount FROM forcephot_task WHERE id={taskid};")
+    cur.execute(f"SELECT COUNT(*) as taskcount FROM forcephot_task WHERE id={taskid} AND is_archived=FALSE;")
     exists = not (cur.fetchone()['taskcount'] == 0)
     conn.commit()
     cur.close()
@@ -329,13 +329,12 @@ def log(msg, *args, **kwargs):
 def do_taskloop():
     # track some kind of workload measurement for each user
     # that is reset after each complete pass
-    usertaskload = {}
 
     conn = mysql.connector.connect(**CONNKWARGS)
 
     cur = conn.cursor(dictionary=True, buffered=True)
 
-    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp IS NULL;")
+    cur.execute("SELECT COUNT(*) as taskcount FROM forcephot_task WHERE finishtimestamp IS NULL AND is_archived=FALSE;")
     taskcount = cur.fetchone()['taskcount']
 
     if taskcount == 0:
@@ -345,73 +344,63 @@ def do_taskloop():
 
     cur.execute(
         "SELECT t.*, a.email, a.username FROM forcephot_task AS t LEFT JOIN auth_user AS a"
-        " ON user_id = a.id WHERE finishtimestamp IS NULL ORDER BY timestamp;")
+        " ON user_id = a.id WHERE finishtimestamp IS NULL AND is_archived=FALSE ORDER BY queuepos_relative;")
 
-    for taskrow in cur:
-        task = dict(taskrow)
+    task = dict(cur.fetchone())
 
-        if not task_exists(conn=conn, taskid=task['id']):
-            log(f"task {task['id']} (user {task['username']}): was cancelled.")
-            continue
+    # if not task_exists(conn=conn, taskid=task['id']):
+    #     log(f"task {task['id']} (user {task['username']}): was cancelled.")
+    #     return
 
-        taskload_thisuser = usertaskload.get(task['user_id'], 0)
+    logprefix = f"task{task['id']:05d}: "
+    cur2 = conn.cursor()
+    cur2.execute(f"UPDATE forcephot_task SET starttimestamp=UTC_TIMESTAMP() WHERE id={task['id']};")
+    conn.commit()
+    cur2.close()
 
-        if taskload_thisuser < USERTASKLOADLIMIT:
-            logprefix = f"task{task['id']:05d}: "
+    log(logprefix + f"Starting task for {task['username']}:")
+    log(logprefix + str(task))
+
+    runtask_starttime = time.perf_counter()
+
+    localresultfile, error_msg = runtask(conn=conn, logprefix=logprefix, task=task)
+
+    if not task_exists(conn=conn, taskid=task['id']):  # task was cancelled
+        log(logprefix + "Task was cancelled during execution (no longer in database)")
+
+        # in case a result file was created, delete it
+        remove_task_resultfiles(taskid=task['id'], parent_task_id=task['parent_task_id'],
+                                request_type=task['request_type'])
+    else:
+        runtask_duration = time.perf_counter() - runtask_starttime
+
+        log(logprefix + f"Task ran for {runtask_duration:.1f} seconds")
+
+        if error_msg:
+            # an error occured and the task should not be retried (e.g. invalid
+            # minor planet center object name or no data returned)
+            log(logprefix + f"Error_msg: {error_msg}")
+
+            send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
+
             cur2 = conn.cursor()
-            cur2.execute(f"UPDATE forcephot_task SET starttimestamp=UTC_TIMESTAMP() WHERE id={task['id']};")
+            cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=UTC_TIMESTAMP(), queuepos_relative=NULL, error_msg='{error_msg}' WHERE id={task['id']};")
             conn.commit()
             cur2.close()
+        else:
+            if localresultfile and os.path.exists(localresultfile):
+                # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+                send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
 
-            log(logprefix + f"Starting task for {task['username']} (who has run {taskload_thisuser} tasks "
-                "in this pass so far):")
-            log(logprefix + str(task))
-            usertaskload[task['user_id']] = taskload_thisuser + 1
-
-            runtask_starttime = time.perf_counter()
-
-            localresultfile, error_msg = runtask(conn=conn, logprefix=logprefix, task=task)
-
-            if not task_exists(conn=conn, taskid=task['id']):  # task was cancelled
-                log(logprefix + "Task was cancelled during execution (no longer in database)")
-
-                # in case a result file was created, delete it
-                remove_task_resultfiles(taskid=task['id'], parent_task_id=task['parent_task_id'],
-                                        request_type=task['request_type'])
+                cur2 = conn.cursor()
+                cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=UTC_TIMESTAMP(), queuepos_relative=NULL WHERE id={task['id']};")
+                conn.commit()
+                cur2.close()
             else:
-                runtask_duration = time.perf_counter() - runtask_starttime
-
-                log(logprefix + f"Task ran for {runtask_duration:.1f} seconds")
-
-                if error_msg:
-                    # an error occured and the task should not be retried (e.g. invalid
-                    # minor planet center object name or no data returned)
-                    log(logprefix + f"Error_msg: {error_msg}")
-
-                    send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
-
-                    cur2 = conn.cursor()
-                    cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=UTC_TIMESTAMP(), error_msg='{error_msg}' WHERE id={task['id']};")
-                    conn.commit()
-                    cur2.close()
-                else:
-                    if localresultfile and os.path.exists(localresultfile):
-                        # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                        send_email_if_needed(conn=conn, task=task, logprefix=logprefix)
-
-                        cur2 = conn.cursor()
-                        cur2.execute(f"UPDATE forcephot_task SET finishtimestamp=UTC_TIMESTAMP() WHERE id={task['id']};")
-                        conn.commit()
-                        cur2.close()
-                    else:
-                        waittime = 5
-                        log(logprefix + f"ERROR: Task was not completed successfully. Waiting {waittime} seconds "
-                            f"before continuing with next task...")
-                        time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
-
-            if (taskload_thisuser >= USERTASKLOADLIMIT):
-                log(f"User {task['username']} has reached a task load of {taskload_thisuser} "
-                    f"above limit {USERTASKLOADLIMIT} for this pass.")
+                waittime = 5
+                log(logprefix + f"ERROR: Task was not completed successfully. Waiting {waittime} seconds "
+                    f"before continuing with next task...")
+                time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
     conn.commit()
     cur.close()

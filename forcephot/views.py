@@ -36,6 +36,44 @@ from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
 
 
+def calculate_queue_positions():
+    # the last started task user id can be passed in, in case the associated task
+    # got cancelled
+    # the user of the last completed task (to get position in current pass)
+    laststartedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by('-starttimestamp').first()
+
+    queuedtasks = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
+    queuedtaskcount = queuedtasks.count()
+    queuedtasks.update(queuepos_relative=None)
+
+    queuepos = 0
+    passnum = 0
+    while queuepos < queuedtaskcount:
+        useridsassigned_currentpass = set()
+        if passnum == 0 and not laststartedtask.finishtimestamp:
+            # currently running task will be assigned position 0
+            laststartedtask.queuepos_relative = 0
+            laststartedtask.save()
+            useridsassigned_currentpass.add(laststartedtask.user_id)
+            queuepos = 1
+
+        unassigned_tasks = queuedtasks.filter(queuepos_relative__isnull=True)
+        if unassigned_tasks.count() == 0:
+            break
+
+        for task in unassigned_tasks:
+
+            if (task.user_id not in useridsassigned_currentpass and
+                    (passnum != 0 or task.user_id > laststartedtask.user_id)):
+                # print(queuepos, task)
+                task.queuepos_relative = queuepos
+                task.save()
+                useridsassigned_currentpass.add(task.user_id)
+                queuepos += 1
+
+        passnum += 1
+
+
 class ForcePhotPermission(permissions.BasePermission):
     message = 'You must be the owner of this object.'
 
@@ -139,6 +177,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields['from_api'] = (self.request.accepted_renderer.format != 'html')
 
         serializer.save(**extra_fields)
+        calculate_queue_positions()
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
@@ -152,8 +191,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     #     #         'Location': reverse('task-list', request=request)})
     #     return Response(status=status.HTTP_204_NO_CONTENT)
 
-    # def perform_destroy(self, instance):
-    #     instance.delete()
+    def perform_destroy(self, instance):
+        laststartedtask_user_id = Task.objects.filter(
+            finishtimestamp__isnull=False).order_by('-starttimestamp').first().user_id
+        instance.delete()
+        calculate_queue_positions(laststartedtask_user_id)
 
     def list(self, request, *args, **kwargs):
         if request.user.is_authenticated:
@@ -231,6 +273,9 @@ def deletetask(request, pk):
     if not request.user.is_authenticated:
         raise PermissionDenied()
 
+    laststartedtask_user_id = Task.objects.filter(
+        finishtimestamp__isnull=False).order_by('-starttimestamp').first().user_id
+
     try:
         item = Task.objects.get(id=pk)
 
@@ -241,6 +286,8 @@ def deletetask(request, pk):
 
     except ObjectDoesNotExist:
         pass
+
+    calculate_queue_positions(laststartedtask_user_id)
 
     redirurl = request.META.get('HTTP_REFERER', reverse('task-list'))
     if f'/{pk}/' in redirurl:  # if referrer was the single-task view, it will not exist anymore

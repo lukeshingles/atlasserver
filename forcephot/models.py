@@ -4,6 +4,7 @@ import datetime
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
+from django.db.models import Min
 from django.utils import timezone
 from pathlib import Path
 from forcephot.misc import date_to_mjd, country_code_to_name
@@ -48,6 +49,7 @@ class Task(models.Model):
                                            verbose_name='Epoch year')
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name='Proper motion RA (mas/yr)')
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name='Proper motion Dec (mas/yr)')
+    queuepos_relative = models.IntegerField(null=True, blank=True, default=None, verbose_name='Queue position')
 
     parent_task = models.ForeignKey('self',
                                     related_name='imagerequest',
@@ -150,37 +152,20 @@ class Task(models.Model):
 
         return None
 
+    @property
     def queuepos(self):
-        return -1  # disable for performance reasons
-        if self.finishtimestamp:
-            return -1
+        if self.finishtimestamp or self.queuepos_relative is None:
+            return None
 
-        # this can probably be done more efficiently. The goal is to figure out the task queue position
-        # given that a round-robin queue is used
+        # after completing a job, the next job might not have queuepos_relative=0 until a queue order refresh is done
+        # so queuepos_relative=1 could have queuepos 0 (is next)
+        minqueuepos = Task.objects.filter(finishtimestamp__isnull=True).aggregate(
+            Min('queuepos_relative'))['queuepos_relative__min']
 
-        posallqueue = 0.
+        if minqueuepos is None:
+            minqueuepos = 0
 
-        # task position in the owner's queue
-        posownerqueue = Task.objects.filter(id__lt=self.id, finishtimestamp__isnull=True, user=self.user).count()
-
-        for tmpuser in User.objects.all():
-            tmpusertasks = Task.objects.filter(
-                id__lt=self.id, finishtimestamp__isnull=True, user=tmpuser).order_by('id')
-
-            if tmpusertasks.count() > posownerqueue:
-                # add the number of tasks from earlier full passes
-                posallqueue += posownerqueue
-
-                # add one if this tmpuser's task preceeds it in the final pass when the task runs
-                if tmpusertasks[posownerqueue].id < self.id:
-                    posallqueue += 1
-            else:
-                # add the number of tasks from earlier full passes
-                posallqueue += tmpusertasks.count()
-
-        # queuepos = sum[
-        # x = Task.objects.filter(timestamp__lt=self.timestamp, finishtimestamp__isnull=True, user=self.user).count()
-        return int(posallqueue)
+        return self.queuepos_relative - int(minqueuepos)
 
     def finished(self):
         return True if self.finishtimestamp else False
