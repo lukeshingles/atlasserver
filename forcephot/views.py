@@ -685,7 +685,7 @@ def taskimagezip(request, taskid):
             return HttpResponseNotFound("Page not found")
 
     if item:
-        resultfile = item.localresultimagezipfile()
+        resultfile = item.localresultimagezipfile
         if resultfile:
             resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
 
