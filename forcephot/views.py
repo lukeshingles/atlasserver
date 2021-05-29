@@ -258,9 +258,13 @@ def reactqueue(request, *args, **kwargs):
     else:
         form = TaskForm()
 
+    api_url = request.build_absolute_uri(reverse('task-list'))
+    if 'cursor' in request.GET:
+        api_url += '?cursor=' + request.GET['cursor']
+
     return render(request, 'tasklist-react.html', {
         'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
-        'api_url': request.build_absolute_uri(reverse('task-list')),
+        'api_url': api_url,
         'api_url_base': request.build_absolute_uri(reverse('index')),
     })
 
