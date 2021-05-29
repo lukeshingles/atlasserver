@@ -192,10 +192,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     #     return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
-        laststartedtask_user_id = Task.objects.filter(
-            finishtimestamp__isnull=False).order_by('-starttimestamp').first().user_id
         instance.delete()
-        calculate_queue_positions(laststartedtask_user_id)
+        calculate_queue_positions()
 
     def list(self, request, *args, **kwargs):
         if request.user.is_authenticated:
@@ -273,9 +271,6 @@ def deletetask(request, pk):
     if not request.user.is_authenticated:
         raise PermissionDenied()
 
-    laststartedtask_user_id = Task.objects.filter(
-        finishtimestamp__isnull=False).order_by('-starttimestamp').first().user_id
-
     try:
         item = Task.objects.get(id=pk)
 
@@ -287,7 +282,7 @@ def deletetask(request, pk):
     except ObjectDoesNotExist:
         pass
 
-    calculate_queue_positions(laststartedtask_user_id)
+    calculate_queue_positions()
 
     redirurl = request.META.get('HTTP_REFERER', reverse('task-list'))
     if f'/{pk}/' in redirurl:  # if referrer was the single-task view, it will not exist anymore
@@ -350,6 +345,7 @@ def requestimages(request, pk):
 
         newtask = Task(**data)
         newtask.save()
+        calculate_queue_positions()
 
         redirurl = replace_query_param(reverse('task-list'), 'newids', str(newtask.id))
 
