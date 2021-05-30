@@ -292,10 +292,9 @@ class TaskList extends React.Component {
   setSingleTaskView(task_url) {
     console.log('Task list changed to single task view for ', task_url);
 
-    this.setState({'api_url': task_url});
+    this.setState({'api_url': task_url}, () => {this.fetchData(true)});
 
     window.history.pushState({}, document.title, task_url);
-    this.fetchData(true);
 
     $('#tasklist').addClass('singletaskdetail');
     $('.newrequest').hide();
@@ -307,7 +306,7 @@ class TaskList extends React.Component {
     if (new_cursor != null) {
       new_api_url.searchParams.set('cursor', new_cursor);
     }
-    this.setState({'api_url': new_api_url.toString()});
+    this.setState({'api_url': new_api_url.toString()}, () => {this.fetchData(true)});
 
     var new_page_url = new URL(window.location.href);
     if (new_cursor != null) {
@@ -315,7 +314,6 @@ class TaskList extends React.Component {
     }
 
     window.history.pushState({}, document.title, new_page_url);
-    this.fetchData(true);
   }
 
   fetchData(scrollUpAfter) {
@@ -352,9 +350,20 @@ class TaskList extends React.Component {
     });
   }
 
+  // shouldComponentUpdate(nextProps, nextState) {
+  //   if (nextState.api_url != this.state.api_url) {
+  //     this.fetchData(true);
+  //     return true;
+  //   } else if (JSON.stringify(nextState) != JSON.stringify(this.state)) {
+  //     return true;
+  //   } else {
+  //     return false;
+  //   }
+  // }
+
   componentDidMount() {
     this.fetchData(false);
-    this.interval = setInterval(() => this.fetchData(), 2000);
+    this.interval = setInterval(() => this.fetchData(), 5000);
   }
 
   componentWillUnmount() {
