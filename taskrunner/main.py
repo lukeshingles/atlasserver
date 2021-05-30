@@ -140,7 +140,26 @@ def runtask(task, conn, logprefix='', **kwargs):
         atlascommand += (" red" if task['use_reduced'] else " diff")
 
     elif task['request_type'] == 'IMGZIP':
+        localdatafile = Path(localresultdir, f"job{task['parent_task_id']:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task['parent_task_id']:05d}.txt")
+
+        copycommand = f'rsync {localdatafile} {remoteServer}:{remotedatafile}'
+
+        log(logprefix + copycommand)
+
+        p = subprocess.Popen(copycommand,
+                             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             encoding='utf-8', bufsize=1, universal_newlines=True)
+        stdout, stderr = p.communicate()
+
+        if stdout:
+            for line in stdout.split('\n'):
+                log(logprefix + f"STDOUT: {line}")
+
+        if stderr:
+            for line in stderr.split('\n'):
+                log(logprefix + f"STDERR: {line}")
+
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += (" red" if task['use_reduced'] else " diff")
 
