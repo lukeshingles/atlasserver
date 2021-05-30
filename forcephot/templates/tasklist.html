@@ -104,18 +104,24 @@
             return;
         }
 
+        console.log('Fetching task list...')
         api_request_active = true;
-        $.get({url: '{{ request.get_full_path|addtaskboxqueryparam|escapejs }}',
-        statusCode: {
-            404: function(responseObject, textStatus, jqXHR) {
-                // No content found (404)
-                window.location.href = '{% url 'task-list' %}';
+        $.get({
+            url: '{{ request.get_full_path|addtaskboxqueryparam|escapejs }}',
+            cache: true,
+            ifModified: true,
+            statusCode: {
+                404: function(responseObject, textStatus, jqXHR) {
+                    // No content found (404)
+                    api_request_active = false;
+                    window.location.href = '{% url 'task-list' %}';
+                },
             }
-        }})
-        .done(function(data, status) {
+        }).done(function(data, status) {
             api_request_active = false;
+            console.log('done', status)
+
             if (status == 'success') {
-                console.log('Updating page tasks...')
                 newhtml = jQuery(data);
 
                 // remove any tasks from the page that are missing from the new data

@@ -10,12 +10,13 @@ from django.contrib.auth import authenticate, login
 from django.core.exceptions import ObjectDoesNotExist
 # from django.core.exceptions import ValidationError
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count
+from django.db.models import Count, Min, Max
 from django.forms import model_to_dict
 # from django.http import HttpResponse
 from django.http import FileResponse
 # from django.http.response import HttpResponseRedirect
 from django.http import HttpResponseNotFound
+from django.http import HttpResponseNotModified
 from django.http import JsonResponse
 from django.views.decorators.cache import cache_page
 # from django.shortcuts import get_object_or_404
@@ -26,7 +27,8 @@ from rest_framework import filters, permissions, status, viewsets
 # from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from rest_framework.utils.urls import replace_query_param
+from rest_framework.utils.urls import remove_query_param, replace_query_param
+
 from pathlib import Path
 
 from forcephot.filters import TaskFilter
@@ -72,6 +74,21 @@ def calculate_queue_positions():
                 queuepos += 1
 
         passnum += 1
+
+
+def get_tasklist_etag(request, queryset):
+    if settings.DEBUG:
+        todaydate = datetime.datetime.utcnow()
+    else:
+        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d")
+    last_queued = Task.objects.filter().aggregate(Max('timestamp'))['timestamp__max']
+    last_started = Task.objects.filter().aggregate(Max('starttimestamp'))['starttimestamp__max']
+    last_finished = Task.objects.filter().aggregate(Max('finishtimestamp'))['finishtimestamp__max']
+    taskid_list = '-'.join([str(row.id) for row in queryset])
+    etag = (f'{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.'
+            f'lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.tasks{taskid_list}')
+
+    return etag
 
 
 class ForcePhotPermission(permissions.BasePermission):
@@ -121,7 +138,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     filterset_class = TaskFilter
     ordering = '-id'
     # filterset_fields = ['finishtimestamp']
-    template_name = 'tasklist.html'
+    template_name = 'tasklist-react.html'
 
     def create(self, request, *args, **kwargs):
         if request.accepted_renderer.format == 'html':
@@ -205,6 +222,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         page = self.paginate_queryset(listqueryset)
         if page is not None:
+            # if request.GET.get('cursor') and page[0].id == listqueryset[0].id:
+            #     return redirect(remove_query_param(request.get_full_path(), 'cursor'))
             serializer = self.get_serializer(page, many=True)
         else:
             serializer = self.get_serializer(listqueryset, many=True)
@@ -213,7 +232,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
 
         if request.accepted_renderer.format == 'html' or htmltaskframeonly:
-            if not page and listqueryset:
+            if not page and listqueryset:  # empty page, redirect to top of list
                 return redirect(reverse('task-list'), request=request)
 
             if 'form' in kwargs:
@@ -221,9 +240,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             else:
                 form = TaskForm()
 
-            template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
-            if 'usereact' in request.GET:
-                template = 'tasklist-react.html'
+            # template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
+            # if 'usereact' in request.GET:
+            #     template = 'tasklist-react.html'
+
+            template = 'tasklist-frame.html' if htmltaskframeonly else 'tasklist-react.html'
 
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
@@ -233,8 +254,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             })
 
         if page is not None:
+            etag = get_tasklist_etag(request, page)
+            if 'HTTP_IF_NONE_MATCH' in request.META and etag == request.META['HTTP_IF_NONE_MATCH']:
+                return HttpResponseNotModified()
+
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            # return self.get_paginated_response(serializer.data)
+            return self.paginator.get_paginated_response(serializer.data, headers={'ETag': etag})
 
         return Response(serializer.data)
 
@@ -251,9 +277,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             # queryset = self.filter_queryset(self.get_queryset())
             # serializer = self.get_serializer(queryset, many=True)
 
-            template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
-            if 'usereact' in request.GET:
-                template = 'tasklist-react.html'
+            template = 'tasklist-frame.html' if htmltaskframeonly else 'tasklist-react.html'
+
             tasks = [instance]
             form = TaskForm()
             return Response(template_name=template, data={
@@ -262,7 +287,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
-        return Response(serializer.data)
+        etag = get_tasklist_etag(request, [instance])
+        if 'HTTP_IF_NONE_MATCH' in request.META and etag == request.META['HTTP_IF_NONE_MATCH']:
+            return HttpResponseNotModified()
+
+        return Response(serializer.data, headers={'ETag': etag})
 
 
 def deletetask(request, pk):
@@ -587,6 +616,11 @@ def resultplotdatajs(request, taskid):
     if not jsplotfile:
         return HttpResponseNotFound("Page not found")
 
+    # force occasional refresh
+    etag = datetime.datetime.utcnow().strftime("%Y%m%d")
+    if 'HTTP_IF_NONE_MATCH' in request.META and etag == request.META['HTTP_IF_NONE_MATCH']:
+        return HttpResponseNotModified()
+
     if not Path(jsplotfile).exists():
         jsout = []
         resultfile = item.localresultfile()
@@ -649,7 +683,7 @@ def resultplotdatajs(request, taskid):
             f.writelines(jsout)
 
     if os.path.exists(jsplotfile):
-        return FileResponse(open(jsplotfile, 'rb'))
+        return FileResponse(open(jsplotfile, 'rb'), headers={'ETag': etag})
 
     return HttpResponseNotFound("ERROR: Could not create javascript file.")
 

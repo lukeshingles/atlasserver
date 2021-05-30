@@ -84,17 +84,43 @@
     }
 
     updatepropermotionpanel();
+
+    $.urlParam = function(name){
+        var results = new RegExp('[\?&]' + name + '=([^&#]*)').exec(window.location.href);
+        if (results==null) {
+           return null;
+        }
+        return decodeURI(results[1]) || 0;
+    }
+
+    var newids = $.urlParam('newids');
+    var newtaskids = [];
+
+    $( document ).ready(function() {
+      var newids = $.urlParam('newids');
+      if (newids != null) {
+          newids.split('%2C').forEach(function(taskid) {
+              console.log('new task', taskid)
+              li_id = '#task-' + taskid
+              newtaskids.push(parseInt(taskid));
+              $(li_id).hide();
+              $(li_id).show(700);
+              // remove the newids GET parameter from the URL box
+              window.history.replaceState({}, document.title, '{{ request.get_full_path|removetaskboxqueryparam }}' );
+          });
+      }
+    });
     </script>
 
     <!-- production -->
-    <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
-    <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}"></script>
+    <!-- <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script> -->
+    <!-- <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script> -->
+    <!-- <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}"></script> -->
 
     <!-- development -->
-    <!-- <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script> -->
-    <!-- <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script> -->
-    <!-- <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script> -->
+    <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script>
+    <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
 
-    <!-- <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script> -->
+    <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script>
 {% endblock %}

@@ -69,7 +69,6 @@
             <ul class="nav navbar-nav">
                 <li><a href="{% url 'index' %}">Home</a></li>
                 <li><a href="{% url 'resultdesc' %}">Output</a></li>
-                {% if user.is_superuser %}<li><a href="{% url 'task-list' %}?usereact=true" rel="nofollow" class="loginrequired">ReactQueue</a></li>{% endif %}
                 <li><a href="{% url 'task-list' %}" rel="nofollow" class="loginrequired">Queue</a></li>
                 <li><a href="{% url 'task-list' %}?format=api" rel="nofollow" class="loginrequired">API</a></li>
                 <li><a href="{% url 'apiguide' %}">API Guide</a></li>

@@ -9,12 +9,18 @@ var api_request_active = false;
 class TaskPlot extends React.Component {
   constructor(props) {
     super(props);
-
   }
 
   componentDidMount() {
     console.log('activating plot', this.props.taskid)
     $.ajax({url: api_url_base + 'queue/' + this.props.taskid + '/resultplotdata.js', cache: true, dataType: 'script'});
+  }
+
+  componentWillUnmount() {
+    console.log('Unmounting plot for task ', this.props.taskid);
+    delete jslimitsglobal['#plotforcedflux-task-' + this.props.taskid]
+    delete jslcdataglobal['#plotforcedflux-task-' + this.props.taskid]
+    delete jslabelsglobal['#plotforcedflux-task-' + this.props.taskid]
   }
 
   render() {
@@ -61,6 +67,13 @@ class Task extends React.Component {
 
   componentDidMount() {
     this.updateTimeElapsed();
+    if (newtaskids.includes(this.props.taskdata.id)) {
+      var li_id = '#task-' + this.props.taskdata.id
+      $(li_id).hide();
+      $(li_id).show(700);
+      delete newtaskids[this.props.taskdata.id];
+    }
+
     // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);
   }
 
@@ -116,7 +129,7 @@ class Task extends React.Component {
     taskbox.push(<div key="tasknum"><a key="tasklink" onClick={() => this.props.setSingleTaskView(task.url)}>Task {task.id}</a></div>);
 
     if (task.parent_task_url) {
-      taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url + '?usereact'}>Task {task.parent_task_id}</a></p>);
+      taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url}>Task {task.parent_task_id}</a></p>);
     } else if (task.parent_task) {
       taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
     }
@@ -204,10 +217,6 @@ class Pager extends React.Component {
     super(props);
 
     this.state = {}
-    this.state.previous = this.props.previous;
-    this.state.next = this.props.next;
-    this.state.pagetaskcount = this.props.pagetaskcount;
-    this.state.taskcount = this.props.taskcount;
     this.state.previous_cursor = getCursor(this.props.previous);
     this.state.next_cursor = getCursor(this.props.next);
   }
@@ -222,29 +231,10 @@ class Pager extends React.Component {
 
   static getDerivedStateFromProps(props, state) {
     var statechanges = {};
-    if (props.previous != state.previous) {
-      statechanges.previous = props.previous;
-      statechanges.previous_cursor = getCursor(props.previous);
-    }
+    statechanges.previous_cursor = getCursor(props.previous);
+    statechanges.next_cursor = getCursor(props.next);
 
-    if (props.next != state.next) {
-      statechanges.next = props.next;
-      statechanges.next_cursor = getCursor(props.next);
-    }
-
-    if (props.pagetaskcount != state.pagetaskcount) {
-      statechanges.pagetaskcount = props.pagetaskcount;
-    }
-
-    if (props.taskcount != state.taskcount) {
-      statechanges.taskcount = props.taskcount;
-    }
-
-    if (Object.keys(statechanges).length > 0)
-    {
-      return statechanges;
-    }
-    return null;
+    return statechanges;
   }
 
   shouldComponentUpdate(nextProps, nextState) {
@@ -257,15 +247,15 @@ class Pager extends React.Component {
 
   render() {
     console.log('Pager rendered');
-    if (this.state.taskcount == null) {
+    if (this.props.taskcount == null) {
       return null;
     } else {
       return (
         <div id="paginator" key="paginator">
-            <p key="pagedescription">Showing {this.state.pagetaskcount} of {this.state.taskcount} tasks</p>
+            <p key="pagedescription">Showing tasks {this.props.pagefirsttaskposition + 1}-{this.props.pagefirsttaskposition + this.props.pagetaskcount} of {this.props.taskcount}</p>
             <ul key="prevnext" className="pager">
-              {this.state.previous != null ? <li key="previous" className="previous"><a onClick={() => {this.props.updateCursor(this.state.previous_cursor)}} style={{cursor: 'pointer'}}>&laquo; Newer</a></li> : null}
-              {this.state.next != null ? <li key="next" className="next"><a onClick={() => {this.props.updateCursor(this.state.next_cursor)}}style={{cursor: 'pointer'}}>Older &raquo;</a></li> : null}
+              {this.props.previous != null ? <li key="previous" className="previous"><a onClick={() => {this.props.updateCursor(this.state.previous_cursor)}} style={{cursor: 'pointer'}}>&laquo; Newer</a></li> : null}
+              {this.props.next != null ? <li key="next" className="next"><a onClick={() => {this.props.updateCursor(this.state.next_cursor)}} style={{cursor: 'pointer'}}>Older &raquo;</a></li> : null}
             </ul>
         </div>
       )
@@ -305,12 +295,16 @@ class TaskList extends React.Component {
     var new_api_url = new URL(this.state.api_url);
     if (new_cursor != null) {
       new_api_url.searchParams.set('cursor', new_cursor);
+    } else {
+      new_api_url.searchParams.delete('cursor');
     }
     this.setState({'api_url': new_api_url.toString()}, () => {this.fetchData(true)});
 
     var new_page_url = new URL(window.location.href);
     if (new_cursor != null) {
       new_page_url.searchParams.set('cursor', new_cursor);
+    } else {
+      new_page_url.searchParams.delete('cursor');
     }
 
     window.history.pushState({}, document.title, new_page_url);
@@ -330,15 +324,23 @@ class TaskList extends React.Component {
     console.log('Fetching task list from ', this.state.api_url);
     fetch(this.state.api_url,
     {
+      ifModified: true,
       headers: {
         'Accept': 'application/json',
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       }
     })
-    .then((response) => {api_request_active = false; return response.json()})
-    .then((data) => {
+    .then((response) => {
+      api_request_active = false;
+      return response.json();
+    }).catch(error => {
+      console.log('HTTP request failed', error);
+    }).then((data) => {
       if (data.hasOwnProperty('results')) {
         this.setState(data);
+        if (this.state.results.length == 0) {
+          this.updateCursor(null);
+        }
       } else {
         // single task view doesn't put task data inside 'results' list,
         // so we create a single-item results list
@@ -363,7 +365,7 @@ class TaskList extends React.Component {
 
   componentDidMount() {
     this.fetchData(false);
-    this.interval = setInterval(() => this.fetchData(), 5000);
+    this.interval = setInterval(() => this.fetchData(), 3000);
   }
 
   componentWillUnmount() {
@@ -382,7 +384,7 @@ class TaskList extends React.Component {
           <ul key="tasklist" className="tasks">
           {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} />))}
           </ul>
-          <Pager key='pager' previous={this.state.previous} next={this.state.next} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
+          <Pager key='pager' previous={this.state.previous} next={this.state.next} pagefirsttaskposition={this.state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
         </div>
       );
     }
