@@ -167,7 +167,7 @@ class Task extends React.Component {
     if (task.finishtimestamp != null) {
       taskbox.push(<div key="status">Finished at {new Date(task.finishtimestamp).toLocaleString()}</div>);
       if (task.error_msg != null) {
-        taskbox.push(<p key="error_msg" style={{color: 'black', fontWeight: 'bold'}}>Error: {task.error_msg}</p>);
+        taskbox.push(<p key="error_msg" style={{color: 'black', fontWeight: 'bold', marginTop: '1em'}}>Error: {task.error_msg}</p>);
       } else {
         if (task.request_type == 'FP') {
           taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank">Data</a>);
@@ -189,9 +189,9 @@ class Task extends React.Component {
         }
       }
     } else if (task.starttimestamp != null) {
-      taskbox.push(<div key="status" style={{color: 'red', fontStyle: 'italic'}}>Running (started {this.state.timeelapsed} seconds ago)</div>);
+      taskbox.push(<div key="status" style={{color: 'red', fontStyle: 'italic', marginTop: '1em'}}>Running (started {this.state.timeelapsed} seconds ago)</div>);
     } else {
-      taskbox.push(<div key="status">Waiting ({task.queuepos} tasks ahead of this one)</div>);
+      taskbox.push(<div key="status" style={{fontStyle: 'italic', marginTop: '1em'}}>Waiting ({task.queuepos} tasks ahead of this one)</div>);
     }
 
     if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP') {
