@@ -1,6 +1,6 @@
 # atlasserver
 
-This is the source code for https://fallingstar-data.com/forcedphot/
+This is the Python Django Rest Framework server and React front end code for https://fallingstar-data.com/forcedphot/
 
 The ATLAS forced photometry server provides public
 access to photometric measurements over the full history of the ATLAS
