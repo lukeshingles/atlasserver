@@ -163,9 +163,9 @@ class Task extends React.Component {
         taskbox.push(<div key="mjdrange">MJD range: [{mjdmin}, {mjdmax}]</div>);
     }
 
-    taskbox.push(<div key="queuetime">Queued at {task.timestamp}</div>);
+    taskbox.push(<div key="queuetime">Queued at {new Date(task.timestamp).toLocaleString()}</div>);
     if (task.finishtimestamp != null) {
-      taskbox.push(<div key="status">Finished at {task.finishtimestamp}</div>);
+      taskbox.push(<div key="status">Finished at {new Date(task.finishtimestamp).toLocaleString()}</div>);
       if (task.error_msg != null) {
         taskbox.push(<p key="error_msg" style={{color: 'black', fontWeight: 'bold'}}>Error: {task.error_msg}</p>);
       } else {

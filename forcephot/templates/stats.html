@@ -10,7 +10,7 @@
 
     <p>Historical uptime can viewed at <a href="https://statuspage.freshping.io/52636-ATLASForcedPhotometry">FreshPing.io</a></p>
 
-    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at {{ lastfinishtime }} (as of {% now "H:i:s" %}).</p>
+    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at <span id="lastfinishtime">{{ lastfinishtime }}</span> (as of <span id="pagetime">{% now "H:i:s" %}</span>).</p>
     <div id="statsshortterm">Loading short term stats...</div>
     <div id="statsusagechart" style="max-width: 60em; padding-top: 1em; padding-bottom: 2em;">Loading usage chart...</div>
     <div id="statslongterm">Loading long term stats...</div>
@@ -24,6 +24,9 @@
 {% block script %}
   {{ block.super }}
   <script language="javascript" type="text/javascript">
+    $('#lastfinishtime').text(new Date('{{ lastfinishtime }}').toLocaleString());
+    $('#pagetime').text(new Date({% now "U" %} * 1000).toLocaleString());
+
     $.ajax({
         url: "{% url 'statsshortterm'|escapejs %}",
         success: function(result){
