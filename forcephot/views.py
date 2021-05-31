@@ -80,7 +80,7 @@ def get_tasklist_etag(request, queryset):
     if settings.DEBUG:
         todaydate = datetime.datetime.utcnow()
     else:
-        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d")
+        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
     last_queued = Task.objects.filter().aggregate(Max('timestamp'))['timestamp__max']
     last_started = Task.objects.filter().aggregate(Max('starttimestamp'))['starttimestamp__max']
     last_finished = Task.objects.filter().aggregate(Max('finishtimestamp'))['finishtimestamp__max']
