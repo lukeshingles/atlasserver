@@ -146,7 +146,7 @@ class Task extends React.Component {
       taskbox.push(<div key="user">User: {task.username}</div>);
     }
 
-    if (task.comment != '') {
+    if (task.comment != null && task.comment != '') {
       taskbox.push(<div key="comment">Comment: <b>{task.comment}</b></div>);
     }
 
