@@ -129,7 +129,7 @@ class Task(models.Model):
         return None
 
     @property
-    def imagerequest_taskid(self):
+    def imagerequest_task_id(self):
         """
             return the task id of the image request task associated with this
             forced photometry task if it exists, otherwise None

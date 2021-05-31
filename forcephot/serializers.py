@@ -39,9 +39,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         return None
 
     def get_imagerequest_url(self, obj):
-        if obj.imagerequest_taskid:
+        if obj.imagerequest_task_id:
             request = self.context.get('request')
-            return request.build_absolute_uri(reverse('task-detail', args=[obj.imagerequest_taskid]))
+            return request.build_absolute_uri(reverse('task-detail', args=[obj.imagerequest_task_id]))
 
         return None
 
@@ -92,9 +92,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
             'finishtimestamp', 'error_msg', 'previewimage_url', 'parent_task_id', 'parent_task_url', 'request_type',
             'pdfplot_url', 'queuepos',
-            'imagerequest_taskid', 'imagerequest_url', 'imagerequest_finished', 'result_imagezip_url']
+            'imagerequest_task_id', 'imagerequest_url', 'imagerequest_finished', 'result_imagezip_url']
 
         read_only_fields = [
             'user_id', 'username', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg',
             'parent_task_url', 'previewimage_url', 'pdfplot_url', 'queuepos',
-            'imagerequest_taskid', 'imagerequest_url', 'imagerequest_finished', 'result_imagezip_url']
+            'imagerequest_task_id', 'imagerequest_url', 'imagerequest_finished', 'result_imagezip_url']

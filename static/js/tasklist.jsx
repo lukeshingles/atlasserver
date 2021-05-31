@@ -136,10 +136,10 @@ class Task extends React.Component {
       </div>
     ];
 
-    taskbox.push(<div key="tasknum"><a key="tasklink" onClick={() => this.props.setSingleTaskView(task.id, task.url)}>Task {task.id}</a></div>);
+    taskbox.push(<div key="tasknum"><a key="tasklink" onClick={() => {this.props.setSingleTaskView(task.id, task.url)}}>Task {task.id}</a></div>);
 
     if (task.parent_task_url) {
-      taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url}>Task {task.parent_task_id}</a></p>);
+      taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" onClick={() => {this.props.setSingleTaskView(task.parent_task_id, task.parent_task_url)}}>Task {task.parent_task_id}</a></p>);
     } else if (task.parent_task) {
       taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
     }
@@ -184,11 +184,11 @@ class Task extends React.Component {
           if (task.result_imagezip_url != null) {
             taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagezip_url}>Download images (ZIP)</a>);
           }
-        } else if (task.imagerequest_taskid != null) {
+        } else if (task.imagerequest_task_id != null) {
           if (task.imagerequest_finished) {
             taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url}>Images ready</a>);
           } else {
-            taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url}>Images requested</a>);
+            taskbox.push(<a key="imgrequest" className="btn btn-warning" onClick={() => {this.props.setSingleTaskView(task.imagerequest_task_id, task.imagerequest_url)}}>Images requested</a>);
           }
         } else if (user_id == task.user_id) {
             taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={this.requestImages} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
@@ -301,11 +301,14 @@ class TaskList extends React.Component {
     $('.newrequest').hide();
     $('#tasklist').addClass('singletaskdetail');
 
-    var w = $('#plotforcedflux-task-' + task_id).innerWidth();
-    Plotly.relayout('plotforcedflux-task-' + task_id, {
-      width: w, //window.innerWidth,
-      height: lcplotheight //window.innerHeight
-    });
+    var div_plot_id = 'plotforcedflux-task-' + task_id;
+    if ($('#' + div_plot_id).length != 0) {
+      var w = $('#' + div_plot_id).innerWidth();
+      Plotly.relayout(div_plot_id, {
+        width: w, //window.innerWidth,
+        height: lcplotheight //window.innerHeight
+      });
+    };
   }
 
   updateCursor(new_cursor) {

@@ -664,7 +664,7 @@ def resultplotdatajs(request, taskid):
             jsout.append(f'jslabelsglobal["#{divid}"] = jslabels;\n')
 
             jsout.append(
-                f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n')
+                f'var lcdivname = "#{divid}";\n')
 
             jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.min.js').open('rt').readlines()))
             # jsout.append((
