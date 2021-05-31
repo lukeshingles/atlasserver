@@ -250,6 +250,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
+                'debug': settings.DEBUG,
                 'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
@@ -284,6 +285,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return Response(template_name=template, data={
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                 'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
+                'debug': settings.DEBUG,
                 'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
