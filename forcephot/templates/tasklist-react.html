@@ -6,6 +6,7 @@
 
 {% block head %}
     {{ block.super }}
+    <script src="{% static "rest_framework/js/jquery-3.5.1.min.js" %}"></script>
 
     <script language="javascript" type="text/javascript">
         const api_url = window.location.href;
@@ -16,6 +17,9 @@
             url: api_url,
             cache: true,
             ifModified: true,
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',}
         });
     </script>
 {% endblock %}
@@ -124,7 +128,7 @@
 
     {% if debug %}
       <!-- development -->
-      <script src="https://unpkg.com/@babel/standalone/babel.js" crossorigin></script>
+      <script src="https://unpkg.com/@babel/standalone@7.14.4/babel.js" crossorigin></script>
       <script src="https://unpkg.com/react@17.0.2/umd/react.development.js" crossorigin></script>
       <script src="https://unpkg.com/react-dom@17.0.2/umd/react-dom.development.js" crossorigin></script>
       <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script>
