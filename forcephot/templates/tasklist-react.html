@@ -27,7 +27,7 @@
                 'Content-Type': 'application/json',}
         });
 
-        const user_id = {{ request.user.id|escapejs }};
+        const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
         var user_is_active = true;
 
         var lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;
