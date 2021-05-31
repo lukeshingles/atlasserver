@@ -119,9 +119,13 @@ class Task extends React.Component {
       buttontext = 'Cancel';
     }
     console.log('Task ' + task.id + ' rendered');
+    var delbutton = null;
+    if (task.user_id == user_id) {
+       delbutton = <button className="btn btn-sm btn-danger" onClick={this.deleteTask}>{buttontext}</button>;
+    }
     var taskbox = [
       <div key="rightside" className="rightside">
-          <button className="btn btn-sm btn-danger" onClick={this.deleteTask}>{buttontext}</button>
+          {delbutton}
           <img src={task.previewimage_url} style={{display: 'block', marginTop: '1em', marginLeft: '1em'}} />
       </div>
     ];
