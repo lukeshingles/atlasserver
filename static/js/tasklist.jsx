@@ -136,7 +136,7 @@ class Task extends React.Component {
       </div>
     ];
 
-    taskbox.push(<div key="tasknum"><a key="tasklink" onClick={() => this.props.setSingleTaskView(task.url)}>Task {task.id}</a></div>);
+    taskbox.push(<div key="tasknum"><a key="tasklink" onClick={() => this.props.setSingleTaskView(task.id, task.url)}>Task {task.id}</a></div>);
 
     if (task.parent_task_url) {
       taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url}>Task {task.parent_task_id}</a></p>);
@@ -289,7 +289,7 @@ class TaskList extends React.Component {
     this.fetchData = this.fetchData.bind(this);
   }
 
-  setSingleTaskView(task_url) {
+  setSingleTaskView(task_id, task_url) {
     console.log('Task list changed to single task view for ', task_url);
 
     this.setState({'api_url': task_url}, () => {this.fetchData(true)});
@@ -298,8 +298,14 @@ class TaskList extends React.Component {
     new_page_url.searchParams.delete('format');
     window.history.pushState({}, document.title, new_page_url);
 
-    $('#tasklist').addClass('singletaskdetail');
     $('.newrequest').hide();
+    $('#tasklist').addClass('singletaskdetail');
+
+    var w = $('#plotforcedflux-task-' + task_id).innerWidth();
+    Plotly.relayout('plotforcedflux-task-' + task_id, {
+      width: w, //window.innerWidth,
+      height: lcplotheight //window.innerHeight
+    });
   }
 
   updateCursor(new_cursor) {

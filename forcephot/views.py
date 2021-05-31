@@ -220,21 +220,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             listqueryset = Task.objects.none()
             raise PermissionDenied()
 
-        page = self.paginate_queryset(listqueryset)
-        if page is not None:
-            # if request.GET.get('cursor') and page[0].id == listqueryset[0].id:
-            #     return redirect(remove_query_param(request.get_full_path(), 'cursor'))
-            serializer = self.get_serializer(page, many=True)
-        else:
-            serializer = self.get_serializer(listqueryset, many=True)
-
         # taskframeonly is for javascript updates (no header/menubar)
-        htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
+        # htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
 
-        if request.accepted_renderer.format == 'html' or htmltaskframeonly:
-            if not page and listqueryset:  # empty page, redirect to top of list
-                return redirect(reverse('task-list'), request=request)
-
+        if request.accepted_renderer.format == 'html':
             if 'form' in kwargs:
                 form = kwargs['form']
             else:
@@ -244,14 +233,22 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             # if 'usereact' in request.GET:
             #     template = 'tasklist-react.html'
 
-            template = 'tasklist-frame.html' if htmltaskframeonly else 'tasklist-react.html'
+            # template = 'tasklist-frame.html' if htmltaskframeonly else 'tasklist-react.html'
 
-            return Response(template_name=template, data={
-                'serializer': serializer, 'data': serializer.data, 'tasks': page,
+            return Response(template_name=self.template_name, data={
+                # 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
                 'debug': settings.DEBUG,
             })
+
+        page = self.paginate_queryset(listqueryset)
+        if page is not None:
+            # if request.GET.get('cursor') and page[0].id == listqueryset[0].id:
+            #     return redirect(remove_query_param(request.get_full_path(), 'cursor'))
+            serializer = self.get_serializer(page, many=True)
+        else:
+            serializer = self.get_serializer(listqueryset, many=True)
 
         if page is not None:
             etag = get_tasklist_etag(request, page)
@@ -277,12 +274,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             # queryset = self.filter_queryset(self.get_queryset())
             # serializer = self.get_serializer(queryset, many=True)
 
-            template = 'tasklist-frame.html' if htmltaskframeonly else 'tasklist-react.html'
-
-            tasks = [instance]
-            form = TaskForm()
-            return Response(template_name=template, data={
-                'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
+            # tasks = [instance]
+            # form = TaskForm()
+            return Response(template_name=self.template_name, data={
+                # 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                 'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
                 'debug': settings.DEBUG,
             })
@@ -671,7 +666,7 @@ def resultplotdatajs(request, taskid):
             jsout.append(
                 f'var lcdivname = "#{divid}", lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;\n')
 
-            jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.js').open('rt').readlines()))
+            jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.min.js').open('rt').readlines()))
             # jsout.append((
             #     "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', "
             #     "cache: true, dataType: 'script'});"))
