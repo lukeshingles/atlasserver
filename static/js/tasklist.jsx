@@ -49,7 +49,10 @@ class Task extends React.Component {
   }
 
   requestImages() {
-    $.ajax({url: this.props.taskdata.url + 'requestimages', method: 'get', success: (result) => {this.props.fetchData()}});
+    var request_image_url = new URL(this.props.taskdata.url);
+    request_image_url.pathname += 'requestimages';
+    request_image_url.search = '';
+    $.ajax({url: request_image_url, method: 'get', success: (result) => {this.props.fetchData()}});
   }
 
   static getDerivedStateFromProps(props, state) {
