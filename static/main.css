@@ -7,6 +7,10 @@ body {
   margin-bottom: 3em;
 }
 
+a {
+  cursor: pointer;
+}
+
 div.navbar {
   background: white;
 }
