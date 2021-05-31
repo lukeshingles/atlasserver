@@ -1,4 +1,4 @@
-# from django.contrib.auth.models import Group, User
+# from django.contrib.auth.models import User
 from rest_framework import serializers
 from rest_framework.reverse import reverse
 from django.conf import settings
@@ -87,7 +87,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         model = Task
 
         fields = [
-            'url', 'id', 'user_id', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
+            'url', 'id', 'user_id', 'username', 'timestamp', 'mpc_name', 'ra', 'dec', 'mjd_min', 'mjd_max',
             'radec_epoch_year', 'propermotion_ra', 'propermotion_dec', 'use_reduced',
             'finished', 'result_url', 'comment', 'send_email', 'starttimestamp',
             'finishtimestamp', 'error_msg', 'previewimage_url', 'parent_task_id', 'parent_task_url', 'request_type',
@@ -95,6 +95,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             'imagerequest_taskid', 'imagerequest_url', 'imagerequest_finished', 'result_imagezip_url']
 
         read_only_fields = [
-            'user_id', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg',
+            'user_id', 'username', 'timestamp', 'finished', 'result_url', 'starttimestamp', 'finishtimestamp', 'error_msg',
             'parent_task_url', 'previewimage_url', 'pdfplot_url', 'queuepos',
             'imagerequest_taskid', 'imagerequest_url', 'imagerequest_finished', 'result_imagezip_url']

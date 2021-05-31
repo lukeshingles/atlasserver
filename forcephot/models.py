@@ -184,6 +184,10 @@ class Task(models.Model):
 
         return float('NaN')
 
+    @property
+    def username(self):
+        return self.user.username
+
     def __str__(self):
         user = User.objects.get(id=self.user_id)
         if self.mpc_name:
