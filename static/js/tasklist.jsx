@@ -186,7 +186,7 @@ class Task extends React.Component {
           }
         } else if (task.imagerequest_task_id != null) {
           if (task.imagerequest_finished) {
-            taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url}>Images ready</a>);
+            taskbox.push(<a key="imgrequest" className="btn btn-primary" onClick={() => {this.props.setSingleTaskView(task.imagerequest_task_id, task.imagerequest_url)}}>Images ready</a>);
           } else {
             taskbox.push(<a key="imgrequest" className="btn btn-warning" onClick={() => {this.props.setSingleTaskView(task.imagerequest_task_id, task.imagerequest_url)}}>Images requested</a>);
           }
