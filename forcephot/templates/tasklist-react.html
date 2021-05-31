@@ -13,10 +13,11 @@
     <script src="{% static "rest_framework/js/jquery-3.5.1.min.js" %}"></script>
 
     <script language="javascript" type="text/javascript">
-        const api_url = window.location.href;
-        const api_url_base = '{{ api_url_base|escapejs }}';
-        const user_id = {{ request.user.id|escapejs }};
+        var api_url_obj = new URL(window.location.href);
+        api_url_obj.searchParams.set('format', 'json');
+        const api_url = api_url_obj.toString();
 
+        // prefetch the api call at start of page load
         $.get({
             url: api_url,
             cache: true,
@@ -25,6 +26,9 @@
                 'Accept': 'application/json',
                 'Content-Type': 'application/json',}
         });
+
+        const user_id = {{ request.user.id|escapejs }};
+        var user_is_active = true;
     </script>
 {% endblock %}
 
@@ -127,6 +131,32 @@
               window.history.replaceState({}, document.title, '{{ request.get_full_path|removetaskboxqueryparam }}' );
           });
       }
+
+      var inactivityTime = function () {
+        var active_timeout = null;
+        window.onload = setActive;
+        // DOM Events
+        document.addEventListener('mousemove', setActive, true);
+        document.addEventListener('mousedown', setActive, true);
+        document.addEventListener('touchmove', setActive, true);
+        document.addEventListener('touchdown', setActive, true);
+
+        function setActive() {
+          if (!user_is_active) {
+            console.log('User became active');
+          }
+          user_is_active = true;
+          clearTimeout(active_timeout);
+          active_timeout = setTimeout(setInactive, 120000)  // inactive after two minutes
+        }
+      };
+
+      function setInactive() {
+        user_is_active = false;
+        console.log('User became inactive. Stopping API calls');
+      }
+
+      inactivityTime();
     });
     </script>
 

@@ -251,7 +251,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
                 'debug': settings.DEBUG,
-                'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
         if page is not None:
@@ -286,7 +285,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                 'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
                 'debug': settings.DEBUG,
-                'api_url_base': request.build_absolute_uri(reverse('index')),
             })
 
         etag = get_tasklist_etag(request, [instance])

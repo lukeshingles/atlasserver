@@ -13,7 +13,10 @@ class TaskPlot extends React.Component {
 
   componentDidMount() {
     console.log('activating plot', this.props.taskid)
-    $.ajax({url: api_url_base + 'queue/' + this.props.taskid + '/resultplotdata.js', cache: true, dataType: 'script'});
+    var plot_url = new URL(this.props.taskurl);
+    plot_url.pathname += 'resultplotdata.js';
+    plot_url.search = '';
+    $.ajax({url: plot_url, cache: true, dataType: 'script'});
   }
 
   componentWillUnmount() {
@@ -195,7 +198,7 @@ class Task extends React.Component {
     }
 
     if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP') {
-      taskbox.push(<TaskPlot key='plot' taskid={task.id} />);
+      taskbox.push(<TaskPlot key='plot' taskid={task.id} taskurl={task.url} />);
     }
 
     return (
@@ -288,7 +291,9 @@ class TaskList extends React.Component {
 
     this.setState({'api_url': task_url}, () => {this.fetchData(true)});
 
-    window.history.pushState({}, document.title, task_url);
+    var new_page_url = new URL(task_url);
+    new_page_url.searchParams.delete('format');
+    window.history.pushState({}, document.title, new_page_url);
 
     $('#tasklist').addClass('singletaskdetail');
     $('.newrequest').hide();
@@ -314,12 +319,13 @@ class TaskList extends React.Component {
     } else {
       new_page_url.searchParams.delete('cursor');
     }
+    new_page_url.searchParams.delete('format');
 
     window.history.pushState({}, document.title, new_page_url);
   }
 
   fetchData(scrollUpAfter) {
-    if (document[hidden]) {
+    if (document[hidden] || !user_is_active) {
       return;
     }
 
