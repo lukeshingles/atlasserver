@@ -291,7 +291,11 @@ class TaskList extends React.Component {
   }
 
   updateCursor(new_cursor) {
+    if (new_cursor == getCursor(this.state.api_url)) {
+      return;
+    }
     console.log('Task list cursor changed to ', new_cursor);
+
     var new_api_url = new URL(this.state.api_url);
     if (new_cursor != null) {
       new_api_url.searchParams.set('cursor', new_cursor);
@@ -338,7 +342,7 @@ class TaskList extends React.Component {
     }).then((data) => {
       if (data.hasOwnProperty('results')) {
         this.setState(data);
-        if (this.state.results.length == 0) {
+        if (this.state.results.length == 0 && getCursor(this.state.api_url) != null) {
           this.updateCursor(null);
         }
       } else {
