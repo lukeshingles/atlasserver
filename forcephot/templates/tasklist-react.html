@@ -4,6 +4,22 @@
 {% load rest_framework %}
 {% load forcedphottags %}
 
+{% block head %}
+    {{ block.super }}
+
+    <script language="javascript" type="text/javascript">
+        const api_url = window.location.href;
+        const api_url_base = '{{ api_url_base|escapejs }}';
+        const user_id = {{ request.user.id|escapejs }};
+
+        $.get({
+            url: api_url,
+            cache: true,
+            ifModified: true,
+        });
+    </script>
+{% endblock %}
+
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
 
@@ -21,12 +37,6 @@
 
 {% block script %}
     {{ block.super }}
-
-    <script language="javascript" type="text/javascript">
-        const api_url = window.location.href;
-        const api_url_base = '{{ api_url_base|escapejs }}';
-        const user_id = {{ request.user.id|escapejs }};
-    </script>
 
     <script src="{% static 'js/plotly-latest.kws.js' %}"></script>
 
