@@ -77,7 +77,8 @@ class Task extends React.Component {
       var li_id = '#task-' + this.props.taskdata.id
       $(li_id).hide();
       $(li_id).show(700);
-      delete newtaskids[this.props.taskdata.id];
+      console.log('new task', this.props.taskdata.id);
+      newtaskids = newtaskids.filter(item => item !== this.props.taskdata.id)
     }
 
     // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);

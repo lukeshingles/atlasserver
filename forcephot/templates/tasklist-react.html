@@ -15,6 +15,7 @@
     <script language="javascript" type="text/javascript">
         var api_url_obj = new URL(window.location.href);
         api_url_obj.searchParams.set('format', 'json');
+        api_url_obj.searchParams.delete('newids');
         const api_url = api_url_obj.toString();
 
         // prefetch the api call at start of page load
@@ -108,30 +109,29 @@
       updatepropermotionpanel();
     }
 
-    $.urlParam = function(name){
-        var results = new RegExp('[\?&]' + name + '=([^&#]*)').exec(window.location.href);
-        if (results==null) {
-           return null;
-        }
-        return decodeURI(results[1]) || 0;
-    }
-
-    var newids = $.urlParam('newids');
+    var newids = [];
     var newtaskids = [];
 
-    $( document ).ready(function() {
+    $(document).ready(function() {
       updatepropermotionpanel();
-      var newids = $.urlParam('newids');
+
+      var current_url_nonewids = new URL(window.location.href);
+      newids = current_url_nonewids.searchParams.get('newids')
+      current_url_nonewids.searchParams.delete('newids');
+      newtaskids = [];
       if (newids != null) {
           newids.split('%2C').forEach(function(taskid) {
-              console.log('new task', taskid)
-              li_id = '#task-' + taskid
-              newtaskids.push(parseInt(taskid));
-              $(li_id).hide();
-              $(li_id).show(700);
-              // remove the newids GET parameter from the URL box
-              window.history.replaceState({}, document.title, '{{ request.get_full_path|removetaskboxqueryparam }}' );
+            newtaskids.push(parseInt(taskid));
           });
+
+          // console.log('new task', taskid)
+          // li_id = '#task-' + taskid
+          // newtaskids.push(parseInt(taskid));
+          // $(li_id).hide();
+          // $(li_id).show(700);
+          // remove the newids GET parameter from the URL box
+          console.log('newids parameter found');
+          window.history.replaceState({}, document.title, current_url_nonewids.toString() );
       }
 
       var inactivityTime = function () {
