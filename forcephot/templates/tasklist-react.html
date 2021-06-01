@@ -104,10 +104,30 @@
       updatepropermotionpanel();
     });
 
+    function inactivityTimer() {
+      var active_timeout = null;
+      window.onload = setActive;
+      // DOM Events
+      document.addEventListener('mousemove', setActive, true);
+      document.addEventListener('mousedown', setActive, true);
+      document.addEventListener('touchmove', setActive, true);
+      document.addEventListener('touchdown', setActive, true);
+      setActive();
 
-    function updatePageTasks() {
-      updatepropermotionpanel();
-    }
+      function setActive() {
+        if (!user_is_active) {
+          console.log('User became active');
+        }
+        user_is_active = true;
+        clearTimeout(active_timeout);
+        active_timeout = setTimeout(setInactive, 2 * 60 * 1000)  // inactive after two minutes
+      }
+
+      function setInactive() {
+        user_is_active = false;
+        console.log('User became inactive');
+      }
+    };
 
     var newids = [];
     var newtaskids = [];
@@ -134,31 +154,7 @@
           window.history.replaceState({}, document.title, current_url_nonewids.toString() );
       }
 
-      var inactivityTime = function () {
-        var active_timeout = null;
-        window.onload = setActive;
-        // DOM Events
-        document.addEventListener('mousemove', setActive, true);
-        document.addEventListener('mousedown', setActive, true);
-        document.addEventListener('touchmove', setActive, true);
-        document.addEventListener('touchdown', setActive, true);
-
-        function setActive() {
-          if (!user_is_active) {
-            console.log('User became active');
-          }
-          user_is_active = true;
-          clearTimeout(active_timeout);
-          active_timeout = setTimeout(setInactive, 120000)  // inactive after two minutes
-        }
-      };
-
-      function setInactive() {
-        user_is_active = false;
-        console.log('User became inactive. Stopping API calls');
-      }
-
-      inactivityTime();
+      inactivityTimer();
     });
     </script>
 
