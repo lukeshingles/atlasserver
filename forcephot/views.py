@@ -220,20 +220,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             listqueryset = Task.objects.none()
             raise PermissionDenied()
 
-        # taskframeonly is for javascript updates (no header/menubar)
-        # htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
-
         if request.accepted_renderer.format == 'html':
             if 'form' in kwargs:
                 form = kwargs['form']
             else:
                 form = TaskForm()
-
-            # template = 'tasklist-frame.html' if htmltaskframeonly else self.template_name
-            # if 'usereact' in request.GET:
-            #     template = 'tasklist-react.html'
-
-            # template = 'tasklist-frame.html' if htmltaskframeonly else 'tasklist-react.html'
 
             return Response(template_name=self.template_name, data={
                 # 'serializer': serializer, 'data': serializer.data, 'tasks': page,
@@ -267,9 +258,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return HttpResponseNotFound("Page not found")
         serializer = self.get_serializer(instance)
 
-        htmltaskframeonly = request.GET.get('htmltaskframeonly', False)
-
-        if request.accepted_renderer.format == 'html' or htmltaskframeonly:
+        if request.accepted_renderer.format == 'html':
             # return redirect('/')
             # queryset = self.filter_queryset(self.get_queryset())
             # serializer = self.get_serializer(queryset, many=True)
