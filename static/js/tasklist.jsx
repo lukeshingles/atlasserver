@@ -113,6 +113,9 @@ class Task extends React.Component {
 
   render() {
     var task = this.props.taskdata;
+    if (task == null) {
+      return;
+    }
     var statusclass = 'none';
     var buttontext = 'none';
     if (task.finishtimestamp != null) {
@@ -141,7 +144,7 @@ class Task extends React.Component {
 
     if (task.parent_task_url) {
       taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" onClick={() => {this.props.setSingleTaskView(task.parent_task_id, task.parent_task_url)}}>Task {task.parent_task_id}</a></p>);
-    } else if (task.parent_task) {
+    } else if (task.parent_task_id) {
       taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
     }
     if (task.parent_task_id) {
@@ -265,7 +268,7 @@ class Pager extends React.PureComponent {
   }
 }
 
-class TaskList extends React.Component {
+class TaskPage extends React.Component {
   constructor(props) {
     super(props);
 
@@ -273,46 +276,75 @@ class TaskList extends React.Component {
       'taskcount': null,
       'results': null,
       'status': 'Loading...',
-      'api_url': props.api_url,
     };
 
-    this.state.singletaskmode = false;
     this.state.scrollToTopAfterUpdate = false;
+
+    this.newRequest = React.createRef();
+
+    this.singleTaskViewTaskId = this.singleTaskViewTaskId.bind(this);
+    this.setFilter = this.setFilter.bind(this);
     this.setSingleTaskView = this.setSingleTaskView.bind(this);
     this.updateCursor = this.updateCursor.bind(this);
     this.fetchData = this.fetchData.bind(this);
   }
 
+  filterclass(filtername) {
+    var new_page_url = new URL(window.location.href);
+    if (filtername == null) {
+      if (new_page_url.searchParams.get('started') == null && this.singleTaskViewTaskId() == null) {
+        return 'btn-primary'
+      } else {
+        return 'btn-link'
+      }
+    } else if (filtername == 'started') {
+      if (new_page_url.searchParams.get('started') == 'true') {
+        return 'btn-primary'
+      } else {
+        return 'btn-link'
+      }
+    }
+  }
+
+  setFilter(filtername) {
+    var new_page_url = new URL(api_url_base);
+    new_page_url.search = '';
+    if (filtername != null) {
+      new_page_url.searchParams.set(filtername, true);
+    }
+
+    if (new_page_url != window.location.href) {
+      this.setState({'scrollToTopAfterUpdate': true}, () => {this.fetchData()});
+
+      window.history.pushState({}, document.title, new_page_url);
+    }
+  }
+
+  singleTaskViewTaskId() {
+    var pathext = window.location.href.replace(
+      api_url_base, '').split('/').filter(el => {return el.length != 0});
+
+    if (pathext.length == 1 && !isNaN(pathext[0])) {
+      return parseInt(pathext[0]);
+    } else {
+      return null;
+    }
+  }
+
   setSingleTaskView(task_id, task_url) {
-    console.log('Task list changed to single task view for ', task_url);
-
-    this.setState({ 'api_url': task_url, 'singletaskmode': true, 'scrollToTopAfterUpdate': true}, () => {this.fetchData()});
-
-    var new_page_url = new URL(task_url);
-    new_page_url.searchParams.delete('format');
+    var new_page_url = api_url_base + task_id + '/';
     window.history.pushState({}, document.title, new_page_url);
 
-    $('.page-header h1').text('Task ' + task_id);
-    $('.newrequest').hide();
-    $('#taskfilters').hide();
-    $('#tasklist').addClass('singletaskdetail');
+    console.log('Task list changed to single task view for ', new_page_url.toString());
 
-    window.dispatchEvent(new Event('resize'));
+    this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
   }
 
   updateCursor(new_cursor) {
-    if (new_cursor == new URL(this.state.api_url).searchParams.get('cursor')) {
+    if (new_cursor == new URL(window.location.href).searchParams.get('cursor')) {
       return;
     }
     console.log('Task list cursor changed to ', new_cursor);
-
-    var new_api_url = new URL(this.state.api_url);
-    if (new_cursor != null) {
-      new_api_url.searchParams.set('cursor', new_cursor);
-    } else {
-      new_api_url.searchParams.delete('cursor');
-    }
-    this.setState({api_url: new_api_url.toString(), scrollToTopAfterUpdate: true}, () => {this.fetchData()});
 
     var new_page_url = new URL(window.location.href);
     if (new_cursor != null) {
@@ -323,6 +355,8 @@ class TaskList extends React.Component {
     new_page_url.searchParams.delete('format');
 
     window.history.pushState({}, document.title, new_page_url);
+
+    this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
   }
 
   fetchData() {
@@ -336,8 +370,8 @@ class TaskList extends React.Component {
     }
 
     api_request_active = true;
-    console.log('Fetching task list from ', this.state.api_url);
-    fetch(this.state.api_url,
+    console.log('Fetching task list from ', window.location.href);
+    fetch(window.location.href,
     {
       ifModified: true,
       headers: {
@@ -347,15 +381,23 @@ class TaskList extends React.Component {
     })
     .then((response) => {
       api_request_active = false;
+      if (response.status != 200) {
+        console.log("Fetch recieved HTTP status ", response.status);
+      }
+      if (response.status == 404) {
+        window.history.pushState({}, document.title, api_url_base);
+        this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
+      }
       return response.json();
     }).catch(error => {
       console.log('HTTP request failed', error);
     }).then((data) => {
-      if (data.hasOwnProperty('results')) {
+      if (data == null) {
+        return;
+      } else if (data.hasOwnProperty('results')) {
         this.setState(data);
-        this.setState({singletaskview: false});
-        if (data.results.length == 0 && getCursor(this.state.api_url) != null) {
-          // page is now blank. redirect to first page
+        if (data.results.length == 0 && getCursor(window.location.href) != null) {
+          // page is empty. redirect to main page
           this.updateCursor(null);
         }
       } else {
@@ -363,7 +405,6 @@ class TaskList extends React.Component {
         // so we create a single-item results list
         this.setState({
           results: [data],
-          singletaskview: true,
           next: null,
           previous: null,
           pagefirsttaskposition: null,
@@ -377,26 +418,25 @@ class TaskList extends React.Component {
     if (this.state.scrollToTopAfterUpdate) {
       window.scrollTo(0, 0);
       this.setState({scrollToTopAfterUpdate: false});
+      window.dispatchEvent(new Event('resize'));
     }
-  }
-
-  // shouldComponentUpdate(nextProps, nextState) {
-  //   if (nextState.api_url != this.state.api_url) {
-  //     this.fetchData(true);
-  //     return true;
-  //   } else if (JSON.stringify(nextState) != JSON.stringify(this.state)) {
-  //     return true;
-  //   } else {
-  //     return false;
-  //   }
-  // }
-
-  componentWillMount() {
-    this.fetchData();
   }
 
   componentDidMount() {
     this.interval = setInterval(() => this.fetchData(), 3000);
+    this.fetchData();
+
+    // Declare a fragment:
+    // var fragment = document.createDocumentFragment();
+    // Append desired element to the fragment:
+    // fragment.appendChild(document.getElementById('newrequestsource'));
+
+
+    // Append fragment to desired element:
+    // document.getElementById('this.newRequest').appendChild(fragment);
+    // this.newRequest.current.appendChild(document.getElementById('newrequestsource'));
+
+    this.newRequest.current.appendChild(document.getElementById('newrequestsource'));
   }
 
   componentWillUnmount() {
@@ -404,22 +444,42 @@ class TaskList extends React.Component {
   }
 
   render() {
+    var singletaskmode = this.singleTaskViewTaskId() != null;
+    var pagehtml = [];
+    if (!singletaskmode) {
+      pagehtml.push(<div key="header" className="page-header"><h1>Task Queue</h1></div>);
+    } else {
+      pagehtml.push(<div key="header" className="page-header"><h1>Task {this.singleTaskViewTaskId()}</h1></div>);
+    }
+
+    pagehtml.push(
+      <ul key="filters" id="taskfilters">
+        <li key="all"><a onClick={() => this.setFilter(null)} className={'btn ' + this.filterclass(null)}>All tasks</a></li>
+        <li key="started"><a onClick={() => this.setFilter('started')} className={'btn ' + this.filterclass('started')}>Running/Finished</a></li>
+      </ul>);
+
+    var newrequeststyle = singletaskmode ? {display: 'none'} : null;
+    pagehtml.push(<div key="newrequest" id="newrequestcontainer" ref={this.newRequest} style={newrequeststyle}></div>);
+
+    var tasklist;
     if (this.state.results == null) {
-      return <p>Loading tasks...</p>;
+      tasklist = <p key="message">Loading tasks...</p>;
     } else if (this.state.results.length == 0) {
-      return <p>There are no tasks.</p>;
+      tasklist = <p key="message">There are no tasks.</p>;
     } else {
       var pagetaskcount = (this.state.results != null) ? this.state.results.length : null;
-      return (
-        <div>
-          <ul key="tasklist" className="tasks">
+      tasklist = [
+        <ul key="ultasklist" className="tasks">
           {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} />))}
-          </ul>
-          <Pager key='pager' previous={this.state.previous} next={this.state.next} pagefirsttaskposition={this.state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
-        </div>
-      );
+        </ul>,
+        <Pager key='pager' previous={this.state.previous} next={this.state.next} pagefirsttaskposition={this.state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
+      ];
     }
+
+    pagehtml.push(<div key="tasklist" id="tasklist" className={singletaskmode ? 'singletaskdetail' : null}>{tasklist}</div>);
+
+    return pagehtml;
   }
 }
 
-ReactDOM.render(React.createElement(TaskList, {api_url: api_url}), document.getElementById('tasklist'));
+ReactDOM.render(React.createElement(TaskPage, {}), document.getElementById('taskpage'));

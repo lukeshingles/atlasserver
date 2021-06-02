@@ -16,6 +16,7 @@
         api_url_obj.searchParams.set('format', 'json');
         api_url_obj.searchParams.delete('newids');
         const api_url = api_url_obj.toString();
+        const api_url_base = '{{api_url_base|escapejs}}';
 
         // prefetch the api request at start of page load
         var xmlhttp = new XMLHttpRequest();
@@ -36,16 +37,10 @@
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
 
-    <div class="page-header">
-    <h1>{{name}}</h1>
-    </div>
+    <div id="taskpage"></div>
 
-    {% if not singletaskdetail %}
-    {% filterbuttons request %}
     {% include 'new-task.html' %}
-    {% endif %}
-
-    <div id="tasklist"{% if singletaskdetail %} class="singletaskdetail"{% endif %}>Loading tasks...</div>
+</div>
 {% endblock %}
 
 {% block script %}
@@ -56,7 +51,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.0.0-rc.1/plotly-basic.min.js" integrity="sha512-RA66j/KyBShkx9o9sHjmPrpa+kI/z49D6gXcNkTO6l65QjptFU1TfEkjUnyhFadbwZVzLBvP4z7L5Xg+dsiLcQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <script language="javascript" type="text/javascript">
-    "user strict";
+    "use strict";
 
     $("#propermotion_checkboxdiv :checkbox").bind('click dblclick', function(evt) {
         // console.log(evt.type);

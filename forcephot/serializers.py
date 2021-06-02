@@ -1,4 +1,5 @@
 # from django.contrib.auth.models import User
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from rest_framework.reverse import reverse
 from django.conf import settings
@@ -18,6 +19,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
     def get_parent_task_url(self, obj):
         if obj.parent_task_id:
+            try:
+                parent = Task.objects.get(id=obj.parent_task_id)
+                if parent.is_archived:
+                    return None
+            except ObjectDoesNotExist:
+                return None
             request = self.context.get('request')
             return request.build_absolute_uri(reverse('task-detail', args=[obj.parent_task_id]))
 

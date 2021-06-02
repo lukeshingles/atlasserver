@@ -232,7 +232,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 # 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                 'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
-                'debug': settings.DEBUG,
+                'debug': settings.DEBUG, 'api_url_base': request.build_absolute_uri(reverse('task-list'))
             })
 
         page = self.paginate_queryset(listqueryset)
@@ -270,7 +270,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return Response(template_name=self.template_name, data={
                 # 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                 'name': f'Task {self.get_object().id}', 'singletaskdetail': True,
-                'debug': settings.DEBUG,
+                'debug': settings.DEBUG, 'api_url_base': request.build_absolute_uri(reverse('task-list'))
             })
 
         etag = get_tasklist_etag(request, [instance])

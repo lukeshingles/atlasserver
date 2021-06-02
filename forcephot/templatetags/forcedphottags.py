@@ -19,7 +19,7 @@ def filterbuttons(request):
     strhtml = '<ul id="taskfilters">'
     links = [
         (reverse('task-list'), 'All tasks'),
-        (replace_query_param(reverse('task-list'), 'started', 'true'), 'Running/Finished</a></li>'),
+        (replace_query_param(reverse('task-list'), 'started', 'true'), 'Running/Finished>'),
     ]
     for href, label in links:
         strclass = 'btn-primary' if fullpath == href else 'btn-link'
