@@ -79,9 +79,10 @@ def calculate_queue_positions():
 
 def get_tasklist_etag(request, queryset):
     if settings.DEBUG:
-        return None
+        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M:%S")
+    else:
+        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
 
-    todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
     last_queued = Task.objects.filter().aggregate(Max('timestamp'))['timestamp__max']
     last_started = Task.objects.filter().aggregate(Max('starttimestamp'))['starttimestamp__max']
     last_finished = Task.objects.filter().aggregate(Max('finishtimestamp'))['finishtimestamp__max']

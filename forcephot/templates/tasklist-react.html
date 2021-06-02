@@ -11,20 +11,20 @@
     <meta http-equiv="refresh" content="10800" />
 
     <script language="javascript" type="text/javascript">
+        "use strict";
         var api_url_obj = new URL(window.location.href);
         api_url_obj.searchParams.set('format', 'json');
         api_url_obj.searchParams.delete('newids');
         const api_url = api_url_obj.toString();
 
-        // prefetch the api call at start of page load
-        $.get({
-            url: api_url,
-            cache: true,
-            ifModified: true,
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',}
-        });
+        // prefetch the api request at start of page load
+        var xmlhttp = new XMLHttpRequest();
+        xmlhttp.open("GET", api_url, true);
+        xmlhttp.setRequestHeader('Accept', 'application/json')
+        xmlhttp.setRequestHeader('Content-Type', 'application/json')
+        xmlhttp.setRequestHeader('Cache-Control', '')
+        xmlhttp.setRequestHeader('Pragma', '')
+        xmlhttp.send();
 
         const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
         var user_is_active = true;
