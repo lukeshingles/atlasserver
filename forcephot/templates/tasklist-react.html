@@ -53,7 +53,12 @@
 {% block script %}
     {{ block.super }}
 
-    <script src="{% static 'js/plotly-v1.58.4.kws.min.js' %}"></script>
+    <!-- <script src="{% static 'js/plotly-v1.58.4.kws.js' %}"></script> -->
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/1.58.4/plotly.min.js" integrity="sha512-odxyOOOwpEgYQnS+TzF/P33O+DfGNGqyh89pJ/u2addhMw9ZIef3M8aw/otYSgsPxLdZi3HQhlI9IiX3H5SxpA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script> -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/1.58.4/plotly-basic.min.js"
+      integrity="sha512-7S1p+6A2VVIWu+EevZqeqXWos1Tn+mroZxpkZ9THWipecJkL7TLg2myv5cIAShu9j3+fjHyCvEh/d7BKegMY1g=="
+      crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <!-- <script src="{% static 'js/plotly-v1.58.4.kws.min.js' %}"></script> -->
     <!-- <script src="https://unpkg.com/browse/plotly.js-dist-min@1.58.4/plotly.min.js"></script> -->
 
     <script language="javascript" type="text/javascript">

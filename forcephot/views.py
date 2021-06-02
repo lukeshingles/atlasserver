@@ -78,9 +78,9 @@ def calculate_queue_positions():
 
 def get_tasklist_etag(request, queryset):
     if settings.DEBUG:
-        todaydate = datetime.datetime.utcnow()
-    else:
-        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
+        return None
+
+    todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
     last_queued = Task.objects.filter().aggregate(Max('timestamp'))['timestamp__max']
     last_started = Task.objects.filter().aggregate(Max('starttimestamp'))['starttimestamp__max']
     last_finished = Task.objects.filter().aggregate(Max('finishtimestamp'))['finishtimestamp__max']
@@ -601,7 +601,10 @@ def resultplotdatajs(request, taskid):
         return HttpResponseNotFound("Page not found")
 
     # force occasional refresh
-    etag = datetime.datetime.utcnow().strftime("%Y%m%d")
+    if settings.DEBUG:
+        etag = None
+    else:
+        etag = datetime.datetime.utcnow().strftime("%Y%m%d")
     if 'HTTP_IF_NONE_MATCH' in request.META and etag == request.META['HTTP_IF_NONE_MATCH']:
         return HttpResponseNotModified()
 
