@@ -302,14 +302,7 @@ class TaskList extends React.Component {
     $('.newrequest').hide();
     $('#tasklist').addClass('singletaskdetail');
 
-    var div_plot_id = 'plotforcedflux-task-' + task_id;
-    if ($('#' + div_plot_id).length != 0) {
-      var w = $('#' + div_plot_id).innerWidth();
-      Plotly.relayout(div_plot_id, {
-        width: w, //window.innerWidth,
-        height: lcplotheight //window.innerHeight
-      });
-    };
+    window.dispatchEvent(new Event('resize'));
   }
 
   updateCursor(new_cursor) {

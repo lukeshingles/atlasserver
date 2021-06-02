@@ -29,6 +29,7 @@
 //                everything within here into a different scope.  It means that the
 //                plot code can be called multiple times on the same page without
 //                worrying about variable name clashes. Needed for window resize.
+"use strict";
 (function () {
 
 // Need to set the div ID from the global data
@@ -88,7 +89,7 @@ var plotColors = { "backgroundColor": "#FFFFFF",
 // All the lightcurve data
 var data = [];
 
-for(filter=0;filter<jslcdataglobal[locallcdivname].length;filter++){
+for(var filter=0;filter<jslcdataglobal[locallcdivname].length;filter++){
   // All the filter data
   var detx = [];
   var dety = [];
@@ -97,7 +98,7 @@ for(filter=0;filter<jslcdataglobal[locallcdivname].length;filter++){
   var nondety = [];
   if (jslcdataglobal[locallcdivname][filter]){
 
-    for(lc=0; lc<jslcdataglobal[locallcdivname][filter].length; lc++){
+    for(var lc=0; lc<jslcdataglobal[locallcdivname][filter].length; lc++){
       // Split out the dets and non-dets into separate arrays
       if (jslcdataglobal[locallcdivname][filter][lc]){
         if (jslcdataglobal[locallcdivname][filter][lc].length > 0){
@@ -176,22 +177,22 @@ for(filter=0;filter<jslcdataglobal[locallcdivname].length;filter++){
 
 if (typeof lcplotwidth !== 'undefined')
 {
-  w = lcplotwidth;
+  var w = lcplotwidth;
 }
 else
 {
-  w = $(locallcdivname).innerWidth();
+  var w = $(locallcdivname).innerWidth();
 }
 
 if (locallcdivname.includes("flux"))
 {
-  yautorange = false;
-  ylabel = 'Flux / \u00B5Jy';
+  var yautorange = false;
+  var ylabel = 'Flux / \u00B5Jy';
 }
 else
 {
-  yautorange = 'reversed';
-  ylabel = 'AB Mag';
+  var yautorange = 'reversed';
+  var ylabel = 'AB Mag';
 }
 
 var layout = { showlegend: true,
@@ -205,8 +206,10 @@ var layout = { showlegend: true,
                          range: [xmin, xmax],
                          title: "mjd" },
                margin: {l: 70, r: 0, b: 30, t: 30},
-               width: w, //window.innerWidth,
-               height: lcplotheight} //window.innerHeight
+              //  width: w, //window.innerWidth,
+              //  width: '100%',
+               height: lcplotheight, //window.innerHeight
+             } 
                //paper_bgcolor: 'rgba(0,0,0,0)'}
                //plot_bgcolor: 'rgba(0,0,0,0)'}
 
@@ -222,26 +225,6 @@ if (!(locallcdivname.includes("forced")))
                        title: "days since earliest detection" }
 }
 
-Plotly.newPlot(locallcdivname.replace('#',''), data, layout, {displayModeBar: false});
-
-// Resize all the lightcurve plots when the window size is changed.
-$(window).bind("resize.lcplot", function() {
-  Object.keys(jslcdataglobal).forEach(function(key) {
-    if (typeof lcplotwidth !== 'undefined')
-    {
-      w = lcplotwidth;
-      // No need to resize - do nothing.
-    }
-    else
-    {
-      w = $(locallcdivname).innerWidth();
-      Plotly.relayout(key.replace('#',''), {
-        width: w, //window.innerWidth,
-        height: lcplotheight //window.innerHeight
-      })
-    }
-
-  });
-});
+Plotly.react(locallcdivname.replace('#', ''), data, layout, {displayModeBar: false, responsive: true});
 
 })();

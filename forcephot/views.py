@@ -1,5 +1,6 @@
 import datetime
 import os
+import time
 
 import numpy as np
 # import geoip2.errors
@@ -608,8 +609,8 @@ def resultplotdatajs(request, taskid):
     if 'HTTP_IF_NONE_MATCH' in request.META and etag == request.META['HTTP_IF_NONE_MATCH']:
         return HttpResponseNotModified()
 
-    if not Path(jsplotfile).exists():
-        jsout = []
+    if settings.DEBUG or not jsplotfile.exists() or (time.time() - jsplotfile.stat().st_mtime) < (60 * 60):
+        jsout = ['"use strict";\n']
         resultfile = item.localresultfile()
         if resultfile:
             resultfilepath = os.path.join(settings.STATIC_ROOT, resultfile)
@@ -658,7 +659,10 @@ def resultplotdatajs(request, taskid):
             jsout.append(
                 f'var lcdivname = "#{divid}";\n')
 
-            jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.min.js').open('rt').readlines()))
+            if settings.DEBUG:
+                jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.js').open('rt').readlines()))
+            else:
+                jsout.append(''.join(Path(settings.STATIC_ROOT, 'js/lightcurveplotly.min.js').open('rt').readlines()))
             # jsout.append((
             #     "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', "
             #     "cache: true, dataType: 'script'});"))
@@ -669,7 +673,7 @@ def resultplotdatajs(request, taskid):
         with jsplotfile.open('w') as f:
             f.writelines(jsout)
 
-    if os.path.exists(jsplotfile):
+    if jsplotfile.exists():
         return FileResponse(open(jsplotfile, 'rb'), headers={'ETag': etag})
 
     return HttpResponseNotFound("ERROR: Could not create javascript file.")
