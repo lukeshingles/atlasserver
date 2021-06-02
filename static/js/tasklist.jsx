@@ -291,7 +291,9 @@ class TaskList extends React.Component {
     new_page_url.searchParams.delete('format');
     window.history.pushState({}, document.title, new_page_url);
 
+    $('.page-header h1').text('Task ' + task_id);
     $('.newrequest').hide();
+    $('#taskfilters').hide();
     $('#tasklist').addClass('singletaskdetail');
 
     window.dispatchEvent(new Event('resize'));

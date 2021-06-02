@@ -1,5 +1,7 @@
 from django import template
 from rest_framework.utils.urls import remove_query_param, replace_query_param
+from django.urls import reverse
+# from rest_framework.reverse import reverse
 from django.utils.html import mark_safe
 
 register = template.Library()
@@ -16,8 +18,8 @@ def filterbuttons(request):
     fullpath = remove_query_param(remove_query_param(request.get_full_path(), 'cursor'), 'newids')
     strhtml = '<ul id="taskfilters">'
     links = [
-        (remove_query_param(fullpath, 'started'), 'All tasks'),
-        (replace_query_param(fullpath, 'started', 'true'), 'Running/Finished</a></li>'),
+        (reverse('task-list'), 'All tasks'),
+        (replace_query_param(reverse('task-list'), 'started', 'true'), 'Running/Finished</a></li>'),
     ]
     for href, label in links:
         strclass = 'btn-primary' if fullpath == href else 'btn-link'
