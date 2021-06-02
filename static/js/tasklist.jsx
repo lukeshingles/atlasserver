@@ -6,7 +6,7 @@ var jslimitsglobal = new Object();
 
 var api_request_active = false;
 
-class TaskPlot extends React.Component {
+class TaskPlot extends React.PureComponent {
   constructor(props) {
     super(props);
   }
@@ -214,22 +214,17 @@ class Task extends React.Component {
 }
 
 
-function getCursor(str_json_url) {
-  if (str_json_url == null) {
-    return null;
-  }
-  var json_url = new URL(str_json_url);
-  return json_url.searchParams.get('cursor');
-}
-
-
-class Pager extends React.Component {
+class Pager extends React.PureComponent {
   constructor(props) {
     super(props);
 
     this.state = {}
-    this.state.previous_cursor = getCursor(this.props.previous);
-    this.state.next_cursor = getCursor(this.props.next);
+    if (this.props.previous != null) {
+      this.state.previous_cursor = new URL(this.props.previous).searchParams.get('cursor');
+    }
+    if (this.props.next != null) {
+      this.state.next_cursor = new URL(this.props.next).searchParams.get('cursor');
+    }
   }
 
   // componentWillReceiveProps(nextProps) {
@@ -242,18 +237,14 @@ class Pager extends React.Component {
 
   static getDerivedStateFromProps(props, state) {
     var statechanges = {};
-    statechanges.previous_cursor = getCursor(props.previous);
-    statechanges.next_cursor = getCursor(props.next);
+    if (props.previous != null) {
+      statechanges.previous_cursor = new URL(props.previous).searchParams.get('cursor');
+    }
+    if (props.next != null) {
+      statechanges.next_cursor = new URL(props.next).searchParams.get('cursor');
+    }
 
     return statechanges;
-  }
-
-  shouldComponentUpdate(nextProps, nextState) {
-    if (JSON.stringify(this.props) == JSON.stringify(nextProps)) {
-      return false;
-    } else {
-      return true;
-    }
   }
 
   render() {
@@ -285,6 +276,7 @@ class TaskList extends React.Component {
       'api_url': props.api_url,
     };
 
+    this.state.singletaskmode = false;
     this.setSingleTaskView = this.setSingleTaskView.bind(this);
     this.updateCursor = this.updateCursor.bind(this);
     this.fetchData = this.fetchData.bind(this);
@@ -293,7 +285,7 @@ class TaskList extends React.Component {
   setSingleTaskView(task_id, task_url) {
     console.log('Task list changed to single task view for ', task_url);
 
-    this.setState({'api_url': task_url}, () => {this.fetchData(true)});
+    this.setState({'api_url': task_url, 'singletaskmode': true}, () => {this.fetchData(true)});
 
     var new_page_url = new URL(task_url);
     new_page_url.searchParams.delete('format');
@@ -306,7 +298,7 @@ class TaskList extends React.Component {
   }
 
   updateCursor(new_cursor) {
-    if (new_cursor == getCursor(this.state.api_url)) {
+    if (new_cursor == new URL(this.state.api_url).searchParams.get('cursor')) {
       return;
     }
     console.log('Task list cursor changed to ', new_cursor);
@@ -358,13 +350,22 @@ class TaskList extends React.Component {
     }).then((data) => {
       if (data.hasOwnProperty('results')) {
         this.setState(data);
-        if (this.state.results.length == 0 && getCursor(this.state.api_url) != null) {
+        this.setState({singletaskview: false});
+        if (data.results.length == 0 && getCursor(this.state.api_url) != null) {
+          // page is now blank. redirect to first page
           this.updateCursor(null);
         }
       } else {
         // single task view doesn't put task data inside 'results' list,
         // so we create a single-item results list
-        this.setState({results: [data]});
+        this.setState({
+          results: [data],
+          singletaskview: true,
+          next: null,
+          previous: null,
+          pagefirsttaskposition: null,
+          taskcount: null,
+        });
       }
       if (scrollUpAfter) {
         window.scrollTo(0, 0);
