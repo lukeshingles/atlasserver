@@ -314,9 +314,8 @@ class TaskPage extends React.Component {
     }
 
     if (new_page_url != window.location.href) {
-      this.setState({'scrollToTopAfterUpdate': true}, () => {this.fetchData()});
-
       window.history.pushState({}, document.title, new_page_url);
+      this.setState({'scrollToTopAfterUpdate': true}, () => {this.fetchData()});
     }
   }
 
