@@ -277,6 +277,7 @@ class TaskList extends React.Component {
     };
 
     this.state.singletaskmode = false;
+    this.state.scrollToTopAfterUpdate = false;
     this.setSingleTaskView = this.setSingleTaskView.bind(this);
     this.updateCursor = this.updateCursor.bind(this);
     this.fetchData = this.fetchData.bind(this);
@@ -285,7 +286,7 @@ class TaskList extends React.Component {
   setSingleTaskView(task_id, task_url) {
     console.log('Task list changed to single task view for ', task_url);
 
-    this.setState({'api_url': task_url, 'singletaskmode': true}, () => {this.fetchData(true)});
+    this.setState({ 'api_url': task_url, 'singletaskmode': true, 'scrollToTopAfterUpdate': true}, () => {this.fetchData()});
 
     var new_page_url = new URL(task_url);
     new_page_url.searchParams.delete('format');
@@ -311,7 +312,7 @@ class TaskList extends React.Component {
     } else {
       new_api_url.searchParams.delete('cursor');
     }
-    this.setState({'api_url': new_api_url.toString()}, () => {this.fetchData(true)});
+    this.setState({api_url: new_api_url.toString(), scrollToTopAfterUpdate: true}, () => {this.fetchData()});
 
     var new_page_url = new URL(window.location.href);
     if (new_cursor != null) {
@@ -324,7 +325,7 @@ class TaskList extends React.Component {
     window.history.pushState({}, document.title, new_page_url);
   }
 
-  fetchData(scrollUpAfter) {
+  fetchData() {
     if (document[hidden] || !user_is_active) {
       return;
     }
@@ -369,10 +370,14 @@ class TaskList extends React.Component {
           taskcount: null,
         });
       }
-      if (scrollUpAfter) {
-        window.scrollTo(0, 0);
-      }
     });
+  }
+
+  componentDidUpdate() {
+    if (this.state.scrollToTopAfterUpdate) {
+      window.scrollTo(0, 0);
+      this.setState({scrollToTopAfterUpdate: false});
+    }
   }
 
   // shouldComponentUpdate(nextProps, nextState) {
@@ -386,8 +391,11 @@ class TaskList extends React.Component {
   //   }
   // }
 
+  componentWillMount() {
+    this.fetchData();
+  }
+
   componentDidMount() {
-    this.fetchData(false);
     this.interval = setInterval(() => this.fetchData(), 3000);
   }
 
