@@ -337,7 +337,14 @@ class TaskPage extends React.Component {
 
     console.log('Task list changed to single task view for ', new_page_url.toString());
 
-    this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
+    this.setState({
+      results: this.state.results.filter(task => {return task.id == task_id}),
+      scrollToTopAfterUpdate: true,
+      next: null,
+      previous: null,
+      pagefirsttaskposition: null,
+      taskcount: null,
+    }, () => {this.fetchData()});
   }
 
   updateCursor(new_cursor) {
