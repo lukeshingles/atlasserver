@@ -272,6 +272,7 @@ class TaskPage extends React.Component {
       taskcount: null,
       results: null,
       scrollToTopAfterUpdate: false,
+      dataurl: window.location.href,
     };
 
     this.newRequest = React.createRef();
@@ -373,6 +374,8 @@ class TaskPage extends React.Component {
     if (document[hidden] || !user_is_active) {
       return;
     }
+
+    this.setState({dataurl: window.location.href});
 
     var fetchcachematch = (window.location.href in fetchcache);
     if (fetchcachematch) {
