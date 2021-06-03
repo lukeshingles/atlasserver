@@ -309,7 +309,7 @@ class TaskPage extends React.Component {
 
     if (new_page_url != window.location.href) {
       window.history.pushState({}, document.title, new_page_url);
-      var statechanges = {'scrollToTopAfterUpdate': true};
+      var statechanges = {'scrollToTopAfterUpdate': true, dataurl: new_page_url};
       if (filtername == 'started') {
         if (this.state.results != null) {
           statechanges['results'] = this.state.results.filter(task => {return task.starttimestamp != null});
