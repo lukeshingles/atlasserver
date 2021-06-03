@@ -402,7 +402,7 @@ class TaskPage extends React.Component {
         return;
       } else if (data.hasOwnProperty('results')) {
         this.setState(data);
-        if (data.results.length == 0 && getCursor(window.location.href) != null) {
+        if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
           // page is empty. redirect to main page
           this.updateCursor(null);
         }
