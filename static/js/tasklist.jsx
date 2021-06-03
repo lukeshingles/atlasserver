@@ -282,16 +282,18 @@ class TaskPage extends React.Component {
     this.fetchData = this.fetchData.bind(this);
   }
 
-  filterclass(filtername) {
-    var new_page_url = new URL(window.location.href);
+  filterclass(filtername, strurl) {
+    // var page_url = new URL(window.location.href);
+    var page_url = new URL(strurl);
+    var started = page_url.searchParams.get('started');
     if (filtername == null) {
-      if (new_page_url.searchParams.get('started') == null && this.singleTaskViewTaskId() == null) {
+      if (started == null && this.singleTaskViewTaskId(this.state.dataurl) == null) {
         return 'btn-primary'
       } else {
         return 'btn-link'
       }
     } else if (filtername == 'started') {
-      if (new_page_url.searchParams.get('started') == 'true') {
+      if (started == 'true') {
         return 'btn-primary'
       } else {
         return 'btn-link'
@@ -323,9 +325,9 @@ class TaskPage extends React.Component {
     }
   }
 
-  singleTaskViewTaskId() {
-    var pathext = window.location.href.replace(
-      api_url_base, '').split('/').filter(el => {return el.length != 0});
+  singleTaskViewTaskId(strurl) {
+    var pathext = strurl.toString().replace(
+      api_url_base.toString(), '').split('/').filter(el => {return el.length != 0});
 
     if (pathext.length == 1 && !isNaN(pathext[0])) {
       return parseInt(pathext[0]);
@@ -485,18 +487,18 @@ class TaskPage extends React.Component {
 
   render() {
     console.log('TaskPage rendered');
-    var singletaskmode = this.singleTaskViewTaskId() != null;
+    var singletaskmode = this.singleTaskViewTaskId(this.state.dataurl) != null;
     var pagehtml = [];
     if (!singletaskmode) {
       pagehtml.push(<div key="header" className="page-header"><h1>Task Queue</h1></div>);
     } else {
-      pagehtml.push(<div key="header" className="page-header"><h1>Task {this.singleTaskViewTaskId()}</h1></div>);
+      pagehtml.push(<div key="header" className="page-header"><h1>Task {this.singleTaskViewTaskId(this.state.dataurl)}</h1></div>);
     }
 
     pagehtml.push(
       <ul key="filters" id="taskfilters">
-        <li key="all"><a onClick={() => this.setFilter(null)} className={'btn ' + this.filterclass(null)}>All tasks</a></li>
-        <li key="started"><a onClick={() => this.setFilter('started')} className={'btn ' + this.filterclass('started')}>Running/Finished</a></li>
+        <li key="all"><a onClick={() => this.setFilter(null)} className={'btn ' + this.filterclass(null, this.state.dataurl)}>All tasks</a></li>
+        <li key="started"><a onClick={() => this.setFilter('started')} className={'btn ' + this.filterclass('started', this.state.dataurl)}>Running/Finished</a></li>
       </ul>);
 
     var newrequeststyle = singletaskmode ? {display: 'none'} : null;
