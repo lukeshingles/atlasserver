@@ -311,9 +311,12 @@ class TaskPage extends React.Component {
       window.history.pushState({}, document.title, new_page_url);
       var statechanges = {'scrollToTopAfterUpdate': true};
       if (filtername == 'started') {
-        statechanges['results'] = this.state.results.filter(task => {return task.starttimestamp != null});
-        if (statechanges['results'].length == 0) {
-          statechanges['results'] = null;  // prevent flash of "there are no results" for empty (non-null) results list
+        if (this.state.results != null) {
+          statechanges['results'] = this.state.results.filter(task => {return task.starttimestamp != null});
+          if (statechanges['results'].length == 0) {
+            // prevent flash of "there are no results" for empty ([] non-null) results list
+            statechanges['results'] = null;
+          }
         }
       }
       this.setState(statechanges, () => {this.fetchData(true)});
@@ -444,7 +447,7 @@ class TaskPage extends React.Component {
           console.log('Applying results from', get_url);
           this.setState(statechanges);
         } else {
-          console.log('Abandoning results from', get_url, 'location.href', window.location.href);
+          console.log('Not applying results from', get_url, 'location.href', window.location.href);
           return;
         }
       }
@@ -481,6 +484,7 @@ class TaskPage extends React.Component {
   }
 
   render() {
+    console.log('TaskPage rendered');
     var singletaskmode = this.singleTaskViewTaskId() != null;
     var pagehtml = [];
     if (!singletaskmode) {
