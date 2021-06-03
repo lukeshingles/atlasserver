@@ -5,6 +5,7 @@ var jslabelsglobal = new Object();
 var jslimitsglobal = new Object();
 
 var api_request_active = false;
+var fetchcache = [];
 
 class TaskPlot extends React.PureComponent {
   constructor(props) {
@@ -268,12 +269,10 @@ class TaskPage extends React.Component {
     super(props);
 
     this.state = {
-      'taskcount': null,
-      'results': null,
-      'status': 'Loading...',
+      taskcount: null,
+      results: null,
+      scrollToTopAfterUpdate: false,
     };
-
-    this.state.scrollToTopAfterUpdate = false;
 
     this.newRequest = React.createRef();
 
@@ -300,6 +299,7 @@ class TaskPage extends React.Component {
   }
 
   setFilter(filtername) {
+    console.log('changed filter to', filtername);
     var new_page_url = new URL(api_url_base);
     new_page_url.search = '';
     if (filtername != null) {
@@ -308,7 +308,14 @@ class TaskPage extends React.Component {
 
     if (new_page_url != window.location.href) {
       window.history.pushState({}, document.title, new_page_url);
-      this.setState({'scrollToTopAfterUpdate': true}, () => {this.fetchData()});
+      var statechanges = {'scrollToTopAfterUpdate': true};
+      if (filtername == 'started') {
+        statechanges['results'] = this.state.results.filter(task => {return task.starttimestamp != null});
+        if (statechanges['results'].length == 0) {
+          statechanges['results'] = null;  // prevent flash of "there are no results" for empty (non-null) results list
+        }
+      }
+      this.setState(statechanges, () => {this.fetchData(true)});
     }
   }
 
@@ -329,14 +336,18 @@ class TaskPage extends React.Component {
 
     console.log('Task list changed to single task view for ', new_page_url.toString());
 
+    var newresults = this.state.results.filter(task => {return task.id == task_id});
+    if (newresults.length == 0) {
+      newresults = null;  // prevent flash of "there are no results" for empty (non-null) results list
+    }
     this.setState({
-      results: this.state.results.filter(task => {return task.id == task_id}),
+      results: newresults,
       scrollToTopAfterUpdate: true,
       next: null,
       previous: null,
       pagefirsttaskposition: null,
       taskcount: null,
-    }, () => {this.fetchData()});
+    }, () => {this.fetchData(true)});
   }
 
   updateCursor(new_cursor) {
@@ -355,24 +366,32 @@ class TaskPage extends React.Component {
 
     window.history.pushState({}, document.title, new_page_url);
 
-    this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
+    this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData(true)});
   }
 
-  fetchData() {
+  fetchData(usertriggered) {
     if (document[hidden] || !user_is_active) {
       return;
     }
 
-    if (api_request_active) {
+    var fetchcachematch = (window.location.href in fetchcache);
+    if (fetchcachematch) {
+      console.log('using fetchcache before GET response', window.location.href);
+      this.setState(fetchcachematch[window.location.href]);
+    } else {
+      console.log('no fetchcache for', window.location.href);
+    }
+
+    if (api_request_active && !usertriggered) {
       console.log('prevent overlapping GET requests');
       return;
     }
 
     api_request_active = true;
-    console.log('Fetching task list from ', window.location.href);
-    fetch(window.location.href,
+    var get_url = window.location.href;
+    console.log('Fetching task list from', get_url, 'fetchcachematch', fetchcachematch);
+    fetch(get_url,
     {
-      ifModified: true,
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
@@ -380,12 +399,13 @@ class TaskPage extends React.Component {
     })
     .then((response) => {
       api_request_active = false;
+      // etag = response.headers.get('ETag');
       if (response.status != 200) {
         console.log("Fetch recieved HTTP status ", response.status);
       }
       if (response.status == 404) {
         window.history.pushState({}, document.title, api_url_base);
-        this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
+        this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData(true)});
       }
       if (response.status == 200) {
         return response.json();
@@ -393,24 +413,37 @@ class TaskPage extends React.Component {
         return null;
       }
     }).catch(error => {
+      api_request_active = false;
       console.log('HTTP request failed', error);
-    }).then((data) => {
+    }).then(data => {
+      var statechanges = null;
       if (data != null && data.hasOwnProperty('results')) {
-        this.setState(data);
         if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
           // page is empty. redirect to main page
           this.updateCursor(null);
+        } else {
+          statechanges = data;
         }
       } else if (data != null && data.hasOwnProperty('id')) {
         // single task view doesn't put task data inside 'results' list,
         // so we create a single-item results list
-        this.setState({
+        statechanges = {
           results: [data],
           next: null,
           previous: null,
           pagefirsttaskposition: null,
           taskcount: null,
-        });
+        };
+      }
+      if (statechanges != null) {
+        fetchcache[window.location.href] = statechanges;
+        if (get_url == window.location.href) {
+          console.log('Applying results from', get_url);
+          this.setState(statechanges);
+        } else {
+          console.log('Abandoning results from', get_url, 'location.href', window.location.href);
+          return;
+        }
       }
     });
   }
@@ -424,8 +457,8 @@ class TaskPage extends React.Component {
   }
 
   componentDidMount() {
-    this.interval = setInterval(() => this.fetchData(), 3000);
-    this.fetchData();
+    this.interval = setInterval(() => this.fetchData(false), 2500);
+    this.fetchData(true);
 
     // Declare a fragment:
     // var fragment = document.createDocumentFragment();

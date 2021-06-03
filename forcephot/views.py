@@ -602,7 +602,7 @@ def resultplotdatajs(request, taskid):
     if not jsplotfile:
         return HttpResponseNotFound("Page not found")
 
-    # force occasional refresh
+    # disable etag for debugging
     if settings.DEBUG:
         etag = None
     else:
