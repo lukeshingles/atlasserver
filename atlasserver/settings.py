@@ -32,7 +32,7 @@ DEBUG = False
 
 ALLOWED_HOSTS = ['*']
 
-# Application definition
+ADMINS = [('Luke Shingles', 'luke.shingles@gmail.com')]  # send server error notifications to this person
 
 
 INSTALLED_APPS = [
