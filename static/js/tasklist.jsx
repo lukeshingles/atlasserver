@@ -36,8 +36,6 @@ class TaskPlot extends React.PureComponent {
 class Task extends React.Component {
   constructor(props) {
     super(props);
-    this.requestImages = this.requestImages.bind(this);
-    this.deleteTask = this.deleteTask.bind(this);
     this.state = {}
     this.state.updateTimeElapsed = this.updateTimeElapsed.bind(this);
     this.state.interval = null;
@@ -78,7 +76,7 @@ class Task extends React.Component {
       $(li_id).hide();
       $(li_id).show(700);
       console.log('new task', this.props.taskdata.id);
-      newtaskids = newtaskids.filter(item => item !== this.props.taskdata.id)
+      newtaskids = newtaskids.filter(item => {item !== this.props.taskdata.id})
     }
 
     // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);
@@ -113,9 +111,6 @@ class Task extends React.Component {
 
   render() {
     var task = this.props.taskdata;
-    if (task == null) {
-      return;
-    }
     var statusclass = 'none';
     var buttontext = 'none';
     if (task.finishtimestamp != null) {
@@ -131,7 +126,7 @@ class Task extends React.Component {
     console.log('Task ' + task.id + ' rendered');
     var delbutton = null;
     if (task.user_id == user_id) {
-       delbutton = <button className="btn btn-sm btn-danger" onClick={this.deleteTask}>{buttontext}</button>;
+       delbutton = <button className="btn btn-sm btn-danger" onClick={() => this.deleteTask()}>{buttontext}</button>;
     }
     var taskbox = [
       <div key="rightside" className="rightside">
@@ -195,7 +190,7 @@ class Task extends React.Component {
             taskbox.push(<a key="imgrequest" className="btn btn-warning" onClick={() => {this.props.setSingleTaskView(task.imagerequest_task_id, task.imagerequest_url)}}>Images requested</a>);
           }
         } else if (user_id == task.user_id) {
-            taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={this.requestImages} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
+            taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
         }
       }
     } else if (task.starttimestamp != null) {
@@ -282,8 +277,6 @@ class TaskPage extends React.Component {
 
     this.newRequest = React.createRef();
 
-    this.singleTaskViewTaskId = this.singleTaskViewTaskId.bind(this);
-    this.setFilter = this.setFilter.bind(this);
     this.setSingleTaskView = this.setSingleTaskView.bind(this);
     this.updateCursor = this.updateCursor.bind(this);
     this.fetchData = this.fetchData.bind(this);
@@ -394,19 +387,21 @@ class TaskPage extends React.Component {
         window.history.pushState({}, document.title, api_url_base);
         this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData()});
       }
-      return response.json();
+      if (response.status == 200) {
+        return response.json();
+      } else {
+        return null;
+      }
     }).catch(error => {
       console.log('HTTP request failed', error);
     }).then((data) => {
-      if (data == null) {
-        return;
-      } else if (data.hasOwnProperty('results')) {
+      if (data != null && data.hasOwnProperty('results')) {
         this.setState(data);
         if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
           // page is empty. redirect to main page
           this.updateCursor(null);
         }
-      } else {
+      } else if (data != null && data.hasOwnProperty('id')) {
         // single task view doesn't put task data inside 'results' list,
         // so we create a single-item results list
         this.setState({
