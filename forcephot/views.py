@@ -2,8 +2,14 @@ import datetime
 import os
 import time
 
-import numpy as np
-# import geoip2.errors
+
+from bokeh.embed import components
+from bokeh.models import HoverTool
+from bokeh.models import DataRange1d
+from bokeh.models import Range1d
+from bokeh.plotting import figure
+from bokeh.plotting import ColumnDataSource
+from bokeh.models import FactorRange, Legend
 
 from django.conf import settings as settings
 from django.contrib.auth import authenticate, login
@@ -11,7 +17,8 @@ from django.contrib.auth import authenticate, login
 from django.core.exceptions import ObjectDoesNotExist
 # from django.core.exceptions import ValidationError
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count, Min, Max
+from django.db.models import Count, Max
+from django.db.models.functions import Trunc
 from django.forms import model_to_dict
 # from django.http import HttpResponse
 from django.http import FileResponse
@@ -19,18 +26,20 @@ from django.http import FileResponse
 from django.http import HttpResponseNotFound
 from django.http import HttpResponseNotModified
 from django.http import JsonResponse
-from django.views.decorators.cache import cache_page
 # from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.shortcuts import render
+from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
+
+import numpy as np
+from pathlib import Path
+
 from rest_framework import filters, permissions, status, viewsets
-# from rest_framework.renderers import TemplateHTMLRenderer
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from rest_framework.utils.urls import remove_query_param, replace_query_param
-
-from pathlib import Path
+# from rest_framework.utils.urls import remove_query_param
+from rest_framework.utils.urls import replace_query_param
 
 from forcephot.filters import TaskFilter
 from forcephot.forms import TaskForm, RegistrationForm
@@ -190,6 +199,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields['timestamp'] = datetime.datetime.utcnow().replace(
             tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
 
+        # we store the region but not the IP address itself for privacy reasons
         extra_fields['country_code'] = self.request.geo_data.country_code
         extra_fields['region'] = self.request.geo_data.region
         extra_fields['city'] = self.request.geo_data.city
@@ -330,6 +340,7 @@ def requestimages(request, pk):
         data['starttimestamp'] = None
         data['finishtimestamp'] = None
 
+        # we store the region but not the IP address itself for privacy reasons
         data['country_code'] = request.geo_data.country_code
         data['region'] = request.geo_data.region
         data['city'] = request.geo_data.city
@@ -353,21 +364,11 @@ def statscoordchart(request):
 
     tasks = Task.objects.all().order_by('-timestamp')[:30000].select_related('user')
 
-    # from bokeh.io import output_file, show
-    # from bokeh.transform import linear_cmap
-    # from bokeh.util.hex import hexbin
-    from bokeh.embed import components
-    from bokeh.models import HoverTool
-    from bokeh.models import Range1d
-    from bokeh.plotting import figure
-    from bokeh.plotting import ColumnDataSource
-    # from bokeh.resources import CDN
-
     dictsource = {
-            'ra': [tsk.ra for tsk in tasks],
-            'dec':  [tsk.dec for tsk in tasks],
-            'taskid': [tsk.id for tsk in tasks],
-            'username': [tsk.user.username for tsk in tasks],
+        'ra': [tsk.ra for tsk in tasks],
+        'dec':  [tsk.dec for tsk in tasks],
+        'taskid': [tsk.id for tsk in tasks],
+        'username': [tsk.user.username for tsk in tasks],
     }
     source = ColumnDataSource(dictsource)
 
@@ -402,22 +403,6 @@ def statscoordchart(request):
 
 @cache_page(30)
 def statsusagechart(request):
-    from django.db.models.functions import Trunc
-    # from bokeh.io import output_file, show
-    # from bokeh.transform import linear_cmap
-    # from bokeh.util.hex import hexbin
-    from bokeh.embed import components
-    from bokeh.models import HoverTool
-    # from bokeh.models import SingleIntervalTicker, LinearAxis
-    # from bokeh.models import Range1d
-    from bokeh.models import DataRange1d
-    from bokeh.plotting import figure
-    from bokeh.plotting import ColumnDataSource
-    from bokeh.models import FactorRange, Legend
-    # from bokeh.transform import dodge, factor_cmap
-
-    # from bokeh.resources import CDN
-
     today = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
 
