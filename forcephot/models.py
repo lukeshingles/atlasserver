@@ -41,7 +41,7 @@ class Task(models.Model):
     from_api = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
-    city = models.CharField(default=None, null=True, blank=True, max_length=256)
+    # city = models.CharField(default=None, null=True, blank=True, max_length=256)
     error_msg = models.CharField(null=True, blank=True, default=None, max_length=200,
                                  verbose_name="Error messages during execution")
     is_archived = models.BooleanField(default=False)
