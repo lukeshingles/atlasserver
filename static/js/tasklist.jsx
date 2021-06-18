@@ -136,10 +136,10 @@ class Task extends React.Component {
       </div>
     ];
 
-    taskbox.push(<div key="tasknum"><a key="tasklink" href={task.url} onClick={(e) => {e.preventDefault(); this.props.setSingleTaskView(task.id, task.url)}}>Task {task.id}</a></div>);
+    taskbox.push(<div key="tasknum"><a key="tasklink" href={task.url} onClick={(e) => {this.props.setSingleTaskView(e, task.id, task.url)}}>Task {task.id}</a></div>);
 
     if (task.parent_task_url) {
-      taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url} onClick={(e) => {e.preventDefault(); this.props.setSingleTaskView(task.parent_task_id, task.parent_task_url)}}>Task {task.parent_task_id}</a></p>);
+      taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url} onClick={(e) => {this.props.setSingleTaskView(e, task.parent_task_id, task.parent_task_url)}}>Task {task.parent_task_id}</a></p>);
     } else if (task.parent_task_id) {
       taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
     }
@@ -186,9 +186,9 @@ class Task extends React.Component {
           }
         } else if (task.imagerequest_task_id != null) {
           if (task.imagerequest_finished) {
-            taskbox.push(<a key="imgrequest" className="btn btn-primary" onClick={() => {this.props.setSingleTaskView(task.imagerequest_task_id, task.imagerequest_url)}}>Images ready</a>);
+            taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url} onClick={(e) => {this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url)}}>Images ready</a>);
           } else {
-            taskbox.push(<a key="imgrequest" className="btn btn-warning" onClick={() => {this.props.setSingleTaskView(task.imagerequest_task_id, task.imagerequest_url)}}>Images requested</a>);
+            taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => {this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url)}}>Images requested</a>);
           }
         } else if (user_id == task.user_id) {
             taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
@@ -336,7 +336,11 @@ class TaskPage extends React.Component {
     }
   }
 
-  setSingleTaskView(task_id, task_url) {
+  setSingleTaskView(event, task_id, task_url) {
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      return; // let the browser deal with the click natively
+    }
+    event.preventDefault();
     var new_page_url = api_url_base + task_id + '/';
     window.history.pushState({}, document.title, new_page_url);
 
