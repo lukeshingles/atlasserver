@@ -7,6 +7,7 @@ import os
 import pandas as pd
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -26,12 +27,14 @@ def main():
     tmpfolder = Path(tempfile.mkdtemp())
     rowcount = len(df)
     commands = []
+    wpdatelines = ['#obs wallpaperdate\n'] if not reduced else None
+
     for index, row in df[:500].iterrows():
         obs = row['Obs']  # looks like '01a59309o0235c'
         imgfolder = 'red' if reduced else 'diff'  # difference or reduced image
         fitsext = 'fits' if reduced else 'diff'
         fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'
-        fitsoutpath = Path(tmpfolder / f'{obs}.fits')
+        fitsoutpath = Path(tmpfolder / (f'{obs}.fits' if reduced else f'{obs}_diff.fits'))
 
         if firstfitsoutpath_c is None and obs.endswith('c'):
             firstfitsoutpath_c = fitsoutpath
@@ -47,15 +50,27 @@ def main():
             "\n"
         )
 
+        if not reduced:
+            wpdate = subprocess.check_output(
+                f'fitshdr {fitsinput} -noquote -v WPDATE', shell=True).decode("utf-8").strip()
+
+            wpdatelines.append(f'{obs} {wpdate}\n')
+
     commandfile = tmpfolder / 'commandlist.sh'
     with commandfile.open('w') as f:
         f.writelines(commands)
+
+    if not reduced:
+        wpdatefile = tmpfolder / 'wallpaperdates.txt'
+        with wpdatefile.open('w') as f:
+            f.writelines(wpdatelines)
 
     os.system(f'parallel --jobs 32 < {commandfile}')
 
     for firstfitsoutpath in [firstfitsoutpath_c, firstfitsoutpath_o]:
         if firstfitsoutpath is not None:
-            refoutputpath = str(firstfitsoutpath).replace('.fits', '_ref.fits')
+            origext = '.fits' if reduced else '_diff.fits'
+            refoutputpath = str(firstfitsoutpath).replace(origext, '_ref.fits')
             command_getref = f'/atlas/bin/wpwarp2 -novar -nomask -nozerosat -wp {refoutputpath} {firstfitsoutpath}\n'
             with commandfile.open('a') as f:
                 f.write(command_getref)

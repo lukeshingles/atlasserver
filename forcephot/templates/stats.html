@@ -6,7 +6,7 @@
         <h1>{{ name }}</h1>
     </div>
 
-    <p>If you notice any issues with the data or this website, please file <a href="https://github.com/lukeshingles/atlasserver/issues">an issue on GitHub</a>. Data errors, security vulnerabilities, and downtime will be handled urgently, and feature requests will also be considered.</p>
+    <p>If you notice any issues with the data or this website, please file <a href="https://github.com/lukeshingles/atlasserver/issues">an issue on GitHub</a>. Data errors, security vulnerabilities, and downtime will be handled urgently, and feature requests will be considered as time allows.</p>
 
     <p>Historical uptime can viewed at <a href="https://statuspage.freshping.io/52636-ATLASForcedPhotometry">FreshPing.io</a></p>
 
@@ -26,7 +26,7 @@
   <script src="https://cdn.pydata.org/bokeh/release/bokeh-2.3.2.min.js"></script>
   <script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-2.3.2.min.js"></script>
   <script language="javascript" type="text/javascript">
-    $('#lastfinishtime').text(new Date('{{ lastfinishtime }}').toLocaleString());
+    $('#lastfinishtime').text(new Date('{{ lastfinishtime }}'.replace(/-/g, "/")).toLocaleString());
     $('#pagetime').text(new Date({% now "U" %} * 1000).toLocaleString());
 
     $.ajax({

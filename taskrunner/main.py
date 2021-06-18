@@ -496,9 +496,9 @@ def main():
 
     logdir.mkdir(parents=True, exist_ok=True)
 
-    log('Starting forcephotrunner...')
+    log('Starting forcedphot task runner...')
 
-    last_maintenancetime = float('-inf')
+    # last_maintenancetime = float('-inf')
     printedwaiting = False
     while True:
         # if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
