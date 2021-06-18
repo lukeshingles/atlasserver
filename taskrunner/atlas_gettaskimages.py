@@ -118,14 +118,14 @@ def main():
                 if mjd < 58417:
                     wallpaperdesc = "0000-00-00 'wallpaper 1 because MJD < 58417'"
                 elif obs[-1] == 'c' and mjd < 58882:
-                    wallpaperdesc = "2020-02-03 'wallpaper 2 because cyan filter and 58417 <= MJD < 58882'"
+                    wallpaperdesc = "2018-10-26 'wallpaper 2 because cyan filter and 58417 <= MJD < 58882'"
                 elif obs[-1] == 'o' and mjd < 58884:
-                    wallpaperdesc = "2020-02-03 'wallpaper 2 because cyan filter and 58417 <= MJD < 58884'"
+                    wallpaperdesc = "2018-10-26 'wallpaper 2 because cyan filter and 58417 <= MJD < 58884'"
                 elif obs[-1] == 'c':
                     wallpaperdesc = "2020-02-03 'wallpaper 3 because cyan filter and 58882 <= MJD'"
                 elif obs[-1] == 'o':
                     wallpaperdesc = "2020-02-05 'wallpaper 3 because orange filter and 58884 <= MJD'"
-                wallpaperstatus = 'inferred_by_mjd_filter'
+                wallpaperstatus = 'inferred_from_mjd_filter'
             else:
                 wallpaperstatus = 'fits_header'
 
