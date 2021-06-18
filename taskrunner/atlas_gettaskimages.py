@@ -137,7 +137,7 @@ def main():
         f.writelines(commands)
 
     if not reduced:
-        wpdatefile = tmpfolder / 'wallpaperdates.txt'
+        wpdatefile = tmpfolder / 'wallpapers.txt'
         with wpdatefile.open('w') as f:
             f.writelines(wpdatelines)
 
