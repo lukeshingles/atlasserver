@@ -27,7 +27,7 @@ def main():
     tmpfolder = Path(tempfile.mkdtemp())
     rowcount = len(df)
     commands = []
-    wpdatelines = ['#obs wallpaperdate\n'] if not reduced else None
+    wpdatelines = ['#obs wallpaperdate wallpaperdir\n'] if not reduced else None
 
     for index, row in df[:500].iterrows():
         obs = row['Obs']  # looks like '01a59309o0235c'
@@ -51,10 +51,10 @@ def main():
         )
 
         if not reduced:
-            wpdate = subprocess.check_output(
-                f'fitshdr {fitsinput} -noquote -v WPDATE', shell=True).decode("utf-8").strip()
+            wpdatedir = subprocess.check_output(
+                f'fitshdr {fitsinput} -noquote -v WPDATE WPDIR', shell=True).decode("utf-8").strip()
 
-            wpdatelines.append(f'{obs} {wpdate}\n')
+            wpdatelines.append(f'{obs} {wpdatedir}\n')
 
     commandfile = tmpfolder / 'commandlist.sh'
     with commandfile.open('w') as f:
