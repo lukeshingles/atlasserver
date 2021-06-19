@@ -136,10 +136,10 @@ def main():
     with commandfile.open('w') as f:
         f.writelines(commands)
 
-    if not reduced:
-        wpdatefile = tmpfolder / 'wallpapers.txt'
-        with wpdatefile.open('w') as f:
-            f.writelines(wpdatelines)
+    # if not reduced:
+    #     wpdatefile = tmpfolder / 'wallpapers.txt'
+    #     with wpdatefile.open('w') as f:
+    #         f.writelines(wpdatelines)
 
     os.system(f'parallel --jobs 32 < {commandfile}')
 
