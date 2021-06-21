@@ -87,7 +87,7 @@ def main():
     tmpfolder = Path(tempfile.mkdtemp())
     rowcount = len(df)
     commands = []
-    wpdatelines = ['#obs MJD obsdate wallpapersource wallpaperdate wallpaperdescription\n'] if not reduced else None
+    # wpdatelines = ['#obs MJD obsdate wallpapersource wallpaperdate wallpaperdescription\n'] if not reduced else None
 
     for index, row in df[:500].iterrows():
         mjd = row['#MJD']
@@ -111,26 +111,26 @@ def main():
             "\n"
         )
 
-        if not reduced:
-            wallpaperdesc = subprocess.check_output(
-                f'fitshdr {fitsinput} -noquote -v WPDATE WPDIR', shell=True).decode("utf-8").strip()
-            if not wallpaperdesc or len(wallpaperdesc) == 0:
-                if mjd < 58417:
-                    wallpaperdesc = "0000-00-00 'wallpaper 1 because MJD < 58417'"
-                elif obs[-1] == 'c' and mjd < 58882:
-                    wallpaperdesc = "2018-10-26 'wallpaper 2 because cyan filter and 58417 <= MJD < 58882'"
-                elif obs[-1] == 'o' and mjd < 58884:
-                    wallpaperdesc = "2018-10-26 'wallpaper 2 because cyan filter and 58417 <= MJD < 58884'"
-                elif obs[-1] == 'c':
-                    wallpaperdesc = "2020-02-03 'wallpaper 3 because cyan filter and 58882 <= MJD'"
-                elif obs[-1] == 'o':
-                    wallpaperdesc = "2020-02-05 'wallpaper 3 because orange filter and 58884 <= MJD'"
-                wallpaperstatus = 'inferred_from_mjd_filter'
-            else:
-                wallpaperstatus = 'fits_header'
-
-            obsdate = mjd_to_date(mjd)
-            wpdatelines.append(f'{obs} {mjd:.6f} {obsdate} {wallpaperstatus} {wallpaperdesc}\n')
+        # if not reduced:
+        #     wallpaperdesc = subprocess.check_output(
+        #         f'fitshdr {fitsinput} -noquote -v WPDATE WPDIR', shell=True).decode("utf-8").strip()
+        #     if not wallpaperdesc or len(wallpaperdesc) == 0:
+        #         if mjd < 58417:
+        #             wallpaperdesc = "0000-00-00 'wallpaper 1 because MJD < 58417'"
+        #         elif obs[-1] == 'c' and mjd < 58882:
+        #             wallpaperdesc = "2018-10-26 'wallpaper 2 because cyan filter and 58417 <= MJD < 58882'"
+        #         elif obs[-1] == 'o' and mjd < 58884:
+        #             wallpaperdesc = "2018-10-26 'wallpaper 2 because cyan filter and 58417 <= MJD < 58884'"
+        #         elif obs[-1] == 'c':
+        #             wallpaperdesc = "2020-02-03 'wallpaper 3 because cyan filter and 58882 <= MJD'"
+        #         elif obs[-1] == 'o':
+        #             wallpaperdesc = "2020-02-05 'wallpaper 3 because orange filter and 58884 <= MJD'"
+        #         wallpaperstatus = 'inferred_from_mjd_filter'
+        #     else:
+        #         wallpaperstatus = 'fits_header'
+        #
+        #     obsdate = mjd_to_date(mjd)
+        #     wpdatelines.append(f'{obs} {mjd:.6f} {obsdate} {wallpaperstatus} {wallpaperdesc}\n')
 
     commandfile = tmpfolder / 'commandlist.sh'
     with commandfile.open('w') as f:
