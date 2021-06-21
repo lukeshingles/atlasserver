@@ -40,16 +40,8 @@ def date_to_mjd(year, month, day):
 
     Returns
     -------
-    jd : float
-        Julian Day
-
-    Examples
-    --------
-    Convert 6 a.m., February 17, 1985 to Julian Day
-
-    >>> date_to_jd(1985,2,17.25)
-    2446113.75
-
+    mjd : float
+        Modified Julian Day
     """
     if month == 1 or month == 2:
         yearp = year - 1
