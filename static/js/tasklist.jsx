@@ -499,11 +499,13 @@ class TaskPage extends React.Component {
       pagehtml.push(<div key="header" className="page-header"><h1>Task {this.singleTaskViewTaskId(this.state.dataurl)}</h1></div>);
     }
 
-    pagehtml.push(
-      <ul key="filters" id="taskfilters">
-        <li key="all"><a onClick={() => this.setFilter(null)} className={'btn ' + this.filterclass(null, this.state.dataurl)}>All tasks</a></li>
-        <li key="started"><a onClick={() => this.setFilter('started')} className={'btn ' + this.filterclass('started', this.state.dataurl)}>Running/Finished</a></li>
-      </ul>);
+    if (!singletaskmode || (this.state.results.length > 0 && this.state.results[0].user_id == user_id)) {
+      pagehtml.push(
+        <ul key="filters" id="taskfilters">
+          <li key="all"><a onClick={() => this.setFilter(null)} className={'btn ' + this.filterclass(null, this.state.dataurl)}>All tasks</a></li>
+          <li key="started"><a onClick={() => this.setFilter('started')} className={'btn ' + this.filterclass('started', this.state.dataurl)}>Running/Finished</a></li>
+        </ul>);
+    }
 
     var newrequeststyle = singletaskmode ? {display: 'none'} : null;
     pagehtml.push(<div key="newrequest" id="newrequestcontainer" ref={this.newRequest} style={newrequeststyle}></div>);
