@@ -603,7 +603,8 @@ def resultplotdatajs(request, taskid):
             if not os.path.exists(resultfilepath):
                 return HttpResponseNotFound("Page not found")
 
-            df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#')
+            df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#',
+                             dtype=float, converters={'F': str, 'Obs': str, 'uJy': int, 'duJy': int})
             # df.rename(columns={'#MJD': 'MJD'})
             if df.empty:
                 return HttpResponseNotFound("Page not found")
