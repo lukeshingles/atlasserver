@@ -200,7 +200,7 @@ class Task extends React.Component {
       taskbox.push(<div key="status" style={{fontStyle: 'italic', marginTop: '1em'}}>Waiting ({task.queuepos} tasks ahead of this one)</div>);
     }
 
-    if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP') {
+    if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP' && !this.props.hidePlot) {
       taskbox.push(<TaskPlot key='plot' taskid={task.id} taskurl={task.url} />);
     }
 
@@ -519,7 +519,7 @@ class TaskPage extends React.Component {
       var pagetaskcount = (this.state.results != null) ? this.state.results.length : null;
       tasklist = [
         <ul key="ultasklist" className="tasks">
-          {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} />))}
+          {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} hidePlot={pagetaskcount > 10} />))}
         </ul>,
         <Pager key='pager' previous={this.state.previous} next={this.state.next} pagefirsttaskposition={this.state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
       ];
