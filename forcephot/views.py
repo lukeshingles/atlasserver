@@ -609,7 +609,9 @@ def resultplotdatajs(request, taskid):
             if df.empty:
                 return HttpResponseNotFound("Page not found")
 
-            df.query("uJy > -1e10 and uJy < 1e10", inplace=True)
+            ujy_min = int(-1e10)
+            ujy_max = int(1e10)
+            df.query("uJy > @ujy_min & uJy < @ujy_max", inplace=True)
 
             jsout.append("var jslcdata = new Array();\n")
             jsout.append("var jslabels = new Array();\n")
