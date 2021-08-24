@@ -13,7 +13,7 @@ if [ -f $APACHEPATH/apachectl ]; then
     # wait a second to make sure the port is released
 else
     echo "Creating directory $APACHEPATH"
-    mkdir -p APACHEPATH
+    mkdir -p $APACHEPATH
 fi
 
 mod_wsgi-express setup-server --working-directory atlasserver --url-alias /forcedphot/static static --application-type module atlasserver.wsgi --server-root $APACHEPATH --port 8086 --mount-point /forcedphot --include-file httpconf.txt
