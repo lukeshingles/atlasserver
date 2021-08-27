@@ -456,7 +456,7 @@ def statsusagechart(request):
 
     r = plot.vbar_stack(
         ['waitingtaskcount', 'dayfinished_web_counts', 'dayfinished_img_counts', 'dayfinished_api_counts'],
-        x='queueday', source=source, color=['red', 'green', 'blue', 'grey'], line_width=0., width=0.3)
+        x='queueday', source=source, color=['red', 'green', 'blue', 'lightgrey'], line_width=0., width=0.3)
 
     # plot.legend.orientation = "horizontal"
 
