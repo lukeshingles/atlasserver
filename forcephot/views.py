@@ -461,9 +461,9 @@ def statsusagechart(request):
     # plot.legend.orientation = "horizontal"
 
     legend = Legend(items=[
-        ("Done (image)", [r[3]]),
-        ("Done (API)", [r[2]]),
-        ("Done (web)", [r[1]]),
+        ("Finished (image)", [r[3]]),
+        ("Finished (API)", [r[2]]),
+        ("Finished (web)", [r[1]]),
         ("Waiting", [r[0]]),
     ], location="top", border_line_width=0)
 
@@ -472,7 +472,9 @@ def statsusagechart(request):
     plot.add_tools(HoverTool(
         tooltips=[
             ("Day", "@queueday"),
-            ("Finished", "@finishedtaskcount"),
+            ("Finished (image)", "@dayfinished_img_counts"),
+            ("Finished (API)", "@dayfinished_api_counts"),
+            ("Finished (web)", "@dayfinished_web_counts"),
             ("Waiting", "@waitingtaskcount"),
         ], mode="mouse", point_policy="follow_mouse", renderers=r))
 
