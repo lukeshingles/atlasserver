@@ -426,11 +426,17 @@ def statsusagechart(request):
         timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=False)
 
     dayfinishedcounts = get_days_ago_counts(finishedtasks)
+    dayfinished_web_counts = get_days_ago_counts(finishedtasks.filter(from_api=False).exclude(request_type='IMGZIP'))
+    dayfinished_api_counts = get_days_ago_counts(finishedtasks.filter(from_api=True).exclude(request_type='IMGZIP'))
+    dayfinished_img_counts = get_days_ago_counts(finishedtasks.filter(request_type='IMGZIP'))
 
     data = {
         'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
         'waitingtaskcount': [daywaitingcounts.get(d, 0.) for d in arr_queueday],
-        'finishedtaskcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
+        # 'finishedtaskcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
+        'dayfinished_web_counts': [dayfinished_web_counts.get(d, 0.) for d in arr_queueday],
+        'dayfinished_api_counts': [dayfinished_api_counts.get(d, 0.) for d in arr_queueday],
+        'dayfinished_img_counts': [dayfinished_img_counts.get(d, 0.) for d in arr_queueday],
     }
 
     source = ColumnDataSource(data=data)
@@ -448,13 +454,16 @@ def statsusagechart(request):
 
     plot.grid.visible = False
 
-    r = plot.vbar_stack(['waitingtaskcount', 'finishedtaskcount'], x='queueday', source=source, color=['red', 'grey'],
-                        line_width=0., width=0.3)
+    r = plot.vbar_stack(
+        ['waitingtaskcount', 'dayfinished_web_counts', 'dayfinished_api_counts', 'dayfinished_img_counts'],
+        x='queueday', source=source, color=['red', 'black', 'grey', 'darkblue'], line_width=0., width=0.3)
 
     # plot.legend.orientation = "horizontal"
 
     legend = Legend(items=[
-        ("Finished", [r[1]]),
+        ("Done (image)", [r[3]]),
+        ("Done (API)", [r[2]]),
+        ("Done (web)", [r[1]]),
         ("Waiting", [r[0]]),
     ], location="top", border_line_width=0)
 
