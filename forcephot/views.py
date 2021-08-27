@@ -455,15 +455,15 @@ def statsusagechart(request):
     plot.grid.visible = False
 
     r = plot.vbar_stack(
-        ['waitingtaskcount', 'dayfinished_api_counts', 'dayfinished_web_counts', 'dayfinished_img_counts'],
-        x='queueday', source=source, color=['red', 'grey', 'black', 'darkblue'], line_width=0., width=0.3)
+        ['waitingtaskcount', 'dayfinished_web_counts', 'dayfinished_img_counts', 'dayfinished_api_counts'],
+        x='queueday', source=source, color=['red', 'black', 'darkblue', 'grey'], line_width=0., width=0.3)
 
     # plot.legend.orientation = "horizontal"
 
     legend = Legend(items=[
-        ("Finished (image)", [r[3]]),
-        ("Finished (web)", [r[2]]),
-        ("Finished (API)", [r[1]]),
+        ("Finished (API)", [r[3]]),
+        ("Finished (image)", [r[2]]),
+        ("Finished (web)", [r[1]]),
         ("Waiting", [r[0]]),
     ], location="top", border_line_width=0)
 
@@ -472,9 +472,9 @@ def statsusagechart(request):
     plot.add_tools(HoverTool(
         tooltips=[
             ("Day", "@queueday"),
+            ("Finished (API)", "@dayfinished_api_counts"),
             ("Finished (image)", "@dayfinished_img_counts"),
             ("Finished (web)", "@dayfinished_web_counts"),
-            ("Finished (API)", "@dayfinished_api_counts"),
             ("Waiting", "@waitingtaskcount"),
         ], mode="mouse", point_policy="follow_mouse", renderers=r))
 
