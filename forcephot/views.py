@@ -403,17 +403,18 @@ def statscoordchart(request):
 
 @cache_page(30)
 def statsusagechart(request):
+    def get_days_ago_counts(tasks):
+        taskcounts = tasks.annotate(queueday=Trunc('timestamp', 'day')) \
+            .values('queueday').annotate(taskcount=Count('id'))
+        return {(today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in taskcounts}
+
     today = datetime.datetime.utcnow().replace(
         tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
 
     waitingtasks = Task.objects.filter(
-        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)\
-        .annotate(queueday=Trunc('timestamp', 'day')) \
-        .values('queueday') \
-        .annotate(taskcount=Count('id'))
+        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)
 
-    daywaitingcounts = {
-        (today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in waitingtasks}
+    daywaitingcounts = get_days_ago_counts(waitingtasks)
 
     for d in range(14):
         if d not in daywaitingcounts:
@@ -422,13 +423,9 @@ def statsusagechart(request):
     arr_queueday = sorted(daywaitingcounts.keys(), reverse=True)
 
     finishedtasks = Task.objects.filter(
-        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=False) \
-        .annotate(queueday=Trunc('timestamp', 'day')) \
-        .values('queueday') \
-        .annotate(taskcount=Count('id'))
+        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=False)
 
-    dayfinishedcounts = {
-        (today - task['queueday']).total_seconds() // 86400: task['taskcount'] for task in finishedtasks}
+    dayfinishedcounts = get_days_ago_counts(finishedtasks)
 
     data = {
         'queueday': [(today - datetime.timedelta(days=d)).strftime('%b %d') for d in arr_queueday],
