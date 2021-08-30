@@ -104,10 +104,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'ra': 'Dec given but RA is missing'})
 
             if not is_finite_float(attrs.get('ra', 0.)):
-                serializers.ValidationError('ra must be a finite floating-point number')
+                raise serializers.ValidationError({'ra': 'ra must be a finite floating-point number'})
 
             if not is_finite_float(attrs.get('dec', 0.)):
-                serializers.ValidationError('dec must be a finite floating-point number')
+                raise serializers.ValidationError({'dec': 'dec must be a finite floating-point number'})
 
         return attrs
 
