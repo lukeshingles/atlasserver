@@ -200,9 +200,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
 
         # we store the region but not the IP address itself for privacy reasons
-        extra_fields['country_code'] = self.request.geo_data.country_code
-        extra_fields['region'] = self.request.geo_data.region
-        # extra_fields['city'] = self.request.geo_data.city
+        try:
+            extra_fields['country_code'] = self.request.geo_data.country_code
+            extra_fields['region'] = self.request.geo_data.region
+            # extra_fields['city'] = self.request.geo_data.city
+        except AttributeError:
+            pass
 
         extra_fields['from_api'] = (self.request.accepted_renderer.format != 'html')
 
