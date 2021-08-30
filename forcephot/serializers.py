@@ -6,6 +6,20 @@ from django.conf import settings
 
 from forcephot.models import Task
 
+import math
+
+
+def is_finite_float(val):
+    try:
+        f_val = float(val)
+    except ValueError:
+        return False
+
+    if math.isnan(f_val):
+        return False
+
+    return True
+
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
@@ -88,6 +102,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'dec': 'RA given but Dec is missing'})
             elif not attrs.get('ra', False):
                 raise serializers.ValidationError({'ra': 'Dec given but RA is missing'})
+
+            if not is_finite_float(attrs.get('ra', 0.)):
+                serializers.ValidationError('ra must be a finite floating-point number')
+
+            if not is_finite_float(attrs.get('dec', 0.)):
+                serializers.ValidationError('dec must be a finite floating-point number')
+
         return attrs
 
     class Meta:
