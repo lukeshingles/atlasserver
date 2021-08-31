@@ -225,8 +225,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     #     return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
+        # if the job we're deleting is in the queue (i.e. not finished), we need to update queue positions
+        update_queue_positions = False if instance.finishtimestamp else True
         instance.delete()
-        calculate_queue_positions()
+        if update_queue_positions:
+            calculate_queue_positions()
 
     def list(self, request, *args, **kwargs):
         if request.user.is_authenticated:
