@@ -129,7 +129,7 @@ def runtask(task, conn, logprefix='', **kwargs):
         if task['mjd_max']:
             atlascommand += f" m1={float(task['mjd_max'])}"
 
-        atlascommand += " dodb=1 parallel=32"
+        atlascommand += " dodb=1 parallel=16"
 
         # for debugging because force.sh takes a long time to run
         # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
