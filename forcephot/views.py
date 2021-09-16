@@ -58,6 +58,7 @@ def calculate_queue_positions():
     queuedtaskcount = queuedtasks.count()
     queuedtasks.update(queuepos_relative=None)
 
+    # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
     queuepos = 0
     passnum = 0
     while queuepos < queuedtaskcount:
