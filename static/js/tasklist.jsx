@@ -386,6 +386,8 @@ class TaskPage extends React.Component {
 
     this.setState({dataurl: window.location.href});
 
+    // start by applying a cached version if we have it
+    // then send out an HTTP request and update when available
     var fetchcachematch = (window.location.href in fetchcache);
     if (fetchcachematch) {
       console.log('using fetchcache before GET response', window.location.href);
@@ -407,23 +409,29 @@ class TaskPage extends React.Component {
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
-      }
+      },
+      redirect: "manual"
     })
     .then((response) => {
       api_request_active = false;
       // etag = response.headers.get('ETag');
-      if (response.status != 200) {
-        console.log("Fetch recieved HTTP status ", response.status);
-      }
-      if (response.status == 404) {
-        window.history.pushState({}, document.title, api_url_base);
-        this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData(true)});
-      }
-      if (response.status == 200) {
-        return response.json();
+      if (response.type === "opaqueredirect") {
+        // redirect to login page
+        window.location.href = response.url;
+        console.log('Fetch got a redirection to ', response.url);
       } else {
-        return null;
+        if (response.status != 200) {
+          console.log("Fetch recieved HTTP status ", response.status);
+        }
+        if (response.status == 404) {
+          window.history.pushState({}, document.title, api_url_base);
+          this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData(true)});
+        }
+        if (response.status == 200) {
+          return response.json();
+        }
       }
+      return null;
     }).catch(error => {
       api_request_active = false;
       console.log('HTTP request failed', error);
