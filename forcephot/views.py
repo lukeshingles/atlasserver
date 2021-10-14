@@ -150,6 +150,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     template_name = 'tasklist-react.html'
 
     def create(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            raise PermissionDenied()
         if request.accepted_renderer.format == 'html':
             form = TaskForm(request.POST)
             success = False
