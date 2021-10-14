@@ -124,6 +124,9 @@ def splitradeclist(data, form=None):
 
         if ',' in line:
             row = line.split(',')
+        elif len(line.split()) == 6:  # handle '00 52 20.21 +56 34 03.9' style of RA Dec
+            rowspacesplit = line.split()
+            row = [' '.join(rowspacesplit[:3]), ' '.join(rowspacesplit[3:6])]
         else:
             row = line.split()
 
