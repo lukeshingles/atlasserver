@@ -107,13 +107,10 @@ class ForcePhotPermission(permissions.BasePermission):
     message = 'You must be the owner of this object.'
 
     def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
+        if request.method in permissions.SAFE_METHODS or request.user.is_authenticated:
             return True
 
-        if request.method in ['PUT', 'PATCH'] and not request.user.is_authenticated:
-            return False
-
-        return True
+        return False
     #     return request.user and request.user.is_authenticated
 
     """
