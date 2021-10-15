@@ -108,7 +108,7 @@ def runtask(task, conn, logprefix='', **kwargs):
     atlascommand = "nice -n 19 "
     if task['request_type'] == 'FP':
         if task['mpc_name']:
-            atlascommand += f"/atlas/bin/ssforce.sh {task['mpc_name']}"
+            atlascommand += f"/atlas/bin/ssforce.sh '{task['mpc_name']}'"
         else:
             atlascommand += f"/atlas/bin/force.sh {float(task['ra'])} {float(task['dec'])}"
 
