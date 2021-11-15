@@ -183,10 +183,12 @@ class Task extends React.Component {
         if (task.request_type == 'IMGZIP') {
           if (task.result_imagezip_url != null) {
             taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagezip_url}>Download images (ZIP)</a>);
+          } else {
+            taskbox.push(<p>The download link has expired. Delete this task and request again if necessary.</p>);
           }
         } else if (task.imagerequest_task_id != null) {
           if (task.imagerequest_finished) {
-            taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url} onClick={(e) => {this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url)}}>Images ready</a>);
+            taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url} onClick={(e) => {this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url)}}>Images retrieved</a>);
           } else {
             taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => {this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url)}}>Images requested</a>);
           }
