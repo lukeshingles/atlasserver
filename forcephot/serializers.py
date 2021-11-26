@@ -10,6 +10,8 @@ import math
 
 
 def is_finite_float(val):
+    if val is None:
+        return False
     try:
         f_val = float(val)
     except ValueError:
