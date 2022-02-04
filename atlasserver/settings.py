@@ -158,7 +158,7 @@ USE_X_FORWARDED_PORT = False
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
 SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
 
-CSRF_TRUSTED_ORIGINS = ['.qub.ac.uk', 'fallingstar-data.com']
+CSRF_TRUSTED_ORIGINS = ['https://*.qub.ac.uk', 'https://fallingstar-data.com']
 
 # When set to True, if the request URL does not match any of the patterns in the URLconf and it doesn’t end in a slash,
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
