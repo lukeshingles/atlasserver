@@ -15,10 +15,9 @@ Including another URLconf
 """
 
 import rest_framework.authtoken.views
-from django.conf.urls import url
 from django.conf import settings
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
 # from django.contrib.auth.models import User
 # from django.contrib.auth.decorators import login_required
 from django.views.generic.base import TemplateView
@@ -42,7 +41,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('queue/<str:pk>/delete/', views.deletetask, name="delete"),
     path('queue/<str:pk>/requestimages/', views.requestimages, name="requestimages"),
-    url(r'^register/$', views.register, name='register'),
+    re_path(r'^register/$', views.register, name='register'),
     path('faq/', TemplateView.as_view(template_name='faq.html', extra_context={'name': 'FAQ'}), name="faq"),
     path('resultdesc/',
          TemplateView.as_view(template_name='resultdesc.html', extra_context={'name': 'Output Description'}),
