@@ -62,6 +62,16 @@ MIDDLEWARE = [
     'geoip2_extras.middleware.GeoIP2Middleware',
 ]
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    },
+    # required in order for IP addresses to be cached
+    "geoip2-extras": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    },
+}
+
 ROOT_URLCONF = 'atlasserver.urls'
 
 TEMPLATES = [
