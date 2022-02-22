@@ -17,8 +17,6 @@ sys.path.insert(1, str(Path(sys.path[0]).parent.resolve()))
 import atlasserver.settings as settings
 from forcephot.misc import make_pdf_plot
 
-load_dotenv(override=True)
-
 remoteServer = 'atlas'
 localresultdir = Path(settings.STATIC_ROOT, 'results')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
