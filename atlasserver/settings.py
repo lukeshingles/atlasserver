@@ -103,9 +103,9 @@ DATABASES = {
         # 'OPTIONS': {
         #     # 'read_default_file': '/usr/local/etc/my.cnf',
         # },
-        'NAME': os.environ.get('DJANGO_MYSQL_DBNAME'),
-        'USER': os.environ.get('DJANGO_MYSQL_USER'),
-        'PASSWORD': os.environ.get('DJANGO_MYSQL_PASSWORD'),
+        'NAME': os.environ.get('ATLASSERVER_DJANGO_MYSQL_DBNAME'),
+        'USER': os.environ.get('ATLASSERVER_DJANGO_MYSQL_USER'),
+        'PASSWORD': os.environ.get('ATLASSERVER_DJANGO_MYSQL_PASSWORD'),
         'HOST': 'localhost',   # Or an IP Address that your DB is hosted on
         'PORT': '3306',
     }
@@ -217,7 +217,7 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_USE_TLS = True
 EMAIL_PORT = 587
 
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+EMAIL_HOST_USER = os.environ.get('ATLASSERVER_EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('ATLASSERVER_EMAIL_HOST_PASSWORD')
 
 GEOIP_PATH = os.path.dirname(__file__)

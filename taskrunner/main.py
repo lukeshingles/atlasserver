@@ -11,7 +11,6 @@ from signal import SIGINT, SIGTERM, signal
 import mysql.connector
 import pandas as pd
 from django.core.mail import EmailMessage
-from dotenv import load_dotenv
 
 sys.path.insert(1, str(Path(sys.path[0]).parent.resolve()))
 
@@ -309,7 +308,7 @@ def send_email_if_needed(conn, task, logprefix=''):
                 body=(
                     'Your forced photometry results are attached for:\n\n'
                     + '\n'.join(taskdesclist) + '\n\n'),
-                from_email=os.environ.get('EMAIL_HOST_USER'),
+                from_email=settings.EMAIL_HOST_USER,
                 to=[task["email"]],
             )
 

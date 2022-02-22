@@ -1,13 +1,13 @@
 # rename this file to .env after editing
 
-DJANGO_SECRET_KEY = ''
+ATLASSERVER_DJANGO_SECRET_KEY = ''
 
 # to generate a new key run:
 # python3 manage.py shell -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 
-EMAIL_HOST_USER = 'user@server.com'
-EMAIL_HOST_PASSWORD = 'PASSWORD'
+ATLASSERVER_EMAIL_HOST_USER = 'user@server.com'
+ATLASSERVER_EMAIL_HOST_PASSWORD = 'PASSWORD'
 
-DJANGO_MYSQL_DBNAME = 'atlasserver'
-DJANGO_MYSQL_USER = 'djangouser'
-DJANGO_MYSQL_PASSWORD = 'PASSWORD'
+ATLASSERVER_DJANGO_MYSQL_DBNAME = 'atlasserver'
+ATLASSERVER_DJANGO_MYSQL_USER = 'djangouser'
+ATLASSERVER_DJANGO_MYSQL_PASSWORD = 'PASSWORD'
