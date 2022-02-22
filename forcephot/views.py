@@ -347,9 +347,12 @@ def requestimages(request, pk):
         data['finishtimestamp'] = None
 
         # we store the region but not the IP address itself for privacy reasons
-        data['country_code'] = request.geo_data.country_code
-        data['region'] = request.geo_data.region
-        # data['city'] = request.geo_data.city
+        try:
+            data['country_code'] = request.geo_data.country_code
+            data['region'] = request.geo_data.region
+            # data['city'] = request.geo_data.city
+        except AttributeError:
+            pass
 
         data['from_api'] = False
         data['send_email'] = False
