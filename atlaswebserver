@@ -27,7 +27,7 @@ stop () {
     echo "Stopping ATLAS Apache server (pid $(cat $APACHEPATH/httpd.pid))"
     $APACHEPATH/apachectl stop
   else
-    echo "ATLAS Apache server was already stopped"
+    echo "ATLAS Apache server was not running"
   fi
 
 }
