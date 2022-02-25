@@ -344,7 +344,7 @@ def log(msg, *args, **kwargs):
     line = f'{dtnow}  {msg}'
     print(line, *args, **kwargs)
 
-    logfile_archive = Path(logdir, f'fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}-{dtnow.timetuple().tm_sec:02d}.txt')
+    logfile_archive = Path(logdir, f'fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}.txt')
     logfile_latest = Path(logdir, 'fprunnerlog_latest.txt')
 
     if LASTLOGFILEARCHIVED and logfile_archive != LASTLOGFILEARCHIVED:
