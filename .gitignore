@@ -130,7 +130,5 @@ dmypy.json
 
 .tags*
 logs
-fprunnerlog.txt
-fprunnerlogstderr.txt
 logs/*.txt
 *.mmdb
