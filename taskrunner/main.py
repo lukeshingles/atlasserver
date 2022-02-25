@@ -18,7 +18,7 @@ import atlasserver.settings as settings
 from forcephot.misc import make_pdf_plot
 
 remoteServer = 'atlas'
-localresultdir = Path(settings.STATIC_ROOT, 'results')
+localresultdir = Path(settings.RESULTS_DIR)
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
 logdir = Path(__file__).resolve().parent / 'logs'
 TASKMAXTIME = 1200
@@ -36,6 +36,9 @@ CONNKWARGS = {
 # set a limit on the number of tasks run for each user per full pass of the task queue
 # this prevents a single user from monopolising a large block of the queue
 USERTASKLOADLIMIT = 1
+
+# so that current log can be archived periodically
+LASTLOGFILEARCHIVED = None
 
 
 def localresultfileprefix(id):
@@ -140,12 +143,11 @@ def runtask(task, conn, logprefix='', **kwargs):
         localdatafile = Path(localresultdir, f"job{task['parent_task_id']:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task['parent_task_id']:05d}.txt")
 
-        copycommand = f'rsync {localdatafile} {remoteServer}:{remotedatafile}'
+        copycommand = ['rsync', str(localdatafile), f'{remoteServer}:{remotedatafile}']
 
-        log(logprefix + copycommand)
+        log(logprefix + ' '.join(copycommand))
 
-        p = subprocess.Popen(copycommand,
-                             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        p = subprocess.Popen(copycommand, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              encoding='utf-8', bufsize=1, universal_newlines=True)
         stdout, stderr = p.communicate()
 
@@ -162,7 +164,7 @@ def runtask(task, conn, logprefix='', **kwargs):
 
     log(logprefix + f"Executing on {remoteServer}: {atlascommand}")
 
-    p = subprocess.Popen(["ssh", f"{remoteServer}", atlascommand],
+    p = subprocess.Popen(["ssh", f"{remoteServer}", atlascommand], shell=False,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          encoding='utf-8', bufsize=1, universal_newlines=True)
 
@@ -219,17 +221,19 @@ def runtask(task, conn, logprefix='', **kwargs):
     # make sure the large zip files are not kept around on the remote system
     # but keep the data files there for possible image requests
     if task['request_type'] == 'FP':
-        copycommands = [f'scp {remoteServer}:{remoteresultfile} {localresultfile}',
-                        ('rsync --remove-source-files '
-                         f'{remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")} {localresultdir}')]
+        copycommands = [
+            ['scp', f'{remoteServer}:{remoteresultfile}', str(localresultfile)],
+            ['rsync', '--remove-source-files',
+             f'{remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")}', str(localresultdir)]
+        ]
     else:
-        copycommands = [f'rsync --remove-source-files {remoteServer}:{remoteresultfile} {localresultdir}']
+        copycommands = [['rsync', '--remove-source-files', f'{remoteServer}:{remoteresultfile}', str(localresultdir)]]
 
     for copycommand in copycommands:
-        log(logprefix + copycommand)
+        log(logprefix + ' '.join(copycommand))
 
-        p = subprocess.Popen(copycommand,
-                             shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        p = subprocess.Popen(copycommand, shell=False,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              encoding='utf-8', bufsize=1, universal_newlines=True)
         stdout, stderr = p.communicate()
 
@@ -335,12 +339,27 @@ def handler(signal_received, frame):
 
 
 def log(msg, *args, **kwargs):
+    global LASTLOGFILEARCHIVED
     dtnow = datetime.datetime.utcnow()
     line = f'{dtnow}  {msg}'
     print(line, *args, **kwargs)
-    logfile = Path(logdir, f'fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}.txt')
-    with logfile.open("a+") as logfile:
-        logfile.write(line + '\n')
+
+    logfile_archive = Path(logdir, f'fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}-{dtnow.timetuple().tm_sec:02d}.txt')
+    logfile_latest = Path(logdir, 'fprunnerlog_latest.txt')
+
+    if LASTLOGFILEARCHIVED and logfile_archive != LASTLOGFILEARCHIVED:
+        import shutil
+        # os.rename(logfile_latest, logfile_archive)
+        shutil.copyfile(logfile_latest, LASTLOGFILEARCHIVED)
+        flogfile = logfile_latest.open("w")
+    else:
+        flogfile = logfile_latest.open("a")
+
+    LASTLOGFILEARCHIVED = logfile_archive
+
+    # with logfile_latest.open("a") as flogfile:
+    flogfile.write(line + '\n')
+    flogfile.close()
 
 
 def do_taskloop():
