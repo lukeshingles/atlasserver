@@ -1,6 +1,7 @@
 #!/bin/bash
 
 APACHEPATH="/tmp/atlasforced"
+ATLASSERVERPATH=$(realpath $(dirname "$0"))
 
 start () {
   echo "Starting ATLAS Apache server"
@@ -15,9 +16,9 @@ start () {
   port=8086
   mountpoint=/forcedphot
 
-  mod_wsgi-express setup-server --working-directory atlasserver --url-alias $mountpoint/static static --url-alias static static --application-type module atlasserver.wsgi --server-root $APACHEPATH --port $port --mount-point $mountpoint --include-file httpconf.txt
+  mod_wsgi-express setup-server --working-directory atlasserver --url-alias $mountpoint/static static --url-alias static static --application-type module atlasserver.wsgi --server-root $APACHEPATH --port $port --mount-point $mountpoint --include-file $ATLASSERVERPATH/httpconf.txt
 
-  export PYTHONPATH=$(realpath $(dirname "$0"))
+  export PYTHONPATH=$ATLASSERVERPATH
   $APACHEPATH/apachectl start
 }
 

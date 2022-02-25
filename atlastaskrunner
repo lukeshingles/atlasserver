@@ -1,11 +1,13 @@
 #!/bin/bash
 
+ATLASSERVERPATH=$(realpath $(dirname "$0"))
+
 print_tips () {
   echo ""
   echo "attach to the session with:"
   echo "  tmux attach -t atlastaskrunner"
   echo "check the log with:"
-  echo "  tail -f $(realpath $(dirname "$0"))/taskrunner/logs/fprunnerlog_latest.txt"
+  echo "  tail -f $ATLASSERVERPATH/taskrunner/logs/fprunnerlog_latest.txt"
 }
 
 check_session_exists () {
@@ -23,7 +25,7 @@ start () {
     echo "Doing nothing (atlastaskrunner tmux session already exists)"
   else
     echo "Starting atlastaskrunner tmux session"
-    tmux new-session -d -s atlastaskrunner $(dirname "$0")/taskrunner/supervise_atlastaskrunner.sh
+    tmux new-session -d -s atlastaskrunner $ATLASSERVERPATH/taskrunner/supervise_atlastaskrunner.sh
   fi
 
   print_tips
