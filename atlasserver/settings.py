@@ -154,6 +154,7 @@ PATHPREFIX = '/forcedphot'
 STATIC_URL = PATHPREFIX + '/static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+RESULTS_DIR = os.path.join(STATIC_ROOT, 'results')
 
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
