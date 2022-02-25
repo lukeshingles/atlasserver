@@ -16,7 +16,7 @@ start () {
   port=8086
   mountpoint=/forcedphot
 
-  mod_wsgi-express setup-server --working-directory atlasserver --url-alias $mountpoint/static static --url-alias static static --application-type module atlasserver.wsgi --server-root $APACHEPATH --port $port --mount-point $mountpoint --include-file $ATLASSERVERPATH/httpconf.txt
+  mod_wsgi-express setup-server --working-directory $ATLASSERVERPATH/atlasserver --url-alias $mountpoint/static $ATLASSERVERPATH/static --url-alias static static --application-type module atlasserver.wsgi --server-root $APACHEPATH --port $port --mount-point $mountpoint --include-file $ATLASSERVERPATH/httpconf.txt
 
   export PYTHONPATH=$ATLASSERVERPATH
   $APACHEPATH/apachectl start
