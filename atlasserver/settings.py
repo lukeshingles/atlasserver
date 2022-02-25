@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 """
 
 import os
+import platform
 from pathlib import Path  # Python 3.6+ only
 
 from dotenv import load_dotenv
@@ -28,7 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = False if platform.system() != 'Darwin' else True
 
 ALLOWED_HOSTS = ['*']
 
@@ -149,8 +150,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
-PATHPREFIX = '/forcedphot'
-# PATHPREFIX = ''
+PATHPREFIX = '/forcedphot' if platform.system() != 'Darwin' else ''
 STATIC_URL = PATHPREFIX + '/static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
@@ -169,7 +169,7 @@ USE_X_FORWARDED_PORT = False
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
 SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
 
-CSRF_TRUSTED_ORIGINS = ['https://*.qub.ac.uk', 'https://fallingstar-data.com']
+CSRF_TRUSTED_ORIGINS = ['https://*.qub.ac.uk', 'https://fallingstar-data.com', 'http://localhost']
 
 # When set to True, if the request URL does not match any of the patterns in the URLconf and it doesn’t end in a slash,
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
