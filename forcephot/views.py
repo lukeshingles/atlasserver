@@ -591,7 +591,6 @@ def register(request):
 @cache_page(60 * 10)
 def resultplotdatajs(request, taskid):
     import pandas as pd
-
     if taskid:
         try:
             item = Task.objects.get(id=taskid)
@@ -729,6 +728,26 @@ def taskresultdata(request, taskid):
 
             if os.path.exists(resultfilepath):
                 return FileResponse(open(resultfilepath, 'rb'))
+
+    return HttpResponseNotFound("Page not found")
+
+
+@cache_page(60 * 60)
+def taskpreviewimage(request, taskid):
+    item = None
+    if taskid:
+        try:
+            item = Task.objects.get(id=taskid)
+        except ObjectDoesNotExist:
+            return HttpResponseNotFound("Page not found")
+
+    if item:
+        previewimagefile = item.localresultpreviewimagefile
+        if previewimagefile:
+            previewimagefile = Path(os.path.join(settings.STATIC_ROOT, previewimagefile))
+
+            if os.path.exists(previewimagefile):
+                return FileResponse(open(previewimagefile, 'rb'))
 
     return HttpResponseNotFound("Page not found")
 

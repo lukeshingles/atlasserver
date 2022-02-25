@@ -53,9 +53,10 @@ urlpatterns = [
     path('stats/coordchart.json', views.statscoordchart, name="statscoordchart"),
     path('stats/usagechart.json', views.statsusagechart, name="statsusagechart"),
 
+    path('queue/<int:taskid>/preview.jpg', views.taskpreviewimage, name='taskpreviewimage'),
+    path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
     path('queue/<int:taskid>/resultplotdata.js', views.resultplotdatajs, name='resultplotdatajs'),
     path('queue/<int:taskid>/plot.pdf', views.taskpdfplot, name='taskpdfplot'),
-    path('queue/<int:taskid>/data.txt', views.taskresultdata, name='taskresultdata'),
     path('queue/<int:taskid>/images.zip', views.taskimagezip, name='taskimagezip'),
 
     path('apiguide/',
