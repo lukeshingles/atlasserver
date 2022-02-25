@@ -341,7 +341,8 @@ def handler(signal_received, frame):
 def log(msg, *args, **kwargs):
     global LASTLOGFILEARCHIVED
     dtnow = datetime.datetime.utcnow()
-    line = f'{dtnow}  {msg}'
+    strtime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f'{strtime}  {msg}'
     print(line, *args, **kwargs)
 
     logfile_archive = Path(logdir, f'fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}.txt')
