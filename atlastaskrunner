@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ATLASSERVERPATH=$(realpath $(dirname "$0"))
+ATLASSERVERPATH=$(dirname $(realpath "$0"))
 
 print_tips () {
   echo ""
@@ -64,7 +64,7 @@ elif [ $1 = "stop" ]; then
 
 elif [ $1 = "log" ]; then
 
-  "tail -f $ATLASSERVERPATH/taskrunner/logs/fprunnerlog_latest.txt"
+  tail -f $ATLASSERVERPATH/taskrunner/logs/fprunnerlog_latest.txt
 
 else
 
