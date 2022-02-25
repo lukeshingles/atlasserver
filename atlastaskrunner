@@ -7,7 +7,7 @@ print_tips () {
   echo "to attach to the session (be careful not to stop the task runner!):"
   echo "  tmux attach -t atlastaskrunner"
   echo "check the log with:"
-  echo "  tail -f $ATLASSERVERPATH/taskrunner/logs/fprunnerlog_latest.txt"
+  echo "  $(basename $0) log"
 }
 
 check_session_exists () {
@@ -43,7 +43,7 @@ stop () {
 
 
 if [ $# -eq 0 ]; then
-  echo 1>&2 "Usage: $0 [start|restart|stop]"
+  echo 1>&2 "Usage: $(basename $0) [start|restart|stop|log]"
   print_tips
   exit 3
 fi
@@ -62,9 +62,13 @@ elif [ $1 = "stop" ]; then
 
   stop
 
+elif [ $1 = "log" ]; then
+
+  "tail -f $ATLASSERVERPATH/taskrunner/logs/fprunnerlog_latest.txt"
+
 else
 
-    echo 1>&2 "Usage: $0 [start|restart|stop]"
+    echo 1>&2 "Usage: $0 [start|restart|stop|log]"
     print_tips
     exit 3
 
