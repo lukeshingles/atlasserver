@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 env:
-    DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+    ATLASSERVER_DJANGO_SECRET_KEY: ${{ secrets.ATLASSERVER_DJANGO_SECRET_KEY }}
 
 jobs:
   build:
