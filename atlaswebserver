@@ -57,4 +57,10 @@ elif [ $1 = "stop" ]; then
 
   stop
 
+else
+
+    echo 1>&2 "Usage: $0 [start|restart|stop]"
+    print_tips
+    exit 3
+
 fi

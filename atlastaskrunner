@@ -4,7 +4,7 @@ ATLASSERVERPATH=$(realpath $(dirname "$0"))
 
 print_tips () {
   echo ""
-  echo "attach to the session with:"
+  echo "to attach to the session (be careful not to stop the task runner!):"
   echo "  tmux attach -t atlastaskrunner"
   echo "check the log with:"
   echo "  tail -f $ATLASSERVERPATH/taskrunner/logs/fprunnerlog_latest.txt"
@@ -61,5 +61,11 @@ elif [ $1 = "restart" ]; then
 elif [ $1 = "stop" ]; then
 
   stop
+
+else
+
+    echo 1>&2 "Usage: $0 [start|restart|stop]"
+    print_tips
+    exit 3
 
 fi
