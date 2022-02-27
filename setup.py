@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-
 # coding: utf-8
-"""Plotting and analysis tools for the ARTIS 3D supernova radiative transfer code."""
+"""This is the source code for the ATLAS Forced Photometry Server, a Python Django Rest Framework server with a React frontend."""
 
 import datetime
 from pathlib import Path
