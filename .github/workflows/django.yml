@@ -57,5 +57,5 @@ jobs:
 
     - name: Run Tests
       run: |
-        cat atlasserver/settings_ci.py >> atlasserver/settings.py
+        cat atlasserver/settings_test.txt >> atlasserver/settings.py
         ./manage.py test
