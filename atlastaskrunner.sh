@@ -7,7 +7,7 @@ print_tips () {
   echo "to attach to the session (be careful not to stop the task runner!):"
   echo "  tmux attach -t atlastaskrunner"
   echo "check the log with:"
-  echo "  $(basename $0) log"
+  echo "  atlastaskrunner log"
 }
 
 check_session_exists () {
@@ -22,7 +22,7 @@ check_session_exists () {
 start () {
   check_session_exists
   if [ $session_exists = 1 ]; then
-    echo "Doing nothing (atlastaskrunner tmux session already exists)"
+    echo "atlastaskrunner tmux session already exists"
   else
     echo "Starting atlastaskrunner tmux session"
     tmux new-session -d -s atlastaskrunner $ATLASSERVERPATH/taskrunner/supervise_atlastaskrunner.sh
@@ -43,7 +43,7 @@ stop () {
 
 
 if [ $# -eq 0 ]; then
-  echo 1>&2 "Usage: $(basename $0) [start|restart|stop|log]"
+  echo 1>&2 "Usage: atlastaskrunner [start|restart|stop|log]"
   print_tips
   exit 3
 fi

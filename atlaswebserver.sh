@@ -40,7 +40,7 @@ stop () {
 
 
 if [ $# -eq 0 ]; then
-  echo 1>&2 "Usage: $(basename $0) [start|restart|stop]"
+  echo 1>&2 "Usage: atlaswebserver[start|restart|stop]"
   exit 3
 fi
 
@@ -65,8 +65,7 @@ elif [ $1 = "stop" ]; then
 
 else
 
-    echo 1>&2 "Usage: $0 [start|restart|stop]"
-    print_tips
+    echo 1>&2 "Usage: atlaswebserver [start|restart|stop]"
     exit 3
 
 fi
