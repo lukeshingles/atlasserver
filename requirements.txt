@@ -16,4 +16,4 @@ mysqlclient>=2.0.3
 pandas>=1.2.4
 pycountry>=20.7.3
 python-dotenv>=0.17.0
-#mod-wsgi-standalone>=4.7.1
+mod-wsgi-standalone>=4.7.1
