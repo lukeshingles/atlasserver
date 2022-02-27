@@ -12,6 +12,7 @@ env:
 jobs:
   build:
 
+    environment: test
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 4
@@ -56,4 +57,5 @@ jobs:
 
     - name: Run Tests
       run: |
+        cat atlasserver/settings_test.py >> atlasserver/settings.py
         ./manage.py test
