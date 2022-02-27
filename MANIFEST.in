@@ -1,0 +1,2 @@
+recursive-include artistools *.sh
+recursive-include artistools *.txt
