@@ -59,3 +59,4 @@ jobs:
       run: |
         cat atlasserver/settings_test.txt >> atlasserver/settings.py
         ./manage.py test
+        python -m pip install -e .
