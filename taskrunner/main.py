@@ -334,7 +334,7 @@ def send_email_if_needed(conn, task, logprefix=''):
 
 def handler(signal_received, frame):
     # Handle any cleanup here
-    print('SIGINT or CTRL-C detected. Exiting')
+    log('SIGINT or CTRL-C detected. Exiting')
     exit(0)
 
 
