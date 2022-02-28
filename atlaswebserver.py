@@ -73,6 +73,11 @@ def start():
         print('Start command unsuccessful. Trying again in one second...')
         time.sleep(1)
 
+    while not get_httpd_pid():
+        pass
+
+    print(f"ATLAS Apache server is running with pid {get_httpd_pid()}")
+
 
 def stop():
     pid = get_httpd_pid()
@@ -105,6 +110,13 @@ def main():
     else:
 
         print("Usage: atlaswebserver [start|restart|stop]")
+        print()
+
+        pid = get_httpd_pid()
+        if pid:
+            print(f"ATLAS Apache server is running with pid {pid}")
+        else:
+            print("ATLAS Apache server is not running (pid file missing)")
         sys.exit(3)
 
 
