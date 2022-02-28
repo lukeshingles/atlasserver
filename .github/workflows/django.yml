@@ -18,9 +18,6 @@ jobs:
       max-parallel: 4
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
-    env:
-      DB_USER: ATLASSERVER_DJANGO_MYSQL_USER
-      DB_PASSWORD: root
     steps:
 
     - name: Checkout Code
@@ -59,6 +56,9 @@ jobs:
 
     - name: Set up MySQL
       run: |
+        echo $ATLASSERVER_DJANGO_MYSQL_DBNAME
+        echo $ATLASSERVER_DJANGO_MYSQL_USER
+        echo $ATLASSERVER_DJANGO_MYSQL_PASSWORD
         sudo /etc/init.d/mysql start
         mysql -e "CREATE DATABASE $ATLASSERVER_DJANGO_MYSQL_DBNAME;" -u$ATLASSERVER_DJANGO_MYSQL_USER -p$ATLASSERVER_DJANGO_MYSQL_PASSWORD
 
