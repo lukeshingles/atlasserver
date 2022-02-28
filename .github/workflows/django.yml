@@ -8,18 +8,8 @@ on:
 
 env:
     ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
-    ATLASSERVER_DJANGO_MYSQL_USER: mysqluser
-    ATLASSERVER_DJANGO_MYSQL_PASSWORD: password
-
-services:
-    mysql:
-        image: mysql:5.7
-        env:
-            MYSQL_ALLOW_EMPTY_PASSWORD: yes
-            MYSQL_DATABASE: atlasserver
-        ports:
-            - 3306
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    ATLASSERVER_DJANGO_MYSQL_USER: root
+    ATLASSERVER_DJANGO_MYSQL_PASSWORD: 
 
 jobs:
   build:
@@ -30,6 +20,18 @@ jobs:
       max-parallel: 4
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
+
+    services:
+        mysql:
+            image: mysql:5.7
+            env:
+                MYSQL_ALLOW_EMPTY_PASSWORD: yes
+                MYSQL_DATABASE: atlasserver
+            ports:
+                - 3306
+            options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+
     steps:
 
     - name: Checkout Code
@@ -68,13 +70,8 @@ jobs:
 
     - name: Set up MySQL
       run: |
-        echo $ATLASSERVER_DJANGO_MYSQL_DBNAME
-        echo ${{ secrets.ATLASSERVER_DJANGO_MYSQL_DBNAME }}
-        echo ${{ env.ATLASSERVER_DJANGO_MYSQL_DBNAME }}
-        echo $ATLASSERVER_DJANGO_MYSQL_USER
-        echo $ATLASSERVER_DJANGO_MYSQL_PASSWORD
         sudo /etc/init.d/mysql start
-        mysql -e "CREATE DATABASE $ATLASSERVER_DJANGO_MYSQL_DBNAME;" -u$ATLASSERVER_DJANGO_MYSQL_USER -p$ATLASSERVER_DJANGO_MYSQL_PASSWORD
+        mysql -e "CREATE DATABASE atlasserver;" -u root
 
     - name: Run Tests
       run: |
