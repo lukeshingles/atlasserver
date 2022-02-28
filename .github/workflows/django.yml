@@ -60,7 +60,7 @@ jobs:
     - name: Set up MySQL
       run: |
         sudo /etc/init.d/mysql start
-        mysql -e 'CREATE DATABASE {{ env.ATLASSERVER_DJANGO_MYSQL_DBNAME }};' -u${{ env.ATLASSERVER_DJANGO_MYSQL_USER }} -p${{ env.ATLASSERVER_DJANGO_MYSQL_PASSWORD }}
+        mysql -e "CREATE DATABASE $ATLASSERVER_DJANGO_MYSQL_DBNAME;" -u$ATLASSERVER_DJANGO_MYSQL_USER -p$ATLASSERVER_DJANGO_MYSQL_PASSWORD
 
     - name: Run Tests
       run: |
