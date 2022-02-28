@@ -77,7 +77,7 @@ jobs:
       run: |
         sudo /etc/init.d/mysql start
         echo "mysql started"
-        mysql -e "CREATE DATABASE atlasserver;" -u$ATLASSERVER_DJANGO_MYSQL_USER -pATLASSERVER_DJANGO_MYSQL_PASSWORD
+        mysql -e "CREATE DATABASE atlasserver;" -uroot -proot
 
     - name: Run Tests
       run: |
