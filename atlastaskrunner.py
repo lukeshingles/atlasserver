@@ -66,6 +66,9 @@ def stop():
     else:
         print('task runner tmux session does not exist')
 
+    if Path('/tmp/atlasforced/taskrunner.pid').is_file():
+        Path('/tmp/atlasforced/taskrunner.pid').unlink()
+
 
 def main():
 

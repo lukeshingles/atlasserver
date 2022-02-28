@@ -2,10 +2,20 @@
 
 taskrunnerpath=$(dirname "$0")
 
+pidfile=/tmp/atlasforced/taskrunner.pid
+
+if [ -f $pidfile ]; then
+  echo "ERROR: pid file $pidfile already exists. Exiting to prevent multiple instances of the task runner process." | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+  exit 1
+fi
+
+echo $$ > $pidfile
+
 clean_up() {
   # sig=$(($? - 128))
   sig=$?
   echo $(date "+%F %H:%M:%S") "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+  rm $pidfile
   exit
 }
 
@@ -21,7 +31,7 @@ if [ "$session_name" = "atlastaskrunner" ]; then
 else
   echo "ERROR: this script should only be run under the designated tmux session. To start the task runner tmux session, run:"
   echo "  atlastaskrunner start"
-  # exit 1
+  exit 1
 fi
 
 while (true) do
