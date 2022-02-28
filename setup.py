@@ -30,8 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'atlaswebserver = atlaswebserver:main',
-            # 'atlaswebserver = commands:atlaswebserver',
-            'atlastaskrunner = commands:atlastaskrunner',
+            'atlastaskrunner = atlastaskrunner:main',
         ]
     },
     python_requires='>==3.6',

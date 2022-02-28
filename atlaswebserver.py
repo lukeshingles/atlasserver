@@ -12,6 +12,23 @@ APACHEPATH = Path("/tmp/atlasforced")
 ATLASSERVERPATH = Path(__file__).resolve().parent
 
 
+def run_command(commands, print_output=True):
+    p = subprocess.Popen(
+        commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        encoding='utf-8', bufsize=1, universal_newlines=True)
+
+    if print_output:
+        for line in iter(p.stdout.readline, ''):
+            print(line, end='')
+
+    stdout, stderr = p.communicate()
+    if print_output:
+        print(stdout, end='')
+        print(stderr, end='')
+
+    return p.returncode
+
+
 def start():
     print("Starting ATLAS Apache server")
 
@@ -31,47 +48,27 @@ def start():
         port = 8086
         mountpoint = '/forcedphot'
 
-    p = subprocess.Popen(
-        ['mod_wsgi-express', 'setup-server', '--working-directory', f'{ATLASSERVERPATH / "atlasserver"}',
-         '--url-alias', f'{mountpoint}/static', f'{ATLASSERVERPATH / "static"}', '--url-alias', 'static', 'static',
-         '--application-type', 'module', 'atlasserver.wsgi', '--server-root', str(APACHEPATH), '--port', str(port),
-         '--mount-point', mountpoint, '--include-file', f'{ATLASSERVERPATH / "httpconf.txt"}'],
-        shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        encoding='utf-8', bufsize=1, universal_newlines=True)
-    stdout, stderr = p.communicate()
-    print(stdout, end='')
-    print(stderr, end='')
+    run_command([
+        'mod_wsgi-express', 'setup-server', '--working-directory', str(ATLASSERVERPATH / "atlasserver"),
+        '--url-alias', f'{mountpoint}/static', str(ATLASSERVERPATH / "static"), '--url-alias', 'static', 'static',
+        '--application-type', 'module', 'atlasserver.wsgi', '--server-root', str(APACHEPATH), '--port', str(port),
+        '--mount-point', mountpoint, '--include-file', str(ATLASSERVERPATH / "httpconf.txt")])
 
     os.environ['PYTHONPATH'] = str(ATLASSERVERPATH)
-    p = subprocess.Popen([f'{APACHEPATH / "apachectl"}', 'start'],
-                         shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         encoding='utf-8', bufsize=1, universal_newlines=True)
-    stdout, stderr = p.communicate()
-    print(stdout, end='')
-    print(stderr, end='')
+    run_command([f'{APACHEPATH / "apachectl"}', 'start'])
 
 
 def stop():
     if Path(APACHEPATH, 'httpd.pid').is_file():
         pid = Path(APACHEPATH, 'httpd.pid').open().read().strip()
         print(f"Stopping ATLAS Apache server (pid {pid})")
-        p = subprocess.Popen([f'{APACHEPATH / "apachectl"}', 'stop'],
-                             shell=False,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             encoding='utf-8', bufsize=1, universal_newlines=True)
-        stdout, stderr = p.communicate()
-        print(stdout, end='')
-        print(stderr, end='')
+        run_command([f'{APACHEPATH / "apachectl"}', 'stop'])
     else:
         print("ATLAS Apache server was not running")
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: atlaswebserver [start|restart|stop]")
-        sys.exit(3)
-
-    if sys.argv[1] == "start":
+    if len(sys.argv) == 2 and sys.argv[1] == "start":
 
         if Path(APACHEPATH, 'httpd.pid').is_file():
             pid = Path(APACHEPATH, 'httpd.pid').open().read().strip()
@@ -79,13 +76,13 @@ def main():
         else:
             start()
 
-    elif sys.argv[1] == "restart":
+    elif len(sys.argv) == 2 and sys.argv[1] == "restart":
 
         stop()
         time.sleep(1)
         start()
 
-    elif sys.argv[1] == "stop":
+    elif len(sys.argv) == 2 and sys.argv[1] == "stop":
 
         stop()
 
