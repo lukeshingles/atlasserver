@@ -30,7 +30,7 @@ def print_tips():
     print("to attach to the session (be careful not to stop the task runner!):")
     print("  tmux attach -t atlastaskrunner")
     print("check the log with:")
-    print("  atlastaskrunner log")
+    print("  atlastaskrunner log [-f]")
 
 
 def check_session_exists():
@@ -80,7 +80,7 @@ def main():
 
     else:
 
-        print("Usage: $0 [start|restart|stop|log] [-f]")
+        print("Usage: atlastaskrunner [start|restart|stop|log] [-f]")
         print_tips()
         sys.exit(3)
 
