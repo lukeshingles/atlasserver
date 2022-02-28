@@ -6,8 +6,8 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-    ATLASSERVER_DJANGO_SECRET_KEY: ${{ secrets.ATLASSERVER_DJANGO_SECRET_KEY }}
+# env:
+#     ATLASSERVER_DJANGO_SECRET_KEY: ${{ secrets.ATLASSERVER_DJANGO_SECRET_KEY }}
 
 jobs:
   build:
@@ -18,7 +18,9 @@ jobs:
       max-parallel: 4
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
-
+    env:
+      DB_USER: ATLASSERVER_DJANGO_MYSQL_USER
+      DB_PASSWORD: root
     steps:
 
     - name: Checkout Code
@@ -55,8 +57,13 @@ jobs:
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
+    - name: Set up MySQL
+      run: |
+        sudo /etc/init.d/mysql start
+        mysql -e 'CREATE DATABASE atlasserver;' -u${{ env.ATLASSERVER_DJANGO_MYSQL_USER }} -p${{ env.ATLASSERVER_DJANGO_MYSQL_PASSWORD }}
+
     - name: Run Tests
       run: |
-        cat atlasserver/settings_test.txt >> atlasserver/settings.py
+        # cat atlasserver/settings_test.txt >> atlasserver/settings.py
         ./manage.py test
         python -m pip install -e .
