@@ -12,6 +12,13 @@ APACHEPATH = Path("/tmp/atlasforced")
 ATLASSERVERPATH = Path(__file__).resolve().parent
 
 
+def get_httpd_pid():
+    if Path(APACHEPATH, 'httpd.pid').is_file():
+        return Path(APACHEPATH, 'httpd.pid').open().read().strip()
+    else:
+        return None
+
+
 def run_command(commands, print_output=True):
     p = subprocess.Popen(
         commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -30,6 +37,11 @@ def run_command(commands, print_output=True):
 
 
 def start():
+    pid = get_httpd_pid()
+    if pid:
+        print(f"ATLAS Apache server is already running (pid {pid})")
+        return
+
     print("Starting ATLAS Apache server")
 
     if Path('.env').is_file():
@@ -55,14 +67,18 @@ def start():
         '--mount-point', mountpoint, '--include-file', str(ATLASSERVERPATH / "httpconf.txt")])
 
     os.environ['PYTHONPATH'] = str(ATLASSERVERPATH)
-    run_command([f'{APACHEPATH / "apachectl"}', 'start'])
+
+    # socket might not be released, so try until it is
+    while run_command([f'{APACHEPATH / "apachectl"}', 'start']):
+        print('Start command unsuccessful. Trying again in one second...')
+        time.sleep(1)
 
 
 def stop():
-    if Path(APACHEPATH, 'httpd.pid').is_file():
-        pid = Path(APACHEPATH, 'httpd.pid').open().read().strip()
+    pid = get_httpd_pid()
+    if pid:
         print(f"Stopping ATLAS Apache server (pid {pid})")
-        run_command([f'{APACHEPATH / "apachectl"}', 'stop'])
+        run_command([f'{APACHEPATH / "apachectl"}', 'graceful-stop'])
     else:
         print("ATLAS Apache server was not running")
 
@@ -70,16 +86,16 @@ def stop():
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "start":
 
-        if Path(APACHEPATH, 'httpd.pid').is_file():
-            pid = Path(APACHEPATH, 'httpd.pid').open().read().strip()
-            print(f"ATLAS Apache server is already running (pid {pid})")
-        else:
-            start()
+        start()
 
     elif len(sys.argv) == 2 and sys.argv[1] == "restart":
 
         stop()
-        time.sleep(1)
+
+        # wait for httpd process to be ended
+        while get_httpd_pid():
+            pass
+
         start()
 
     elif len(sys.argv) == 2 and sys.argv[1] == "stop":
