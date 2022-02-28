@@ -3,12 +3,14 @@
 taskrunnerpath=$(dirname "$0")
 
 clean_up() {
-  echo $(date "+%F %H:%M:%S") "Supervisor: Caught SIGTERM signal!" | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+  # sig=$(($? - 128))
+  sig=$?
+  echo $(date "+%F %H:%M:%S") "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
   exit
 }
 
-# trap 'clean_up; exit' SIGHUP SIGINT SIGTERM SIGABRT SIGKILL SIGQUIT SIGEXIT 0 1 2 3 13 15 # EXIT HUP INT QUIT PIPE TERM
-trap clean_up EXIT HUP INT QUIT PIPE TERM
+trap 'clean_up; exit' SIGHUP SIGINT SIGTERM SIGABRT SIGKILL SIGQUIT SIGEXIT 0 1 2 3 13 15 # EXIT HUP INT QUIT PIPE TERM
+
 
 if [[ -n "$TMUX_PANE" ]]; then
     session_name=$(tmux list-panes -t "$TMUX_PANE" -F '#S' | head -n1)

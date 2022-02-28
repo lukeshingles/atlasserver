@@ -54,6 +54,7 @@ def start():
 def stop():
     if check_session_exists():
         print('Stopping atlastaskrunner tmux session')
+        run_command(['tmux', 'send-keys', '-t', 'atlastaskrunner', 'C-C'])
         run_command(['tmux', 'kill-session', '-t', 'atlastaskrunner'])
     else:
         print('task runner tmux session does not exist')
