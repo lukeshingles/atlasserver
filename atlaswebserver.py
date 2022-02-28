@@ -32,8 +32,8 @@ def run_command(commands, print_output=True):
 def start():
     print("Starting ATLAS Apache server")
 
-    # if Path('.env').is_file():
-    #     Path('.env').chmod(600)
+    if Path('.env').is_file():
+        Path('.env').chmod(0o600)
 
     APACHEPATH.mkdir(parents=True, exist_ok=True)
 
