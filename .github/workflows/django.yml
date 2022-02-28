@@ -9,7 +9,8 @@ on:
 env:
     ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
     ATLASSERVER_DJANGO_MYSQL_USER: root
-    ATLASSERVER_DJANGO_MYSQL_PASSWORD: 
+    ATLASSERVER_DJANGO_MYSQL_PASSWORD: password
+    ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
 
 jobs:
   build:
@@ -71,7 +72,7 @@ jobs:
     - name: Set up MySQL
       run: |
         sudo /etc/init.d/mysql start
-        mysql -e "CREATE DATABASE atlasserver;" -u root
+        mysql -e "CREATE DATABASE atlasserver;" -u root -p password
 
     - name: Run Tests
       run: |
