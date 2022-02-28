@@ -6,8 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
-# env:
-#     ATLASSERVER_DJANGO_SECRET_KEY: ${{ secrets.ATLASSERVER_DJANGO_SECRET_KEY }}
+env:
+    ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
+    ATLASSERVER_DJANGO_MYSQL_USER: mysqluser
+    ATLASSERVER_DJANGO_MYSQL_PASSWORD: password
 
 jobs:
   build:
@@ -57,6 +59,8 @@ jobs:
     - name: Set up MySQL
       run: |
         echo $ATLASSERVER_DJANGO_MYSQL_DBNAME
+        echo ${{ secrets.ATLASSERVER_DJANGO_MYSQL_DBNAME }}
+        echo ${{ env.ATLASSERVER_DJANGO_MYSQL_DBNAME }}
         echo $ATLASSERVER_DJANGO_MYSQL_USER
         echo $ATLASSERVER_DJANGO_MYSQL_PASSWORD
         sudo /etc/init.d/mysql start
