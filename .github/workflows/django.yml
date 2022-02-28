@@ -77,10 +77,9 @@ jobs:
       run: |
         sudo /etc/init.d/mysql start
         echo "mysql started"
-        mysql -e "CREATE DATABASE $ATLASSERVER_DJANGO_MYSQL_DBNAME;" -u$ATLASSERVER_DJANGO_MYSQL_USER -pATLASSERVER_DJANGO_MYSQL_PASSWORD
+        mysql -e "CREATE DATABASE atlasserver;" -u$ATLASSERVER_DJANGO_MYSQL_USER -pATLASSERVER_DJANGO_MYSQL_PASSWORD
 
     - name: Run Tests
       run: |
-        # cat atlasserver/settings_test.txt >> atlasserver/settings.py
         ./manage.py test
         python -m pip install -e .
