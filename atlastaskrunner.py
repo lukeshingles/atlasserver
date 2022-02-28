@@ -13,14 +13,21 @@ def run_command(commands, print_output=True):
         commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         encoding='utf-8', bufsize=1, universal_newlines=True)
 
+    exit_now = False
     if print_output:
-        for line in iter(p.stdout.readline, ''):
-            print(line, end='')
+        try:
+            for line in iter(p.stdout.readline, ''):
+                print(line, end='')
+        except KeyboardInterrupt:
+            exit_now = True
 
     stdout, stderr = p.communicate()
     if print_output:
         print(stdout, end='')
         print(stderr, end='')
+
+    if exit_now:
+        sys.exit(130)
 
     return p.returncode
 
