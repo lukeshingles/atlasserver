@@ -22,18 +22,18 @@ jobs:
       matrix:
         python-version: ['3.7', '3.8', '3.9', '3.10']
 
-    services:
-        mysql:
-            image: mysql:5.7
-            env:
-                MYSQL_ALLOW_EMPTY_PASSWORD: yes
-                MYSQL_DATABASE: atlasserver
-                MYSQL_USER: root
-                MYSQL_PASSWORD: password
-                MYSQL_ROOT_PASSWORD: password
-            ports:
-                - 3306
-            options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    # services:
+    #     mysql:
+    #         image: mysql:5.7
+    #         env:
+    #             MYSQL_ALLOW_EMPTY_PASSWORD: yes
+    #             MYSQL_DATABASE: atlasserver
+    #             MYSQL_USER: root
+    #             MYSQL_PASSWORD: password
+    #             MYSQL_ROOT_PASSWORD: password
+    #         ports:
+    #             - 3306
+    #         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
 
 
     steps:
@@ -75,7 +75,7 @@ jobs:
     - name: Set up MySQL
       run: |
         sudo /etc/init.d/mysql start
-        mysql -e "CREATE DATABASE atlasserver;" -u root -p password
+        mysql -e "CREATE DATABASE atlasserver;" -u root -p root
 
     - name: Run Tests
       run: |
