@@ -4,6 +4,7 @@ taskrunnerpath=$(dirname "$0")
 
 clean_up() {
   echo $(date "+%F %H:%M:%S") "Supervisor: Caught SIGTERM signal!" | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+  exit
 }
 
 # trap 'clean_up; exit' SIGHUP SIGINT SIGTERM SIGABRT SIGKILL SIGQUIT SIGEXIT 0 1 2 3 13 15 # EXIT HUP INT QUIT PIPE TERM
