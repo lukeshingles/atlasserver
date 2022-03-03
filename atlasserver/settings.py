@@ -48,7 +48,7 @@ INSTALLED_APPS = [
     'django_filters',
     'rest_framework',
     'rest_framework.authtoken',
-    'geoip2',
+    'geoip2_extras',
 ]
 
 MIDDLEWARE = [
