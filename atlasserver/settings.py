@@ -61,6 +61,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'geoip2_extras.middleware.GeoIP2Middleware',
+    'forcephot.countryrestriction.CountryRestrictionMiddleware',
 ]
 
 CACHES = {
