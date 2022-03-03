@@ -2,6 +2,7 @@ from django.core.mail import EmailMessage
 from django.http import HttpResponseForbidden
 from django.utils.deprecation import MiddlewareMixin
 from django.conf import settings
+from django.contrib.auth import logout
 
 
 class CountryRestrictionMiddleware(MiddlewareMixin):
@@ -44,6 +45,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
             )
 
             message.send()
+            logout(request)
             return HttpResponseForbidden(block_message)
 
         return None
