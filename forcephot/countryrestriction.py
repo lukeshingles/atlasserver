@@ -18,7 +18,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
 
         country_code = request.geo_data['country_code']
         if country_code == 'RU':
-            block_message = f"Forbidden country {country_code}"
+            block_message = f"Forbidden country: {country_code}"
             log_message = f"Forbidden country: {country_code}\n"
 
         if hasattr(request.user, 'email') and request.user.email.endswith('.ru'):
