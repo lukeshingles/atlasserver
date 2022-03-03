@@ -3,10 +3,10 @@ astropy>=4.2
 bokeh>=2.4.0
 Django>=3.2
 django-filter>=2.4.0
-django-geoip2-extras>=1.2.1
+django-geoip2-extras>=2.0.2
 djangorestframework>=3.12.4
 fundamentals>=2.3.0
-geoip2==3.0.0
+geoip2>=4.5.0
 Markdown>=3.2.2
 matplotlib>=3.3.3
 multiprocess>=0.70.11.1
