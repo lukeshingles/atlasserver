@@ -201,9 +201,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         # we store the region but not the IP address itself for privacy reasons
         try:
-            extra_fields['country_code'] = self.request.geo_data.country_code
-            extra_fields['region'] = self.request.geo_data.region
-            # extra_fields['city'] = self.request.geo_data.city
+            extra_fields['country_code'] = request.geo_data['country_code']
+            extra_fields['region'] = request.geo_data['region']
+            # extra_fields['city'] = request.geo_data['city']
         except AttributeError:
             pass
 
@@ -348,9 +348,9 @@ def requestimages(request, pk):
 
         # we store the region but not the IP address itself for privacy reasons
         try:
-            data['country_code'] = request.geo_data.country_code
-            data['region'] = request.geo_data.region
-            # data['city'] = request.geo_data.city
+            data['country_code'] = request.geo_data['country_code']
+            data['region'] = request.geo_data['region']
+            # data['city'] = request.geo_data['city']
         except AttributeError:
             pass
 
