@@ -204,7 +204,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             extra_fields['country_code'] = self.request.geo_data['country_code']
             extra_fields['region'] = self.request.geo_data['region']
             # extra_fields['city'] = self.request.geo_data['city']
-        except AttributeError:
+        except KeyError:
             pass
 
         extra_fields['from_api'] = (self.request.accepted_renderer.format != 'html')
@@ -351,7 +351,7 @@ def requestimages(request, pk):
             data['country_code'] = request.geo_data['country_code']
             data['region'] = request.geo_data['region']
             # data['city'] = request.geo_data['city']
-        except AttributeError:
+        except KeyError:
             pass
 
         data['from_api'] = False
