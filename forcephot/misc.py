@@ -181,7 +181,7 @@ def make_pdf_plot_worker(localresultfile, taskid, taskcomment='', logprefix='', 
     localresultfile, plotfilepath, plotfilepath_requested = (
         localresultfiles[0], plotfilepaths[0], plotfilepaths_requested[0])
 
-    if os.path.exists(plotfilepath_requested):
+    if os.path.exists(plotfilepath_requested.resolve()):
         if logfunc and plotfilepath == plotfilepath_requested:
             logfunc(logprefix + f'Created plot file {Path(plotfilepath).relative_to(localresultdir)}')
         elif logfunc:

@@ -81,7 +81,7 @@ class Task(models.Model):
         """
         if self.finishtimestamp:
             resultfile = self.localresultfileprefix() + '.txt'
-            if Path(settings.STATIC_ROOT, resultfile).exists():
+            if Path(settings.STATIC_ROOT, resultfile).resolve().exists():
                 return resultfile
 
         return None
@@ -93,7 +93,7 @@ class Task(models.Model):
         """
         if self.finishtimestamp:
             imagefile = self.localresultfileprefix(use_parent=True) + '.jpg'
-            if Path(settings.STATIC_ROOT, imagefile).exists():
+            if Path(settings.STATIC_ROOT, imagefile).resolve().exists():
                 return imagefile
 
         return None
@@ -123,7 +123,7 @@ class Task(models.Model):
             return the full local path to the image zip file if it exists, otherwise None
         """
         imagezipfile = Path(self.localresultfileprefix(use_parent=True) + '.zip')
-        if Path(settings.STATIC_ROOT, imagezipfile).exists():
+        if Path(settings.STATIC_ROOT, imagezipfile).resolve().exists():
             return imagezipfile
 
         return None
