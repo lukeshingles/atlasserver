@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import psutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +52,12 @@ def start():
         print("atlastaskrunner tmux session already exists")
     else:
         print("Starting atlastaskrunner tmux session")
+        pidfile = Path('/tmp/atlasforced/taskrunner.pid')
+        if pidfile.is_file():
+            pid = int(pidfile.open().read().strip())
+            if not psutil.pid_exists(pid):
+                # process ended, so the pid file should be deleted
+                pidfile.unlink()
         run_command([
             'tmux', 'new-session', '-d', '-s', 'atlastaskrunner',
             str(ATLASSERVERPATH / 'taskrunner' / 'supervise_atlastaskrunner.sh')])

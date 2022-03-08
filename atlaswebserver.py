@@ -2,6 +2,7 @@
 
 import os
 import platform
+import psutil
 import subprocess
 import sys
 import time
@@ -13,10 +14,16 @@ ATLASSERVERPATH = Path(__file__).resolve().parent
 
 
 def get_httpd_pid():
-    if Path(APACHEPATH, 'httpd.pid').is_file():
-        return Path(APACHEPATH, 'httpd.pid').open().read().strip()
-    else:
-        return None
+    pidfile = Path(APACHEPATH, 'httpd.pid')
+    if pidfile.is_file():
+        pid = int(pidfile.open().read().strip())
+        if psutil.pid_exists(pid):
+            return pid
+        else:
+            # process ended, so the pid file should be deleted
+            pidfile.unlink()
+
+    return None
 
 
 def run_command(commands, print_output=True):
