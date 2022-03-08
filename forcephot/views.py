@@ -702,12 +702,12 @@ def taskpdfplot(request, taskid):
         # if os.path.exists(pdfpath):
         #     os.remove(pdfpath)
 
-        if not pdfpath.exists():
+        if not os.path.exists(pdfpath):
             # matplotlib needs to run in its own process or it will crash
             make_pdf_plot(
                 taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment, separate_process=True)
 
-        if Path(pdfpath).resolve().exists():
+        if os.path.exists(pdfpath):
             return FileResponse(open(pdfpath, 'rb'))
 
     return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps a lack of data points?)")
@@ -726,7 +726,7 @@ def taskresultdata(request, taskid):
         if resultfile:
             resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
 
-            if resultfilepath.resolve().exists():
+            if os.path.exists(resultfilepath):
                 return FileResponse(open(resultfilepath, 'rb'))
 
     return HttpResponseNotFound("Page not found")
@@ -746,7 +746,7 @@ def taskpreviewimage(request, taskid):
         if previewimagefile:
             previewimagefile = Path(os.path.join(settings.STATIC_ROOT, previewimagefile))
 
-            if previewimagefile.resolve().exists():
+            if os.path.exists(previewimagefile):
                 return FileResponse(open(previewimagefile, 'rb'))
 
     return HttpResponseNotFound("Page not found")
@@ -765,7 +765,7 @@ def taskimagezip(request, taskid):
         if resultfile:
             resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
 
-            if resultfilepath.resolve().exists():
+            if os.path.exists(resultfilepath):
                 return FileResponse(open(resultfilepath, 'rb'))
 
     return HttpResponseNotFound("Page not found")
