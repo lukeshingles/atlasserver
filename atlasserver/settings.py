@@ -168,9 +168,10 @@ USE_X_FORWARDED_PORT = False
 # WARNING! Only set this if you fully understand what you're doing. Otherwise,
 # you may be opening yourself up to a security risk.
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
-SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
+if platform.system() != 'Darwin':
+    SECURE_PROXY_SSL_HEADER = ('SERVER_SOFTWARE', 'Apache')
 
-CSRF_TRUSTED_ORIGINS = ['https://*.qub.ac.uk', 'https://fallingstar-data.com', 'http://localhost']
+CSRF_TRUSTED_ORIGINS = ['https://*.qub.ac.uk', 'https://fallingstar-data.com', 'http://localhost', 'http://127.0.0.1']
 
 # When set to True, if the request URL does not match any of the patterns in the URLconf and it doesn’t end in a slash,
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
