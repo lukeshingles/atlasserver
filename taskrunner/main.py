@@ -364,7 +364,7 @@ def do_taskloop():
 
     log(logprefix + f"Starting task for {task.user.username} (task.user.email):")
     for key, value in taskdict.items():
-        log(f'{logprefix}   {key:>15}: {item}')
+        log(f'{logprefix}   {key:>15}: {value}')
 
     runtask_starttime = time.perf_counter()
 
