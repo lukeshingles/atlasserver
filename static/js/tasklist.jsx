@@ -69,7 +69,6 @@ class Task extends React.Component {
     return null;
   }
 
-
   componentDidMount() {
     this.updateTimeElapsed();
     if (newtaskids.includes(this.props.taskdata.id)) {

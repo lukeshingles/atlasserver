@@ -52,6 +52,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'django.middleware.common.BrokenLinkEmailsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -222,5 +223,7 @@ EMAIL_PORT = 587
 
 EMAIL_HOST_USER = os.environ.get('ATLASSERVER_EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.environ.get('ATLASSERVER_EMAIL_HOST_PASSWORD')
+SERVER_EMAIL = EMAIL_HOST_USER
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 GEOIP_PATH = os.path.dirname(__file__)
