@@ -85,7 +85,7 @@ def calculate_queue_positions():
         for task in unassigned_tasks:
 
             if (task.user_id not in useridsassigned_currentpass and
-                    (passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id))):
+                    (passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id)):
                 # print(queuepos, task)
                 task.queuepos_relative = queuepos
                 task.save()
