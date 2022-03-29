@@ -233,7 +233,12 @@ class Task(models.Model):
                     pass
         else:
             # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
-            for ext in ['.txt', '.pdf', '.js', '.jpg']:
+            delete_extlist = ['.txt', '.pdf', '.js']
+            imgreqtaskid = self.imagerequest_task_id
+            if imgreqtaskid is None:  # image request tasks share this same preview image
+                delete_extlist.append('.jpg')
+
+            for ext in delete_extlist:
                 try:
                     Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink()
                 except FileNotFoundError:
