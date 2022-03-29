@@ -362,8 +362,9 @@ def do_taskloop():
         starttimestamp=datetime.datetime.utcnow().replace(
             tzinfo=datetime.timezone.utc, microsecond=0).isoformat())
 
-    log(logprefix + f"Starting task for {task.user.username}:")
-    log(logprefix + str(taskdict))
+    log(logprefix + f"Starting task for {task.user.username} (task.user.email):")
+    for key, value in taskdict.items():
+        log(f'{logprefix}   {key:>15}: {item}')
 
     runtask_starttime = time.perf_counter()
 
