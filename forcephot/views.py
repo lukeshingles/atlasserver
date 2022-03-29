@@ -626,8 +626,8 @@ def resultplotdatajs(request, taskid):
         jsout = ['"use strict";\n']
         resultfile = item.localresultfile()
         if resultfile:
-            resultfilepath = os.path.join(settings.STATIC_ROOT, resultfile)
-            if not os.path.exists(resultfilepath):
+            resultfilepath = Path(settings.STATIC_ROOT, resultfile)
+            if not resultfilepath.is_file():
                 return HttpResponseNotFound("Page not found")
 
             df = pd.read_csv(resultfilepath, delim_whitespace=True, escapechar='#',
@@ -706,19 +706,19 @@ def taskpdfplot(request, taskid):
 
     resultfile = item.localresultfile()
     if resultfile:
-        resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
+        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
         pdfpath = resultfilepath.with_suffix('.pdf')
 
         # to force a refresh of all plots
         # if os.path.exists(pdfpath):
         #     os.remove(pdfpath)
 
-        if not os.path.exists(pdfpath):
+        if not pdfpath.is_file():
             # matplotlib needs to run in its own process or it will crash
             make_pdf_plot(
                 taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment, separate_process=True)
 
-        if os.path.exists(pdfpath):
+        if pdfpath.is_file():
             return FileResponse(open(pdfpath, 'rb'))
 
     return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps a lack of data points?)")
@@ -755,9 +755,9 @@ def taskpreviewimage(request, taskid):
     if item:
         previewimagefile = item.localresultpreviewimagefile
         if previewimagefile:
-            previewimagefile = Path(os.path.join(settings.STATIC_ROOT, previewimagefile))
+            previewimagefile = Path(settings.STATIC_ROOT, previewimagefile)
 
-            if os.path.exists(previewimagefile):
+            if previewimagefile.is_file():
                 return FileResponse(open(previewimagefile, 'rb'))
 
     return HttpResponseNotFound("Page not found")
@@ -774,9 +774,9 @@ def taskimagezip(request, taskid):
     if item:
         resultfile = item.localresultimagezipfile
         if resultfile:
-            resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
+            resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
-            if os.path.exists(resultfilepath):
+            if resultfilepath.is_file():
                 return FileResponse(open(resultfilepath, 'rb'))
 
     return HttpResponseNotFound("Page not found")

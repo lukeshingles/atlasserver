@@ -239,7 +239,7 @@ LOGGING = {
         'file': {
             'level': 'WARNING',
             'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'djangodebug.log'),
+            'filename': BASE_DIR / 'djangodebug.log',
             'formatter': 'timestamp',
         },
         'mail_admins': {
