@@ -52,10 +52,15 @@ def calculate_queue_positions():
     # the last started task user id can be passed in, in case the associated task
     # got cancelled
     # the user of the last completed task (to get position in current pass)
-    currentlyrunningtask = Task.objects.filter(
-        finishtimestamp__isnull=False, starttimestamp__isnull=False).order_by('-starttimestamp').first()
+    query_currentlyrunningtask = Task.objects.all().filter(
+        finishtimestamp__isnull=False, starttimestamp__isnull=False).order_by('-starttimestamp')
+    if query_currentlyrunningtask.exists():
+        currentlyrunningtask = query_currentlyrunningtask.first()
+    else:
+        currentlyrunningtask = None
 
-    queuedtasks = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
+    queuedtasks = Task.objects.all().filter(
+        finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
     queuedtaskcount = queuedtasks.count()
     queuedtasks.update(queuepos_relative=None)
 
