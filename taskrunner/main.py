@@ -364,7 +364,7 @@ def do_taskloop():
 
     log(logprefix + f"Starting task for {task.user.username} ({task.user.email}):")
     for key, value in taskdict.items():
-        log(f'{logprefix}   {key:>15}: {value}')
+        log(f'{logprefix}   {key:>17}: {value}')
 
     runtask_starttime = time.perf_counter()
 
@@ -459,9 +459,17 @@ def do_maintenance(maxtime=None):
     logprefix = "Maintenance: "
 
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    thirtydaytasks = Task.objects.filter(finishtimestamp__lt=now - datetime.timedelta(days=90))
-    taskcount = thirtydaytasks.count()
-    log(logprefix + f"There are {taskcount} tasks that finished more than 90 days ago")
+    days_ago = 365
+    oldtasks = Task.objects.all().filter(finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
+    taskcount = oldtasks.count()
+    taskid_examples = oldtasks.values_list('id', flat=True)[:10]
+    log(logprefix + f"There are {taskcount} tasks that finished more than {days_ago} days ago")
+    log(logprefix + f"  first few task ids: {taskid_examples}")
+    log(logprefix + "  deleting...")
+
+    oldtasks.remove()
+
+    log(logprefix + "  done.")
 
     # # this can get very slow
     # rm_unassociated_files(logprefix, start_maintenancetime, maxtime)
