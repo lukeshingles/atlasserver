@@ -52,7 +52,8 @@ def calculate_queue_positions():
     # the last started task user id can be passed in, in case the associated task
     # got cancelled
     # the user of the last completed task (to get position in current pass)
-    laststartedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by('-starttimestamp').first()
+    currentlyrunningtask = Task.objects.filter(
+        finishtimestamp__isnull=False, starttimestamp__isnull=False).order_by('-starttimestamp').first()
 
     queuedtasks = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
     queuedtaskcount = queuedtasks.count()
@@ -64,11 +65,11 @@ def calculate_queue_positions():
     while queuepos < queuedtaskcount:
         useridsassigned_currentpass = set()
 
-        if passnum == 0 and not laststartedtask.finishtimestamp:
+        if passnum == 0 and currentlyrunningtask:
             # currently running task will be assigned position 0
-            laststartedtask.queuepos_relative = 0
-            laststartedtask.save()
-            useridsassigned_currentpass.add(laststartedtask.user_id)
+            currentlyrunningtask.queuepos_relative = 0
+            currentlyrunningtask.save()
+            useridsassigned_currentpass.add(currentlyrunningtask.user_id)
             queuepos = 1
 
         unassigned_tasks = queuedtasks.filter(queuepos_relative__isnull=True)
@@ -78,7 +79,7 @@ def calculate_queue_positions():
         for task in unassigned_tasks:
 
             if (task.user_id not in useridsassigned_currentpass and
-                    (passnum != 0 or task.user_id > laststartedtask.user_id)):
+                    (passnum != 0 or (currentlyrunningtask and task.user_id > currentlyrunningtask.user_id)):)
                 # print(queuepos, task)
                 task.queuepos_relative = queuepos
                 task.save()
