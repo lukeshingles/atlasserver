@@ -17,6 +17,7 @@ from django.contrib.auth import authenticate, login
 from django.core.exceptions import ObjectDoesNotExist
 # from django.core.exceptions import ValidationError
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Count, Max
 from django.db.models.functions import Trunc
 from django.forms import model_to_dict
@@ -52,50 +53,51 @@ def calculate_queue_positions():
     # the last started task user id can be passed in, in case the associated task
     # got cancelled
     # the user of the last completed task (to get position in current pass)
-    query_currentlyrunningtask = Task.objects.all().filter(
-        finishtimestamp__isnull=True, starttimestamp__isnull=False).order_by('-starttimestamp')
-    if query_currentlyrunningtask.exists():
-        currentlyrunningtask = query_currentlyrunningtask.first()
-    else:
-        currentlyrunningtask = None
+    with transaction.atomic():
+        query_currentlyrunningtask = Task.objects.all().filter(
+            finishtimestamp__isnull=True, starttimestamp__isnull=False).order_by('-starttimestamp')
+        if query_currentlyrunningtask.exists():
+            currentlyrunningtask = query_currentlyrunningtask.first()
+        else:
+            currentlyrunningtask = None
 
-    queuedtasks = Task.objects.all().filter(
-        finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
+        queuedtasks = Task.objects.all().filter(
+            finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
 
-    queuedtaskcount = queuedtasks.count()
-    queuedtasks.update(queuepos_relative=None)
+        queuedtaskcount = queuedtasks.count()
+        queuedtasks.update(queuepos_relative=None)
 
-    # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
-    queuepos = 0
-    passnum = 0
-    while queuepos < queuedtaskcount:
-        useridsassigned_currentpass = set()
+        # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
+        queuepos = 0
+        passnum = 0
+        while queuepos < queuedtaskcount:
+            useridsassigned_currentpass = set()
 
-        if passnum == 0 and currentlyrunningtask:
-            # currently running task will be assigned position 0
-            currentlyrunningtask.queuepos_relative = 0
-            currentlyrunningtask.save()
-            useridsassigned_currentpass.add(currentlyrunningtask.user_id)
-            queuepos = 1
+            if passnum == 0 and currentlyrunningtask:
+                # currently running task will be assigned position 0
+                currentlyrunningtask.queuepos_relative = 0
+                currentlyrunningtask.save()
+                useridsassigned_currentpass.add(currentlyrunningtask.user_id)
+                queuepos = 1
 
-        unassigned_tasks = Task.objects.all().filter(
-            finishtimestamp__isnull=True, is_archived=False).order_by(
-            'user_id', 'timestamp').filter(queuepos_relative__isnull=True)
+            unassigned_tasks = Task.objects.all().filter(
+                finishtimestamp__isnull=True, is_archived=False).order_by(
+                'user_id', 'timestamp').filter(queuepos_relative__isnull=True)
 
-        if unassigned_tasks.count() == 0:
-            break
+            if unassigned_tasks.count() == 0:
+                break
 
-        for task in unassigned_tasks:
+            for task in unassigned_tasks:
 
-            if (task.user_id not in useridsassigned_currentpass and
-                    (passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id)):
-                # print(queuepos, task)
-                task.queuepos_relative = queuepos
-                task.save()
-                useridsassigned_currentpass.add(task.user_id)
-                queuepos += 1
+                if (task.user_id not in useridsassigned_currentpass and
+                        (passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id)):
+                    # print(queuepos, task)
+                    task.queuepos_relative = queuepos
+                    task.save()
+                    useridsassigned_currentpass.add(task.user_id)
+                    queuepos += 1
 
-        passnum += 1
+            passnum += 1
 
 
 def get_tasklist_etag(request, queryset):
