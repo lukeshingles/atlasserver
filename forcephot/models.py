@@ -159,7 +159,7 @@ class Task(models.Model):
 
         # after completing a job, the next job might not have queuepos_relative=0 until a queue order refresh is done
         # so queuepos_relative=1 could have queuepos 0 (is next)
-        minqueuepos = Task.all().objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
+        minqueuepos = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
             Min('queuepos_relative'))['queuepos_relative__min']
 
         if minqueuepos is None:
