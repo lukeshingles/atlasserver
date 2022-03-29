@@ -460,7 +460,7 @@ def remove_old_tasks(logprefix, request_type, days_ago):
     oldtasks = Task.objects.all().filter(
         finishtimestamp__lt=now - datetime.timedelta(days=days_ago),
         request_type='IMGZIP',
-        archived=False
+        is_archived=False
     )
 
     taskcount = oldtasks.count()
