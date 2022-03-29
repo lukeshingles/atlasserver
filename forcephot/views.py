@@ -78,7 +78,10 @@ def calculate_queue_positions():
             useridsassigned_currentpass.add(currentlyrunningtask.user_id)
             queuepos = 1
 
-        unassigned_tasks = queuedtasks.filter(queuepos_relative__isnull=True)
+        unassigned_tasks = Task.objects.all().filter(
+            finishtimestamp__isnull=True, is_archived=False).order_by(
+            'user_id', 'timestamp').filter(queuepos_relative__isnull=True)
+
         if unassigned_tasks.count() == 0:
             break
 
