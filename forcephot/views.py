@@ -725,9 +725,9 @@ def taskresultdata(request, taskid):
     if item:
         resultfile = item.localresultfile()
         if resultfile:
-            resultfilepath = Path(os.path.join(settings.STATIC_ROOT, resultfile))
+            resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
-            if os.path.exists(resultfilepath):
+            if resultfilepath.is_file():
                 return FileResponse(open(resultfilepath, 'rb'))
 
     return HttpResponseNotFound("Page not found")
