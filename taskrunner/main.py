@@ -453,24 +453,37 @@ def do_taskloop():
 #     log(logprefix + "Finished checking for unassociated result files")
 
 
+def remove_old_tasks(logprefix, request_type, days_ago):
+    assert days_ago > 29
+
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    oldtasks = Task.objects.all().filter(
+        finishtimestamp__lt=now - datetime.timedelta(days=days_ago),
+        request_type='IMGZIP')
+
+    taskcount = oldtasks.count()
+
+    taskid_examples = list(oldtasks.values_list('id', flat=True)[:10])
+
+    log(logprefix + f"There are {taskcount} {request_type} tasks that finished more than {days_ago} days ago")
+
+    if taskcount > 0:
+        log(logprefix + f"  first few task ids: {taskid_examples}")
+        log(logprefix + "  deleting...")
+
+        for task in oldtasks:
+            task.delete()
+
+        log(logprefix + "  done.")
+
+
 def do_maintenance(maxtime=None):
     # start_maintenancetime = time.perf_counter()
 
     logprefix = "Maintenance: "
 
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    days_ago = 365
-    oldtasks = Task.objects.all().filter(finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
-    taskcount = oldtasks.count()
-    taskid_examples = list(oldtasks.values_list('id', flat=True)[:10])
-    log(logprefix + f"There are {taskcount} tasks that finished more than {days_ago} days ago")
-    log(logprefix + f"  first few task ids: {taskid_examples}")
-    log(logprefix + "  deleting...")
-
-    for task in oldtasks:
-        task.delete()
-
-    log(logprefix + "  done.")
+    remove_old_tasks(logprefix=logprefix, request_type='IMGZIP', days_ago=90)
+    remove_old_tasks(logprefix=logprefix, request_type='FP', days_ago=365)
 
     # # this can get very slow
     # rm_unassociated_files(logprefix, start_maintenancetime, maxtime)
