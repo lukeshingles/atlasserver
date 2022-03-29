@@ -33,7 +33,7 @@ setup(
             'atlastaskrunner = atlastaskrunner:main',
         ]
     },
-    python_requires='>==3.6',
+    python_requires='>=3.8',
     # test_suite='tests',
     # setup_requires=['pytest', 'pytest-runner', 'pytest-cov'],
     # tests_require=['pytest', 'pytest-runner', 'pytest-cov'],

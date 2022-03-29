@@ -63,6 +63,7 @@ def calculate_queue_positions():
     passnum = 0
     while queuepos < queuedtaskcount:
         useridsassigned_currentpass = set()
+
         if passnum == 0 and not laststartedtask.finishtimestamp:
             # currently running task will be assigned position 0
             laststartedtask.queuepos_relative = 0
