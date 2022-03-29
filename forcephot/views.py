@@ -61,6 +61,7 @@ def calculate_queue_positions():
 
     queuedtasks = Task.objects.all().filter(
         finishtimestamp__isnull=True, is_archived=False).order_by('user_id', 'timestamp')
+
     queuedtaskcount = queuedtasks.count()
     queuedtasks.update(queuepos_relative=None)
 
@@ -84,7 +85,7 @@ def calculate_queue_positions():
         for task in unassigned_tasks:
 
             if (task.user_id not in useridsassigned_currentpass and
-                    (passnum != 0 or (currentlyrunningtask and task.user_id > currentlyrunningtask.user_id))):
+                    (passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id))):
                 # print(queuepos, task)
                 task.queuepos_relative = queuepos
                 task.save()
