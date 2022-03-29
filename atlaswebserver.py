@@ -67,11 +67,12 @@ def start():
         port = 8086
         mountpoint = '/forcedphot'
 
-    run_command([
+    command = [
         'mod_wsgi-express', 'setup-server', '--working-directory', str(ATLASSERVERPATH / "atlasserver"),
         '--url-alias', f'{mountpoint}/static', str(ATLASSERVERPATH / "static"), '--url-alias', 'static', 'static',
         '--application-type', 'module', 'atlasserver.wsgi', '--server-root', str(APACHEPATH), '--port', str(port),
-        '--mount-point', mountpoint, '--include-file', str(ATLASSERVERPATH / "httpconf.txt")])
+        '--mount-point', mountpoint, '--include-file', str(ATLASSERVERPATH / "httpconf.txt"), '--log-to-terminal']
+    run_command(command)
 
     os.environ['PYTHONPATH'] = str(ATLASSERVERPATH)
 

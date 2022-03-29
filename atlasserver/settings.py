@@ -16,8 +16,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# import forcephot
-
 load_dotenv(override=True)
 
 SECRET_KEY = os.environ.get('ATLASSERVER_DJANGO_SECRET_KEY')
@@ -29,11 +27,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False if platform.system() != 'Darwin' else True
+DEBUG = (platform.system() == 'Darwin')
 
 ALLOWED_HOSTS = ['*']
 
-ADMINS = [('Luke Shingles', 'luke.shingles@gmail.com')]  # send server error notifications to this person
+ADMINS = [('Luke Shingles', 'luke.shingles@gmail.com'), ]  # send server error notifications to this person
+MANAGERS = ADMINS
 
 
 INSTALLED_APPS = [
@@ -41,7 +40,6 @@ INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
-    # 'django.contrib.humanize',
     'django.contrib.messages',
     'django.contrib.sessions',
     'django.contrib.staticfiles',
@@ -227,3 +225,35 @@ SERVER_EMAIL = EMAIL_HOST_USER
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 GEOIP_PATH = os.path.dirname(__file__)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'timestamp': {
+            'format': '{asctime} {levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'WARNING',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'djangodebug.log'),
+            'formatter': 'timestamp',
+        },
+        'mail_admins': {
+            'level': 'WARNING',
+            'class': 'django.utils.log.AdminEmailHandler',
+            'email_backend': EMAIL_BACKEND,
+            'include_html': True,
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['file', 'mail_admins'],
+            'level': 'WARNING',
+            'propagate': True,
+        },
+    },
+}
