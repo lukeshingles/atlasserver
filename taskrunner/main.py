@@ -467,7 +467,7 @@ def do_maintenance(maxtime=None):
     log(logprefix + f"  first few task ids: {taskid_examples}")
     log(logprefix + "  deleting...")
 
-    oldtasks.remove()
+    oldtasks.delete()
 
     log(logprefix + "  done.")
 
