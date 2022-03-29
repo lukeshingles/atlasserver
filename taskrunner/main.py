@@ -462,7 +462,7 @@ def do_maintenance(maxtime=None):
     days_ago = 365
     oldtasks = Task.objects.all().filter(finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
     taskcount = oldtasks.count()
-    taskid_examples = oldtasks.values_list('id', flat=True)[:10]
+    taskid_examples = list(oldtasks.values_list('id', flat=True)[:10])
     log(logprefix + f"There are {taskcount} tasks that finished more than {days_ago} days ago")
     log(logprefix + f"  first few task ids: {taskid_examples}")
     log(logprefix + "  deleting...")
