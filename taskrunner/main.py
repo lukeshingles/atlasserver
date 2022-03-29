@@ -357,7 +357,7 @@ def do_taskloop():
     task = queuedtasks.order_by('queuepos_relative').first()
     taskdict = model_to_dict(task)
 
-    logprefix = f"task{task.id:05d}: "
+    logprefix = f"task {task.id:05d}: "
     Task.objects.all().filter(pk=task.id).update(
         starttimestamp=datetime.datetime.utcnow().replace(
             tzinfo=datetime.timezone.utc, microsecond=0).isoformat())

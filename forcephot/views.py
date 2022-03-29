@@ -50,10 +50,8 @@ from forcephot.serializers import ForcePhotTaskSerializer
 
 
 def calculate_queue_positions():
-    # the last started task user id can be passed in, in case the associated task
-    # got cancelled
-    # the user of the last completed task (to get position in current pass)
     with transaction.atomic():
+        # to get position in current pass, check if job currently running
         query_currentlyrunningtask = Task.objects.all().filter(
             finishtimestamp__isnull=True, starttimestamp__isnull=False).order_by('-starttimestamp')
         if query_currentlyrunningtask.exists():
