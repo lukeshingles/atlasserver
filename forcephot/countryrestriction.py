@@ -1,7 +1,7 @@
-from django.core.mail import EmailMessage
+# from django.core.mail import EmailMessage
+from django.core.mail import send_mail
 from django.http import HttpResponseForbidden
 from django.utils.deprecation import MiddlewareMixin
-from django.conf import settings
 from django.contrib.auth import logout
 
 
@@ -36,19 +36,29 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
             for attr in userprops:
                 userdata[attr] = getattr(request.user, attr, "None")
 
-            message = EmailMessage(
-                subject='Geo blocked request',
-                body=(
-                    f'{log_message}\n'
-                    f'Geo data: {request.geo_data}\n'
-                    f'User: {userdata}\n'
-                    f'Request: {request}\n'
-                ),
-                from_email=settings.EMAIL_HOST_USER,
-                to=['luke.shingles@gmail.com'],
+            body = (
+                f'{log_message}\n'
+                f'Geo data: {request.geo_data}\n'
+                f'User: {userdata}\n'
+                f'Request: {request}\n'
+            )
+            subject = 'Geo blocked request'
+            # message = EmailMessage(
+            #     subject=subject,
+            #     body=body,
+            #     from_email='atlasforced@gmail.com',
+            #     to=['luke.shingles@gmail.com'],
+            # )
+            # message.send()
+
+            send_mail(
+                subject=subject,
+                message=body,
+                from_email='atlasforced@gmail.com',
+                recipient_list=['luke.shingles@gmail.com', ],
+                fail_silently=False,
             )
 
-            message.send()
             logout(request)
             return HttpResponseForbidden(block_message)
 
