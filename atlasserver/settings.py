@@ -219,10 +219,10 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_USE_TLS = True
 EMAIL_PORT = 587
 
-EMAIL_HOST_USER = 'atlasforced@gmail.com'
+EMAIL_HOST_USER = os.environ.get('ATLASSERVER_EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.environ.get('ATLASSERVER_EMAIL_HOST_PASSWORD')
-SERVER_EMAIL = 'atlasforced@gmail.com'
-DEFAULT_FROM_EMAIL = 'atlasforced@gmail.com'
+SERVER_EMAIL = os.environ.get('ATLASSERVER_EMAIL_HOST_USER')
+DEFAULT_FROM_EMAIL = os.environ.get('ATLASSERVER_EMAIL_HOST_USER')
 
 GEOIP_PATH = os.path.dirname(__file__)
 
