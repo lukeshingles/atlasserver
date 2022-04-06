@@ -54,7 +54,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
             send_mail(
                 subject=subject,
                 message=body,
-                from_email='atlasforced@gmail.com',
+                # from_email='atlasforced@gmail.com',
                 recipient_list=['luke.shingles@gmail.com', ],
                 fail_silently=False,
             )
