@@ -2,6 +2,7 @@
 from django.core.mail import send_mail
 from django.http import HttpResponseForbidden
 from django.utils.deprecation import MiddlewareMixin
+from django.conf import settings
 from django.contrib.auth import logout
 
 
@@ -55,6 +56,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
                 subject=subject,
                 message=body,
                 # from_email='atlasforced@gmail.com',
+                from_email=settings.EMAIL_HOST_USER,
                 recipient_list=['luke.shingles@gmail.com', ],
                 fail_silently=False,
             )
