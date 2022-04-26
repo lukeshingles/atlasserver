@@ -90,6 +90,7 @@ form#newrequest input, textarea {
 }
 
 p.inputisodate {
+  clear: left;
   margin-left: 10px;
   padding-left: 5em;
   color: grey;
