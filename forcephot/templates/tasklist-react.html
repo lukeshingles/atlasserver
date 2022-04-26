@@ -139,7 +139,7 @@
             var strmjdmin = $('#id_mjd_min').val();
             var isostrmin = '';
             if (strmjdmin == '') {
-                isostrmin = '(since beginning)'
+                isostrmin = '(leave blank to fetch earliest)'
             } else {
                 try {
                     var mjdmin = parseFloat(strmjdmin);
