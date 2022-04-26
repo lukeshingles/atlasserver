@@ -89,6 +89,12 @@ form#newrequest input, textarea {
     border: 1px solid grey;
 }
 
+p.inputisodate {
+  margin-left: 10px;
+  padding-left: 5em;
+  color: grey;
+}
+
 form#newrequest input[type=submit] {
   width: 100%;
 }

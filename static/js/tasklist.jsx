@@ -165,7 +165,7 @@ class Task extends React.Component {
     if (task.mjd_min != null || task.mjd_max != null) {
         var mjdmin = task.mjd_min != null ? task.mjd_min : "0";
         var mjdmax = task.mjd_max != null ? task.mjd_max : "∞";
-        taskbox.push(<div key="mjdrange">MJD range: [{mjdmin}, {mjdmax}]</div>);
+        taskbox.push(<div key="mjdrange">MJD request: [{mjdmin}, {mjdmax}]</div>);
     }
 
     taskbox.push(<div key="queuetime">Queued at {new Date(task.timestamp).toLocaleString()}</div>);

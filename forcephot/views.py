@@ -44,7 +44,7 @@ from rest_framework.utils.urls import replace_query_param
 
 from forcephot.filters import TaskFilter
 from forcephot.forms import TaskForm, RegistrationForm
-from forcephot.misc import country_code_to_name, country_region_to_name, splitradeclist, date_to_mjd, make_pdf_plot
+from forcephot.misc import country_code_to_name, country_region_to_name, splitradeclist, datetime_to_mjd, make_pdf_plot
 from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
 
@@ -655,8 +655,7 @@ def resultplotdatajs(request, taskid):
                     f"[{mjd},{uJy},{duJy}]" for _, (mjd, uJy, duJy) in
                     dffilter[["#MJD", "uJy", "duJy"]].iterrows()])) + "]);\n")
 
-            today = datetime.date.today()
-            mjd_today = date_to_mjd(today.year, today.month, today.day)
+            mjd_today = datetime_to_mjd(datetime.datetime.now())
             xmin = df['#MJD'].min()
             xmax = df['#MJD'].max()
             ymin = max(-200, df.uJy.min())

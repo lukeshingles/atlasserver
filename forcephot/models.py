@@ -7,12 +7,11 @@ from django.db import models
 from django.db.models import Min
 from django.utils import timezone
 from pathlib import Path
-from forcephot.misc import date_to_mjd, country_code_to_name
+from forcephot.misc import datetime_to_mjd, country_code_to_name
 
 
 def get_mjd_min_default():
-    date_min = datetime.date.today() - datetime.timedelta(days=30)
-    return date_to_mjd(date_min.year, date_min.month, date_min.day)
+    return datetime_to_mjd(datetime.datetime.now() - datetime.timedelta(days=30))
 
 
 class Task(models.Model):

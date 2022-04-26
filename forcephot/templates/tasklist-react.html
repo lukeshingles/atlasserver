@@ -53,6 +53,28 @@
     <script language="javascript" type="text/javascript">
     "use strict";
 
+    function mjdFromDate(dateObj) { // Decimal days
+        const jd = dateObj / 86400000 + 2440587.5;
+        const mjd = jd - 2400000.5;
+        return mjd;
+    }
+
+    function mjdUTC(Y, M, D, H, m, s, ms) { // M is Jan = 0, Feb = 1, etc.
+        // Add local hour offset to `H` or minute offset to `m` for local time
+        const jd = Date.UTC.apply(Date, arguments) / 86400000 + 2440587.5;
+        const mjd = jd - 2400000.5;
+        return mjd;
+    }
+
+    function dateFromMJD(mjd) { // Any time of day to nearest millisecond
+        const jd = mjd + 2400000.5;
+        var obj = new Date();
+
+        obj.setTime(Math.round((jd - 2440587.5) * 86400000));
+
+        return obj;
+    }
+
     $("#propermotion_checkboxdiv :checkbox").bind('click dblclick', function(evt) {
         // console.log(evt.type);
         updatepropermotionpanel();
@@ -98,6 +120,63 @@
     $(window).focus(function() {
       updatepropermotionpanel();
     });
+
+
+    function mjd_updater() {
+        // var mjdmin_computed = $('#id_mjd_min').val();
+        // var updatemjdtimer = setInterval(update_mjds, 1000)  // inactive after two minutes
+
+        $("#id_mjd_min").on("propertychange change keyup paste input", update_mjd_min);
+        $("#id_mjd_max").on("propertychange change keyup paste input", update_mjd_max);
+        update_mjd_min();
+        update_mjd_max();
+
+        function update_mjd_min() {
+            // to update to 30 days ago:
+            //     mjdmin = mjdFromDate(new Date()) - 30.;
+            //     $('#id_mjd_min').val(mjdmin);
+
+            var strmjdmin = $('#id_mjd_min').val();
+            var isostrmin = '';
+            if (strmjdmin == '') {
+                isostrmin = '(since beginning)'
+            } else {
+                try {
+                    var mjdmin = parseFloat(strmjdmin);
+                    var isostr_withmilliseconds = dateFromMJD(mjdmin).toISOString();
+                    isostrmin = (
+                        isostr_withmilliseconds.includes('.') ?
+                        isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
+                }
+                catch(err) {
+                    isostrmin = 'error'
+                    console.log('error', err, err.message);
+                }
+            }
+            $('#id_mjd_min_isoformat').text(isostrmin);
+        }
+
+        function update_mjd_max() {
+            var strmjdmax = $('#id_mjd_max').val();
+            var isostrmax = '';
+            if (strmjdmax == '') {
+                isostrmax = '(leave blank to fetch latest)'
+            } else {
+                try {
+                    var mjdmax = parseFloat(strmjdmax);
+                    var isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
+                    isostrmax = (
+                        isostr_withmilliseconds.includes('.') ?
+                        isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
+                }
+                catch(err) {
+                    isostrmax = 'error'
+                    console.log('error', err, err.message);
+                }
+            }
+            $('#id_mjd_max_isoformat').text(isostrmax);
+        }
+    }
 
     function inactivityTimer() {
       var active_timeout = null;
@@ -150,6 +229,8 @@
       }
 
       inactivityTimer();
+
+      mjd_updater();
     });
     </script>
 

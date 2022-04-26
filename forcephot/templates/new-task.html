@@ -26,8 +26,8 @@
             </ul>
         </div>
         <ul>
-            <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}</li>
-            <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}</li>
+            <li>{{ form.mjd_min.label_tag }}{{ form.mjd_min }}{{ form.mjd_min.errors }}<p class="inputisodate" id='id_mjd_min_isoformat'></p></li>
+            <li>{{ form.mjd_max.label_tag }}{{ form.mjd_max }}{{ form.mjd_max.errors }}<p class="inputisodate" id='id_mjd_max_isoformat'></p></li>
             <li>{{ form.comment.label_tag }}{{ form.comment }}{{ form.comment.errors }}</li>
             <li>{{ form.use_reduced }}<label for="id_use_reduced">Use reduced (input) instead of difference images (<a href="{% url 'faq' %}">FAQ</a>)</label></li>
             <li>{{ form.send_email }}<label for="id_send_email">Email me when completed</label></li>
