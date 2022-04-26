@@ -484,7 +484,7 @@ def do_maintenance(maxtime=None):
 
     logprefix = "Maintenance: "
 
-    remove_old_tasks(logprefix=logprefix, request_type='IMGZIP', days_ago=90)
+    remove_old_tasks(logprefix=logprefix, request_type='IMGZIP', days_ago=60)
     remove_old_tasks(logprefix=logprefix, request_type='FP', days_ago=365)
 
     # # this can get very slow
