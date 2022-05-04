@@ -459,7 +459,7 @@ def remove_old_tasks(logprefix, request_type, days_ago):
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     oldtasks = Task.objects.all().filter(
         finishtimestamp__lt=now - datetime.timedelta(days=days_ago),
-        request_type='IMGZIP',
+        request_type=request_type,
         is_archived=False
     )
 
