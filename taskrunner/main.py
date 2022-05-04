@@ -453,28 +453,47 @@ def do_taskloop():
 #     log(logprefix + "Finished checking for unassociated result files")
 
 
-def remove_old_tasks(logprefix, request_type, days_ago):
+def remove_old_tasks(logprefix, days_ago, harddeleterecord=False, request_type=None, is_archived=None):
     assert days_ago > 29
 
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    oldtasks = Task.objects.all().filter(
-        finishtimestamp__lt=now - datetime.timedelta(days=days_ago),
-        request_type=request_type,
-        is_archived=False
+    filteropts = dict(
+        finishtimestamp__isnull=False,
+        finishtimestamp__lt=now - datetime.timedelta(days=days_ago)
     )
+
+    if not harddeleterecord:
+        # exclude tasks that are already soft deleted from soft deletion query
+        is_archived = False
+
+    if request_type is not None:
+        filteropts['request_type'] = request_type
+
+    if is_archived is not None:
+        filteropts['is_archived'] = is_archived
+
+    oldtasks = Task.objects.all().filter(**filteropts)
 
     taskcount = oldtasks.count()
 
     taskid_examples = list(oldtasks.values_list('id', flat=True)[:10])
 
-    log(logprefix + f"There are {taskcount} {request_type} tasks that finished more than {days_ago} days ago")
+    strrequesttype = f'{request_type} ' if request_type else ''
+    strarchived = 'archived ' if is_archived else ''
+    log(logprefix + f"There are {taskcount} {strarchived}{strrequesttype}tasks"
+        f" that finished more than {days_ago} days ago")
 
     if taskcount > 0:
-        log(logprefix + f"  first few task ids: {taskid_examples}")
-        log(logprefix + "  deleting...")
+        strdeleteype = 'deleting' if harddeleterecord else 'archiving'
+        log(logprefix + f"  {strdeleteype} (first few task ids: {taskid_examples})")
 
         for task in oldtasks:
             task.delete()
+
+        # the previous call only deleted data files and kept the database record
+        # marked as archived. The following also deletes the database record.
+        if harddeleterecord:
+            oldtasks.delete()
 
         log(logprefix + "  done.")
 
@@ -484,8 +503,13 @@ def do_maintenance(maxtime=None):
 
     logprefix = "Maintenance: "
 
-    remove_old_tasks(logprefix=logprefix, request_type='IMGZIP', days_ago=60)
-    remove_old_tasks(logprefix=logprefix, request_type='FP', days_ago=365)
+    remove_old_tasks(logprefix=logprefix, days_ago=60, harddeleterecord=False, request_type='IMGZIP')
+
+    remove_old_tasks(logprefix=logprefix, days_ago=365, harddeleterecord=False, request_type='FP')
+
+    # remove_old_tasks(logprefix=logprefix, days_ago=365, harddeleterecord=True, is_archived=True)
+
+    # remove_old_tasks(logprefix=logprefix, days_ago=500, harddeleterecord=True)
 
     # # this can get very slow
     # rm_unassociated_files(logprefix, start_maintenancetime, maxtime)
