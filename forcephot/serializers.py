@@ -111,6 +111,14 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             if not is_finite_float(attrs.get('dec', 0.)):
                 raise serializers.ValidationError({'dec': 'dec must be a finite floating-point number'})
 
+        if 'mjd_min' in attrs and not is_finite_float(attrs['mjd_min']):
+            raise serializers.ValidationError(
+                {'mjd_min': 'mjd_min must be either None or a finite floating-point number.'})
+
+        if 'mjd_max' in attrs and not is_finite_float(attrs['mjd_max']):
+            raise serializers.ValidationError(
+                {'mjd_max': 'mjd_max must be either None or a finite floating-point number.'})
+
         return attrs
 
     class Meta:
