@@ -17,7 +17,7 @@ def is_finite_float(val):
     except ValueError:
         return False
 
-    if math.isnan(f_val):
+    if not math.isfinite(f_val):
         return False
 
     return True
