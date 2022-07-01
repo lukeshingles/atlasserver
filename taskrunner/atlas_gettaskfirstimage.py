@@ -43,7 +43,7 @@ def main():
     if fitsoutpath.exists():
         fitsoutpath.unlink()
 
-    # jobxxxxx.fits.jpg to jobxxxx.first.jpg
+    # jobxxxxx.fits.jpg to jobxxxx.jpg
     fitsoutpath.with_suffix('.fits.jpg').rename(Path(datafile).with_suffix('.jpg'))
 
 
