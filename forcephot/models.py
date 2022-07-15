@@ -11,7 +11,7 @@ from forcephot.misc import datetime_to_mjd, country_code_to_name
 
 
 def get_mjd_min_default():
-    return datetime_to_mjd(datetime.datetime.now() - datetime.timedelta(days=30))
+    return round(datetime_to_mjd(datetime.datetime.now() - datetime.timedelta(days=30)), 5)
 
 
 class Task(models.Model):
