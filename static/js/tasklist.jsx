@@ -158,8 +158,16 @@ class Task extends React.Component {
     if (task.mpc_name != null) {
       taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
     } else {
-      taskbox.push(<div key="target">RA Dec: {task.ra} {task.dec}</div>);
+      var radecepoch = '';
+      if (task.radec_epoch_year != null) {
+        radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
+      }
+      taskbox.push(<div key="target">RA Dec: {radecepoch}{task.ra} {task.dec}</div>);
+      if (task.propermotion_ra > 0 || task.propermotion_dec > 0) {
+        taskbox.push(<div key="propermotion">Proper motion [mas/yr]: {task.propermotion_ra} {task.propermotion_dec}</div>);
+      }
     }
+
     taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
 
     if (task.mjd_min != null || task.mjd_max != null) {
