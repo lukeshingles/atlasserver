@@ -4,8 +4,251 @@ var jslcdataglobal = new Object();
 var jslabelsglobal = new Object();
 var jslimitsglobal = new Object();
 
-var api_request_active = false;
-var fetchcache = [];
+var tasklist_api_request_active = false;
+var tasklist_fetchcache = [];
+var tasklist_api_error = '';
+var submission_in_progress = false;
+
+class NewRequest extends React.Component {
+  get_defaultstate() {
+    return {
+      showradechelp: false,
+      radeclist: '',
+      mjd_min: (mjdFromDate(new Date()) - 30.).toFixed(5),
+      mjd_max: '',
+      use_reduced: false,
+      send_email: true,
+      enable_propermotion: false,
+      radec_epoch_year: '',
+      propermotion_ra: 0.,
+      propermotion_dec: 0.,
+      errors: [],
+      httperror: '',
+      submission_in_progress: false,  // duplicated to trigger a render
+    };
+  }
+
+  constructor(props) {
+    super(props);
+
+    this.state = this.get_defaultstate();
+
+    this.handlechange_mjd_min = this.handlechange_mjd_min.bind(this);
+    this.update_mjd_min = this.update_mjd_min.bind(this);
+    this.handlechange_mjd_max = this.handlechange_mjd_max.bind(this);
+    this.update_mjd_max = this.update_mjd_max.bind(this);
+    this.submit = this.submit.bind(this);
+  }
+
+  componentDidMount() {
+    this.update_mjd_min(this.state.mjd_min);
+    this.update_mjd_max(this.state.mjd_max);
+  }
+
+  update_mjd_min(strmjdmin) {
+    var isostrmin = '';
+    if (strmjdmin == '') {
+      isostrmin = '(leave blank to fetch earliest)'
+    } else {
+      try {
+        var mjdmin = parseFloat(strmjdmin);
+        var isostr_withmilliseconds = dateFromMJD(mjdmin).toISOString();
+        isostrmin = (
+            isostr_withmilliseconds.includes('.') ?
+            isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
+      }
+      catch(err) {
+        isostrmin = 'error'
+        console.log('error', err, err.message);
+      }
+    }
+    this.setState({'mjd_min': strmjdmin, 'mjd_min_isoformat': isostrmin});
+  }
+
+  handlechange_mjd_min(event) {
+    this.update_mjd_min(event.target.value);
+  }
+
+  update_mjd_max(strmjdmax) {
+    var isostrmax = '';
+    if (strmjdmax == '') {
+      isostrmax = '(leave blank to fetch latest)'
+    } else {
+      try {
+        var mjdmax = parseFloat(strmjdmax);
+        console.log("invalid?", strmjdmax, mjdmax);
+        var isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
+        isostrmax = (
+            isostr_withmilliseconds.includes('.') ?
+            isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
+      }
+      catch(err) {
+        isostrmax = 'error'
+        console.log('error', err, err.message);
+      }
+    }
+    this.setState({'mjd_max': strmjdmax, 'mjd_max_isoformat': isostrmax});
+  }
+
+  handlechange_mjd_max(event) {
+    this.update_mjd_max(event.target.value);
+  }
+
+  async submit() {
+    var datadict = {
+      radeclist: this.state.radeclist,
+      mjd_min: this.state.mjd_min == '' ? null : this.state.mjd_min,
+      mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
+      use_reduced: this.state.use_reduced,
+      use_email: this.state.use_email,
+    };
+
+    if (this.state.enable_propermotion) {
+      datadict['radec_epoch_year'] = this.state.radec_epoch_year;
+      datadict['propermotion_ra'] = this.state.propermotion_ra;
+      datadict['propermotion_dec'] = this.state.propermotion_dec;
+    }
+    console.log(datadict)
+
+    fetch(api_url_base,
+    {
+      credentials: "same-origin",
+      method: "POST",
+      body: JSON.stringify(datadict),
+      headers: {
+        "X-CSRFToken": getCookie("csrftoken"),
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+    })
+    .catch(error => {
+      submission_in_progress = false;
+      console.log('New task HTTP request failed', error);
+      this.setState({'httperror': 'HTTP request failed.', 'submission_in_progress': false});
+    })
+    .then((response) => {
+      submission_in_progress = false;
+      this.setState({'httperror': '', 'submission_in_progress': false});
+      console.log('New task: HTTP response ', response.status);
+
+      if (response.status == 201) {
+        console.log("New task: successful creation", response.status);
+        this.setState(this.get_defaultstate());
+        response.json().then(data => {
+          // console.log('Creation data', data);
+          data.forEach((task, i) => {
+            console.log('Created new task', task.id);
+            newtaskids.push(task.id);
+          })
+        });
+        this.props.fetchData(true);
+      }
+      else if (response.status == 400)
+      {
+        response.json().then(data => {
+          console.log('New task: errors returned', data);
+          this.setState({'errors': data});
+        });
+      }
+      else
+      {
+        console.log("New task: Error on submission: ", response.status);
+      };
+    })
+    .catch(error => {
+      submission_in_progress = false;
+      console.log('New task HTTP request failed', error);
+      this.setState({
+          'httperror': 'HTTP request failed. Check internet connection and server are online.',
+          'submission_in_progress': false});
+    });
+  }
+
+  onSubmit() {
+    event.preventDefault();
+    if (submission_in_progress) {
+      console.log('New task: Submission already in progress');
+      return;
+    }
+
+    console.log('New task: Submitting', api_url_base);
+    submission_in_progress = true;
+    this.setState({'submission_in_progress': false});
+    this.submit();
+  }
+
+  render() {
+    var formcontent = [];
+    formcontent.push(
+      <ul key="ulradec">
+        <li><label htmlFor="id_radeclist">RA Dec / MPC names:</label>
+        <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={this.state.radeclist} onChange={e => {this.setState({'radeclist': e.target.value})}}></textarea>
+        <a onClick={()=> {this.setState({'showradechelp': !this.state.showradechelp})}}>Help</a>
+        {this.state.showradechelp ? <div id="radec_help" style={{display: 'block', clear: 'right', fontSize: 'small'}} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
+        </li>
+        {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['radeclist']}</li></ul> : ''}
+      </ul>
+    );
+
+    formcontent.push(
+      <div key="propermotion_checkbox" id="propermotion_checkboxdiv" style={{width: '100%'}}>
+        <label style={{width: '100%'}}>
+            <input type="checkbox" checked={this.state.enable_propermotion} onChange={e => {this.setState({'enable_propermotion': e.target.checked})}} style={{position: 'static', display: 'inline', width: '5em'}} /> Proper motion
+        </label>
+      </div>);
+      if (this.state.enable_propermotion) {
+        formcontent.push(
+          <div key="propermotion_panel" id="propermotion_panel" style={{background: 'rgb(235,235,235)'}}>
+              <p key="propermotiondesc" style={{fontSize: 'small'}}>If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
+              <ul key="propermotion_inputs">
+                <li key="radec_epoch_year"><label htmlFor="id_radec_epoch_year">Epoch year:</label><input type="number" name="radec_epoch_year" step="0.1" id="id_radec_epoch_year" value={this.state.radec_epoch_year} onChange={e => {this.setState({'radec_epoch_year': e.target.value})}} /></li>
+                <li key="propermotion_ra"><label htmlFor="id_propermotion_ra">PM RA [mas/yr]</label><input type="number" name="propermotion_ra" step="any" id="id_propermotion_ra" value={this.state.propermotion_ra} onChange={e => {this.setState({'propermotion_ra': e.target.value})}} /></li>
+                <li key="propermotion_dec"><label htmlFor="id_propermotion_dec">PM Dec [mas/yr]</label><input type="number" name="propermotion_dec" step="any" id="id_propermotion_dec" value={this.state.propermotion_dec} onChange={e => {this.setState({'propermotion_dec': e.target.value})}} /></li>
+              </ul>
+          </div>
+        );
+      }
+
+    formcontent.push(
+      <ul key="ulmjdoptions">
+        <li key="mjd_min">
+          <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={this.state.mjd_min} onChange={this.handlechange_mjd_min} />
+          <p className="inputisodate" id='id_mjd_min_isoformat'>{this.state.mjd_min_isoformat}</p>
+        </li>
+        <li key="mjd_max">
+          <label htmlFor="id_mjd_max">MJD max:</label><input type="number" name="mjd_max" step="any" id="id_mjd_max" value={this.state.mjd_max} onChange={this.handlechange_mjd_max} />
+          <p className="inputisodate" id='id_mjd_max_isoformat'>{this.state.mjd_max_isoformat}</p>
+          {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['mjd_max']}</li></ul> : ''}
+        </li>
+        <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={this.state.comment} onChange={e => {this.setState({'comment': e.target.value})}} /></li>
+
+        <li key="use_reduced"><input type="checkbox" name="use_reduced" id="id_use_reduced" checked={this.state.use_reduced} onChange={e => {this.setState({'use_reduced': e.target.checked})}} /><label htmlFor="id_use_reduced" >Use reduced (input) instead of difference images (<a href="../faq/">FAQ</a>)</label></li>
+        <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={this.state.send_email} onChange={e => {this.setState({'send_email': e.target.checked})}}/><label htmlFor="id_send_email">Email me when completed</label></li>
+      </ul>
+    );
+
+    var submitclassname = submission_in_progress ? 'btn btn-info submitting' : 'btn btn-info';
+    var submitvalue = submission_in_progress ? 'Requesting...' : 'Request';
+
+    formcontent.push(<input key="submitbutton" className={submitclassname} id="submitrequest" type="submit" value={submitvalue} />);
+    if (this.state.httperror != '') {
+      formcontent.push(<p key="httperror" style={{'color': 'red'}}>{this.state.httperror}</p>);
+    }
+
+    return (
+      <div key="newrequestcontainer" id="newrequestcontainer">
+        <div key="newrequestsource" className="newrequest" id="newrequestsource">
+          <div key="newtask" className="task">
+            <h2 key="newtaskheader">New request</h2>
+            <form key="newtaskform" id="newrequest" onSubmit={this.onSubmit.bind(this)}>
+              {formcontent}
+            </form>
+          </div>
+        </div>
+      </div>);
+  }
+}
+
 
 class TaskPlot extends React.PureComponent {
   constructor(props) {
@@ -44,7 +287,16 @@ class Task extends React.Component {
   }
 
   deleteTask() {
-    $.ajax({url: this.props.taskdata.url, method: 'delete', success: (result) => {this.props.fetchData()}});
+    var li_id = '#task-' + this.props.taskdata.id
+    // $(li_id).hide(300);
+    $(li_id).slideUp(200);
+    setTimeout(() => {
+      console.log('Deleting ', this.props.taskdata.id);
+      $.ajax({url: this.props.taskdata.url, method: 'delete',
+              success: (result) => {console.log('Deleted', this.props.taskdata.id); this.props.fetchData()},
+              error: () => {console.log('Error deleting', this.props.taskdata.id); this.props.fetchData();}
+      });
+    }, 200);
   }
 
   requestImages() {
@@ -70,13 +322,15 @@ class Task extends React.Component {
   }
 
   componentDidMount() {
+  // componentDidUpdate() {
     this.updateTimeElapsed();
     if (newtaskids.includes(this.props.taskdata.id)) {
       var li_id = '#task-' + this.props.taskdata.id
+      console.log('showing new task', this.props.taskdata.id);
       $(li_id).hide();
-      $(li_id).show(700);
-      console.log('new task', this.props.taskdata.id);
-      newtaskids = newtaskids.filter(item => {item !== this.props.taskdata.id})
+      // $(li_id).show(600);
+      $(li_id).slideDown(200);
+      newtaskids = newtaskids.filter(item => {return item !== this.props.taskdata.id})
     }
 
     // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);
@@ -282,6 +536,7 @@ class TaskPage extends React.Component {
       results: null,
       scrollToTopAfterUpdate: false,
       dataurl: window.location.href,
+      fetchtimeelapsed: null,
     };
 
     this.newRequest = React.createRef();
@@ -397,32 +652,36 @@ class TaskPage extends React.Component {
 
     // start by applying a cached version if we have it
     // then send out an HTTP request and update when available
-    var fetchcachematch = (window.location.href in fetchcache);
-    if (fetchcachematch) {
-      console.log('using fetchcache before GET response', window.location.href);
-      this.setState(fetchcachematch[window.location.href]);
+    var tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
+    if (tasklist_fetchcachematch) {
+      console.log('using tasklist_fetchcache before GET response', window.location.href);
+      this.setState(tasklist_fetchcache[window.location.href]);
     } else {
-      console.log('no fetchcache for', window.location.href);
+      console.log('no tasklist_fetchcache for', window.location.href);
     }
 
-    if (api_request_active && !usertriggered) {
+    if (tasklist_api_request_active && !usertriggered) {
       console.log('prevent overlapping GET requests');
       return;
     }
 
-    api_request_active = true;
+    tasklist_api_request_active = true;
     var get_url = window.location.href;
-    console.log('Fetching task list from', get_url, 'fetchcachematch', fetchcachematch);
+    console.log('Fetching task list from', get_url, 'tasklist_fetchcachematch', tasklist_fetchcachematch);
     fetch(get_url,
     {
+      credentials: "same-origin",
+      method: "GET",
       headers: {
+        "X-CSRFToken": getCookie("csrftoken"),
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       },
       redirect: "manual"
     })
     .then((response) => {
-      api_request_active = false;
+      tasklist_api_error = '';
+      tasklist_api_request_active = false;
       // etag = response.headers.get('ETag');
       if (response.type === "opaqueredirect") {
         // redirect to login page
@@ -442,8 +701,9 @@ class TaskPage extends React.Component {
       }
       return null;
     }).catch(error => {
-      api_request_active = false;
-      console.log('HTTP request failed', error);
+      tasklist_api_request_active = false;
+      console.log('Get task list HTTP request failed', error);
+      tasklist_api_error = 'Connection error';
     }).then(data => {
       var statechanges = null;
       if (data != null && data.hasOwnProperty('results')) {
@@ -465,7 +725,8 @@ class TaskPage extends React.Component {
         };
       }
       if (statechanges != null) {
-        fetchcache[window.location.href] = statechanges;
+        statechanges['tasklist_last_fetch_time'] = new Date();
+        tasklist_fetchcache[window.location.href] = statechanges;
         if (get_url == window.location.href) {
           console.log('Applying results from', get_url);
           this.setState(statechanges);
@@ -486,28 +747,21 @@ class TaskPage extends React.Component {
   }
 
   componentDidMount() {
-    this.interval = setInterval(() => this.fetchData(false), 2500);
+    this.fetchinterval = setInterval(() => this.fetchData(false), 2000);
     this.fetchData(true);
 
     // Declare a fragment:
     // var fragment = document.createDocumentFragment();
     // Append desired element to the fragment:
     // fragment.appendChild(document.getElementById('newrequestsource'));
-
-
-    // Append fragment to desired element:
-    // document.getElementById('this.newRequest').appendChild(fragment);
-    // this.newRequest.current.appendChild(document.getElementById('newrequestsource'));
-
-    this.newRequest.current.appendChild(document.getElementById('newrequestsource'));
   }
 
   componentWillUnmount() {
-    clearInterval(this.interval);
+    clearInterval(this.fetchinterval);
   }
 
   render() {
-    console.log('TaskPage rendered');
+    // console.log('TaskPage rendered');
     var singletaskmode = this.singleTaskViewTaskId(this.state.dataurl) != null;
     var pagehtml = [];
     if (!singletaskmode) {
@@ -524,8 +778,13 @@ class TaskPage extends React.Component {
         </ul>);
     }
 
-    var newrequeststyle = singletaskmode ? {display: 'none'} : null;
-    pagehtml.push(<div key="newrequest" id="newrequestcontainer" ref={this.newRequest} style={newrequeststyle}></div>);
+    if (!singletaskmode) {
+      pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} />);
+    }
+
+    if (this.state.tasklist_last_fetch_time != null) {
+      pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated at {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{tasklist_api_error}</span></p>);
+    }
 
     var tasklist;
     if (this.state.results == null) {
@@ -548,4 +807,9 @@ class TaskPage extends React.Component {
   }
 }
 
-ReactDOM.render(React.createElement(TaskPage, {}), document.getElementById('taskpage'));
+
+// ReactDOM.render(React.createElement(TaskPage, {}), document.getElementById('taskpage'));
+
+const container = document.getElementById('taskpage');
+const root = ReactDOM.createRoot(container);
+root.render(<TaskPage />);

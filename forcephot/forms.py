@@ -8,28 +8,6 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext
 from django.utils.translation import gettext_lazy as _
 
-from forcephot.misc import splitradeclist
-from forcephot.models import Task
-
-
-class TaskForm(forms.ModelForm):
-    radeclist = forms.CharField(label="RA Dec / MPC names", required=True,
-                                widget=forms.Textarea(attrs={"rows": 3, "cols": ""}))
-
-    class Meta:
-        model = Task
-        # fields = '__all__'
-        fields = ('mpc_name', 'radeclist', 'mjd_min', 'mjd_max', 'radec_epoch_year',
-                  'propermotion_ra', 'propermotion_dec', 'comment', 'use_reduced', 'send_email')
-
-    def clean(self):
-        cleaned_data = super().clean()
-
-        if 'radeclist' in cleaned_data and cleaned_data['radeclist']:
-            splitradeclist(cleaned_data, form=self)  # doesn't use the output, just checks for errors
-
-        return cleaned_data
-
 
 class RegistrationForm(UserCreationForm):
     """
