@@ -9,13 +9,17 @@ var tasklist_fetchcache = [];
 var tasklist_api_error = '';
 var submission_in_progress = false;
 
+function getDefaultMjdMin() {
+  return (mjdFromDate(new Date()) - 30.).toFixed(5);
+}
+
 class NewRequest extends React.Component {
   get_defaultstate() {
     return {
       showradechelp: false,
       radeclist: localStorage.getItem('radeclist') != null ? localStorage.getItem('radeclist') : '',
-      mjd_min: (mjdFromDate(new Date()) - 30.).toFixed(5),
-      mjd_max: '',
+      mjd_min: localStorage.getItem('mjd_min') != null? localStorage.getItem('mjd_min') : getDefaultMjdMin(),
+      mjd_max: localStorage.getItem('mjd_max') != null ? localStorage.getItem('mjd_max') : '',
       comment: localStorage.getItem('comment') != null ? localStorage.getItem('comment') : '',
       use_reduced: localStorage.getItem('use_reduced') == 'true',
       send_email: localStorage.getItem('send_email') != 'false',
@@ -68,6 +72,7 @@ class NewRequest extends React.Component {
 
   handlechange_mjd_min(event) {
     this.update_mjd_min(event.target.value);
+    localStorage.setItem('mjd_min', event.target.value);
   }
 
   update_mjd_max(strmjdmax) {
@@ -89,6 +94,7 @@ class NewRequest extends React.Component {
       }
     }
     this.setState({'mjd_max': strmjdmax, 'mjd_max_isoformat': isostrmax});
+    localStorage.setItem('mjd_max', strmjdmax);
   }
 
   handlechange_mjd_max(event) {
@@ -139,7 +145,10 @@ class NewRequest extends React.Component {
         localStorage.removeItem('radec_epoch_year');
         localStorage.removeItem('propermotion_ra');
         localStorage.removeItem('propermotion_dec');
+        localStorage.removeItem('mjd_min');
+        localStorage.removeItem('mjd_max');
         localStorage.removeItem('comment');
+
         this.setState(this.get_defaultstate());
         response.json().then(data => {
           // console.log('Creation data', data);
@@ -221,6 +230,7 @@ class NewRequest extends React.Component {
       <ul key="ulmjdoptions">
         <li key="mjd_min">
           <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={this.state.mjd_min} onChange={this.handlechange_mjd_min} />
+          <a className="btn" onClick={() => {this.setState({'mjd_min': getDefaultMjdMin()}); this.update_mjd_min(getDefaultMjdMin()); localStorage.removeItem('mjd_min');}}>↩️</a>
           <p className="inputisodate" id='id_mjd_min_isoformat'>{this.state.mjd_min_isoformat}</p>
         </li>
         <li key="mjd_max">
