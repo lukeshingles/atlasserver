@@ -670,12 +670,15 @@ class TaskPage extends React.Component {
 
     // start by applying a cached version if we have it
     // then send out an HTTP request and update when available
-    var tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
-    if (tasklist_fetchcachematch) {
-      console.log('using tasklist_fetchcache before GET response', window.location.href);
-      this.setState(tasklist_fetchcache[window.location.href]);
-    } else {
-      console.log('no tasklist_fetchcache for', window.location.href);
+    if (usertriggered)
+    {
+      var tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
+      if (tasklist_fetchcachematch) {
+        console.log('using tasklist_fetchcache before GET response', window.location.href);
+        this.setState(tasklist_fetchcache[window.location.href]);
+      } else {
+        console.log('no tasklist_fetchcache for', window.location.href);
+      }
     }
 
     if (tasklist_api_request_active && !usertriggered) {
