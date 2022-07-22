@@ -127,7 +127,7 @@ def runtask(task, logprefix='', **kwargs):
 
         atlascommand += " | sort -n"
         atlascommand += f" | tee {remoteresultfile}; "
-        atlascommand += f"~/atlas_gettaskfirstimage.py {remoteresultfile}"
+        atlascommand += f"~/atlas_gettaskimage.py {remoteresultfile}"
         atlascommand += (" red" if task.use_reduced else " diff")
 
     elif task.request_type == 'IMGZIP':

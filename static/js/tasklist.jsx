@@ -191,7 +191,7 @@ class NewRequest extends React.Component {
       <ul key="ulradec">
         <li><label htmlFor="id_radeclist">RA Dec / MPC names:</label>
         <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={this.state.radeclist} onChange={e => {this.setState({'radeclist': e.target.value}); localStorage.setItem("radeclist", e.target.value);}}></textarea>
-        <a onClick={()=> {this.setState({'showradechelp': !this.state.showradechelp})}}>Help</a>
+        &nbsp;<a onClick={()=> {this.setState({'showradechelp': !this.state.showradechelp})}}>Help</a>
         {this.state.showradechelp ? <div id="radec_help" style={{display: 'block', clear: 'right', fontSize: 'small'}} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
         </li>
         {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['radeclist']}</li></ul> : ''}
@@ -748,20 +748,13 @@ class TaskPage extends React.Component {
 
   componentDidUpdate() {
     if (this.state.scrollToTopAfterUpdate) {
-      window.scrollTo(0, 0);
       this.setState({scrollToTopAfterUpdate: false});
-      window.dispatchEvent(new Event('resize'));
     }
   }
 
   componentDidMount() {
     this.fetchinterval = setInterval(() => this.fetchData(false), 2000);
     this.fetchData(true);
-
-    // Declare a fragment:
-    // var fragment = document.createDocumentFragment();
-    // Append desired element to the fragment:
-    // fragment.appendChild(document.getElementById('newrequestsource'));
   }
 
   componentWillUnmount() {
@@ -787,7 +780,7 @@ class TaskPage extends React.Component {
     }
 
     if (this.state.tasklist_last_fetch_time != null) {
-      pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated at {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{tasklist_api_error}</span></p>);
+      pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{tasklist_api_error}</span></p>);
     }
 
     if (!singletaskmode) {
@@ -810,6 +803,12 @@ class TaskPage extends React.Component {
     }
 
     pagehtml.push(<div key="tasklist" id="tasklist" className={singletaskmode ? 'singletaskdetail' : null}>{tasklist}</div>);
+
+    if (this.state.scrollToTopAfterUpdate) {
+      window.scrollTo(0, 0);
+      // this.setState({scrollToTopAfterUpdate: false});
+      window.dispatchEvent(new Event('resize'));
+    }
 
     return pagehtml;
   }
