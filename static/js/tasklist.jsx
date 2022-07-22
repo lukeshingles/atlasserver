@@ -321,7 +321,29 @@ class Task extends React.Component {
     var request_image_url = new URL(this.props.taskdata.url);
     request_image_url.pathname += 'requestimages';
     request_image_url.search = '';
-    $.ajax({url: request_image_url, method: 'get', success: (result) => {this.props.fetchData()}});
+
+    fetch(request_image_url,
+    {
+      credentials: "same-origin",
+      method: "GET",
+      headers: {
+        "X-CSRFToken": getCookie("csrftoken"),
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+    })
+    .then((response) => {
+      if (response.redirected) {
+        // console.log(response)
+        var newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
+        newtaskids.push(newimgtask_id);
+        console.log('requestimages created task', newimgtask_id);
+        var new_page_url = new URL(response.url);
+        new_page_url.searchParams.delete('newids');
+        window.history.pushState({}, document.title, new_page_url);
+        this.props.fetchData(true);
+      }
+    });
   }
 
   static getDerivedStateFromProps(props, state) {
@@ -750,6 +772,9 @@ class TaskPage extends React.Component {
         tasklist_fetchcache[window.location.href] = statechanges;
         if (get_url == window.location.href) {
           console.log('Applying results from', get_url);
+          if (usertriggered) {
+            statechanges['scrollToTopAfterUpdate'] = true
+          }
           this.setState(statechanges);
         } else {
           console.log('Not applying results from', get_url, 'location.href', window.location.href);
