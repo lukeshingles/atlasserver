@@ -13,15 +13,16 @@ class NewRequest extends React.Component {
   get_defaultstate() {
     return {
       showradechelp: false,
-      radeclist: '',
+      radeclist: localStorage.getItem('radeclist') != null ? localStorage.getItem('radeclist') : '',
       mjd_min: (mjdFromDate(new Date()) - 30.).toFixed(5),
       mjd_max: '',
-      use_reduced: false,
-      send_email: true,
-      enable_propermotion: false,
-      radec_epoch_year: '',
-      propermotion_ra: 0.,
-      propermotion_dec: 0.,
+      comment: localStorage.getItem('comment') != null ? localStorage.getItem('comment') : '',
+      use_reduced: localStorage.getItem('use_reduced') == 'true',
+      send_email: localStorage.getItem('send_email') != 'false',
+      enable_propermotion: localStorage.getItem('enable_propermotion') == 'true',
+      radec_epoch_year: localStorage.getItem('radec_epoch_year') != null ? localStorage.getItem('radec_epoch_year') : '',
+      propermotion_ra: localStorage.getItem('propermotion_ra') != null ? localStorage.getItem('propermotion_ra') : 0.,
+      propermotion_dec: localStorage.getItem('propermotion_dec') != null ? localStorage.getItem('propermotion_dec') : 0.,
       errors: [],
       httperror: '',
       submission_in_progress: false,  // duplicated to trigger a render
@@ -133,6 +134,12 @@ class NewRequest extends React.Component {
 
       if (response.status == 201) {
         console.log("New task: successful creation", response.status);
+        localStorage.removeItem('radeclist');
+        localStorage.removeItem('enable_propermotion');
+        localStorage.removeItem('radec_epoch_year');
+        localStorage.removeItem('propermotion_ra');
+        localStorage.removeItem('propermotion_dec');
+        localStorage.removeItem('comment');
         this.setState(this.get_defaultstate());
         response.json().then(data => {
           // console.log('Creation data', data);
@@ -179,10 +186,11 @@ class NewRequest extends React.Component {
 
   render() {
     var formcontent = [];
+
     formcontent.push(
       <ul key="ulradec">
         <li><label htmlFor="id_radeclist">RA Dec / MPC names:</label>
-        <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={this.state.radeclist} onChange={e => {this.setState({'radeclist': e.target.value})}}></textarea>
+        <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={this.state.radeclist} onChange={e => {this.setState({'radeclist': e.target.value}); localStorage.setItem("radeclist", e.target.value);}}></textarea>
         <a onClick={()=> {this.setState({'showradechelp': !this.state.showradechelp})}}>Help</a>
         {this.state.showradechelp ? <div id="radec_help" style={{display: 'block', clear: 'right', fontSize: 'small'}} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
         </li>
@@ -193,7 +201,7 @@ class NewRequest extends React.Component {
     formcontent.push(
       <div key="propermotion_checkbox" id="propermotion_checkboxdiv" style={{width: '100%'}}>
         <label style={{width: '100%'}}>
-            <input type="checkbox" checked={this.state.enable_propermotion} onChange={e => {this.setState({'enable_propermotion': e.target.checked})}} style={{position: 'static', display: 'inline', width: '5em'}} /> Proper motion
+            <input type="checkbox" checked={this.state.enable_propermotion} onChange={e => {this.setState({'enable_propermotion': e.target.checked}); localStorage.setItem("enable_propermotion", e.target.checked);}} style={{position: 'static', display: 'inline', width: '5em'}} /> Proper motion
         </label>
       </div>);
       if (this.state.enable_propermotion) {
@@ -201,9 +209,9 @@ class NewRequest extends React.Component {
           <div key="propermotion_panel" id="propermotion_panel" style={{background: 'rgb(235,235,235)'}}>
               <p key="propermotiondesc" style={{fontSize: 'small'}}>If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
               <ul key="propermotion_inputs">
-                <li key="radec_epoch_year"><label htmlFor="id_radec_epoch_year">Epoch year:</label><input type="number" name="radec_epoch_year" step="0.1" id="id_radec_epoch_year" value={this.state.radec_epoch_year} onChange={e => {this.setState({'radec_epoch_year': e.target.value})}} /></li>
-                <li key="propermotion_ra"><label htmlFor="id_propermotion_ra">PM RA [mas/yr]</label><input type="number" name="propermotion_ra" step="any" id="id_propermotion_ra" value={this.state.propermotion_ra} onChange={e => {this.setState({'propermotion_ra': e.target.value})}} /></li>
-                <li key="propermotion_dec"><label htmlFor="id_propermotion_dec">PM Dec [mas/yr]</label><input type="number" name="propermotion_dec" step="any" id="id_propermotion_dec" value={this.state.propermotion_dec} onChange={e => {this.setState({'propermotion_dec': e.target.value})}} /></li>
+                <li key="radec_epoch_year"><label htmlFor="id_radec_epoch_year">Epoch year:</label><input type="number" name="radec_epoch_year" step="0.1" id="id_radec_epoch_year" value={this.state.radec_epoch_year} onChange={e => {this.setState({'radec_epoch_year': e.target.value}); localStorage.setItem("radec_epoch_year", e.target.value);}} /></li>
+                <li key="propermotion_ra"><label htmlFor="id_propermotion_ra">PM RA [mas/yr]</label><input type="number" name="propermotion_ra" step="any" id="id_propermotion_ra" value={this.state.propermotion_ra} onChange={e => {this.setState({'propermotion_ra': e.target.value}); localStorage.setItem("propermotion_ra", e.target.value);}} /></li>
+                <li key="propermotion_dec"><label htmlFor="id_propermotion_dec">PM Dec [mas/yr]</label><input type="number" name="propermotion_dec" step="any" id="id_propermotion_dec" value={this.state.propermotion_dec} onChange={e => {this.setState({'propermotion_dec': e.target.value}); localStorage.setItem("propermotion_dec", e.target.value);}} /></li>
               </ul>
           </div>
         );
@@ -220,10 +228,10 @@ class NewRequest extends React.Component {
           <p className="inputisodate" id='id_mjd_max_isoformat'>{this.state.mjd_max_isoformat}</p>
           {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['mjd_max']}</li></ul> : ''}
         </li>
-        <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={this.state.comment} onChange={e => {this.setState({'comment': e.target.value})}} /></li>
+        <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={this.state.comment} onChange={e => {this.setState({'comment': e.target.value}); localStorage.setItem("comment", e.target.value);}} /></li>
 
-        <li key="use_reduced"><input type="checkbox" name="use_reduced" id="id_use_reduced" checked={this.state.use_reduced} onChange={e => {this.setState({'use_reduced': e.target.checked})}} /><label htmlFor="id_use_reduced" >Use reduced (input) instead of difference images (<a href="../faq/">FAQ</a>)</label></li>
-        <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={this.state.send_email} onChange={e => {this.setState({'send_email': e.target.checked})}}/><label htmlFor="id_send_email">Email me when completed</label></li>
+        <li key="use_reduced"><input type="checkbox" name="use_reduced" id="id_use_reduced" checked={this.state.use_reduced} onChange={e => {this.setState({'use_reduced': e.target.checked}); localStorage.setItem("use_reduced", e.target.checked);}} /><label htmlFor="id_use_reduced" >Use reduced (input) instead of difference images (<a href="../faq/">FAQ</a>)</label></li>
+        <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={this.state.send_email} onChange={e => {this.setState({'send_email': e.target.checked}); localStorage.setItem("send_email", e.target.checked);}}/><label htmlFor="id_send_email">Email me when completed</label></li>
       </ul>
     );
 
@@ -291,10 +299,10 @@ class Task extends React.Component {
     // $(li_id).hide(300);
     $(li_id).slideUp(200);
     setTimeout(() => {
-      console.log('Deleting ', this.props.taskdata.id);
+      // console.log('Starting delete of task ', this.props.taskdata.id);
       $.ajax({url: this.props.taskdata.url, method: 'delete',
-              success: (result) => {console.log('Deleted', this.props.taskdata.id); this.props.fetchData()},
-              error: () => {console.log('Error deleting', this.props.taskdata.id); this.props.fetchData();}
+        success: (result) => {console.log('Deleted task ', this.props.taskdata.id); this.props.fetchData()},
+        error: (err) => { console.log('Failed to delete task ', this.props.taskdata.id, err); $('#task-' + this.props.taskdata.id).slideDown(100); this.props.fetchData();}
       });
     }, 200);
   }
@@ -409,7 +417,7 @@ class Task extends React.Component {
       taskbox.push(<div key="comment">Comment: <b>{task.comment}</b></div>);
     }
 
-    if (task.mpc_name != null) {
+    if (task.mpc_name != null && task.mpc_name != '') {
       taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
     } else {
       var radecepoch = '';
@@ -667,7 +675,7 @@ class TaskPage extends React.Component {
 
     tasklist_api_request_active = true;
     var get_url = window.location.href;
-    console.log('Fetching task list from', get_url, 'tasklist_fetchcachematch', tasklist_fetchcachematch);
+    console.log('Fetching task list from', get_url);
     fetch(get_url,
     {
       credentials: "same-origin",
@@ -778,12 +786,12 @@ class TaskPage extends React.Component {
         </ul>);
     }
 
-    if (!singletaskmode) {
-      pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} />);
-    }
-
     if (this.state.tasklist_last_fetch_time != null) {
       pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated at {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{tasklist_api_error}</span></p>);
+    }
+
+    if (!singletaskmode) {
+      pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} />);
     }
 
     var tasklist;

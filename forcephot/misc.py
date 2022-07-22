@@ -21,20 +21,19 @@ def splitradeclist(data, form=None):
     if 'radeclist' not in data:
         return [data]
     # multi-add functionality with a list of RA,DEC coords
-    formdata = data
     datalist = []
 
     converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
 
     # if an RA and Dec were specified, add them to the list
-    if 'ra' in formdata and formdata['ra'] and 'dec' in formdata and formdata['dec']:
-        newrow = formdata.copy()
+    if 'ra' in data and data['ra'] and 'dec' in data and data['dec']:
+        newrow = data.copy()
         newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=newrow['ra'])
         newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=newrow['dec'])
         del newrow['radeclist']
         datalist.append(newrow)
 
-    lines = formdata['radeclist'].split('\n')
+    lines = data['radeclist'].split('\n')
 
     if len(lines) > 100:
         raise serializers.ValidationError({'radeclist': f'Number of lines ({len(lines)}) is above the limit of 100'})
@@ -46,10 +45,11 @@ def splitradeclist(data, form=None):
             if not mpc_name:
                 raise serializers.ValidationError({'radeclist': f'Error on line {index}: MPC name is blank'})
             else:
-                newrow = formdata.copy()
+                newrow = data.copy()
                 newrow['mpc_name'] = mpc_name
                 newrow['ra'] = None
                 newrow['dec'] = None
+                ForcePhotTaskSerializer.validate_mpc_name(None, mpc_name, prefix=f'Error on line {index}: ', field='radeclist')
                 datalist.append(newrow)
 
                 serializer = ForcePhotTaskSerializer(data=newrow, many=False)
@@ -65,14 +65,17 @@ def splitradeclist(data, form=None):
             row = line.split()
 
         if row and len(row) < 2:
-            raise serializers.ValidationError({'radeclist': f'Error on line {index}: Could not find two columns. '
+            raise serializers.ValidationError(
+                {'radeclist': f'Error on line {index}: Could not find two columns. '
                                'Separate RA and Dec by a comma or a space.'})
         elif row:
             try:
-                newrow = formdata.copy()
+                newrow = data.copy()
                 newrow['ra'] = converter.ra_sexegesimal_to_decimal(ra=row[0])
                 newrow['dec'] = converter.dec_sexegesimal_to_decimal(dec=row[1])
                 newrow['radeclist'] = ['']
+                ForcePhotTaskSerializer.validate_ra(None, newrow['ra'], prefix=f'Error on line {index}: ', field='radeclist')
+                ForcePhotTaskSerializer.validate_dec(None, newrow['dec'], prefix=f'Error on line {index}: ', field='radeclist')
                 serializer = ForcePhotTaskSerializer(data=newrow, many=False)
                 serializer.is_valid(raise_exception=True)
                 datalist.append(newrow)

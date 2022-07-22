@@ -82,43 +82,55 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     imagerequest_url = serializers.SerializerMethodField('get_imagerequest_url')
     result_imagezip_url = serializers.SerializerMethodField('get_result_imagezip_url')
 
-    def validate_mpc_name(self, value):
+    def validate_mpc_name(self, value, prefix='', field='mpc_name'):
         # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         # if any([c not in dict.fromkeys(okchars) for c in value]):
         #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
 
-        badchars = "'\";"
+        badchars = "a'\";"
         if any([c in dict.fromkeys(badchars) for c in value]):
             raise serializers.ValidationError(
-                'Invalid mpc_name. May not contain quotes or seimicolons')
+                {field: prefix + 'Invalid mpc_name. May not contain quotes or seimicolons'})
 
         return value
 
-    def validate_ra(self, value):
-        if not is_finite_float(value):
+    def validate_ra(self, value, prefix='', field='ra'):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value) and value >0:
             raise serializers.ValidationError(
-                'ra must be a finite floating-point number.')
+                {field: prefix + 'ra must be a finite floating-point number.'})
 
         return value
 
-    def validate_dec(self, value):
+    def validate_dec(self, value, prefix='', field='dec'):
+        if value is None or value == '':
+            return value
+
         if not is_finite_float(value):
             raise serializers.ValidationError(
-                'dec must be a finite floating-point number.')
+                {field: prefix + 'dec must be a finite floating-point number.'})
 
         return value
 
     def validate_mjd_min(self, value):
-        if value is not None and not is_finite_float(value):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value):
             raise serializers.ValidationError(
-                'mjd_min must be either None or a finite floating-point number.')
+                {'mjd_min': 'mjd_min must be either None or a finite floating-point number.'})
 
         return value
 
     def validate_mjd_max(self, value):
-        if value is not None and not is_finite_float(value):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value):
             raise serializers.ValidationError(
-                'mjd_max must be either None or a finite floating-point number.')
+                {'mjd_max': 'mjd_max must be either None or a finite floating-point number.'})
 
         return value
 
