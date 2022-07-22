@@ -63,15 +63,17 @@ def start():
         print('Detected macOS, so using testing configuration for http://localhost/')
         port = 80
         mountpoint = '/'
+        includefile = []
     else:
         port = 8086
         mountpoint = '/forcedphot'
+        includefile = ['--include-file', str(ATLASSERVERPATH / "httpconf.txt")]
 
     command = [
         'mod_wsgi-express', 'setup-server', '--working-directory', str(ATLASSERVERPATH / "atlasserver"),
         '--url-alias', f'{mountpoint}/static', str(ATLASSERVERPATH / "static"), '--url-alias', 'static', 'static',
         '--application-type', 'module', 'atlasserver.wsgi', '--server-root', str(APACHEPATH), '--port', str(port),
-        '--mount-point', mountpoint, '--include-file', str(ATLASSERVERPATH / "httpconf.txt"), '--log-to-terminal']
+        '--mount-point', mountpoint, *includefile, '--log-to-terminal']
     run_command(command)
 
     os.environ['PYTHONPATH'] = str(ATLASSERVERPATH)

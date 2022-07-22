@@ -229,31 +229,59 @@ GEOIP_PATH = os.path.dirname(__file__)
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+        'require_debug_true': {
+            '()': 'django.utils.log.RequireDebugTrue',
+        },
+    },
     'formatters': {
         'timestamp': {
             'format': '{asctime} {levelname} {message}',
             'style': '{',
         },
+        'django.server': {
+            '()': 'django.utils.log.ServerFormatter',
+            'format': '[{server_time}] {message}',
+            'style': '{',
+        }
     },
     'handlers': {
+        'console': {
+            'level': 'INFO',
+            'filters': ['require_debug_true'],
+            'class': 'logging.StreamHandler',
+        },
+        'django.server': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'django.server',
+        },
+        'mail_admins': {
+            'level': 'WARNING',
+            'filters': ['require_debug_false'],
+            'class': 'django.utils.log.AdminEmailHandler',
+            'email_backend': EMAIL_BACKEND,
+            'include_html': True,
+        },
         'file': {
             'level': 'WARNING',
             'class': 'logging.FileHandler',
             'filename': BASE_DIR / 'djangodebug.log',
             'formatter': 'timestamp',
         },
-        'mail_admins': {
-            'level': 'WARNING',
-            'class': 'django.utils.log.AdminEmailHandler',
-            'email_backend': EMAIL_BACKEND,
-            'include_html': True,
-        },
     },
     'loggers': {
         'django': {
-            'handlers': ['file', 'mail_admins'],
-            'level': 'WARNING',
-            'propagate': True,
+            'handlers': ['console', 'mail_admins', 'file'],
+            'level': 'INFO',
+        },
+        'django.server': {
+            'handlers': ['django.server'],
+            'level': 'INFO',
+            'propagate': False,
         },
     },
 }

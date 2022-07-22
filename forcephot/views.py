@@ -1,5 +1,4 @@
 import datetime
-import os
 import time
 
 
@@ -43,10 +42,11 @@ from rest_framework.reverse import reverse
 from rest_framework.utils.urls import replace_query_param
 
 from forcephot.filters import TaskFilter
-from forcephot.forms import TaskForm, RegistrationForm
+from forcephot.forms import RegistrationForm
 from forcephot.misc import country_code_to_name, country_region_to_name, splitradeclist, datetime_to_mjd, make_pdf_plot
 from forcephot.models import Task
 from forcephot.serializers import ForcePhotTaskSerializer
+from rest_framework import serializers
 
 
 def calculate_queue_positions():
@@ -163,39 +163,16 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             raise PermissionDenied()
-        if request.accepted_renderer.format == 'html':
-            form = TaskForm(request.POST)
-            success = False
-            if form.is_valid():
-                datalist = splitradeclist(request.data)
-                if datalist:
-                    serializer = self.get_serializer(data=datalist, many=True)
-                    success = serializer.is_valid(raise_exception=True)
-                    self.perform_create(serializer)
-                    kwargs['headers'] = self.get_success_headers(serializer.data)
 
-                    # this single post request may have actually contained multiple tasks,
-                    # so manually increment the throttles as if we made extra requests
-                    for throttle in self.get_throttles():
-                        for _ in range(len(datalist) - 1):
-                            throttle.allow_request(request=request, view=self)
-                else:
-                    success = False
-
-            if success:
-                strnewids = ','.join([str(item['id']) for item in serializer.data])
-                redirurl = request.META['HTTP_REFERER'] if 'HTTP_REFERER' in request.META else reverse('task-list')
-                redirurl = replace_query_param(redirurl, 'newids', strnewids)
-                return redirect(redirurl, status=status.HTTP_201_CREATED, headers=kwargs['headers'])
-
-            kwargs['form'] = form
-            return self.list(request, *args, **kwargs)
+        if 'radeclist' in request.data:
+            datalist = splitradeclist(request.data)
+            serializer = self.get_serializer(data=datalist, many=True)
         else:
             serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
-            headers = self.get_success_headers(serializer.data)
-            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         # if self.request.user and self.request.user.is_authenticated:
@@ -218,7 +195,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         except KeyError:
             pass
 
-        extra_fields['from_api'] = (self.request.accepted_renderer.format != 'html')
+        extra_fields['from_api'] = 'HTTP_REFERER' not in self.request.META
 
         serializer.save(**extra_fields)
         calculate_queue_positions()
@@ -250,14 +227,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied()
 
         if request.accepted_renderer.format == 'html':
-            if 'form' in kwargs:
-                form = kwargs['form']
-            else:
-                form = TaskForm()
-
             return Response(template_name=self.template_name, data={
                 # 'serializer': serializer, 'data': serializer.data, 'tasks': page,
-                'form': form, 'name': 'Task Queue', 'singletaskdetail': False,
+                'name': 'Task Queue', 'singletaskdetail': False,
                 'paginator': self.paginator, 'usertaskcount': listqueryset.count(),
                 'debug': settings.DEBUG, 'api_url_base': request.build_absolute_uri(reverse('task-list'))
             })

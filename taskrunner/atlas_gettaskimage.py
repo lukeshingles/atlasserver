@@ -26,7 +26,7 @@ def main():
     if df.empty:
         return
 
-    row = df.iloc[0]
+    row = df[df.m == df.m.max()].iloc[0]  # maximum magnitude
     obs = row['Obs']  # looks like '01a59309o0235c'
     imgfolder = 'red' if reduced else 'diff'  # difference or reduced image
     fitsext = 'fits' if reduced else 'diff'

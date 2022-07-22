@@ -82,42 +82,79 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     imagerequest_url = serializers.SerializerMethodField('get_imagerequest_url')
     result_imagezip_url = serializers.SerializerMethodField('get_result_imagezip_url')
 
+    def validate_mpc_name(self, value, prefix='', field='mpc_name'):
+        # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        # if any([c not in dict.fromkeys(okchars) for c in value]):
+        #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
+
+        badchars = "a'\";"
+        if any([c in dict.fromkeys(badchars) for c in value]):
+            raise serializers.ValidationError(
+                {field: prefix + 'Invalid mpc_name. May not contain quotes or seimicolons'})
+
+        return value
+
+    def validate_ra(self, value, prefix='', field='ra'):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value) and value >0:
+            raise serializers.ValidationError(
+                {field: prefix + 'ra must be a finite floating-point number.'})
+
+        return value
+
+    def validate_dec(self, value, prefix='', field='dec'):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {field: prefix + 'dec must be a finite floating-point number.'})
+
+        return value
+
+    def validate_mjd_min(self, value):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {'mjd_min': 'mjd_min must be either None or a finite floating-point number.'})
+
+        return value
+
+    def validate_mjd_max(self, value):
+        if value is None or value == '':
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {'mjd_max': 'mjd_max must be either None or a finite floating-point number.'})
+
+        return value
+
     def validate(self, attrs):
-        # print(attrs)
-        # raise serializers.ValidationError('This field must be an even number.')
         if attrs.get('mpc_name', False):
-            mpc_name = attrs['mpc_name']
-            # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            # if any([c not in dict.fromkeys(okchars) for c in mpc_name]):
-            #     raise serializers.ValidationError({'mpc_name': f'Invalid an mpc_name. May contain only: 0-9a-z[space]'})
-            badchars = "'\";"
-            if any([c in dict.fromkeys(badchars) for c in mpc_name]):
-                raise serializers.ValidationError(
-                    {'mpc_name': 'Invalid an mpc_name. May not contain quotes or seimicolons'})
 
             if attrs.get('ra', False) or attrs.get('dec', False):
                 raise serializers.ValidationError({'mpc_name': 'mpc_name was given but RA and Dec were not empty.'})
         else:
-            if not 'ra' in attrs and not 'dec' in attrs:
-                raise serializers.ValidationError('Either an mpc_name or (ra, dec) must be specified')
-            elif not 'dec' in attrs:
-                raise serializers.ValidationError({'dec': 'RA given but Dec is missing'})
-            elif not 'ra' in attrs:
-                raise serializers.ValidationError({'ra': 'Dec given but RA is missing'})
-
-            if not is_finite_float(attrs.get('ra', 0.)):
-                raise serializers.ValidationError({'ra': 'ra must be a finite floating-point number'})
-
-            if not is_finite_float(attrs.get('dec', 0.)):
-                raise serializers.ValidationError({'dec': 'dec must be a finite floating-point number'})
+            if 'ra' not in attrs and 'dec' not in attrs:
+                raise serializers.ValidationError('Either an mpc_name or (ra, dec) must be specified.')
+            elif 'dec' not in attrs:
+                raise serializers.ValidationError({'dec': 'ra was set but dec is missing.'})
+            elif 'ra' not in attrs:
+                raise serializers.ValidationError({'ra': 'dec was set but ra is missing.'})
 
         if 'mjd_min' in attrs and attrs['mjd_min'] is not None and not is_finite_float(attrs['mjd_min']):
             raise serializers.ValidationError(
                 {'mjd_min': 'mjd_min must be either None or a finite floating-point number.'})
 
-        if 'mjd_max' in attrs and attrs['mjd_max'] is not None and not is_finite_float(attrs['mjd_max']):
-            raise serializers.ValidationError(
-                {'mjd_max': 'mjd_max must be either None or a finite floating-point number.'})
+        if 'mjd_max' in attrs and attrs['mjd_max'] is not None:
+            if 'mjd_min' in attrs and attrs['mjd_min'] is not None and not attrs['mjd_max'] > attrs['mjd_min']:
+                raise serializers.ValidationError(
+                    {'mjd_max': 'mjd_max must be greater than mjd_min.'})
 
         return attrs
 

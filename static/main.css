@@ -222,3 +222,16 @@ table.countrystats th[scope="row"] {
 .bk-logo {
     display:none !important;
 }
+
+#submitrequest.submitting {
+  background: grey;
+}
+
+#tasklistfetchstatus {
+  color: rgb(60%,60%,60%);
+  font-size: 0.7em;
+}
+
+#tasklistfetchstatus .errors {
+  color: red;
+}
