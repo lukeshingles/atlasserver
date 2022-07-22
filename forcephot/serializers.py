@@ -98,7 +98,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         if value is None or value == '':
             return value
 
-        if not is_finite_float(value) and value >0:
+        if not is_finite_float(value):
             raise serializers.ValidationError(
                 {field: prefix + 'ra must be a finite floating-point number.'})
 
