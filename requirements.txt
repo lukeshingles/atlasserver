@@ -1,6 +1,6 @@
 astrocalc>=0.4.1
 astropy>=4.2
-bokeh>=2.4.2
+bokeh>=2.4.3
 Django>=3.2
 django-filter>=2.4.0
 django-geoip2-extras>=2.0.2
