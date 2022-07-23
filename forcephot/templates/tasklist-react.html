@@ -13,7 +13,6 @@
         "use strict";
         var api_url_obj = new URL(window.location.href);
         api_url_obj.searchParams.set('format', 'json');
-        api_url_obj.searchParams.delete('newids');
         const api_url = api_url_obj.toString();
         const api_url_base = '{{api_url_base|escapejs}}';
 
@@ -43,9 +42,9 @@
 {% block script %}
     {{ block.super }}
 
-    <!-- <script src="{% static 'js/plotly-v1.58.4.kws.js' %}"></script> -->
-    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/1.58.4/plotly-basic.min.js" integrity="sha512-7S1p+6A2VVIWu+EevZqeqXWos1Tn+mroZxpkZ9THWipecJkL7TLg2myv5cIAShu9j3+fjHyCvEh/d7BKegMY1g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script> -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.1.0/plotly-basic.min.js" integrity="sha512-zXKq4GIZaBx/gGnmJnbXivo3sXo+caMy2HGhhwna3iKvbzsTGRbHZoJJq+xQsIRizeoMZ9jDFiHegiusa8yNdw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.13.2/plotly.min.js"
+      integrity="sha512-ITXzLSVSZ7scJaUrv1WSSxZZ/BER14QBqChT/Bta2oZgLu6PcTYWJfVgICG+jwDrEfkVYVJSYwkAVlqxBl4q3w=="
+      crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <script language="javascript" type="text/javascript">
     "use strict";
@@ -126,28 +125,8 @@
     var newids = [];
     var newtaskids = [];
 
-    $(document).ready(function() {
-      var current_url_nonewids = new URL(window.location.href);
-      newids = current_url_nonewids.searchParams.get('newids')
-      current_url_nonewids.searchParams.delete('newids');
-      newtaskids = [];
-      if (newids != null) {
-          newids.split('%2C').forEach(function(taskid) {
-            newtaskids.push(parseInt(taskid));
-          });
-
-          // console.log('new task', taskid)
-          // li_id = '#task-' + taskid
-          // newtaskids.push(parseInt(taskid));
-          // $(li_id).hide();
-          // $(li_id).show(700);
-          // remove the newids GET parameter from the URL box
-          console.log('newids parameter found');
-          window.history.replaceState({}, document.title, current_url_nonewids.toString() );
-      }
-
-      inactivityTimer();
-    });
+    // TODO: remove?
+    $(document).ready(inactivityTimer);
     </script>
 
     {% if debug %}
@@ -155,7 +134,10 @@
       <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
       <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
       <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
+      <script type="text/babel" src="{% static 'js/newrequest.jsx' %}"></script>
+      <script type="text/babel" src="{% static 'js/task.jsx' %}"></script>
       <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script>
+      <!-- <script type="text/javascript" src="{% static 'js/tasklist.v2.min.js' %}"></script> -->
     {% else %}
       <!-- production -->
       <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
