@@ -63,6 +63,8 @@ class Task(models.Model):
         default=RequestType.FP
     )
 
+    task_modified_datetime = models.DateTimeField(auto_now=True)
+
     def localresultfileprefix(self, use_parent=False):
         """
             return the relative path prefix for the job (no file extension)
