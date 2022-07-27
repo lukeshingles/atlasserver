@@ -141,8 +141,11 @@ class Task extends React.Component {
             taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url} onClick={(e) => { this.props.setSingleTaskView(e, task.parent_task_id, task.parent_task_url) }}>Task {task.parent_task_id}</a></p>);
         } else if (task.parent_task_id) {
             taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
+        } else if (task.request_type == 'IMGZIP') {
+            taskbox.push(<p key="imgrequest">Image request</p>);
         }
-        if (task.parent_task_id) {
+
+        if (task.request_type == 'IMGZIP') {
             var imagetype = task.use_reduced ? 'reduced' : 'difference';
             taskbox.push(<p key="imgrequestnote">Up to the first 500 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
         }
