@@ -1,5 +1,32 @@
 'use strict';
 
+class TaskPlot extends React.PureComponent {
+    constructor(props) {
+        super(props);
+    }
+
+    componentDidMount() {
+        console.log('activating plot', this.props.taskid)
+        var plot_url = new URL(this.props.taskurl);
+        plot_url.pathname += 'resultplotdata.js';
+        plot_url.search = '';
+        $.ajax({ url: plot_url, cache: true, dataType: 'script' });
+    }
+
+    componentWillUnmount() {
+        console.log('Unmounting plot for task ', this.props.taskid);
+        delete jslimitsglobal['#plotforcedflux-task-' + this.props.taskid]
+        delete jslcdataglobal['#plotforcedflux-task-' + this.props.taskid]
+        delete jslabelsglobal['#plotforcedflux-task-' + this.props.taskid]
+    }
+
+    render() {
+        return (
+            <div key='plot' id={'plotforcedflux-task-' + this.props.taskid} className="plot" style={{ width: '100%', height: '300px' }}></div>
+        );
+    }
+}
+
 class Task extends React.Component {
     constructor(props) {
         super(props);
