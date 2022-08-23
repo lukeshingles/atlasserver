@@ -43,6 +43,9 @@ class Task extends React.Component {
         setTimeout(() => {
             // console.log('Starting delete of task ', this.props.taskdata.id);
             $.ajax({
+                headers: {
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
                 url: this.props.taskdata.url, method: 'delete',
                 success: (result) => { console.log('Deleted task ', this.props.taskdata.id); this.props.fetchData() },
                 error: (err) => { console.log('Failed to delete task ', this.props.taskdata.id, err); $('#task-' + this.props.taskdata.id).slideDown(100); this.props.fetchData(); }
