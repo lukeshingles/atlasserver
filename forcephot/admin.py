@@ -7,6 +7,7 @@ import forcephot.models
 
 # admin.site.register(forcephot.models.Task)
 
+
 class CustomAdmin(admin.ModelAdmin):
     # readonly_fields = ('parent_task',)
 

@@ -11,21 +11,27 @@ ATLASSERVERPATH = Path(__file__).resolve().parent
 
 def run_command(commands, print_output=True):
     p = subprocess.Popen(
-        commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        encoding='utf-8', bufsize=1, universal_newlines=True)
+        commands,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        bufsize=1,
+        universal_newlines=True,
+    )
 
     exit_now = False
     if print_output:
         try:
-            for line in iter(p.stdout.readline, ''):
-                print(line, end='')
+            for line in iter(p.stdout.readline, ""):
+                print(line, end="")
         except KeyboardInterrupt:
             exit_now = True
 
     stdout, stderr = p.communicate()
     if print_output:
-        print(stdout, end='')
-        print(stderr, end='')
+        print(stdout, end="")
+        print(stderr, end="")
 
     if exit_now:
         sys.exit(130)
@@ -42,9 +48,9 @@ def print_tips():
 
 
 def check_session_exists():
-    returncode = run_command(['tmux', 'has', '-t', 'atlastaskrunner'], print_output=False)
+    returncode = run_command(["tmux", "has", "-t", "atlastaskrunner"], print_output=False)
 
-    return (returncode == 0)
+    return returncode == 0
 
 
 def start():
@@ -52,52 +58,54 @@ def start():
         print("atlastaskrunner tmux session already exists")
     else:
         print("Starting atlastaskrunner tmux session")
-        pidfile = Path('/tmp/atlasforced/taskrunner.pid')
+        pidfile = Path("/tmp/atlasforced/taskrunner.pid")
         if pidfile.is_file():
             pid = int(pidfile.open().read().strip())
             if not psutil.pid_exists(pid):
                 # process ended, so the pid file should be deleted
                 pidfile.unlink()
-        run_command([
-            'tmux', 'new-session', '-d', '-s', 'atlastaskrunner',
-            str(ATLASSERVERPATH / 'taskrunner' / 'supervise_atlastaskrunner.sh')])
+        run_command(
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                "atlastaskrunner",
+                str(ATLASSERVERPATH / "taskrunner" / "supervise_atlastaskrunner.sh"),
+            ]
+        )
 
     print_tips()
 
 
 def stop():
     if check_session_exists():
-        print('Stopping atlastaskrunner tmux session')
-        run_command(['tmux', 'send-keys', '-t', 'atlastaskrunner', 'C-C'])
-        run_command(['tmux', 'kill-session', '-t', 'atlastaskrunner'])
+        print("Stopping atlastaskrunner tmux session")
+        run_command(["tmux", "send-keys", "-t", "atlastaskrunner", "C-C"])
+        run_command(["tmux", "kill-session", "-t", "atlastaskrunner"])
     else:
-        print('task runner tmux session does not exist')
+        print("task runner tmux session does not exist")
 
-    if Path('/tmp/atlasforced/taskrunner.pid').is_file():
-        Path('/tmp/atlasforced/taskrunner.pid').unlink()
+    if Path("/tmp/atlasforced/taskrunner.pid").is_file():
+        Path("/tmp/atlasforced/taskrunner.pid").unlink()
 
 
 def main():
-
     if len(sys.argv) == 2 and sys.argv[1] == "start":
-
         start()
 
     elif len(sys.argv) == 2 and sys.argv[1] == "restart":
-
         stop()
         start()
 
     elif len(sys.argv) == 2 and sys.argv[1] == "stop":
-
         stop()
 
     elif len(sys.argv) >= 2 and sys.argv[1] == "log":
         # pass through a -f for follow logs
-        run_command(['tail', *sys.argv[2:], str(ATLASSERVERPATH / 'taskrunner' / 'logs' / 'fprunnerlog_latest.txt')])
+        run_command(["tail", *sys.argv[2:], str(ATLASSERVERPATH / "taskrunner" / "logs" / "fprunnerlog_latest.txt")])
 
     else:
-
         print("Usage: atlastaskrunner [start|restart|stop|log] [-f]")
         print_tips()
         sys.exit(3)

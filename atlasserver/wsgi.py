@@ -15,6 +15,6 @@ load_dotenv(override=True)
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'atlasserver.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
 application = get_wsgi_application()

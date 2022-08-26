@@ -14,7 +14,7 @@ ATLASSERVERPATH = Path(__file__).resolve().parent
 
 
 def get_httpd_pid():
-    pidfile = Path(APACHEPATH, 'httpd.pid')
+    pidfile = Path(APACHEPATH, "httpd.pid")
     if pidfile.is_file():
         pid = int(pidfile.open().read().strip())
         if psutil.pid_exists(pid):
@@ -28,17 +28,23 @@ def get_httpd_pid():
 
 def run_command(commands, print_output=True):
     p = subprocess.Popen(
-        commands, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        encoding='utf-8', bufsize=1, universal_newlines=True)
+        commands,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        bufsize=1,
+        universal_newlines=True,
+    )
 
     if print_output:
-        for line in iter(p.stdout.readline, ''):
-            print(line, end='')
+        for line in iter(p.stdout.readline, ""):
+            print(line, end="")
 
     stdout, stderr = p.communicate()
     if print_output:
-        print(stdout, end='')
-        print(stderr, end='')
+        print(stdout, end="")
+        print(stderr, end="")
 
     return p.returncode
 
@@ -51,36 +57,54 @@ def start():
 
     print("Starting ATLAS Apache server")
 
-    if Path('.env').is_file():
-        Path('.env').chmod(0o600)
+    if Path(".env").is_file():
+        Path(".env").chmod(0o600)
 
     APACHEPATH.mkdir(parents=True, exist_ok=True)
 
     # Create a setup script and immediately start the apache instance.  Our URL prefix
     # is specified by the --mount-point setting.  We need to specify a PYTHONPATH before
     # starting the apache instance. Run this script from THIS directory.
-    if platform.system() == 'Darwin':
-        print('Detected macOS, so using testing configuration for http://localhost/')
+    if platform.system() == "Darwin":
+        print("Detected macOS, so using testing configuration for http://localhost/")
         port = 80
-        mountpoint = '/'
+        mountpoint = "/"
         includefile = []
     else:
         port = 8086
-        mountpoint = '/forcedphot'
-        includefile = ['--include-file', str(ATLASSERVERPATH / "httpconf.txt")]
+        mountpoint = "/forcedphot"
+        includefile = ["--include-file", str(ATLASSERVERPATH / "httpconf.txt")]
 
     command = [
-        'mod_wsgi-express', 'setup-server', '--working-directory', str(ATLASSERVERPATH / "atlasserver"),
-        '--url-alias', f'{mountpoint}/static', str(ATLASSERVERPATH / "static"), '--url-alias', 'static', 'static',
-        '--application-type', 'module', 'atlasserver.wsgi', '--server-root', str(APACHEPATH), '--port', str(port),
-        '--mount-point', mountpoint, *includefile, '--log-to-terminal']
+        "mod_wsgi-express",
+        "setup-server",
+        "--working-directory",
+        str(ATLASSERVERPATH / "atlasserver"),
+        "--url-alias",
+        f"{mountpoint}/static",
+        str(ATLASSERVERPATH / "static"),
+        "--url-alias",
+        "static",
+        "static",
+        "--application-type",
+        "module",
+        "atlasserver.wsgi",
+        "--server-root",
+        str(APACHEPATH),
+        "--port",
+        str(port),
+        "--mount-point",
+        mountpoint,
+        *includefile,
+        "--log-to-terminal",
+    ]
     run_command(command)
 
-    os.environ['PYTHONPATH'] = str(ATLASSERVERPATH)
+    os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)
 
     # socket might not be released, so try until it is
-    while run_command([f'{APACHEPATH / "apachectl"}', 'start']):
-        print('Start command unsuccessful. Trying again in one second...')
+    while run_command([f'{APACHEPATH / "apachectl"}', "start"]):
+        print("Start command unsuccessful. Trying again in one second...")
         time.sleep(1)
 
     while not get_httpd_pid():
@@ -93,18 +117,16 @@ def stop():
     pid = get_httpd_pid()
     if pid:
         print(f"Stopping ATLAS Apache server (pid {pid})")
-        run_command([f'{APACHEPATH / "apachectl"}', 'graceful-stop'])
+        run_command([f'{APACHEPATH / "apachectl"}', "graceful-stop"])
     else:
         print("ATLAS Apache server was not running")
 
 
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "start":
-
         start()
 
     elif len(sys.argv) == 2 and sys.argv[1] == "restart":
-
         stop()
 
         # wait for httpd process to be ended
@@ -114,11 +136,9 @@ def main():
         start()
 
     elif len(sys.argv) == 2 and sys.argv[1] == "stop":
-
         stop()
 
     else:
-
         print("Usage: atlaswebserver [start|restart|stop]")
         print()
 

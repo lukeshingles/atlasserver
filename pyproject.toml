@@ -1,0 +1,18 @@
+[tool.black]
+line-length = 120
+preview = true
+extend-exclude = "plot_atlas_fp.py"
+
+[tool.flake8]
+ignore = "N806"
+max-line-length = 120
+count = true
+
+[tool.pylint.format]
+max-line-length = "120"
+
+[tool.pylama]
+max-line-length = 120
+
+[tool.pycodestyle]
+max-line-length = 120

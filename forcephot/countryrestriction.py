@@ -18,32 +18,27 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
     def process_request(self, request):
         block_message = None
 
-        country_code = request.geo_data['country_code']
-        if country_code in ['BY', 'RU']:
+        country_code = request.geo_data["country_code"]
+        if country_code in ["BY", "RU"]:
             block_message = f"Forbidden country: {country_code}"
             log_message = f"Forbidden country: {country_code}\n"
 
-        if hasattr(request.user, 'email'):
-            if request.user.email.endswith('.ru'):
+        if hasattr(request.user, "email"):
+            if request.user.email.endswith(".ru"):
                 block_message = "Forbidden country: RU"
                 log_message = "Forbidden email country blocked"
-            elif request.user.email.endswith('.by'):
+            elif request.user.email.endswith(".by"):
                 block_message = "Forbidden country: BY"
                 log_message = "Forbidden email country blocked"
 
         if block_message:
-            userdata = {'user': str(request.user)}
-            userprops = ['username', 'email']
+            userdata = {"user": str(request.user)}
+            userprops = ["username", "email"]
             for attr in userprops:
                 userdata[attr] = getattr(request.user, attr, "None")
 
-            body = (
-                f'{log_message}\n'
-                f'Geo data: {request.geo_data}\n'
-                f'User: {userdata}\n'
-                f'Request: {request}\n'
-            )
-            subject = 'Geo blocked request'
+            body = f"{log_message}\nGeo data: {request.geo_data}\nUser: {userdata}\nRequest: {request}\n"
+            subject = "Geo blocked request"
             # message = EmailMessage(
             #     subject=subject,
             #     body=body,
@@ -57,7 +52,9 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
                 message=body,
                 # from_email='atlasforced@gmail.com',
                 from_email=settings.EMAIL_HOST_USER,
-                recipient_list=['luke.shingles@gmail.com', ],
+                recipient_list=[
+                    "luke.shingles@gmail.com",
+                ],
                 fail_silently=False,
             )
 

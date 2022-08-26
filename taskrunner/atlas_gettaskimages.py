@@ -4,10 +4,12 @@ This script is to be run on sc01. A job datafile is converted to a zip of fits i
 """
 
 import os
+
 # import math
 import pandas as pd
 from pathlib import Path
 import shutil
+
 # import subprocess
 import sys
 import tempfile
@@ -79,8 +81,8 @@ def main():
         return
 
     datafile = sys.argv[1]
-    reduced = (sys.argv[2] == 'red')
-    df = pd.read_csv(datafile, delim_whitespace=True, escapechar='#')
+    reduced = sys.argv[2] == "red"
+    df = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
 
     firstfitsoutpath_c = None
     firstfitsoutpath_o = None
@@ -90,17 +92,17 @@ def main():
     # wpdatelines = ['#obs MJD obsdate wallpapersource wallpaperdate wallpaperdescription\n'] if not reduced else None
 
     for index, row in df[:500].iterrows():
-        mjd = row['#MJD']
-        obs = row['Obs']  # looks like '01a59309o0235c'
-        imgfolder = 'red' if reduced else 'diff'  # difference or reduced image
-        fitsext = 'fits' if reduced else 'diff'
-        fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'
-        fitsoutpath = Path(tmpfolder / (f'{obs}.fits' if reduced else f'{obs}_diff.fits'))
+        mjd = row["#MJD"]
+        obs = row["Obs"]  # looks like '01a59309o0235c'
+        imgfolder = "red" if reduced else "diff"  # difference or reduced image
+        fitsext = "fits" if reduced else "diff"
+        fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
+        fitsoutpath = Path(tmpfolder / (f"{obs}.fits" if reduced else f"{obs}_diff.fits"))
 
-        if firstfitsoutpath_c is None and obs.endswith('c'):
+        if firstfitsoutpath_c is None and obs.endswith("c"):
             firstfitsoutpath_c = fitsoutpath
 
-        if firstfitsoutpath_o is None and obs.endswith('o'):
+        if firstfitsoutpath_o is None and obs.endswith("o"):
             firstfitsoutpath_o = fitsoutpath
 
         commands.append(
@@ -132,8 +134,8 @@ def main():
         #     obsdate = mjd_to_date(mjd)
         #     wpdatelines.append(f'{obs} {mjd:.6f} {obsdate} {wallpaperstatus} {wallpaperdesc}\n')
 
-    commandfile = tmpfolder / 'commandlist.sh'
-    with commandfile.open('w') as f:
+    commandfile = tmpfolder / "commandlist.sh"
+    with commandfile.open("w") as f:
         f.writelines(commands)
 
     # if not reduced:
@@ -141,21 +143,21 @@ def main():
     #     with wpdatefile.open('w') as f:
     #         f.writelines(wpdatelines)
 
-    os.system(f'parallel --jobs 16 < {commandfile}')
+    os.system(f"parallel --jobs 16 < {commandfile}")
 
     for firstfitsoutpath in [firstfitsoutpath_c, firstfitsoutpath_o]:
         if firstfitsoutpath is not None:
-            origext = '.fits' if reduced else '_diff.fits'
-            refoutputpath = str(firstfitsoutpath).replace(origext, '_ref.fits')
-            command_getref = f'/atlas/bin/wpwarp2 -novar -nomask -nozerosat -wp {refoutputpath} {firstfitsoutpath}\n'
-            with commandfile.open('a') as f:
+            origext = ".fits" if reduced else "_diff.fits"
+            refoutputpath = str(firstfitsoutpath).replace(origext, "_ref.fits")
+            command_getref = f"/atlas/bin/wpwarp2 -novar -nomask -nozerosat -wp {refoutputpath} {firstfitsoutpath}\n"
+            with commandfile.open("a") as f:
                 f.write(command_getref)
             print(command_getref)
             os.system(command_getref)
 
-    os.system(f'cp {datafile} {tmpfolder}')
+    os.system(f"cp {datafile} {tmpfolder}")
 
-    zipoutpath = Path(datafile).with_suffix('.zip').resolve()
+    zipoutpath = Path(datafile).with_suffix(".zip").resolve()
 
     # make sure the zip file doesn't somehow exist already
     if zipoutpath.exists():
@@ -168,5 +170,5 @@ def main():
     shutil.rmtree(tmpfolder)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -11,13 +11,13 @@ def custom_exception_handler(exc, context):
     if response is not None and response.status_code in [401, 403]:
         try:
             # login_url = request.build_absolute_uri(reverse('rest_framework:login'))
-            login_url = reverse('rest_framework:login')
-            request = context.get('request')
+            login_url = reverse("rest_framework:login")
+            request = context.get("request")
             next = escape(request.path)
             redirect_url = f"{login_url}?next={next}"
 
         except NoReverseMatch:
-            redirect_url = '/'
+            redirect_url = "/"
 
         return HttpResponseRedirect(redirect_url)
     else:

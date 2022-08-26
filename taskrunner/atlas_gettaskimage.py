@@ -16,22 +16,22 @@ def main():
         return
 
     datafile = sys.argv[1]
-    reduced = (sys.argv[2] == 'red')
+    reduced = sys.argv[2] == "red"
 
     if not os.path.exists(datafile):
         return
 
-    df = pd.read_csv(datafile, delim_whitespace=True, escapechar='#')
+    df = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
 
     if df.empty:
         return
 
     row = df[df.m == df.m.max()].iloc[0]  # maximum magnitude
-    obs = row['Obs']  # looks like '01a59309o0235c'
-    imgfolder = 'red' if reduced else 'diff'  # difference or reduced image
-    fitsext = 'fits' if reduced else 'diff'
-    fitsinput = f'/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz'
-    fitsoutpath = Path(datafile).with_suffix('.fits')
+    obs = row["Obs"]  # looks like '01a59309o0235c'
+    imgfolder = "red" if reduced else "diff"  # difference or reduced image
+    fitsext = "fits" if reduced else "diff"
+    fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
+    fitsoutpath = Path(datafile).with_suffix(".fits")
     os.system(
         "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
         f"{fitsinput} {fitsoutpath} "
@@ -44,8 +44,8 @@ def main():
         fitsoutpath.unlink()
 
     # jobxxxxx.fits.jpg to jobxxxx.jpg
-    fitsoutpath.with_suffix('.fits.jpg').rename(Path(datafile).with_suffix('.jpg'))
+    fitsoutpath.with_suffix(".fits.jpg").rename(Path(datafile).with_suffix(".jpg"))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

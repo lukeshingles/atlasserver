@@ -16,10 +16,10 @@ from rest_framework.utils.urls import remove_query_param, replace_query_param
 
 
 class TaskPagination(CursorPagination):
-    cursor_query_param = 'cursor'
-    ordering = ['id']
-    template = 'rest_framework/pagination/older_and_newer.html'
-    page_size_query_param = 'pagesize'
+    cursor_query_param = "cursor"
+    ordering = ["id"]
+    template = "rest_framework/pagination/older_and_newer.html"
+    page_size_query_param = "pagesize"
     querysetcount = None
     pagefirsttaskposition = None  # with ordered tasks, the position of the first page time
     previous_is_top = False
@@ -52,14 +52,14 @@ class TaskPagination(CursorPagination):
         # If we have a cursor with a fixed position then filter by that.
         if current_position is not None:
             order = self.ordering[0]
-            is_reversed = order.startswith('-')
-            order_attr = order.lstrip('-')
+            is_reversed = order.startswith("-")
+            order_attr = order.lstrip("-")
 
             # Test for: (cursor reversed) XOR (queryset reversed)
             if self.cursor.reverse != is_reversed:
-                kwargs = {order_attr + '__lt': current_position}
+                kwargs = {order_attr + "__lt": current_position}
             else:
-                kwargs = {order_attr + '__gt': current_position}
+                kwargs = {order_attr + "__gt": current_position}
 
             queryset = queryset.filter(**kwargs)
 
@@ -70,14 +70,14 @@ class TaskPagination(CursorPagination):
                 prev_records = queryset_full.filter(id__gt=int(current_position) - 1).count()
 
             self.pagefirsttaskposition = prev_records
-            if (prev_records <= self.page_size):
+            if prev_records <= self.page_size:
                 self.previous_is_top = True
 
         # If we have an offset cursor then offset the entire page by that amount.
         # We also always fetch an extra item in order to determine if there is a
         # page following on from this one.
-        results = list(queryset[offset:offset + self.page_size + 1])
-        self.page = list(results[:self.page_size])
+        results = list(queryset[offset : offset + self.page_size + 1])
+        self.page = list(results[: self.page_size])
 
         # Determine the position of the final item following the page.
         if len(results) > len(self.page):
@@ -119,15 +119,20 @@ class TaskPagination(CursorPagination):
 
     def get_previous_link(self):
         if self.previous_is_top:
-            return remove_query_param(self.base_url, 'cursor')
+            return remove_query_param(self.base_url, "cursor")
         else:
             return super().get_previous_link()
 
     def get_paginated_response(self, data, headers=None):
-        return Response(OrderedDict([
-            ('next', self.get_next_link()),
-            ('previous', self.get_previous_link()),
-            ('pagefirsttaskposition', self.pagefirsttaskposition),
-            ('taskcount', self.querysetcount),
-            ('results', data)
-        ]), headers=headers)
+        return Response(
+            OrderedDict(
+                [
+                    ("next", self.get_next_link()),
+                    ("previous", self.get_previous_link()),
+                    ("pagefirsttaskposition", self.pagefirsttaskposition),
+                    ("taskcount", self.querysetcount),
+                    ("results", data),
+                ]
+            ),
+            headers=headers,
+        )
