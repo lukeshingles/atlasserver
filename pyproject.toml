@@ -7,13 +7,14 @@ extend-exclude = "plot_atlas_fp.py"
 ignore = "N806"
 max-line-length = 120
 count = true
-exclude =
-    .git,
-    __pycache__,
-    docs/source/conf.py,
-    old,
-    build,
-    plot_atlas_fp.py
+exclude = [
+    '.git',
+    '__pycache__',
+    'docs/source/conf.py',
+    'old',
+    'build',
+    'plot_atlas_fp.py'
+]
 
 [tool.pylint.format]
 max-line-length = "120"
