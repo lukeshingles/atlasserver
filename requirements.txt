@@ -5,6 +5,7 @@ Django>=3.2
 django-filter>=2.4.0
 django-geoip2-extras>=2.0.2
 djangorestframework>=3.12.4
+flake8>=5.0.4
 fundamentals>=2.3.0
 #geoip2>=4.5.0
 julian>=0.14
