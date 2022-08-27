@@ -7,12 +7,12 @@ from django.core.paginator import Paginator as DjangoPaginator
 from django.template import loader
 from django.utils.encoding import force_str
 from django.utils.translation import gettext_lazy as _
-from rest_framework.pagination import CursorPagination, _positive_int, Cursor, _reverse_ordering, replace_query_param
+from rest_framework.pagination import CursorPagination, _positive_int, Cursor, _reverse_ordering
 from rest_framework.compat import coreapi, coreschema
 from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
-from rest_framework.utils.urls import remove_query_param, replace_query_param
+from rest_framework.utils.urls import remove_query_param
 
 
 class TaskPagination(CursorPagination):
