@@ -103,7 +103,13 @@ def main():
 
     elif len(sys.argv) >= 2 and sys.argv[1] == "log":
         # pass through a -f for follow logs
-        run_command(["tail", *sys.argv[2:], str(ATLASSERVERPATH / "taskrunner" / "logs" / "fprunnerlog_latest.txt")])
+        run_command(
+            [
+                "tail",
+                *sys.argv[2:],
+                str(ATLASSERVERPATH / "atlasserver" / "taskrunner" / "logs" / "fprunnerlog_latest.txt"),
+            ]
+        )
 
     else:
         print("Usage: atlastaskrunner [start|restart|stop|log] [-f]")
