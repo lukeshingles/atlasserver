@@ -44,7 +44,7 @@ load-plugins = "pylint_django"
 django-settings-module = "atlasserver.settings"
 
 [tool.pylint.typecheck]
-ignored-modules = ["astropy", "extinction"]
+ignored-modules = ["astropy"]
 
 [tool.setuptools_scm]
 write_to = "_version.py"
