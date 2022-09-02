@@ -77,9 +77,9 @@ jobs:
               run: |
                   python3 -m pip install --upgrade pip wheel pylint
 
-            - name: Lint with mypy
+            - name: Lint with pylint
               run: |
-                  pylint artistools
+                  pylint atlasserver
 
     superlinter:
         name: Super linter
