@@ -1,6 +1,6 @@
 # atlasserver
 
-https://fallingstar-data.com/forcedphot/
+<https://fallingstar-data.com/forcedphot/>
 
 This is the source code for the ATLAS Forced Photometry Server, a Python Django Rest Framework server with a React frontend.
 

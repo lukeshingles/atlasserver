@@ -27,9 +27,9 @@ ul.nav {
   padding-top: 96px;
 }
 
-div#content {
-  /* margin-top: 0em; */
-}
+/* div#content {
+  margin-top: 0em;
+} */
 
 div.page-header {
   margin: 0;
@@ -46,7 +46,7 @@ input::placeholder {
 }
 
 .submit {
-    background-color: #6BA3E8;
+  background-color: #6BA3E8;
 }
 
 div.newrequest {
@@ -62,31 +62,32 @@ h2 {
 }
 
 form#newrequest li {
-    display: block;
+  display: block;
 }
 
-form#newrequest li > * {
-    display: inline-block;
-    vertical-align: middle;
+form#newrequest li>* {
+  display: inline-block;
+  vertical-align: middle;
 }
 
-form#newrequest li > *:nth-child(1) {
-    text-align: right;
-    width: 5em;
-    margin-right: 10px;
+form#newrequest li>*:nth-child(1) {
+  text-align: right;
+  width: 5em;
+  margin-right: 10px;
 }
 
-form#newrequest li > *:nth-child(2) {
-    text-align: left;
-    width: 15em;
+form#newrequest li>*:nth-child(2) {
+  text-align: left;
+  width: 15em;
 }
 
-form#newrequest input, textarea {
-    display:inline-block;
-    padding: 0.3em 0.3em;
-    margin: 8px 0;
-    box-sizing: border-box;
-    border: 1px solid grey;
+form#newrequest input,
+textarea {
+  display: inline-block;
+  padding: 0.3em 0.3em;
+  margin: 8px 0;
+  box-sizing: border-box;
+  border: 1px solid grey;
 }
 
 p.inputisodate {
@@ -112,28 +113,28 @@ div#tasklist.singletaskdetail {
 }
 
 .task {
-    margin: 0 0 1.0em 0;
-    padding: 1em;
-    border-radius: 0.5em;
-    border: 0.1em solid rgb(0, 0, 0, 0.8);
-    background-color: white;
+  margin: 0 0 1.0em 0;
+  padding: 1em;
+  border-radius: 0.5em;
+  border: 0.1em solid rgb(0, 0, 0, 0.8);
+  background-color: white;
 }
 
 ul.tasks li.queued {
-    background-color: rgba(0, 0, 0, 0.1);
-    border: none;
-    color: grey;
+  background-color: rgba(0, 0, 0, 0.1);
+  border: none;
+  color: grey;
 }
 
 ul.tasks li.started {
-    background-color: rgb(255, 170, 50, 0.5);
+  background-color: rgb(255, 170, 50, 0.5);
 }
 
 ul.tasks div.rightside {
-    /* background-color: #ff4e19; */
-    /* border-color: #e59400; */
-    float: right;
-    text-align: right;
+  /* background-color: #ff4e19; */
+  /* border-color: #e59400; */
+  float: right;
+  text-align: right;
 }
 
 .results {
@@ -142,27 +143,26 @@ ul.tasks div.rightside {
 }
 
 li.task .btn:not(.btn-sm) {
-    margin-right: 0.2em;
-    /* background-color: #6BA3E8; */
-    color: white;
-    /* display: block; */
-    margin-top: 1em;
-    /* width: 9em; */
-    padding: 0.4em 1.8em;
-    /* margin-right: 0.5em; */
+  margin-right: 0.2em;
+  /* background-color: #6BA3E8; */
+  color: white;
+  /* display: block; */
+  margin-top: 1em;
+  /* width: 9em; */
+  padding: 0.4em 1.8em;
+  /* margin-right: 0.5em; */
 }
 
 ul {
-    list-style: none;
-    padding: 0;
+  list-style: none;
+  padding: 0;
 }
 
 .navbar-nav>li>a[href~="{{ request.get_full_path }}"] {
   text-decoration: underline;
 }
 
-span.helptext
-{
+span.helptext {
   display: block;
 }
 
@@ -195,7 +195,7 @@ ul.errorlist {
   color: red;
 }
 
-ul#taskfilters > * {
+ul#taskfilters>* {
   display: inline;
 }
 
@@ -205,12 +205,12 @@ table.countrystats {
   margin-top: 0;
 }
 
-table.countrystats tr > * {
+table.countrystats tr>* {
   padding: 0.1em 0.6em;
   text-align: right;
 }
 
-table.countrystats tr > *:first-child {
+table.countrystats tr>*:first-child {
   text-align: left;
   padding: 0.1em 0.1em;
 }
@@ -220,7 +220,7 @@ table.countrystats th[scope="row"] {
 }
 
 .bk-logo {
-    display:none !important;
+  display: none !important;
 }
 
 #submitrequest.submitting {
@@ -228,7 +228,7 @@ table.countrystats th[scope="row"] {
 }
 
 #tasklistfetchstatus {
-  color: rgb(60%,60%,60%);
+  color: rgb(60%, 60%, 60%);
   font-size: 0.7em;
 }
 

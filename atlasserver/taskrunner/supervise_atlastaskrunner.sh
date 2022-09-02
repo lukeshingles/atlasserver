@@ -5,7 +5,7 @@ taskrunnerpath=$(dirname "$0")
 pidfile=/tmp/atlasforced/taskrunner.pid
 
 if [ -f $pidfile ]; then
-  echo "ERROR: pid file $pidfile already exists. Exiting to prevent multiple instances of the task runner process." | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+  echo "ERROR: pid file $pidfile already exists. Exiting to prevent multiple instances of the task runner process." | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
   exit 1
 fi
 
@@ -14,12 +14,12 @@ echo $$ > $pidfile
 clean_up() {
   # sig=$(($? - 128))
   sig=$?
-  echo $(date "+%F %H:%M:%S") "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+  echo $(date "+%F %H:%M:%S") "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
   rm $pidfile
   exit
 }
 
-trap 'clean_up; exit' SIGHUP SIGINT SIGTERM SIGABRT SIGKILL SIGQUIT 0 1 2 3 13 15 # EXIT HUP INT QUIT PIPE TERM
+trap 'clean_up; exit' SIGHUP SIGINT SIGTERM SIGABRT SIGQUIT 0 1 2 3 13 15 # EXIT HUP INT QUIT PIPE TERM
 
 
 if [[ -n "$TMUX_PANE" ]]; then
@@ -35,11 +35,11 @@ else
 fi
 
 while (true) do
-   echo $(date "+%F %H:%M:%S") "Supervisor: Starting task runner Python script" | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+   echo $(date "+%F %H:%M:%S") "Supervisor: Starting task runner Python script" | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
    # your command goes here instead of sleep
-   python3 -u $taskrunnerpath/main.py 2> >(tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt >&2) && break;
+   python3 -u "$taskrunnerpath/main.py" 2> >(tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt" >&2) && break;
    # show result
    exitcode=$?
-   echo $(date "+%F %H:%M:%S") "Supervisor: task runner crashed? Exit code was $exitcode. Restarting in two seconds..." | tee -a $taskrunnerpath/logs/fprunnerlog_latest.txt
+   echo $(date "+%F %H:%M:%S") "Supervisor: task runner crashed? Exit code was $exitcode. Restarting in two seconds..." | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
    sleep 2
 done

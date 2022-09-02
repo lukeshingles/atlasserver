@@ -25,10 +25,10 @@ python_version = "3.10"
 exclude = "(build)|(tests)|(migrations)|(static)"
 ignore_missing_imports = true
 plugins = "mypy_django_plugin.main"
-warn_unused_ignores = true
-warn_redundant_casts = true
-strict_optional = true
-strict = false
+#warn_unused_ignores = true
+#warn_redundant_casts = true
+#strict_optional = true
+#strict = false
 files = "*.py,atlasserver/*.py,atlasserver/forcephot/*.py,atlasserver/taskrunner/*.py"
 
 [tool.django-stubs]
