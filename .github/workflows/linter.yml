@@ -61,6 +61,26 @@ jobs:
                   mkdir -p .mypy_cache
                   mypy --install-types --non-interactive
 
+    pylint:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v3
+
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  cache: pip
+                  python-version-file: .python-version
+
+            - name: Install dependencies
+              run: |
+                  python3 -m pip install --upgrade pip wheel pylint
+
+            - name: Lint with mypy
+              run: |
+                  pylint artistools
+
     superlinter:
         name: Super linter
         runs-on: ubuntu-latest
