@@ -2,7 +2,7 @@ astrocalc>=0.4.1
 astropy>=4.2
 black>=22.8
 bokeh>=2.4.3
-Django>=3.2
+Django>=4.0.7
 django-filter>=2.4.0
 django-geoip2-extras>=2.0.2
 django-stubs[compatible-mypy]>=1.12.0
@@ -14,7 +14,7 @@ fundamentals>=2.3.0
 julian>=0.14
 Markdown>=3.2.2
 matplotlib>=3.3.3
-mod-wsgi==4.9.3
+# mod-wsgi==4.9.3
 # mod-wsgi-standalone>=4.7.1
 multiprocess>=0.70.11.1
 #mysql>=0.0.2
