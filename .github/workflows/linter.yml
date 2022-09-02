@@ -87,6 +87,7 @@ jobs:
                   # LOG_LEVEL: WARNING
                   PYTHON_BLACK_CONFIG_FILE: pyproject.toml
                   PYTHON_MYPY_CONFIG_FILE: pyproject.toml
+                  VALIDATE_PYTHON_MYPY: false
                   VALIDATE_CSS: false
                   VALIDATE_HTML: false # can't understand Django templates
                   VALIDATE_GITLEAKS: false
