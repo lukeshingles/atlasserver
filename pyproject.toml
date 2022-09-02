@@ -20,6 +20,23 @@ line-length = 120
 preview = true
 force-exclude = "plot_atlas_fp.py"
 
+[tool.mypy]
+python_version = "3.10"
+exclude = "(build)|(tests)|(migrations)|(static)"
+ignore_missing_imports = true
+plugins = "mypy_django_plugin.main"
+warn_unused_ignores = true
+warn_redundant_casts = true
+strict_optional = true
+strict = false
+files = "*.py,atlasserver/*.py,atlasserver/forcephot/*.py,atlasserver/forcephot/taskrunner/*.py"
+
+[tool.django-stubs]
+django_settings_module = "atlasserver.settings"
+
+[mypy.plugins.django]
+ignore_missing_model_attributes = true
+
 [tool.pylint]
 max-line-length = 120
 errors-only = true
