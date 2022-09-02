@@ -14,11 +14,9 @@ fundamentals>=2.3.0
 julian>=0.14
 Markdown>=3.2.2
 matplotlib>=3.3.3
-# mod-wsgi==4.9.3
-# mod-wsgi-standalone>=4.7.1
+# mod-wsgi==4.9.3  # for atlspsweb or macOS + apache
+# mod-wsgi-standalone>=4.7.1  # for CI
 multiprocess>=0.70.11.1
-#mysql>=0.0.2
-#mysql-connector-python>=8.0.22
 mysqlclient>=2.0.3
 pandas>=1.2.4
 pycountry>=20.7.3
