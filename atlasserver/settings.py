@@ -76,7 +76,6 @@ CACHES = {
 
 ROOT_URLCONF = "atlasserver.urls"
 
-print(Path(BASE_DIR, "atlasserver", "forcephot", "templates"))
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",

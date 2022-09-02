@@ -29,7 +29,7 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 strict_optional = true
 strict = false
-files = "*.py,atlasserver/*.py,atlasserver/forcephot/*.py,atlasserver/forcephot/taskrunner/*.py"
+files = "*.py,atlasserver/*.py,atlasserver/forcephot/*.py,atlasserver/taskrunner/*.py"
 
 [tool.django-stubs]
 django_settings_module = "atlasserver.settings"
