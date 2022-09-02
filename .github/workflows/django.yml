@@ -63,7 +63,7 @@ jobs:
           cat atlasserver/settings_test.txt >> atlasserver/settings.py
           ./manage.py test
           python -m pip install -e .
-          # atlaswebserver start
+          atlaswebserver start
           # atlastaskrunner start
           # atlastaskrunner stop
-          # atlaswebserver stop
+          atlaswebserver stop
