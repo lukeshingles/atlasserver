@@ -23,18 +23,18 @@ jobs:
             matrix:
                 python-version: ['3.8', '3.9', '3.10']
 
-    # services:
-    #     mysql:
-    #         image: mysql:5.7
-    #         env:
-    #             MYSQL_ALLOW_EMPTY_PASSWORD: yes
-    #             MYSQL_DATABASE: atlasserver
-    #             MYSQL_USER: root
-    #             MYSQL_PASSWORD: password
-    #             MYSQL_ROOT_PASSWORD: password
-    #         ports:
-    #             - 3306
-    #         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+        # services:
+        #     mysql:
+        #         image: mysql:5.7
+        #         env:
+        #             MYSQL_ALLOW_EMPTY_PASSWORD: yes
+        #             MYSQL_DATABASE: atlasserver
+        #             MYSQL_USER: root
+        #             MYSQL_PASSWORD: password
+        #             MYSQL_ROOT_PASSWORD: password
+        #         ports:
+        #             - 3306
+        #         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
 
         steps:
             - name: Checkout Code
@@ -53,18 +53,24 @@ jobs:
                   python -m pip install --upgrade pip wheel
                   python -m pip install -r requirements.txt
 
+            - name: Install package
+              run: |
+                  cat atlasserver/settings_test.txt >> atlasserver/settings.py
+                  python -m pip install -e .
+
             - name: Set up MySQL
               run: |
                   sudo /etc/init.d/mysql start
                   echo "mysql started"
                   mysql -e "CREATE DATABASE ${{env.ATLASSERVER_DJANGO_MYSQL_DBNAME}};" -u${{env.ATLASSERVER_DJANGO_MYSQL_USER}} -p${{env.ATLASSERVER_DJANGO_MYSQL_PASSWORD}}
 
-            - name: Run Tests
+            - name: Run Django Tests
               run: |
-                  cat atlasserver/settings_test.txt >> atlasserver/settings.py
                   ./manage.py test
-                  python -m pip install -e .
+
+            - name: Start and stop server
+              run: |
                   atlaswebserver start
-                  # atlastaskrunner start
-                  # atlastaskrunner stop
+                  atlastaskrunner start
+                  atlastaskrunner stop
                   atlaswebserver stop
