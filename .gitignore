@@ -132,3 +132,4 @@ dmypy.json
 logs
 logs/*.txt
 *.mmdb
+_version.py

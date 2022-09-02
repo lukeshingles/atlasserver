@@ -1,58 +1,59 @@
 import datetime
 import time
+from pathlib import Path
 
-
+import numpy as np
 from bokeh.embed import components
-from bokeh.models import HoverTool
 from bokeh.models import DataRange1d
+from bokeh.models import FactorRange
+from bokeh.models import HoverTool
+from bokeh.models import Legend
 from bokeh.models import Range1d
-from bokeh.plotting import figure
 from bokeh.plotting import ColumnDataSource
-from bokeh.models import FactorRange, Legend
-
+from bokeh.plotting import figure
 from django.conf import settings as settings
-from django.contrib.auth import authenticate, login
-
-# from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from django.contrib.auth import login
 from django.core.exceptions import ObjectDoesNotExist
-
-# from django.core.exceptions import ValidationError
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Count
+from django.db.models import Max
 from django.db.models.functions import Trunc
 from django.forms import model_to_dict
-
-# from django.http import HttpResponse
 from django.http import FileResponse
-
-# from django.http.response import HttpResponseRedirect
 from django.http import HttpResponseNotFound
 from django.http import HttpResponseNotModified
 from django.http import JsonResponse
-
-# from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
-
-import numpy as np
-from pathlib import Path
-
-from rest_framework import filters, permissions, status, viewsets
+from rest_framework import filters
+from rest_framework import permissions
+from rest_framework import serializers
+from rest_framework import status
+from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-
-# from rest_framework.utils.urls import remove_query_param
 from rest_framework.utils.urls import replace_query_param
 
-from forcephot.filters import TaskFilter
-from forcephot.forms import RegistrationForm
-from forcephot.misc import country_code_to_name, country_region_to_name, splitradeclist, datetime_to_mjd, make_pdf_plot
-from forcephot.models import Task
-from forcephot.serializers import ForcePhotTaskSerializer
-from rest_framework import serializers
+from atlasserver.forcephot.filters import TaskFilter
+from atlasserver.forcephot.forms import RegistrationForm
+from atlasserver.forcephot.misc import country_code_to_name
+from atlasserver.forcephot.misc import country_region_to_name
+from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.forcephot.misc import make_pdf_plot
+from atlasserver.forcephot.misc import splitradeclist
+from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+
+# from django.contrib.auth.models import User
+# from django.core.exceptions import ValidationError
+# from django.http import HttpResponse
+# from django.http.response import HttpResponseRedirect
+# from django.shortcuts import get_object_or_404
+# from rest_framework.utils.urls import remove_query_param
 
 
 def calculate_queue_positions():

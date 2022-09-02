@@ -1,7 +1,8 @@
-from rest_framework.views import exception_handler
 from django.http import HttpResponseRedirect
+from django.urls import NoReverseMatch
+from django.urls import reverse
 from django.utils.html import escape
-from django.urls import NoReverseMatch, reverse
+from rest_framework.views import exception_handler
 
 
 def custom_exception_handler(exc, context):

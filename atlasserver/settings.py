@@ -9,7 +9,6 @@ https://docs.djangoproject.com/en/3.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/3.1/ref/settings/
 """
-
 import os
 import platform
 from pathlib import Path
@@ -38,7 +37,7 @@ MANAGERS = ADMINS
 
 
 INSTALLED_APPS = [
-    "forcephot",
+    "atlasserver.forcephot",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -62,7 +61,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "geoip2_extras.middleware.GeoIP2Middleware",
-    "forcephot.countryrestriction.CountryRestrictionMiddleware",
+    "atlasserver.forcephot.countryrestriction.CountryRestrictionMiddleware",
 ]
 
 CACHES = {
@@ -77,10 +76,11 @@ CACHES = {
 
 ROOT_URLCONF = "atlasserver.urls"
 
+print(Path(BASE_DIR, "atlasserver", "forcephot", "templates"))
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR, os.path.join(BASE_DIR, "forcephot", "templates")],
+        "DIRS": [BASE_DIR, Path(BASE_DIR, "atlasserver", "forcephot", "templates")],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -190,11 +190,11 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.TokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly"],
-    "DEFAULT_PAGINATION_CLASS": "forcephot.pagination.TaskPagination",
+    "DEFAULT_PAGINATION_CLASS": "atlasserver.forcephot.pagination.TaskPagination",
     "PAGE_SIZE": 6,
     "DEFAULT_THROTTLE_CLASSES": [
         # 'rest_framework.throttling.ScopedRateThrottle',
-        "forcephot.throttles.ForcedPhotRateThrottle",
+        "atlasserver.forcephot.throttles.ForcedPhotRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "forcephottasks": "60/min",
@@ -205,7 +205,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
     ),
-    "EXCEPTION_HANDLER": "forcephot.exception.custom_exception_handler",
+    "EXCEPTION_HANDLER": "atlasserver.forcephot.exception.custom_exception_handler",
 }
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
@@ -254,14 +254,14 @@ LOGGING = {
             "formatter": "django.server",
         },
         "mail_admins": {
-            "level": "WARNING",
+            "level": "ERROR",
             "filters": ["require_debug_false"],
             "class": "django.utils.log.AdminEmailHandler",
             "email_backend": EMAIL_BACKEND,
             "include_html": True,
         },
         "file": {
-            "level": "WARNING",
+            "level": "ERROR",
             "class": "logging.FileHandler",
             "filename": BASE_DIR / "djangodebug.log",
             "formatter": "timestamp",

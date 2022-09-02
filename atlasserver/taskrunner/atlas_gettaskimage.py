@@ -2,11 +2,11 @@
 """
 This script is to be run on sc01. A job datafile is used to get the first images in JPEG
 """
-
 import os
-import pandas as pd
-from pathlib import Path
 import sys
+from pathlib import Path
+
+import pandas as pd
 
 
 def main():

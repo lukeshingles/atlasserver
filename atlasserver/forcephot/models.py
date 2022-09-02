@@ -1,14 +1,14 @@
 import datetime
-
-# import os
+from pathlib import Path
 
 from django.conf import settings
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.db import models
 from django.db.models import Min
 from django.utils import timezone
-from pathlib import Path
-from forcephot.misc import datetime_to_mjd, country_code_to_name
+
+from atlasserver.forcephot.misc import country_code_to_name
+from atlasserver.forcephot.misc import datetime_to_mjd
 
 
 def get_mjd_min_default():
@@ -198,7 +198,7 @@ class Task(models.Model):
         return self.user.username
 
     def __str__(self):
-        user = User.objects.get(id=self.user_id)
+        user = get_user_model().objects.get(id=self.user_id)
         if self.mpc_name:
             targetstr = " MPC[" + self.mpc_name + "]"
         else:

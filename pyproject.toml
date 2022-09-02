@@ -1,4 +1,34 @@
+[build-system]
+requires = ["psutil>=5.9.0", "setuptools>=45", "setuptools_scm[toml]>=6.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlasserver"
+authors = [
+    {name = "Luke Shingles", email = "luke.shingles@gmail.com"},
+]
+description="ATLAS Forced Photometry server"
+readme = "README.md"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
+dynamic = ["version", "dependencies", "entry-points"]
+requires-python = ">=3.8"
+
 [tool.black]
 line-length = 120
 preview = true
 force-exclude = "plot_atlas_fp.py"
+
+[tool.pylint]
+max-line-length = 120
+errors-only = true
+load-plugins = "pylint_django"
+django-settings-module = "atlasserver.settings"
+
+[tool.pylint.typecheck]
+ignored-modules = ["astropy", "extinction"]
+
+[tool.setuptools_scm]
+write_to = "_version.py"
+local_scheme = "no-local-version"

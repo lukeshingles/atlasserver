@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-import forcephot.models
+import atlasserver.forcephot.models
 
 # Register your models here.
 
@@ -16,4 +16,4 @@ class CustomAdmin(admin.ModelAdmin):
         return False
 
 
-admin.site.register(forcephot.models.Task, CustomAdmin)
+admin.site.register(atlasserver.forcephot.models.Task, CustomAdmin)

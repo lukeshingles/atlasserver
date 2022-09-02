@@ -13,19 +13,20 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
-
 from django.contrib import admin
-from django.contrib.auth.models import User
-from django.urls import include, path
-from rest_framework import routers, serializers, viewsets
+from django.urls import include
+from django.urls import path
+from rest_framework import routers
+from rest_framework import serializers
+from rest_framework import viewsets
 
-import forcephot
+import atlasserver.forcephot
 
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api-auth/", include("rest_framework.urls", namespace="rest_framework")),
-    path("", include("forcephot.urls")),
+    path("", include("atlasserver.forcephot.urls")),
     path("", include("django.contrib.auth.urls")),
 ]

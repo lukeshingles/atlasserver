@@ -13,20 +13,20 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
-
 import rest_framework.authtoken.views
 from django.conf import settings
 from django.contrib import admin
-from django.urls import include, path, re_path
-
-# from django.contrib.auth.models import User
-# from django.contrib.auth.decorators import login_required
+from django.urls import include
+from django.urls import path
+from django.urls import re_path
 from django.views.generic.base import TemplateView
 from rest_framework import routers
 
-# from rest_framework import serializers, viewsets
+from atlasserver.forcephot import views
 
-from forcephot import views
+# from django.contrib.auth.models import User
+# from django.contrib.auth.decorators import login_required
+# from rest_framework import serializers, viewsets
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()

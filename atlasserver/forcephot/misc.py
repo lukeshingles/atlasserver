@@ -1,7 +1,7 @@
 import math
 import os
-
-import plot_atlas_fp
+from multiprocessing import Process
+from pathlib import Path
 
 import astrocalc.coords.unit_conversion
 import fundamentals.logs
@@ -9,8 +9,7 @@ import julian
 import pandas as pd
 import pycountry
 
-from multiprocessing import Process
-from pathlib import Path
+from atlasserver import plot_atlas_fp
 
 dictcountrycodes = {
     "A2": "Satellite Provider",
@@ -271,7 +270,7 @@ dictcountrycodes = {
 
 
 def splitradeclist(data, form=None):
-    from forcephot.serializers import ForcePhotTaskSerializer
+    from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
     from rest_framework import serializers
 
     if "radeclist" not in data:

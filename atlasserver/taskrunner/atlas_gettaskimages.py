@@ -2,17 +2,16 @@
 """
 This script is to be run on sc01. A job datafile is converted to a zip of fits images.
 """
-
 import os
-
-# import math
-import pandas as pd
-from pathlib import Path
 import shutil
-
-# import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+import pandas as pd
+
+# import math
+# import subprocess
 
 
 # def mjd_to_date(mjd):

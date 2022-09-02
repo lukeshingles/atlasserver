@@ -1,5 +1,6 @@
 from django_filters import rest_framework as filters
-from forcephot.models import Task
+
+from atlasserver.forcephot.models import Task
 
 
 class TaskFilter(filters.FilterSet):

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-
 import os
 import platform
-import psutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import psutil
+
 
 APACHEPATH = Path("/tmp/atlasforced")
-ATLASSERVERPATH = Path(__file__).resolve().parent
+ATLASSERVERPATH = Path(__file__).resolve().parent.parent
 
 
 def get_httpd_pid():

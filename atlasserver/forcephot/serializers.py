@@ -1,12 +1,12 @@
 # from django.contrib.auth.models import User
+import math
+
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from rest_framework.reverse import reverse
-from django.conf import settings
 
-from forcephot.models import Task
-
-import math
+from atlasserver.forcephot.models import Task
 
 
 def is_finite_float(val):

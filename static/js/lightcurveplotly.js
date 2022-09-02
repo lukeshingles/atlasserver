@@ -209,7 +209,7 @@ var layout = { showlegend: true,
               //  width: w, //window.innerWidth,
               //  width: '100%',
                height: lcplotheight, //window.innerHeight
-             } 
+             }
                //paper_bgcolor: 'rgba(0,0,0,0)'}
                //plot_bgcolor: 'rgba(0,0,0,0)'}
 

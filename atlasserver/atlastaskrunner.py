@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-
-import psutil
 import subprocess
 import sys
 from pathlib import Path
 
+import psutil
 
-ATLASSERVERPATH = Path(__file__).resolve().parent
+
+ATLASSERVERPATH = Path(__file__).resolve().parent.parent
 
 
 def run_command(commands, print_output=True):
@@ -71,7 +71,7 @@ def start():
                 "-d",
                 "-s",
                 "atlastaskrunner",
-                str(ATLASSERVERPATH / "taskrunner" / "supervise_atlastaskrunner.sh"),
+                str(ATLASSERVERPATH / "atlasserver" / "taskrunner" / "supervise_atlastaskrunner.sh"),
             ]
         )
 

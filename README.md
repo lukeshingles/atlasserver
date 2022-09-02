@@ -19,7 +19,7 @@ git clone https://github.com/lukeshingles/atlasserver.git
 python3 -m pip install -e .
 ```
 
-Two processes must be running: the web server and the task runner. These can be started with:   
+Two processes must be running: the web server and the task runner. These can be started with:
 ```sh
 atlaswebserver start
 atlastaskrunner start

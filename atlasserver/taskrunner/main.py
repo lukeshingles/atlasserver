@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
-
 import datetime
 import os
 import subprocess
 import time
 from pathlib import Path
-from signal import SIGINT, SIGTERM, signal
-
-import pandas as pd
+from signal import SIGINT
+from signal import signal
+from signal import SIGTERM
 
 import django
+import pandas as pd
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.forms.models import model_to_dict
 
-# sys.path.insert(1, str(Path(sys.path[0]).parent.resolve()))
-
 import atlasserver.settings as settings
 
-# from forcephot.misc import make_pdf_plot
+# from atlasserver.forcephot.misc import make_pdf_plot
 
 remoteServer = "atlas"
 localresultdir = Path(settings.RESULTS_DIR)
@@ -28,7 +26,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 # import atlasserver.wsgi
 django.setup()
 
-from forcephot.models import Task
+from atlasserver.forcephot.models import Task
 
 TASKMAXTIME = 1200
 
