@@ -57,77 +57,70 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
 
 def calculate_queue_positions():
-    # with transaction.atomic():
-    # to get position in current pass, check if job currently running
-    query_currentlyrunningtask = (
-        Task.objects.all()
-        .filter(finishtimestamp__isnull=True, is_archived=False, starttimestamp__isnull=False)
-        .order_by("-starttimestamp")
-    )
-    if query_currentlyrunningtask.exists():
-        currentlyrunningtask = query_currentlyrunningtask.first()
-    else:
-        currentlyrunningtask = None
+    with transaction.atomic():
+        # to get position in current pass, check if job currently running
+        query_currentlyrunningtask = (
+            Task.objects.all()
+            .filter(finishtimestamp__isnull=True, is_archived=False, starttimestamp__isnull=False)
+            .order_by("-starttimestamp")
+        )
+        if query_currentlyrunningtask.exists():
+            currentlyrunningtask = query_currentlyrunningtask.first()
+        else:
+            currentlyrunningtask = None
 
-    queuedtasks = (
-        Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
-    )
+        queuedtasks = (
+            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
+        )
 
-    queuedtaskcount = queuedtasks.count()
+        queuedtaskcount = queuedtasks.count()
 
-    # queuedtasks.update(queuepos_relative=None)
-    unassigned_tasks = queuedtasks
+        # queuedtasks.update(queuepos_relative=None)
+        unassigned_tasks = queuedtasks
 
-    # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
-    queuepos = 0
-    passnum = 0
-    queuepos_updates = {}  # for bulk_update()
-    while queuepos < queuedtaskcount:
-        useridsassigned_currentpass = set()
+        # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
+        queuepos = 0
+        passnum = 0
+        queuepos_updates = []  # for bulk_update()
+        while queuepos < queuedtaskcount:
+            useridsassigned_currentpass = set()
 
-        if passnum == 0 and currentlyrunningtask:
-            # currently running task will be assigned position 0
+            if passnum == 0 and currentlyrunningtask:
+                # currently running task will be assigned position 0
 
-            # method 1
-            # Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
-
-            # method 2
-            # currentlyrunningtask.queuepos_relative = 0
-            queuepos_updates[currentlyrunningtask.id] = 0
-
-            # method 3 extremely slow
-            # currentlyrunningtask.save(update_fields=["queuepos_relative"])
-
-            useridsassigned_currentpass.add(currentlyrunningtask.user_id)
-            unassigned_tasks = unassigned_tasks.exclude(id=currentlyrunningtask.id)
-            queuepos = 1
-
-        if unassigned_tasks.count() == 0:
-            break
-
-        for task in unassigned_tasks:
-            if task.user_id not in useridsassigned_currentpass and (
-                passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id
-            ):
                 # method 1
-                # Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
+                # Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
 
                 # method 2
-                # task.queuepos_relative = queuepos
-                queuepos_updates[task.id] = queuepos
+                queuepos_updates.append((currentlyrunningtask.id, 0))
 
                 # method 3 extremely slow
-                # task.save(update_fields=["queuepos_relative"])
+                # currentlyrunningtask.save(update_fields=["queuepos_relative"])
 
-                useridsassigned_currentpass.add(task.user_id)
-                unassigned_tasks = unassigned_tasks.exclude(id=task.id)
-                queuepos += 1
+                useridsassigned_currentpass.add(currentlyrunningtask.user_id)
+                unassigned_tasks = unassigned_tasks.exclude(id=currentlyrunningtask.id)
+                queuepos = 1
 
-        passnum += 1
+            for task in unassigned_tasks:
+                if task.user_id not in useridsassigned_currentpass and (
+                    passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id
+                ):
+                    # method 1
+                    # Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
 
-    Task.objects.bulk_update(
-        [Task(id=k, queuepos_relative=v) for k, v in queuepos_updates.items()], ["queuepos_relative"]
-    )
+                    # method 2
+                    queuepos_updates.append((task.id, queuepos))
+
+                    # method 3 extremely slow
+                    # task.save(update_fields=["queuepos_relative"])
+
+                    useridsassigned_currentpass.add(task.user_id)
+                    unassigned_tasks = unassigned_tasks.exclude(id=task.id)
+                    queuepos += 1
+
+            passnum += 1
+
+        Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
 
 
 def get_tasklist_etag(request, queryset):
