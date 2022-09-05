@@ -59,6 +59,8 @@ div.newrequest {
 
 h2 {
   margin-top: 0;
+  font-size: 1.1em;
+  font-weight: bold;
 }
 
 form#newrequest li {

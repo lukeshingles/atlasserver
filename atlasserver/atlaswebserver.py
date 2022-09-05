@@ -7,10 +7,12 @@ import time
 from pathlib import Path
 
 import psutil
-
+from dotenv import load_dotenv
 
 APACHEPATH = Path("/tmp/atlasforced")
 ATLASSERVERPATH = Path(__file__).resolve().parent.parent
+
+load_dotenv(dotenv_path=ATLASSERVERPATH / ".env", override=True)
 
 
 def get_httpd_pid():
@@ -98,6 +100,15 @@ def start():
         *includefile,
         "--log-to-terminal",
     ]
+
+    if "ATLASSERVER_NPROCESSES" in os.environ:
+        command.append("--processes")
+        command.append(os.environ["ATLASSERVER_NPROCESSES"])
+
+    if "ATLASSERVER_NTHREADPERPROC" in os.environ:
+        command.append("--threads")
+        command.append(os.environ["ATLASSERVER_NTHREADPERPROC"])
+
     run_command(command)
 
     os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)
