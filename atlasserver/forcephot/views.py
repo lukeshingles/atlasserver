@@ -120,7 +120,10 @@ def calculate_queue_positions():
 
             passnum += 1
 
-        Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
+        for key, value in queuepos_updates:
+            Task.objects.filter(id=key).update(queuepos_relative=value)
+
+        # Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
 
 
 def get_tasklist_etag(request, queryset):
