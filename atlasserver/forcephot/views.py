@@ -89,10 +89,10 @@ def calculate_queue_positions():
                 # currently running task will be assigned position 0
 
                 # method 1
-                # Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
+                Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
 
                 # method 2
-                queuepos_updates.append((currentlyrunningtask.id, 0))
+                # queuepos_updates.append((currentlyrunningtask.id, 0))
 
                 # method 3 extremely slow
                 # currentlyrunningtask.save(update_fields=["queuepos_relative"])
@@ -106,10 +106,10 @@ def calculate_queue_positions():
                     passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id
                 ):
                     # method 1
-                    # Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
+                    Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
 
                     # method 2
-                    queuepos_updates.append((task.id, queuepos))
+                    # queuepos_updates.append((task.id, queuepos))
 
                     # method 3 extremely slow
                     # task.save(update_fields=["queuepos_relative"])
@@ -119,9 +119,6 @@ def calculate_queue_positions():
                     queuepos += 1
 
             passnum += 1
-
-        for key, value in queuepos_updates:
-            Task.objects.filter(id=key).update(queuepos_relative=value)
 
         # Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
 
