@@ -61,11 +61,11 @@ def calculate_queue_positions():
         # to get position in current pass, check if job currently running
         query_currentlyrunningtask = (
             Task.objects.all()
-            .filter(finishtimestamp__isnull=True, starttimestamp__isnull=False)
+            .filter(finishtimestamp__isnull=True, is_archived=False, starttimestamp__isnull=False)
             .order_by("-starttimestamp")
         )
         if query_currentlyrunningtask.exists():
-            currentlyrunningtask = query_currentlyrunningtask.first()
+            currentlyrunningtask = query_currentlyrunningtask.first().id
         else:
             currentlyrunningtask = None
 
@@ -74,7 +74,9 @@ def calculate_queue_positions():
         )
 
         queuedtaskcount = queuedtasks.count()
-        queuedtasks.update(queuepos_relative=None)
+
+        # queuedtasks.update(queuepos_relative=None)
+        unassigned_tasks = queuedtasks
 
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos = 0
@@ -87,9 +89,8 @@ def calculate_queue_positions():
                 currentlyrunningtask.queuepos_relative = 0
                 currentlyrunningtask.save()
                 useridsassigned_currentpass.add(currentlyrunningtask.user_id)
+                unassigned_tasks = unassigned_tasks.exclude(id=currentlyrunningtask.id)
                 queuepos = 1
-
-            unassigned_tasks = queuedtasks.filter(queuepos_relative__isnull=True)
 
             if unassigned_tasks.count() == 0:
                 break
@@ -102,6 +103,7 @@ def calculate_queue_positions():
                     task.queuepos_relative = queuepos
                     task.save()
                     useridsassigned_currentpass.add(task.user_id)
+                    unassigned_tasks = unassigned_tasks.exclude(id=task.id)
                     queuepos += 1
 
             passnum += 1
