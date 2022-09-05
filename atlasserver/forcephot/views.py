@@ -56,6 +56,15 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 # from rest_framework.utils.urls import remove_query_param
 
 
+class ResponseThenUpdateQueue(Response):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def close(self):
+        super().close()
+        calculate_queue_positions()
+
+
 def calculate_queue_positions():
     with transaction.atomic():
         # to get position in current pass, check if job currently running
@@ -202,7 +211,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        return ResponseThenUpdateQueue(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         # if self.request.user and self.request.user.is_authenticated:
@@ -229,7 +238,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
         serializer.save(**extra_fields)
-        calculate_queue_positions()
+        # calculate_queue_positions()  # now done in create() after response
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
@@ -242,13 +251,17 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     #     # return Response(status=status.HTTP_303_SEE_OTHER, headers={
     #     #         'Location': reverse('task-list', request=request)})
     #     return Response(status=status.HTTP_204_NO_CONTENT)
+    def destroy(self, request, *args, **kwargs):
+        # if the job we're deleting is in the queue (i.e. not finished), we need to update queue positions
+        instance = self.get_object()
+        update_queue_positions = False if instance.finishtimestamp else True
+        self.perform_destroy(instance)
+        if update_queue_positions:
+            return ResponseThenUpdateQueue(status=status.HTTP_204_NO_CONTENT)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
-        # if the job we're deleting is in the queue (i.e. not finished), we need to update queue positions
-        update_queue_positions = False if instance.finishtimestamp else True
         instance.delete()
-        if update_queue_positions:
-            calculate_queue_positions()
 
     def list(self, request, *args, **kwargs):
         if request.user.is_authenticated:
