@@ -81,16 +81,21 @@ def calculate_queue_positions():
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos = 0
         passnum = 0
-        queuepos_updates = []
+        queuepos_updates = []  # for bulk_update()
         while queuepos < queuedtaskcount:
             useridsassigned_currentpass = set()
 
             if passnum == 0 and currentlyrunningtask:
                 # currently running task will be assigned position 0
 
-                Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
-                # currentlyrunningtask.queuepos_relative = 0
-                # queuepos_updates.append(currentlyrunningtask)
+                # method 1
+                # Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
+
+                # method 2
+                currentlyrunningtask.queuepos_relative = 0
+                queuepos_updates.append(currentlyrunningtask)
+
+                # method 3 extremely slow
                 # currentlyrunningtask.save(update_fields=["queuepos_relative"])
 
                 useridsassigned_currentpass.add(currentlyrunningtask.user_id)
@@ -104,9 +109,14 @@ def calculate_queue_positions():
                 if task.user_id not in useridsassigned_currentpass and (
                     passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id
                 ):
-                    Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
-                    # task.queuepos_relative = queuepos
-                    # queuepos_updates.append(task)
+                    # method 1
+                    # Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
+
+                    # method 2
+                    task.queuepos_relative = queuepos
+                    queuepos_updates.append(task)
+
+                    # method 3 extremely slow
                     # task.save(update_fields=["queuepos_relative"])
 
                     useridsassigned_currentpass.add(task.user_id)
@@ -115,7 +125,7 @@ def calculate_queue_positions():
 
             passnum += 1
 
-        # Task.objects.bulk_update(queuepos_updates, ["queuepos_relative"])
+        Task.objects.bulk_update(queuepos_updates, ["queuepos_relative"])
 
 
 def get_tasklist_etag(request, queryset):
