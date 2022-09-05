@@ -65,9 +65,11 @@ def calculate_queue_positions():
             .order_by("-starttimestamp")
         )
         if query_currentlyrunningtask.exists():
-            currentlyrunningtask = query_currentlyrunningtask.first()
+            currentlyrunningtaskid = query_currentlyrunningtask.first().id
+            currentlyrunningtask_userid = query_currentlyrunningtask.first().user_id
         else:
-            currentlyrunningtask = None
+            currentlyrunningtaskid = None
+            currentlyrunningtask_userid = None
 
         queuedtasks = (
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
@@ -76,7 +78,8 @@ def calculate_queue_positions():
         queuedtaskcount = queuedtasks.count()
 
         # queuedtasks.update(queuepos_relative=None)
-        unassigned_tasks = queuedtasks
+        unassigned_taskids = list([t.id for t in queuedtasks])
+        unassigned_task_userids = list([t.user_id for t in queuedtasks])
 
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos = 0
@@ -85,37 +88,35 @@ def calculate_queue_positions():
         while queuepos < queuedtaskcount:
             useridsassigned_currentpass = set()
 
-            if passnum == 0 and currentlyrunningtask:
+            if passnum == 0 and currentlyrunningtaskid:
                 # currently running task will be assigned position 0
 
                 # method 1
-                Task.objects.filter(id=currentlyrunningtask.id).update(queuepos_relative=0)
+                Task.objects.filter(id=currentlyrunningtaskid).update(queuepos_relative=0)
 
                 # method 2
-                # queuepos_updates.append((currentlyrunningtask.id, 0))
+                # queuepos_updates.append((currentlyrunningtaskid, 0))
 
-                # method 3 extremely slow
-                # currentlyrunningtask.save(update_fields=["queuepos_relative"])
-
-                useridsassigned_currentpass.add(currentlyrunningtask.user_id)
-                unassigned_tasks = unassigned_tasks.exclude(id=currentlyrunningtask.id)
+                useridsassigned_currentpass.add(currentlyrunningtask_userid)
                 queuepos = 1
+                index = unassigned_taskids.index(currentlyrunningtaskid)
+                unassigned_taskids.pop(index)
+                unassigned_task_userids.pop(index)
 
-            for task in unassigned_tasks:
-                if task.user_id not in useridsassigned_currentpass and (
-                    passnum != 0 or not currentlyrunningtask or task.user_id > currentlyrunningtask.user_id
+            for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids)):
+                if task_userid not in useridsassigned_currentpass and (
+                    passnum != 0 or currentlyrunningtaskid is None or task_userid > currentlyrunningtask_userid
                 ):
                     # method 1
-                    Task.objects.filter(id=task.id).update(queuepos_relative=queuepos)
+                    Task.objects.filter(id=taskid).update(queuepos_relative=queuepos)
 
                     # method 2
                     # queuepos_updates.append((task.id, queuepos))
 
-                    # method 3 extremely slow
-                    # task.save(update_fields=["queuepos_relative"])
-
-                    useridsassigned_currentpass.add(task.user_id)
-                    unassigned_tasks = unassigned_tasks.exclude(id=task.id)
+                    useridsassigned_currentpass.add(task_userid)
+                    # unassigned_tasks = unassigned_tasks.exclude(id=task.id)
+                    unassigned_taskids.pop(i)
+                    unassigned_task_userids.pop(i)
                     queuepos += 1
 
             passnum += 1
