@@ -114,13 +114,13 @@ def calculate_queue_positions():
                     # queuepos_updates.append((task.id, queuepos))
 
                     useridsassigned_currentpass.add(task_userid)
-                    # unassigned_tasks = unassigned_tasks.exclude(id=task.id)
                     unassigned_taskids.pop(i)
                     unassigned_task_userids.pop(i)
                     queuepos += 1
 
             passnum += 1
 
+        # method 2
         # Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
 
 
