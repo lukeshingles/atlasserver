@@ -14,8 +14,10 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.urls import include
 from django.urls import path
+from django.views.generic.base import RedirectView
 from rest_framework import routers
 from rest_framework import serializers
 from rest_framework import viewsets
@@ -29,4 +31,5 @@ urlpatterns = [
     path("api-auth/", include("rest_framework.urls", namespace="rest_framework")),
     path("", include("atlasserver.forcephot.urls")),
     path("", include("django.contrib.auth.urls")),
+    path("favicon.ico", RedirectView.as_view(url=staticfiles_storage.url("images/logos/atlas_logo.svg"))),
 ]

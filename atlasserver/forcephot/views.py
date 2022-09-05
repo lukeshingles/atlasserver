@@ -88,7 +88,7 @@ def calculate_queue_positions():
         while queuepos < queuedtaskcount:
             useridsassigned_currentpass = set()
 
-            if passnum == 0 and currentlyrunningtaskid:
+            if passnum == 0 and currentlyrunningtaskid is not None:
                 # currently running task will be assigned position 0
 
                 # method 1
@@ -97,11 +97,14 @@ def calculate_queue_positions():
                 # method 2
                 # queuepos_updates.append((currentlyrunningtaskid, 0))
 
-                useridsassigned_currentpass.add(currentlyrunningtask_userid)
-                queuepos = 1
-                index = unassigned_taskids.index(currentlyrunningtaskid)
-                unassigned_taskids.pop(index)
-                unassigned_task_userids.pop(index)
+                try:
+                    index = unassigned_taskids.index(currentlyrunningtaskid)
+                    unassigned_taskids.pop(index)
+                    unassigned_task_userids.pop(index)
+                    useridsassigned_currentpass.add(currentlyrunningtask_userid)
+                    queuepos = 1
+                except ValueError:  # the task disappeared between the two queries?
+                    currentlyrunningtaskid = None
 
             for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids)):
                 if task_userid not in useridsassigned_currentpass and (
