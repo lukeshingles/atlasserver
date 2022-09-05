@@ -27,8 +27,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_result_url(self, obj):
         if obj.localresultfile() and not obj.error_msg:
             request = self.context.get("request")
-            return staticfiles_storage.url(obj.localresultfile())
-            return request.build_absolute_uri(reverse("taskresultdata", args=[obj.id]))
+            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultfile()))
+            # return request.build_absolute_uri(settings.STATIC_URL + obj.localresultfile())
+            # return request.build_absolute_uri(reverse("taskresultdata", args=[obj.id]))
 
         return None
 
@@ -55,7 +56,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_previewimage_url(self, obj):
         if obj.localresultpreviewimagefile:
             request = self.context.get("request")
-            return staticfiles_storage.url(obj.localresultpreviewimagefile)
+            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultpreviewimagefile))
             # return request.build_absolute_uri(reverse('taskpreviewimage', args=[obj.id]))
 
         return None
@@ -70,7 +71,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_result_imagezip_url(self, obj):
         if obj.localresultimagezipfile:
             request = self.context.get("request")
-            return staticfiles_storage.url(obj.localresultimagezipfile)
+            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
 
         return None
 
