@@ -58,7 +58,7 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 # from rest_framework.utils.urls import remove_query_param
 
 
-def calculate_queue_positions():
+def calculate_queue_positions() -> None:
     with transaction.atomic():
         # to get position in current pass, check if job currently running
         query_currentlyrunningtask = (
@@ -69,11 +69,17 @@ def calculate_queue_positions():
 
         runningtaskid = None
         runningtask_userid = None
-        if query_currentlyrunningtask.exists():
-            runningtask = query_currentlyrunningtask.first()
-            if runningtask and runningtask is not None:
-                runningtaskid = runningtask.id
-                runningtask_userid = runningtask.user_id
+
+        try:
+            if query_currentlyrunningtask.exists():
+                runningtask = query_currentlyrunningtask.first()
+                if runningtask is not None:
+                    runningtaskid = runningtask.id
+                    runningtask_userid = runningtask.user_id
+
+        except AttributeError:
+            runningtaskid = None
+            runningtask_userid = None
 
         queuedtasks = (
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
@@ -85,8 +91,8 @@ def calculate_queue_positions():
         unassigned_task_userids = list([t.user_id for t in queuedtasks])
 
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
-        queuepos = 0
-        passnum = 0
+        queuepos: int = 0
+        passnum: int = 0
         # queuepos_updates = []  # for bulk_update()
         while queuepos < queuedtaskcount:
             useridsassigned_currentpass = set()
@@ -111,7 +117,7 @@ def calculate_queue_positions():
 
             for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids)):
                 if task_userid not in useridsassigned_currentpass and (
-                    passnum != 0 or runningtaskid is None or task_userid > runningtask_userid
+                    passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
                 ):
                     # method 1
                     Task.objects.filter(id=taskid).update(queuepos_relative=queuepos)
@@ -124,6 +130,7 @@ def calculate_queue_positions():
                     unassigned_task_userids.pop(i)
                     queuepos += 1
 
+            assert len(useridsassigned_currentpass) > 0  # prevent infinite loop if the pass failed to assign anything
             passnum += 1
 
         # method 2
