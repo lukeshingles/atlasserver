@@ -755,9 +755,9 @@ def resultplotdatajs(request, taskid):
             jsout.append(f'var lcdivname = "#{divid}";\n')
 
             if settings.DEBUG:
-                jsout.append("".join(Path(settings.STATIC_ROOT, "js/lightcurveplotly.js").open("rt").readlines()))
+                jsout.append(Path(settings.STATIC_ROOT, "js/lightcurveplotly.js").open("rt").read())
             else:
-                jsout.append("".join(Path(settings.STATIC_ROOT, "js/lightcurveplotly.min.js").open("rt").readlines()))
+                jsout.append(Path(settings.STATIC_ROOT, "js/lightcurveplotly.min.js").open("rt").read())
 
         strjs = "".join(jsout)
 
