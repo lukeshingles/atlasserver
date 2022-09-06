@@ -1,6 +1,8 @@
 import datetime
 import time
 from pathlib import Path
+from typing import Any
+from typing import Optional
 
 import numpy as np
 from bokeh.embed import components
@@ -64,12 +66,14 @@ def calculate_queue_positions():
             .filter(finishtimestamp__isnull=True, is_archived=False, starttimestamp__isnull=False)
             .order_by("-starttimestamp")
         )
+
+        runningtaskid = None
+        runningtask_userid = None
         if query_currentlyrunningtask.exists():
-            currentlyrunningtaskid = query_currentlyrunningtask.first().id
-            currentlyrunningtask_userid = query_currentlyrunningtask.first().user_id
-        else:
-            currentlyrunningtaskid = None
-            currentlyrunningtask_userid = None
+            runningtask = query_currentlyrunningtask.first()
+            if runningtask and runningtask is not None:
+                runningtaskid = runningtask.id
+                runningtask_userid = runningtask.user_id
 
         queuedtasks = (
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
@@ -77,38 +81,37 @@ def calculate_queue_positions():
 
         queuedtaskcount = queuedtasks.count()
 
-        # queuedtasks.update(queuepos_relative=None)
         unassigned_taskids = list([t.id for t in queuedtasks])
         unassigned_task_userids = list([t.user_id for t in queuedtasks])
 
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos = 0
         passnum = 0
-        queuepos_updates = []  # for bulk_update()
+        # queuepos_updates = []  # for bulk_update()
         while queuepos < queuedtaskcount:
             useridsassigned_currentpass = set()
 
-            if passnum == 0 and currentlyrunningtaskid is not None:
+            if passnum == 0 and runningtaskid is not None:
                 # currently running task will be assigned position 0
 
                 # method 1
-                Task.objects.filter(id=currentlyrunningtaskid).update(queuepos_relative=0)
+                Task.objects.filter(id=runningtaskid).update(queuepos_relative=0)
 
                 # method 2
                 # queuepos_updates.append((currentlyrunningtaskid, 0))
 
                 try:
-                    index = unassigned_taskids.index(currentlyrunningtaskid)
+                    index = unassigned_taskids.index(runningtaskid)
                     unassigned_taskids.pop(index)
                     unassigned_task_userids.pop(index)
-                    useridsassigned_currentpass.add(currentlyrunningtask_userid)
+                    useridsassigned_currentpass.add(runningtask_userid)
                     queuepos = 1
                 except ValueError:  # the task disappeared between the two queries?
-                    currentlyrunningtaskid = None
+                    runningtaskid = None
 
             for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids)):
                 if task_userid not in useridsassigned_currentpass and (
-                    passnum != 0 or currentlyrunningtaskid is None or task_userid > currentlyrunningtask_userid
+                    passnum != 0 or runningtaskid is None or task_userid > runningtask_userid
                 ):
                     # method 1
                     Task.objects.filter(id=taskid).update(queuepos_relative=queuepos)
@@ -215,7 +218,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     if (usertaskcount > 10):
         #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         #     serializer.save(user=self.request.user)
-        extra_fields = {}  # add computed field values (not user specified)
+        extra_fields: dict[str, Any] = {}  # add computed field values (not user specified)
 
         extra_fields["user"] = self.request.user
         extra_fields["timestamp"] = (
@@ -812,7 +815,7 @@ def taskresultdata(request, taskid):
 
 
 @cache_page(60 * 60)
-def taskpreviewimage(request, taskid):
+def taskpreviewimage(request, taskid: int):
     item = None
     if taskid:
         try:
@@ -831,7 +834,7 @@ def taskpreviewimage(request, taskid):
     return HttpResponseNotFound("Page not found")
 
 
-def taskimagezip(request, taskid):
+def taskimagezip(request, taskid: int):
     item = None
     if taskid:
         try:

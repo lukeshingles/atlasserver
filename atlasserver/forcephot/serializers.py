@@ -28,7 +28,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         if obj.localresultfile() and not obj.error_msg:
             request = self.context.get("request")
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultfile()))
-            # return request.build_absolute_uri(settings.STATIC_URL + obj.localresultfile())
             # return request.build_absolute_uri(reverse("taskresultdata", args=[obj.id]))
 
         return None

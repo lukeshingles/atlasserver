@@ -15,7 +15,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -151,8 +150,8 @@ USE_TZ = True
 PATHPREFIX = "/forcedphot" if platform.system() != "Darwin" else ""
 STATIC_URL = PATHPREFIX + "/static/"
 
-STATIC_ROOT = os.path.join(BASE_DIR, "static")
-RESULTS_DIR = os.path.join(STATIC_ROOT, "results")
+STATIC_ROOT = Path(BASE_DIR, "static")
+RESULTS_DIR = Path(STATIC_ROOT, "results")
 
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
