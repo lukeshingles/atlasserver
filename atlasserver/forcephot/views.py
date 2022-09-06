@@ -62,12 +62,12 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
 def calculate_queue_positions() -> None:
     with transaction.atomic():
-        # to get position in current pass, check if job currently running
-        query_currentlyrunningtask = (
-            Task.objects.all()
-            .filter(finishtimestamp__isnull=True, is_archived=False, starttimestamp__isnull=False)
-            .order_by("-starttimestamp")
+        queuedtasks = (
+            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
         )
+
+        # to get position in current pass, check if job currently running
+        query_currentlyrunningtask = queuedtasks.filter(starttimestamp__isnull=False).order_by("-starttimestamp")
 
         runningtaskid = None
         runningtask_userid = None
@@ -82,10 +82,6 @@ def calculate_queue_positions() -> None:
         except AttributeError:
             runningtaskid = None
             runningtask_userid = None
-
-        queuedtasks = (
-            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
-        )
 
         queuedtaskcount = queuedtasks.count()
 
