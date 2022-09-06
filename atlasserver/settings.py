@@ -64,6 +64,12 @@ MIDDLEWARE = [
     "atlasserver.forcephot.countryrestriction.CountryRestrictionMiddleware",
 ]
 
+filecacheroot = (
+    Path("/tmp/atlasforced/django_cache")
+    if platform.system() == "Darwin"
+    else Path("/lvm/hdd1/files/atlasforced/django_cache")
+)
+
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -76,11 +82,11 @@ CACHES = {
     },
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-        "LOCATION": "/tmp/atlasforced/django_cache/taskderived",
+        "LOCATION": filecacheroot / "taskderived",
     },
     "usagestats": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-        "LOCATION": "/tmp/atlasforced/django_cache/usagestats",
+        "LOCATION": filecacheroot / "usagestats",
     },
 }
 
