@@ -404,7 +404,7 @@ def requestimages(request, pk):
     return redirect(redirurl, request=request)
 
 
-@cache_page(60 * 60 * 24)
+@cache_page(60 * 60 * 24, cache="usagestats")
 def statscoordchart(request):
     # now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     # tasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
@@ -455,7 +455,7 @@ def statscoordchart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(30)
+@cache_page(30, cache="usagestats")
 def statsusagechart(request):
     def get_days_ago_counts(tasks):
         taskcounts = (
@@ -552,7 +552,7 @@ def statsusagechart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(60 * 60 * 4)
+@cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
     dictparams = {}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
@@ -593,7 +593,7 @@ def statslongterm(request):
     return render(request, "statslongterm.html", dictparams)
 
 
-@cache_page(60 * 15)
+@cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
     dictparams = {}
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
@@ -632,7 +632,6 @@ def statsshortterm(request):
     return render(request, "statsshortterm.html", dictparams)
 
 
-# @cache_page(60 * 5)
 def stats(request):
     dictparams = {"name": "Usage Statistics"}
 
@@ -664,7 +663,7 @@ def register(request):
     return render(request, "registration/register.html", {"form": form})
 
 
-@cache_page(60 * 10)
+@cache_page(60 * 10, cache="taskderived")
 def resultplotdatajs(request, taskid):
     import pandas as pd
 
@@ -821,7 +820,7 @@ def taskresultdata(request, taskid):
     return HttpResponseNotFound("Page not found")
 
 
-@cache_page(60 * 60)
+@cache_page(60 * 60, cache="taskderived")
 def taskpreviewimage(request, taskid: int):
     item = None
     if taskid:

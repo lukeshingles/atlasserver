@@ -67,10 +67,20 @@ MIDDLEWARE = [
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        # "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        # "LOCATION": "/tmp/atlasforced/django_cache",
     },
-    # required in order for IP addresses to be cached
+    # required in order for IP address location lookups to be cached
     "geoip2-extras": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    },
+    "taskderived": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": "/tmp/atlasforced/django_cache/taskderived",
+    },
+    "usagestats": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": "/tmp/atlasforced/django_cache/usagestats",
     },
 }
 
