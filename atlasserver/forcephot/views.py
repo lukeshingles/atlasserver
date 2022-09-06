@@ -482,8 +482,8 @@ def statsusagechart(request):
     )
 
     dayfinishedcounts = get_days_ago_counts(finishedtasks)
-    dayfinished_web_counts = get_days_ago_counts(finishedtasks.filter(from_api=False).exclude(request_type="IMGZIP"))
-    dayfinished_api_counts = get_days_ago_counts(finishedtasks.filter(from_api=True).exclude(request_type="IMGZIP"))
+    dayfinished_web_counts = get_days_ago_counts(finishedtasks.filter(from_api=False, request_type="FP"))
+    dayfinished_api_counts = get_days_ago_counts(finishedtasks.filter(from_api=True, request_type="FP"))
     dayfinished_img_counts = get_days_ago_counts(finishedtasks.filter(request_type="IMGZIP"))
 
     data = {
