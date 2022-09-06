@@ -117,15 +117,6 @@ class Task(models.Model):
 
         return None
 
-    def localresultjsplotfile(self):
-        """
-        return the full local path to the plotly javascript file if the FP data file exists, otherwise None
-        """
-        if self.localresultfile():
-            return Path(settings.STATIC_ROOT, self.localresultfile()).with_suffix(".js")
-
-        return None
-
     @property
     def localresultimagezipfile(self):
         """
@@ -243,7 +234,7 @@ class Task(models.Model):
                     pass
         else:
             # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
-            delete_extlist = [".txt", ".pdf", ".js"]
+            delete_extlist = [".txt", ".pdf"]
             imgreqtaskid = self.imagerequest_task_id
             if imgreqtaskid is None:  # image request tasks share this same preview image
                 delete_extlist.append(".jpg")

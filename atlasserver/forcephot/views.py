@@ -753,12 +753,8 @@ def resultplotdatajs(request, taskid):
                 jsout.append("".join(Path(settings.STATIC_ROOT, "js/lightcurveplotly.js").open("rt").readlines()))
             else:
                 jsout.append("".join(Path(settings.STATIC_ROOT, "js/lightcurveplotly.min.js").open("rt").readlines()))
-            # jsout.append((
-            #     "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', "
-            #     "cache: true, dataType: 'script'});"))
 
             strjs = "".join(jsout)
-            # return HttpResponse(strjs, content_type="text/javascript")
 
             # with jsplotfile.open("w") as f:
             #     f.writelines(jsout)
@@ -770,7 +766,7 @@ def resultplotdatajs(request, taskid):
     # if jsplotfile.exists():
     #     return FileResponse(open(jsplotfile, "rb"), headers={"ETag": etag})
 
-    return HttpResponseNotFound("ERROR: Could not create javascript file.")
+    # return HttpResponseNotFound("ERROR: Could not create javascript file.")
 
 
 def taskpdfplot(request, taskid):
