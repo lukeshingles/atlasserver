@@ -690,9 +690,14 @@ def resultplotdatajs(request, taskid):
 
     if strjs is None:
         jsout = ['"use strict";\n']
-        resultfile = task.localresultfile()
-        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
-        if resultfile and resultfilepath.is_file():
+
+        resultfilepath = None
+        if task.localresultfile() is not None:
+            resultfilepath = Path(settings.STATIC_ROOT, task.localresultfile())
+            if not resultfilepath.is_file():
+                resultfilepath = None
+
+        if resultfilepath is not None:
             import pandas as pd
 
             df = pd.read_csv(
