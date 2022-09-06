@@ -24,6 +24,7 @@ from django.db.models import Max
 from django.db.models.functions import Trunc
 from django.forms import model_to_dict
 from django.http import FileResponse
+from django.http import HttpResponse
 from django.http import HttpResponseNotFound
 from django.http import HttpResponseNotModified
 from django.http import JsonResponse
@@ -663,20 +664,16 @@ def register(request):
     return render(request, "registration/register.html", {"form": form})
 
 
-@cache_page(60 * 10, cache="taskderived")
 def resultplotdatajs(request, taskid):
-    import pandas as pd
-
     if taskid:
         try:
-            item = Task.objects.get(id=taskid)
+            task = Task.objects.get(id=taskid)
         except ObjectDoesNotExist:
             return HttpResponseNotFound("Page not found")
     else:
         return HttpResponseNotFound("Page not found")
 
-    jsplotfile = item.localresultjsplotfile()
-    if not jsplotfile:
+    if not task.finishtimestamp:
         return HttpResponseNotFound("Page not found")
 
     # disable etag for debugging
@@ -684,16 +681,20 @@ def resultplotdatajs(request, taskid):
         etag = None
     else:
         etag = datetime.datetime.utcnow().strftime("%Y%m%d")
+
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()
 
-    if settings.DEBUG or not jsplotfile.exists() or (time.time() - jsplotfile.stat().st_mtime) < (60 * 60):
+    from django.core.cache import caches
+
+    strjs = caches["taskderived"].get(f"task{taskid}_resultplotdatajs", default=None)
+
+    if strjs is None:
         jsout = ['"use strict";\n']
-        resultfile = item.localresultfile()
-        if resultfile:
-            resultfilepath = Path(settings.STATIC_ROOT, resultfile)
-            if not resultfilepath.is_file():
-                return HttpResponseNotFound("Page not found")
+        resultfile = task.localresultfile()
+        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
+        if resultfile and resultfilepath.is_file():
+            import pandas as pd
 
             df = pd.read_csv(
                 resultfilepath,
@@ -703,8 +704,6 @@ def resultplotdatajs(request, taskid):
                 converters={"F": str, "Obs": str, "uJy": int, "duJy": int},
             )
             # df.rename(columns={'#MJD': 'MJD'})
-            if df.empty:
-                return HttpResponseNotFound("Page not found")
 
             ujy_min = int(-1e10)
             ujy_max = int(1e10)
@@ -759,14 +758,18 @@ def resultplotdatajs(request, taskid):
             #     "$.ajax({url: '" + settings.STATIC_URL + "js/lightcurveplotly.js', "
             #     "cache: true, dataType: 'script'});"))
 
-        # strjs = ''.join(jsout)
-        # return HttpResponse(strjs, content_type="text/javascript")
+            strjs = "".join(jsout)
+            # return HttpResponse(strjs, content_type="text/javascript")
 
-        with jsplotfile.open("w") as f:
-            f.writelines(jsout)
+            # with jsplotfile.open("w") as f:
+            #     f.writelines(jsout)
 
-    if jsplotfile.exists():
-        return FileResponse(open(jsplotfile, "rb"), headers={"ETag": etag})
+        caches["taskderived"].set(f"task{taskid}_resultplotdatajs", strjs, timeout=60 * 10)
+
+    return HttpResponse(strjs, content_type="text/javascript", headers={"ETag": etag})
+
+    # if jsplotfile.exists():
+    #     return FileResponse(open(jsplotfile, "rb"), headers={"ETag": etag})
 
     return HttpResponseNotFound("ERROR: Could not create javascript file.")
 
