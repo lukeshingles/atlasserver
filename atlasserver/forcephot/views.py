@@ -132,7 +132,7 @@ def calculate_queue_positions() -> None:
                     useridsassigned_currentpass.add(task_userid)
                     queuepos += 1
 
-            assert passnum < (2 * queuedtaskcount)  # prevent infinite loop if we're failing to assign anything
+            assert passnum < (2 * queuedtaskcount + 1)  # prevent infinite loop if we're failing to assign anything
 
             passnum += 1
 
