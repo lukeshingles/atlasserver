@@ -279,7 +279,9 @@ class TaskPage extends React.Component {
 
   componentDidUpdate() {
     if (this.state.scrollToTopAfterUpdate) {
-      this.setState({scrollToTopAfterUpdate: false});
+        this.setState({ scrollToTopAfterUpdate: false });
+        window.scrollTo(0, 0);
+        window.dispatchEvent(new Event('resize'));
     }
   }
 
@@ -334,12 +336,6 @@ class TaskPage extends React.Component {
     }
 
     pagehtml.push(<div key="tasklist" id="tasklist" className={singletaskmode ? 'singletaskdetail' : null}>{tasklist}</div>);
-
-    if (this.state.scrollToTopAfterUpdate) {
-      window.scrollTo(0, 0);
-      // this.setState({scrollToTopAfterUpdate: false});
-      window.dispatchEvent(new Event('resize'));
-    }
 
     return pagehtml;
   }
