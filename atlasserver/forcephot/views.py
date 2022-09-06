@@ -96,7 +96,7 @@ def calculate_queue_positions() -> None:
         queuepos: int = 0
         passnum: int = 0
         # queuepos_updates = []  # for bulk_update()
-        while queuepos < queuedtaskcount:
+        while len(unassigned_taskids) > 0:
             useridsassigned_currentpass = set()
 
             if passnum == 0 and runningtaskid is not None:
@@ -127,12 +127,13 @@ def calculate_queue_positions() -> None:
                     # method 2
                     # queuepos_updates.append((task.id, queuepos))
 
-                    useridsassigned_currentpass.add(task_userid)
                     unassigned_taskids.pop(i)
                     unassigned_task_userids.pop(i)
+                    useridsassigned_currentpass.add(task_userid)
                     queuepos += 1
 
-            assert len(useridsassigned_currentpass) > 0  # prevent infinite loop if the pass failed to assign anything
+            assert passnum < (2 * queuedtaskcount)  # prevent infinite loop if we're failing to assign anything
+
             passnum += 1
 
         # method 2
