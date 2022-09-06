@@ -754,10 +754,10 @@ def resultplotdatajs(request, taskid):
             else:
                 jsout.append("".join(Path(settings.STATIC_ROOT, "js/lightcurveplotly.min.js").open("rt").readlines()))
 
-            strjs = "".join(jsout)
+        strjs = "".join(jsout)
 
-            # with jsplotfile.open("w") as f:
-            #     f.writelines(jsout)
+        # with jsplotfile.open("w") as f:
+        #     f.writelines(jsout)
 
         caches["taskderived"].set(f"task{taskid}_resultplotdatajs", strjs, timeout=60 * 10)
 
