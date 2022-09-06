@@ -64,11 +64,10 @@ MIDDLEWARE = [
     "atlasserver.forcephot.countryrestriction.CountryRestrictionMiddleware",
 ]
 
-filecacheroot = (
-    Path("/tmp/atlasforced/django_cache")
-    if platform.system() == "Darwin"
-    else Path("/lvm/hdd1/files/atlasforced/django_cache")
-)
+filecacheroot = Path("/lvm/hdd1/files/atlasforced/django_cache")
+if not filecacheroot.is_dir():
+    filecacheroot = Path("/tmp/atlasforced/django_cache")
+
 
 CACHES = {
     "default": {
