@@ -82,6 +82,8 @@ CACHES = {
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "taskderived",
+        "TIMEOUT": None,
+        "MAX_ENTRIES": 5000,
     },
     "usagestats": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",

@@ -764,7 +764,7 @@ def resultplotdatajs(request, taskid):
         # with jsplotfile.open("w") as f:
         #     f.writelines(jsout)
 
-        caches["taskderived"].set(f"task{taskid}_resultplotdatajs", strjs, timeout=60 * 10)
+        caches["taskderived"].set(f"task{taskid}_resultplotdatajs", strjs)
 
     return HttpResponse(strjs, content_type="text/javascript", headers={"ETag": etag})
 
