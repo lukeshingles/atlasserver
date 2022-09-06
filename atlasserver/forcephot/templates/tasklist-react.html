@@ -4,45 +4,47 @@
 {% load rest_framework %}
 
 {% block head %}
-    {{ block.super }}
+{{ block.super }}
 
-    <!-- force refresh every 2 hours in case the javascript code needs an update -->
-    <meta http-equiv="refresh" content="7200" />
+<!-- force refresh every 2 hours in case the javascript code needs an update -->
+<meta http-equiv="refresh" content="7200" />
 
-    <script language="javascript" type="text/javascript">
-        "use strict";
-        var api_url_obj = new URL(window.location.href);
-        api_url_obj.searchParams.set('format', 'json');
-        const api_url = api_url_obj.toString();
-        const api_url_base = '{{api_url_base|escapejs}}';
+<script language="javascript" type="text/javascript">
+    "use strict";
+    var api_url_obj = new URL(window.location.href);
+    api_url_obj.searchParams.set('format', 'json');
+    const api_url = api_url_obj.toString();
+    const api_url_base = '{{api_url_base|escapejs}}';
 
-        // prefetch the api request at start of page load
-        var xmlhttp = new XMLHttpRequest();
-        xmlhttp.open("GET", api_url, true);
-        xmlhttp.setRequestHeader('Accept', 'application/json')
-        xmlhttp.setRequestHeader('Content-Type', 'application/json')
-        xmlhttp.setRequestHeader('Cache-Control', '')
-        xmlhttp.setRequestHeader('Pragma', '')
-        xmlhttp.send();
+    // prefetch the api request at start of page load
+    var xmlhttp = new XMLHttpRequest();
+    xmlhttp.open("GET", api_url, true);
+    xmlhttp.setRequestHeader('Accept', 'application/json')
+    xmlhttp.setRequestHeader('Content-Type', 'application/json')
+    xmlhttp.setRequestHeader('Cache-Control', '')
+    xmlhttp.setRequestHeader('Pragma', '')
+    xmlhttp.send();
 
-        const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
-        var user_is_active = true;
+    const user_id = {%if request.user.id %}{ { request.user.id | escapejs } } {% else %} -1{% endif %};
+    var user_is_active = true;
 
-        var lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;
-    </script>
+    var lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;
+</script>
 {% endblock %}
 
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
 
-    <div id="taskpage"><p>Loading task list...</p></div>
+    <div id="taskpage">
+        <p>Loading task list...</p>
+    </div>
 </div>
 {% endblock %}
 
 {% block script %}
-    {{ block.super }}
+{{ block.super }}
 
-    <script language="javascript" type="text/javascript">
+<script language="javascript" type="text/javascript">
     "use strict";
 
     function mjdFromDate(dateObj) { // Decimal days
@@ -70,22 +72,22 @@
     // Set the name of the hidden property and the change event for visibility
     var hidden, visibilityChange;
     if (typeof document.hidden !== "undefined") { // Opera 12.10 and Firefox 18 and later support
-      hidden = "hidden";
-      visibilityChange = "visibilitychange";
+        hidden = "hidden";
+        visibilityChange = "visibilitychange";
     } else if (typeof document.msHidden !== "undefined") {
-      hidden = "msHidden";
-      visibilityChange = "msvisibilitychange";
+        hidden = "msHidden";
+        visibilityChange = "msvisibilitychange";
     } else if (typeof document.webkitHidden !== "undefined") {
-      hidden = "webkitHidden";
-      visibilityChange = "webkitvisibilitychange";
+        hidden = "webkitHidden";
+        visibilityChange = "webkitvisibilitychange";
     }
 
     // Warn if the browser doesn't support addEventListener or the Page Visibility API
     if (typeof document.addEventListener === "undefined" || hidden === undefined) {
-      console.log("This demo requires a browser, such as Google Chrome or Firefox, that supports the Page Visibility API.");
+        console.log("This demo requires a browser, such as Google Chrome or Firefox, that supports the Page Visibility API.");
     } else {
-      // Handle page visibility change
-      // document.addEventListener(visibilityChange, handleVisibilityChange, false);
+        // Handle page visibility change
+        // document.addEventListener(visibilityChange, handleVisibilityChange, false);
     }
 
     // function handleVisibilityChange() {
@@ -94,28 +96,28 @@
     // }
 
     function inactivityTimer() {
-      var active_timeout = null;
-      window.onload = setActive;
-      // DOM Events
-      document.addEventListener('mousemove', setActive, true);
-      document.addEventListener('mousedown', setActive, true);
-      document.addEventListener('touchmove', setActive, true);
-      document.addEventListener('touchdown', setActive, true);
-      setActive();
+        var active_timeout = null;
+        window.onload = setActive;
+        // DOM Events
+        document.addEventListener('mousemove', setActive, true);
+        document.addEventListener('mousedown', setActive, true);
+        document.addEventListener('touchmove', setActive, true);
+        document.addEventListener('touchdown', setActive, true);
+        setActive();
 
-      function setActive() {
-        if (!user_is_active) {
-          console.log('User became active');
+        function setActive() {
+            if (!user_is_active) {
+                console.log('User became active');
+            }
+            user_is_active = true;
+            clearTimeout(active_timeout);
+            active_timeout = setTimeout(setInactive, 2 * 60 * 1000)  // inactive after two minutes
         }
-        user_is_active = true;
-        clearTimeout(active_timeout);
-        active_timeout = setTimeout(setInactive, 2 * 60 * 1000)  // inactive after two minutes
-      }
 
-      function setInactive() {
-        user_is_active = false;
-        console.log('User became inactive');
-      }
+        function setInactive() {
+            user_is_active = false;
+            console.log('User became inactive');
+        }
     };
 
     var newids = [];
@@ -123,23 +125,27 @@
 
     // TODO: remove?
     $(document).ready(inactivityTimer);
-    </script>
+</script>
 
-    {% if debug %}
-      <!-- development -->
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.14.0/plotly-basic.js" integrity="sha512-45RykY4JqYCUtLw4YcGqF68uGRyfZTEqF9IOQqEAycDqQ0zCLNRm5p6brD+QI2Ko+yEFejSrEoUSSn0HWk7frQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-      <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-      <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
-      <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
-      <script type="text/babel" src="{% static 'js/newrequest.jsx' %}"></script>
-      <script type="text/babel" src="{% static 'js/task.jsx' %}"></script>
-      <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script>
-      <!-- <script type="text/javascript" src="{% static 'js/tasklist.v2.min.js' %}"></script> -->
-    {% else %}
-      <!-- production -->
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.14.0/plotly-basic.min.js" integrity="sha512-mGiz3yXDXRBW6vud1EkwwOtezejP388VLl0kBvm7JKpyxiSm4ZHGcxwAm64jJUBvCh94w/MuuISQEnscR1XZIA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-      <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
-      <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
-      <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}?ver=20220906"></script>
-    {% endif %}
+{% if debug %}
+<!-- development -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.14.0/plotly-basic.js"
+    integrity="sha512-45RykY4JqYCUtLw4YcGqF68uGRyfZTEqF9IOQqEAycDqQ0zCLNRm5p6brD+QI2Ko+yEFejSrEoUSSn0HWk7frQ=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
+<script type="text/babel" src="{% static 'js/newrequest.jsx' %}"></script>
+<script type="text/babel" src="{% static 'js/task.jsx' %}"></script>
+<script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script>
+<!-- <script type="text/javascript" src="{% static 'js/tasklist.v2.min.js' %}"></script> -->
+{% else %}
+<!-- production -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.14.0/plotly-basic.min.js"
+    integrity="sha512-mGiz3yXDXRBW6vud1EkwwOtezejP388VLl0kBvm7JKpyxiSm4ZHGcxwAm64jJUBvCh94w/MuuISQEnscR1XZIA=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
+<script type="text/javascript" src="{% static 'js/tasklist.min.js' %}?ver=20220906"></script>
+{% endif %}
 {% endblock %}

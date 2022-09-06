@@ -6,13 +6,20 @@
         <h1>{{ name }}</h1>
     </div>
 
-    <p>If you notice any issues with the data or this website, please <a href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a> or email <a href="mailto:luke.shingles@gmail.com">Luke Shingles</a>. Data errors, security vulnerabilities, and downtime will be handled urgently, and feature requests will be considered as time allows.</p>
+    <p>If you notice any issues with the data or this website, please <a
+            href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a> or email <a
+            href="mailto:luke.shingles@gmail.com">Luke Shingles</a>. Data errors, security vulnerabilities, and downtime
+        will be handled urgently, and feature requests will be considered as time allows.</p>
 
-    <p>Historical uptime can viewed at <a href="https://statuspage.freshping.io/52636-ATLASForcedPhotometry">FreshPing.io</a></p>
+    <p>Historical uptime can viewed at <a
+            href="https://statuspage.freshping.io/52636-ATLASForcedPhotometry">FreshPing.io</a></p>
 
-    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at <span id="lastfinishtime">{{ lastfinishtime }}</span> (as of <span id="pagetime">{% now "H:i:s" %}</span>).</p>
+    <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }}
+        unfinished task{% endif %} in the queue with the most recent completion at <span
+            id="lastfinishtime">{{ lastfinishtime }}</span> (as of <span id="pagetime">{% now "H:i:s" %}</span>).</p>
     <div id="statsshortterm">Loading short term stats...</div>
-    <div id="statsusagechart" style="max-width: 60em; padding-top: 1em; padding-bottom: 2em;">Loading usage chart...</div>
+    <div id="statsusagechart" style="max-width: 60em; padding-top: 1em; padding-bottom: 2em;">Loading usage chart...
+    </div>
     <div id="statslongterm">Loading long term stats...</div>
     <div style="clear: both">&nbsp;</div>
     <div id="statscoordchart" style="max-width: 60em;">Loading recent coordinate chart...</div>
@@ -22,37 +29,41 @@
 
 
 {% block script %}
-  {{ block.super }}
-  <script src="https://cdn.pydata.org/bokeh/release/bokeh-2.4.3.min.js"></script>
-  <script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-2.4.3.min.js"></script>
-  <script language="javascript" type="text/javascript">
+{{ block.super }}
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-2.4.3.min.js"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-2.4.3.min.js"></script>
+<script language="javascript" type="text/javascript">
     $('#lastfinishtime').text(new Date('{{ lastfinishtime }}'.replace(/-/g, "/")).toLocaleString());
     $('#pagetime').text(new Date({% now "U" %} * 1000).toLocaleString());
 
     $.ajax({
         url: "{% url 'statsshortterm'|escapejs %}",
-        success: function(result){
-          $('#statsshortterm').html(result);
-    }});
+        success: function (result) {
+            $('#statsshortterm').html(result);
+        }
+    });
 
     $.ajax({
-      url: "{% url 'statslongterm'|escapejs %}",
-      success: function(result){
-        $('#statslongterm').html(result);
-    }});
+        url: "{% url 'statslongterm'|escapejs %}",
+        success: function (result) {
+            $('#statslongterm').html(result);
+        }
+    });
 
     $.ajax({
         url: "{% url 'statsusagechart'|escapejs %}",
-        success: function(result){
-          $('#statsusagechart').html(result.div);
-          $("head").append(result.script);
-    }});
+        success: function (result) {
+            $('#statsusagechart').html(result.div);
+            $("head").append(result.script);
+        }
+    });
 
     $.ajax({
         url: "{% url 'statscoordchart'|escapejs %}",
-        success: function(result){
-          $('#statscoordchart').html(result.div);
-          $("head").append(result.script);
-    }});
-  </script>
+        success: function (result) {
+            $('#statscoordchart').html(result.div);
+            $("head").append(result.script);
+        }
+    });
+</script>
 {% endblock %}

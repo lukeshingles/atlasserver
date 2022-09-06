@@ -4,51 +4,70 @@
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
     <div class="page-header">
-    <h1>ATLAS Forced Photometry</h1>
+        <h1>ATLAS Forced Photometry</h1>
     </div>
     <p>This is the <a href="https://fallingstar.com/">ATLAS</a> forced photometry server, which provides full public
-    access to photometric measurements over the full history of ATLAS
-    survey. After registration, a user can request forced photometry at
-    any position on the sky either for a single position or a list of
-    positions. Currently that is limited to declinations greater than -50
-    degrees, but will be all sky when the two new ATLAS units are
-    installed in Chile and South Africa in 2021.</p>
+        access to photometric measurements over the full history of ATLAS
+        survey. After registration, a user can request forced photometry at
+        any position on the sky either for a single position or a list of
+        positions. Currently that is limited to declinations greater than -50
+        degrees, but will be all sky when the two new ATLAS units are
+        installed in Chile and South Africa in 2021.</p>
 
-    <p>As described in <a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al. (2018)</a>, ATLAS currently surveys the whole
-    visible sky north of -50 degrees every 2 nights. On each of those
-    alternate nights a sequence of 4 x 30 second exposures taken, spaced
-    over a period of about 1 hour to provide identification and orbit
-    constraints for near-earth objects (NEOs). Discovery of NEOs and
-    potentially hazardous objects is the main purpose of ATLAS. However
-    the all-sky, frequent coverage, to o ~ 19.5 makes it treasure trove
-    for time domain science. A full description is on the ATLAS homepage at <a href="https://fallingstar.com/">fallingstar.com</a></p>
+    <p>As described in <a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al. (2018)</a>,
+        ATLAS currently surveys the whole
+        visible sky north of -50 degrees every 2 nights. On each of those
+        alternate nights a sequence of 4 x 30 second exposures taken, spaced
+        over a period of about 1 hour to provide identification and orbit
+        constraints for near-earth objects (NEOs). Discovery of NEOs and
+        potentially hazardous objects is the main purpose of ATLAS. However
+        the all-sky, frequent coverage, to o ~ 19.5 makes it treasure trove
+        for time domain science. A full description is on the ATLAS homepage at <a
+            href="https://fallingstar.com/">fallingstar.com</a></p>
 
     <p>The potential for transient object science and variable star science
-    has been described in <a href="https://ui.adsabs.harvard.edu/abs/2020PASP..132h5002S/abstract">Smith et al. (2020)</a> and <a href="https://ui.adsabs.harvard.edu/abs/2018AJ....156..241H/abstract">Heinze et al. (2018)</a>,
-    respectively. We release all our transient discoveries to the
-    <a href="https://wis-tns.weizmann.ac.il/">IAU's Transient Name Server</a>.</p>
+        has been described in <a href="https://ui.adsabs.harvard.edu/abs/2020PASP..132h5002S/abstract">Smith et al.
+            (2020)</a> and <a href="https://ui.adsabs.harvard.edu/abs/2018AJ....156..241H/abstract">Heinze et al.
+            (2018)</a>,
+        respectively. We release all our transient discoveries to the
+        <a href="https://wis-tns.weizmann.ac.il/">IAU's Transient Name Server</a>.
+    </p>
 
     <p>A forced photometry means that a point-spread-function is calculated
-    for each image based on high signal to noise stars, and a profile fit
-    is forced at the user's input coordinates. The forced measurement
-    can be made on either a target image (e.g. for the measurement of
-    flux of a variable star), or on a difference image (e.g. for a
-    lightcurve point for a transient). Data processing and photometry
-    are described in more detail in <a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al. (2018)</a> and <a href="https://ui.adsabs.harvard.edu/abs/2020PASP..132h5002S/abstract">Smith et al. (2020)</a>.</p>
+        for each image based on high signal to noise stars, and a profile fit
+        is forced at the user's input coordinates. The forced measurement
+        can be made on either a target image (e.g. for the measurement of
+        flux of a variable star), or on a difference image (e.g. for a
+        lightcurve point for a transient). Data processing and photometry
+        are described in more detail in <a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry
+            et al. (2018)</a> and <a href="https://ui.adsabs.harvard.edu/abs/2020PASP..132h5002S/abstract">Smith et al.
+            (2020)</a>.</p>
 
-    <p><img src="{% static 'images/example_supernova_small.png' %}" width="90%"/><br /><img src="{% static 'images/example_varstar_small.png' %}" width="90%"/></p>
+    <p><img src="{% static 'images/example_supernova_small.png' %}" width="90%" /><br /><img
+            src="{% static 'images/example_varstar_small.png' %}" width="90%" /></p>
 
-    <p>The data returned are described on the <a href="{% url 'resultdesc' %}">Output</a> page and if you encounter problems, bugs, or would like to make suggestions, please do it through our <a href="https://github.com/lukeshingles/atlasserver/issues">GitHub issues page</a>.</p>
+    <p>The data returned are described on the <a href="{% url 'resultdesc' %}">Output</a> page and if you encounter
+        problems, bugs, or would like to make suggestions, please do it through our <a
+            href="https://github.com/lukeshingles/atlasserver/issues">GitHub issues page</a>.</p>
 
-    <p>If you use these data in a publication you must cite <a href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al.
-    (2018)</a>, If you use data for transient time-domain science you must
-    also cite <a href="https://ui.adsabs.harvard.edu/abs/2020PASP..132h5002S/abstract">Smith et al. (2020)</a>, and if you use it for variable object
-    science, you must cite the <a href="https://ui.adsabs.harvard.edu/abs/2018AJ....156..241H/abstract">Heinze et al. (2018)</a>.</p>
+    <p>If you use these data in a publication you must cite <a
+            href="https://ui.adsabs.harvard.edu/abs/2018PASP..130f4505T/abstract">Tonry et al.
+            (2018)</a>, If you use data for transient time-domain science you must
+        also cite <a href="https://ui.adsabs.harvard.edu/abs/2020PASP..132h5002S/abstract">Smith et al. (2020)</a>, and
+        if you use it for variable object
+        science, you must cite the <a href="https://ui.adsabs.harvard.edu/abs/2018AJ....156..241H/abstract">Heinze et
+            al. (2018)</a>.</p>
 
     <p>Please also add the acknowledgement:</p>
 
     <p>This work has made use of data from the Asteroid Terrestrial-impact
-    Last Alert System (ATLAS) project. The Asteroid Terrestrial-impact Last Alert System (ATLAS) project is primarily funded to search for near earth asteroids through NASA grants NN12AR55G, 80NSSC18K0284, and 80NSSC18K1575; byproducts of the NEO search include images and catalogs from the survey area. This work was partially funded by Kepler/K2 grant J1944/80NSSC19K0112 and HST GO-15889, and STFC grants ST/T000198/1 and ST/S006109/1. The ATLAS science products have been made possible through the contributions of the University of Hawaii Institute for Astronomy, the Queen’s University Belfast, the Space Telescope Science Institute, the South African Astronomical Observatory, and The Millennium Institute of Astrophysics (MAS), Chile.</p>
+        Last Alert System (ATLAS) project. The Asteroid Terrestrial-impact Last Alert System (ATLAS) project is
+        primarily funded to search for near earth asteroids through NASA grants NN12AR55G, 80NSSC18K0284, and
+        80NSSC18K1575; byproducts of the NEO search include images and catalogs from the survey area. This work was
+        partially funded by Kepler/K2 grant J1944/80NSSC19K0112 and HST GO-15889, and STFC grants ST/T000198/1 and
+        ST/S006109/1. The ATLAS science products have been made possible through the contributions of the University of
+        Hawaii Institute for Astronomy, the Queen’s University Belfast, the Space Telescope Science Institute, the South
+        African Astronomical Observatory, and The Millennium Institute of Astrophysics (MAS), Chile.</p>
 
     <ul class="logos">
         <li><img src="{% static 'images/logos/LogoMAS.png' %}" /></li>
