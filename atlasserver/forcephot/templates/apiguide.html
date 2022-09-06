@@ -4,14 +4,13 @@
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
     <div class="page-header">
-        <h1>{{name}}</h1>
+    <h1>{{name}}</h1>
     </div>
 
-    <p>The forced photometry server has a REST API that makes it easy to script requests. In this example, we'll use
-        Python.</p>
+    <p>The forced photometry server has a REST API that makes it easy to script requests. In this example, we'll use Python.</p>
 
     <p>First, let's import some useful packages and set the API URL:</p>
-    <pre><code>import io
+<pre><code>import io
 import os
 import sys
 import time
@@ -22,9 +21,8 @@ import requests
 BASEURL = "https://fallingstar-data.com/forcedphot"
 </code></pre>
 
-    <p>Next, we need to obtain a secret token from our username and password. This step normally only has to be done
-        once, unless a token reset is specifically requested (e.g., if it accidentally becomes compromised).</p>
-    <pre><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
+<p>Next, we need to obtain a secret token from our username and password. This step normally only has to be done once, unless a token reset is specifically requested (e.g., if it accidentally becomes compromised).</p>
+<pre><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
 
 if resp.status_code == 200:
     token = resp.json()['token']
@@ -35,9 +33,8 @@ else:
     print(resp.json())
 </code></pre>
 
-    <p>Next, submit an RA and Dec coordinate to the server to obtain a URL for checking the status. Note that our
-        request may be throttled if we make too many in a short time.</p>
-    <pre><code>task_url = None
+<p>Next, submit an RA and Dec coordinate to the server to obtain a URL for checking the status. Note that our request may be throttled if we make too many in a short time.</p>
+<pre><code>task_url = None
 while not task_url:
     with requests.Session() as s:
         resp = s.post(f"{BASEURL}/queue/", headers=headers, data={
@@ -65,9 +62,8 @@ while not task_url:
             sys.exit()
 </code></pre>
 
-    Now we can check if the task has completed, and if so, retrieve the results. Be aware that the result URL is for
-    short term use and may expire in the future.
-    <pre><code>result_url = None
+Now we can check if the task has completed, and if so, retrieve the results. Be aware that the result URL is for short term use and may expire in the future.
+<pre><code>result_url = None
     while not result_url:
         with requests.Session() as s:
             resp = s.get(task_url, headers=headers)
@@ -95,22 +91,16 @@ with requests.Session() as s:
     # s.delete(task_url, headers=headers).json()
 </code></pre>
 
-    <p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>
-    <pre><code>dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), delim_whitespace=True)
+<p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>
+<pre><code>dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), delim_whitespace=True)
 print(dfresult)
 </code></pre>
 
-    <p>A complete Python example script for the API can be downloaded from <a
-            href="{% static "apiexample.py" %}">apiexample.py</a>.</p>
+<p>A complete Python example script for the API can be downloaded from <a href="{% static "apiexample.py" %}">apiexample.py</a>.</p>
 
-    <p>For plotting the output text files, David Young has provided a <a
-            href="https://gist.github.com/thespacedoctor/86777fa5a9567b7939e8d84fd8cf6a76">Python plot script</a> (<a
-            href="https://gist.github.com/thespacedoctor/86777fa5a9567b7939e8d84fd8cf6a76/archive/78863abffeacf9d2a6571426164f1812dc9982bf.zip">zip
-            file</a>).</p>
+<p>For plotting the output text files, David Young has provided a <a href="https://gist.github.com/thespacedoctor/86777fa5a9567b7939e8d84fd8cf6a76">Python plot script</a> (<a href="https://gist.github.com/thespacedoctor/86777fa5a9567b7939e8d84fd8cf6a76/archive/78863abffeacf9d2a6571426164f1812dc9982bf.zip">zip file</a>).</p>
 
-    <p>If you notice any issues with the data or this website, please <a
-            href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a> or email <a
-            href="mailto:luke.shingles@gmail.com">Luke Shingles</a>.</p>
+<p>If you notice any issues with the data or this website, please <a href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a> or email <a href="mailto:luke.shingles@gmail.com">Luke Shingles</a>.</p>
 
 </div>
 {% endblock %}
