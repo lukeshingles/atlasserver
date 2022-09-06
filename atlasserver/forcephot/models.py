@@ -3,6 +3,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
 from django.utils import timezone
@@ -257,5 +258,6 @@ class Task(models.Model):
         if self.finished():
             self.is_archived = True
             self.save()
+            caches["taskderived"].delete(f"task{self.id}_resultplotdatajs")
         else:
             super().delete()

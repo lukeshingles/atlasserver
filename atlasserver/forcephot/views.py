@@ -16,6 +16,7 @@ from bokeh.plotting import figure
 from django.conf import settings as settings
 from django.contrib.auth import authenticate
 from django.contrib.auth import login
+from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -684,8 +685,6 @@ def resultplotdatajs(request, taskid):
 
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()
-
-    from django.core.cache import caches
 
     strjs = caches["taskderived"].get(f"task{taskid}_resultplotdatajs", default=None)
 
