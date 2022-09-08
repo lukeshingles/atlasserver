@@ -237,3 +237,28 @@ table.countrystats th[scope="row"] {
 #tasklistfetchstatus .errors {
   color: red;
 }
+
+
+@media (max-width: 1000px) {
+    div.newrequest {
+        float: none;
+        padding: 0;
+    }
+
+    ul.tasks {
+        clear: both;
+    }
+
+    div#tasklist {
+        width: 100%;
+        padding: 0;
+    }
+
+    div.newrequest {
+        width: 100%;
+    }
+
+    div.newrequest form {
+        width: 28em;
+    }
+}
