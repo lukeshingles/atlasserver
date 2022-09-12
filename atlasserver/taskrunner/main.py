@@ -564,7 +564,7 @@ def main() -> None:
 
     logfunc("Starting forcedphot task runner...")
 
-    numslots: int = 4
+    numslots: int = 1
     procs: list[Optional[Process]] = list([None for _ in range(numslots)])
     procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
