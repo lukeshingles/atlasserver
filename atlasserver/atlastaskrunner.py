@@ -63,7 +63,7 @@ def start():
             pid = int(pidfile.open().read().strip())
             if not psutil.pid_exists(pid):
                 # process ended, so the pid file should be deleted
-                pidfile.unlink()
+                pidfile.unlink(missing_ok=True)
         run_command(
             [
                 "tmux",
