@@ -563,7 +563,7 @@ def main() -> None:
 
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
-    numslots: int = 2
+    numslots: int = 4
     procs: list[Optional[mp.Process]] = list([None for _ in range(numslots)])
     procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
@@ -585,10 +585,12 @@ def main() -> None:
             if proc is not None and proc.exitcode is not None:
                 proc.join()
                 proc.close()
-                logfunc(f"Ended task {procs_taskids[slotid]} in slot {slotid}")
                 procs[slotid] = None
                 procs_userids.pop(slotid)
                 procs_taskids.pop(slotid)
+
+                numslotsfree = sum([1 if p is None else 0 for p in procs])
+                logfunc(f"Slot {slotid} became free. Slots available: {numslotsfree})")
 
         if queuedtaskcount == 0:
             if not printedwaiting:
