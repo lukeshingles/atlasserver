@@ -546,7 +546,7 @@ def do_maintenance(maxtime=None):
 
     remove_old_tasks(days_ago=35, harddeleterecord=True, is_archived=True, from_api=True, logfunc=logfunc)
 
-    remove_old_tasks(days_ago=70, harddeleterecord=True, is_archived=False, from_api=True, logfunc=logfunc)
+    remove_old_tasks(days_ago=140, harddeleterecord=True, is_archived=False, from_api=True, logfunc=logfunc)
 
     remove_old_tasks(days_ago=365, harddeleterecord=True, logfunc=logfunc)
 
