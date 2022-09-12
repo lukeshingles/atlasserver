@@ -544,7 +544,7 @@ def do_maintenance(maxtime=None):
 
     remove_old_tasks(days_ago=365, harddeleterecord=False, request_type="FP", logfunc=logfunc)
 
-    remove_old_tasks(days_ago=35, harddeleterecord=True, is_archived=True, from_api=True, logfunc=logfunc)
+    remove_old_tasks(days_ago=70, harddeleterecord=True, is_archived=True, from_api=True, logfunc=logfunc)
 
     remove_old_tasks(days_ago=140, harddeleterecord=True, is_archived=False, from_api=True, logfunc=logfunc)
 
@@ -582,6 +582,15 @@ def main() -> None:
         )
         queuedtaskcount = queuedtasks.count()
 
+        for slotid, proc in enumerate(procs):
+            if proc is not None and proc.exitcode is not None:
+                proc.join()
+                proc.close()
+                logfunc(f"Ended task {procs_taskids[slotid]} in slot {slotid}")
+                procs[slotid] = None
+                procs_userids.pop(slotid)
+                procs_taskids.pop(slotid)
+
         if queuedtaskcount == 0:
             if not printedwaiting:
                 logfunc("Waiting for tasks...")
@@ -590,16 +599,7 @@ def main() -> None:
         else:
             printedwaiting = False
 
-            for slotid, proc in enumerate(procs):
-                if proc is not None and proc.exitcode is not None:
-                    proc.join()
-                    proc.close()
-                    logfunc(f"Ended task {procs_taskids[slotid]} in slot {slotid}")
-                    procs[slotid] = None
-                    procs_userids.pop(slotid)
-                    procs_taskids.pop(slotid)
-
-            if not any(procs):
+            if not any([p is None for p in procs]):
                 # no free slots
                 time.sleep(1)
             else:
