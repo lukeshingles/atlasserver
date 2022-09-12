@@ -79,7 +79,7 @@ def task_exists(taskid):
 
         return True
 
-    except ObjectDoesNotExist:
+    except (ObjectDoesNotExist, IndexError):
         pass
 
     return False
