@@ -571,15 +571,12 @@ def main() -> None:
     last_maintenancetime: float = float("-inf")
     printedwaiting = False
     while True:
+        time.sleep(1)
+
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
             do_maintenance(maxtime=300)
             printedwaiting = False
-
-        queuedtasks = (
-            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
-        )
-        queuedtaskcount = queuedtasks.count()
 
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
@@ -592,37 +589,37 @@ def main() -> None:
                 numslotsfree = sum([1 if p is None else 0 for p in procs])
                 logfunc(f"slot {slotid} became free. Slots available: {numslotsfree}")
 
+        queuedtasks = (
+            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
+        )
+        queuedtaskcount = queuedtasks.count()
+
         if queuedtaskcount == 0:
             if not printedwaiting:
                 logfunc("Waiting for tasks...")
                 printedwaiting = True
-            time.sleep(1)
+
         else:
-            printedwaiting = False
+            slotid = -1
+            try:
+                slotid = procs.index(None)  # lowest available slot
 
-            if not any([p is None for p in procs]):
-                # no free slots
-                time.sleep(1)
-            else:
+            except ValueError:
                 slotid = -1
-                try:
-                    slotid = procs.index(None)  # lowest available slot
 
-                except ValueError:
-                    time.sleep(1)
+            if slotid >= 0:
+                task = queuedtasks.exclude(user_id__in=list(procs_userids.values())).first()
 
-                if slotid >= 0:
-                    task = queuedtasks.exclude(user_id__in=list(procs_userids.values())).first()
+                if task is not None:
+                    printedwaiting = False
+                    logfunc(f"Unfinished tasks in queue: {queuedtaskcount}")
+                    logfunc(f"Running task {task.id} in slot {slotid}")
+                    procs_userids[slotid] = task.user_id
+                    procs_taskids[slotid] = task.id
 
-                    if task is not None:
-                        logfunc(f"Unfinished tasks in queue: {queuedtaskcount}")
-                        logfunc(f"Running task {task.id} in slot {slotid}")
-                        procs_userids[slotid] = task.user_id
-                        procs_taskids[slotid] = task.id
-
-                        proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid})
-                        proc.start()
-                        procs[slotid] = proc
+                    proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid})
+                    proc.start()
+                    procs[slotid] = proc
 
 
 if __name__ == "__main__":
