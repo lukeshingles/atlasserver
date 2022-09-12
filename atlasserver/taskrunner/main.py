@@ -75,7 +75,7 @@ def log_general(msg, suffix="", *args, **kwargs):
 
 def task_exists(taskid):
     try:
-        Task.objects.all().get(id=taskid)
+        Task.objects.get(id=taskid)
 
         return True
 
