@@ -381,10 +381,10 @@ def do_task(task, slotid):
         log_general(f"slot{slotid:02d} task {task.id:05d}: {x}")
 
     Task.objects.filter(id=task.id).update(
-        starttimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
+        starttimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0)
     )
 
-    logfunc(f"Starting {task.request_type} task for {task.user.username} ({task.user.email}):")
+    logfunc(f"Starting task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
         logfunc_slotonly(f"{key:>17}: {value}")
 
