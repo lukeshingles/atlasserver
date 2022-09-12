@@ -75,7 +75,7 @@ def log_general(msg, suffix="", *args, **kwargs):
 
 def task_exists(taskid):
     try:
-        Task.objects.get(id=taskid)
+        Task.objects.all().get(id=taskid)
 
         return True
 
@@ -380,8 +380,8 @@ def do_task(task, slotid):
         # also log to the main process
         log_general(f"slot{slotid:02d} task {task.id:05d}: {x}")
 
-    Task.objects.filter(id=task.id).update(
-        starttimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0)
+    Task.objects.all().filter(pk=task.id).update(
+        starttimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
     )
 
     logfunc(f"Starting task for {task.user.username} ({task.user.email}):")
