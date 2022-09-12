@@ -371,13 +371,13 @@ def handler(signal_received, frame):
 
 def do_task(task, slotid):
     def logfunc_slotonly(x):
-        log_general(f"slot{slotid:02d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
+        log_general(f"slot{slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
     def logfunc(x):
-        log_general(f"slot{slotid:02d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
+        log_general(f"slot{slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
         # also log to the main process
-        log_general(f"slot{slotid:02d} task {task.id:05d}: {x}")
+        log_general(f"slot{slotid:2d} task {task.id:05d}: {x}")
 
     Task.objects.all().filter(pk=task.id).update(
         starttimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
@@ -590,7 +590,7 @@ def main() -> None:
                 procs_taskids.pop(slotid)
 
                 numslotsfree = sum([1 if p is None else 0 for p in procs])
-                logfunc(f"Slot {slotid} became free. Slots available: {numslotsfree})")
+                logfunc(f"slot {slotid} became free. Slots available: {numslotsfree}")
 
         if queuedtaskcount == 0:
             if not printedwaiting:
