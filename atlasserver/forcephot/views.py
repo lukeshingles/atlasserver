@@ -472,7 +472,7 @@ def statsusagechart(request):
     waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)
 
     waitingtasks_api = waitingtasks.filter(from_api=True)
-    waitingtasks_nonapi = Task.objects.filter(from_api=False)
+    waitingtasks_nonapi = waitingtasks.filter(from_api=False)
 
     daywaitingcounts_api = get_days_ago_counts(waitingtasks_api)
     daywaitingcounts_nonapi = get_days_ago_counts(waitingtasks_nonapi)
