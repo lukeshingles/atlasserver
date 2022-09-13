@@ -6,6 +6,7 @@ from typing import Optional
 
 import numpy as np
 from bokeh.embed import components
+from bokeh.layouts import gridplot
 from bokeh.models import DataRange1d
 from bokeh.models import FactorRange
 from bokeh.models import HoverTool
@@ -456,95 +457,127 @@ def statscoordchart(request):
 
 @cache_page(30, cache="usagestats")
 def statsusagechart(request):
+    days_back = 14
+
     def get_days_ago_counts(tasks):
         taskcounts = (
             tasks.annotate(queueday=Trunc("timestamp", "day")).values("queueday").annotate(taskcount=Count("id"))
         )
-        return {(today - task["queueday"]).total_seconds() // 86400: task["taskcount"] for task in taskcounts}
+        dictcounts = {(today - task["queueday"]).total_seconds() // 86400: task["taskcount"] for task in taskcounts}
+
+        return [dictcounts.get(d, 0.0) for d in reversed(range(days_back))]
 
     today = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
 
     waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)
 
-    daywaitingcounts = get_days_ago_counts(waitingtasks)
+    waitingtasks_api = waitingtasks.filter(from_api=True)
+    waitingtasks_nonapi = Task.objects.filter(from_api=False)
 
-    for d in range(14):
-        if d not in daywaitingcounts:
-            daywaitingcounts[d] = 0.0
-
-    arr_queueday = sorted(daywaitingcounts.keys(), reverse=True)
+    daywaitingcounts_api = get_days_ago_counts(waitingtasks_api)
+    daywaitingcounts_nonapi = get_days_ago_counts(waitingtasks_nonapi)
 
     finishedtasks = Task.objects.filter(
-        timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=False
+        timestamp__gt=today - datetime.timedelta(days=days_back), finishtimestamp__isnull=False
     )
 
-    dayfinishedcounts = get_days_ago_counts(finishedtasks)
     dayfinished_web_counts = get_days_ago_counts(finishedtasks.filter(from_api=False, request_type="FP"))
     dayfinished_api_counts = get_days_ago_counts(finishedtasks.filter(from_api=True, request_type="FP"))
     dayfinished_img_counts = get_days_ago_counts(finishedtasks.filter(request_type="IMGZIP"))
 
     data = {
-        "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in arr_queueday],
-        "waitingtaskcount": [daywaitingcounts.get(d, 0.0) for d in arr_queueday],
-        # 'finishedtaskcount': [dayfinishedcounts.get(d, 0.) for d in arr_queueday],
-        "dayfinished_web_counts": [dayfinished_web_counts.get(d, 0.0) for d in arr_queueday],
-        "dayfinished_api_counts": [dayfinished_api_counts.get(d, 0.0) for d in arr_queueday],
-        "dayfinished_img_counts": [dayfinished_img_counts.get(d, 0.0) for d in arr_queueday],
+        "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))],
+        "waitingtaskcount_api": daywaitingcounts_api,
+        "waitingtaskcount_nonapi": daywaitingcounts_nonapi,
+        "dayfinished_web_counts": dayfinished_web_counts,
+        "dayfinished_api_counts": dayfinished_api_counts,
+        "dayfinished_img_counts": dayfinished_img_counts,
     }
 
-    source = ColumnDataSource(data=data)
+    datasource = ColumnDataSource(data=data)
 
-    plot = figure(
+    fig_api = figure(
         x_range=FactorRange(*data["queueday"]),
         y_range=DataRange1d(start=0.0),
         tools="",
         aspect_ratio=5,
-        # title="Waiting and finished tasks",
+        title="API",
         sizing_mode="stretch_both",
         output_backend="svg",
-        y_axis_label="Tasks per day",
+        y_axis_label="API tasks per day",
     )
 
-    plot.grid.visible = False
+    fig_api.grid.visible = False
 
-    r = plot.vbar_stack(
-        ["waitingtaskcount", "dayfinished_web_counts", "dayfinished_img_counts", "dayfinished_api_counts"],
+    r = fig_api.vbar_stack(
+        ["waitingtaskcount_api", "dayfinished_api_counts"],
         x="queueday",
-        source=source,
-        color=["red", "green", "blue", "lightgrey"],
+        source=datasource,
+        color=["red", "lightgrey"],
         line_width=0.0,
         width=0.3,
     )
 
-    # plot.legend.orientation = "horizontal"
-
-    legend = Legend(
+    legend_api = Legend(
         items=[
-            ("Finished (API)", [r[3]]),
-            ("Finished (images)", [r[2]]),
-            ("Finished (web)", [r[1]]),
-            ("Waiting", [r[0]]),
+            ("Finished (API)", [r[1]]),
+            ("Waiting (API)", [r[0]]),
         ],
         location="top",
         border_line_width=0,
     )
 
-    plot.add_layout(legend, "right")
+    fig_api.add_layout(legend_api, "right")
 
-    plot.add_tools(
-        HoverTool(
-            tooltips=[
-                ("Day", "@queueday"),
-                ("Finished (API)", "@dayfinished_api_counts"),
-                ("Finished (images)", "@dayfinished_img_counts"),
-                ("Finished (web)", "@dayfinished_web_counts"),
-                ("Waiting", "@waitingtaskcount"),
-            ],
-            mode="mouse",
-            point_policy="follow_mouse",
-            renderers=r,
-        )
+    fig_nonapi = figure(
+        x_range=FactorRange(*data["queueday"]),
+        y_range=DataRange1d(start=0.0),
+        tools="",
+        aspect_ratio=5,
+        title="Web",
+        sizing_mode="stretch_both",
+        output_backend="svg",
+        y_axis_label="Web tasks per day",
     )
+
+    fig_nonapi.grid.visible = False
+
+    r_nonapi = fig_nonapi.vbar_stack(
+        ["waitingtaskcount_nonapi", "dayfinished_web_counts", "dayfinished_img_counts"],
+        x="queueday",
+        source=datasource,
+        color=["red", "green", "blue"],
+        line_width=0.0,
+        width=0.3,
+    )
+
+    legend_nonapi = Legend(
+        items=[
+            ("Finished (web images)", [r_nonapi[2]]),
+            ("Finished (web FP)", [r_nonapi[1]]),
+            ("Waiting (web)", [r_nonapi[0]]),
+        ],
+        location="top",
+        border_line_width=0,
+    )
+
+    fig_nonapi.add_layout(legend_nonapi, "right")
+
+    # fig_nonapi.add_tools(
+    #     HoverTool(
+    #         tooltips=[
+    #             ("Day", "@queueday"),
+    #             ("Finished (web images)", "@dayfinished_img_counts"),
+    #             ("Finished (web FP)", "@dayfinished_web_counts"),
+    #             ("Waiting (web)", "@waitingtaskcount_nonapi"),
+    #         ],
+    #         mode="mouse",
+    #         point_policy="follow_mouse",
+    #         renderers=r,
+    #     )
+    # )
+
+    plot = gridplot([[fig_api], [fig_nonapi]], toolbar_location=None)
 
     script, strhtml = components(plot)
 
