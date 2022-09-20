@@ -2,6 +2,7 @@ import math
 import os
 from multiprocessing import Process
 from pathlib import Path
+from typing import Optional
 
 import astrocalc.coords.unit_conversion
 import fundamentals.logs
@@ -355,7 +356,9 @@ def datetime_to_mjd(dt):
     return julian.to_jd(dt) - 2400000.5
 
 
-def make_pdf_plot_worker(localresultfile, taskid, taskcomment="", logprefix="", logfunc=None):
+def make_pdf_plot_worker(
+    localresultfile: Path, taskid: int, taskcomment: str = "", logprefix: str = "", logfunc=None
+) -> Optional[Path]:
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"
     # if taskcomment:
