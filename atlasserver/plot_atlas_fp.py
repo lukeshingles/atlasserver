@@ -552,7 +552,7 @@ class plotter():
         else:
             filePath = f"{self.outputDirectory}{objectName}atlas_fp_lightcurve{stacked}.{self.plotType}"
         plt.savefig(filePath, bbox_inches='tight', transparent=False,
-                    pad_inches=0.1, optimize=True, progressive=True)
+                    pad_inches=0.1)
 
         try:
             cyanMag.remove()
