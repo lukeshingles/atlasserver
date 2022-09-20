@@ -571,7 +571,7 @@ def main() -> None:
     last_maintenancetime: float = float("-inf")
     printedwaiting = False
     while True:
-        time.sleep(1)
+        time.sleep(0.5)
 
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
