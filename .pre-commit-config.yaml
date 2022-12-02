@@ -1,7 +1,7 @@
 ---
 repos:
     - repo: https://github.com/pre-commit/pre-commit-hooks
-      rev: v4.3.0
+      rev: v4.4.0
       hooks:
           - id: check-added-large-files
             args: [--maxkb=500]
@@ -28,18 +28,18 @@ repos:
       hooks:
           - id: yamlfmt
     - repo: https://github.com/asottile/reorder_python_imports
-      rev: v3.8.2
+      rev: v3.9.0
       hooks:
           - id: reorder-python-imports
             types: [python]
             args: [--py39-plus]
             exclude: plot_atlas_fp.py
     - repo: https://github.com/psf/black
-      rev: 22.8.0
+      rev: 22.10.0
       hooks:
           - id: black
     - repo: https://github.com/pycqa/flake8
-      rev: 5.0.4
+      rev: 6.0.0
       hooks:
           - id: flake8
             types: [python]
