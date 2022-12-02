@@ -63,6 +63,10 @@ h2 {
   font-weight: bold;
 }
 
+div.faq h2 {
+  margin-top: 1.8em;
+}
+
 form#newrequest li {
   display: block;
 }
@@ -240,25 +244,25 @@ table.countrystats th[scope="row"] {
 
 
 @media (max-width: 1000px) {
-    div.newrequest {
-        float: none;
-        padding: 0;
-    }
+  div.newrequest {
+    float: none;
+    padding: 0;
+  }
 
-    ul.tasks {
-        clear: both;
-    }
+  ul.tasks {
+    clear: both;
+  }
 
-    div#tasklist {
-        width: 100%;
-        padding: 0;
-    }
+  div#tasklist {
+    width: 100%;
+    padding: 0;
+  }
 
-    div.newrequest {
-        width: 100%;
-    }
+  div.newrequest {
+    width: 100%;
+  }
 
-    div.newrequest form {
-        width: 28em;
-    }
+  div.newrequest form {
+    width: 28em;
+  }
 }
