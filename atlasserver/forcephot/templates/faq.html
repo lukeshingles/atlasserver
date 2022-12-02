@@ -2,17 +2,32 @@
 
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
-    <div class="page-header">
+  <div class="page-header">
     <h1>Frequently Asked Questions</h1>
-    </div>
   </div>
+  <div class="faq">
     <h2>Q: What is tphot and why do I get what appears to be unexpected results in reduced mode?</h2>
-    <p>You may encounter negative flux values in difference image analysis. This is understandable when a variable object has been selected, since it may be either brighter or fainter than the template image used for subtraction. In a minority of cases, you may also encounter negative flux values when requesting “reduced” mode, when photometry is forced on the target images (before differencing). This will strike you as unexpected, but it is a feature of our <strong>tphot</strong> module. <strong>tphot</strong> is a simple, one object at a time, PSF based photometric measurement and is designed for use on difference images in which one expects to have single, unresolved point sources. If we run this on crowded field target images in which the object is variable it may estimate the sky to be too high due to nearby stars, and as it does not fit multiple PSFs (it was never designed to do so), it may subtract an elevated sky leaving negative flux.  Remember <strong>tphot</strong> is not <strong>dophot</strong>. We are planning full release of target images processed with <strong>dophot</strong> in the future. In the meantime, use the results of <strong>tphot</strong>  with care when running on reduced images. It will give you reliable fluxes and magnitudes most of the time, but be careful with interpretation in crowded fields. The ATLAS pixels are 1.86 arcsec and the FWHM is typically 2 pixels.</p>
+    <p>You may encounter negative flux values in difference image analysis. This is understandable when a variable object has been selected, since it may be either brighter or fainter than the template image used for subtraction. In a minority of cases, you may also encounter negative flux values when requesting “reduced” mode, when photometry is forced on the target images (before differencing). This will strike you as unexpected, but it is a feature of our <strong>tphot</strong> module. <strong>tphot</strong> is a simple, one object at a time, PSF based photometric measurement and is designed for use on difference images in which one expects to have single, unresolved point sources. If we run this on crowded field target images in which the object is variable it may estimate the sky to be too high due to nearby stars, and as it does not fit multiple PSFs (it was never designed to do so), it may subtract an elevated sky leaving negative flux. Remember <strong>tphot</strong> is not <strong>dophot</strong>. We are planning full release of target images processed with <strong>dophot</strong> in the future. In the meantime, use the results of <strong>tphot</strong> with care when running on reduced images. It will give you reliable fluxes and magnitudes most of the time, but be careful with interpretation in crowded fields. The ATLAS pixels are 1.86 arcsec and the FWHM is typically 2 pixels.</p>
 
     <h2>Q: Why are there step discontinuities in the difference flux lightcurve when requested over a long period of time (e.g. years)?</h2>
 
     <p>The difference image reference templates are periodically replaced. In order to see whether the step change is real you might want to consider requesting "reduced" (i.e. input) image data. If there are no discontinuities in this lightcurve, the likelihood is that the step features are present because of the template change. The exact template used can be tricky to identify for historical images, but the major wallpaper version 1 to 2 transition happened near MJD 58417 (2018-10-26) and the wallpaper 2 to 3 transition happened near MJD 58882 (2020-02-03). Since early 2021, the exact wallpaper information is now stored in the WPDATE and WPDIR headers in the FITS files, which are available in the results of image requests.</p>
 
-    <p><br />If you notice any issues with the data or this website, please <a href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a>.</p>
+    <h2>Q. How do I get forced photometry for a solar system object?</h2>
+    <p>Enter "mpc" followed by a space character then your asteroid name in the RA/Dec box. If the asteroid is "numbered", the name must be the asteroid number enclosed in parentheses, e.g. "(12267)". Otherwise you must use the "packed designation" form of the asteroid name. For example, 2022 WO1 becomes "K22W01O". For comets, use the packed designation. Examples:</p>
+
+    <pre>mpc (12267)
+    mpc K22W01O
+    mpc CK21Y010</pre>
+
+    <p>See the <a href="https://minorplanetcenter.net/iau/info/PackedDes.html">Minor Planet Center page</a> to learn more about MPC packed designations. Alternatively, you can use the <a href="https://www.minorplanetcenter.net/db_search">MPC's search tool</a> to find out an asteroid or comet's number and packed designation.</p>
+
+    <p>Asteroid forced photometry relies on orbits accurate enough to predict a position with an error of at most 1-2 pixels on the ATLAS detector. Most main belt asteroids have very high quality orbits, but Near-Earth asteroids will work poorly. In general, asteroids with MPC uncertainty parameter of 0 (typically numbered and multi-opposition asteroids) will work well. See <a href="https://minorplanetcenter.net//iau/info/UValue.html">https://minorplanetcenter.net//iau/info/UValue.html</a> for more about the MPC uncertainty parameter.</p>
+
+    <p>Comet orbits will be hit-or-miss due to possible non-gravitational forces acting on comets. The suitability of a particular comet for the forced photometry server must be determined by the submitter. Note that recent comets may appear in the MPC's database search but not the web service that provides the orbit to the ATLAS forced photometry tool due to different publication between these two MPC services.</p>
+
+    <h2>Q: How do I report issues with the data or the website?</h2>
+    <p>Please file an issue on the <a href="https://github.com/lukeshingles/atlasserver/issues">GitHub atlasserver repository</a>.</p>
+  </div>
 </div>
 {% endblock %}
