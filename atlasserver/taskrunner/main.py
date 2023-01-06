@@ -338,15 +338,19 @@ def send_email_if_needed(task, logfunc):
 
             message = EmailMessage(
                 subject="ATLAS forced photometry results",
-                body=("Your forced photometry results are attached for:\n\n" + "\n".join(taskdesclist) + "\n\n"),
+                body=("Your forced photometry results are available for:\n\n" + "\n".join(taskdesclist) + "\n\n"),
                 from_email=settings.EMAIL_HOST_USER,
                 to=[task.user.email],
             )
 
+            attach_size_mb = 0.0
             for localresultfile in localresultfilelist:
                 pdfpath = Path(localresultfile).with_suffix(".pdf")
                 if os.path.exists(pdfpath):
-                    message.attach_file(pdfpath)
+                    filesize_mb = os.stat(pdfpath).st_size / 1024.0 / 1024.0
+                    if (attach_size_mb + filesize_mb) < 22:
+                        attach_size_mb += filesize_mb
+                        message.attach_file(pdfpath)
 
             for localresultfile in localresultfilelist:
                 message.attach_file(localresultfile)
