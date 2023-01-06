@@ -344,6 +344,12 @@ def send_email_if_needed(task, logfunc):
             )
 
             attach_size_mb = 0.0
+
+            for localresultfile in localresultfilelist:
+                filesize_mb = os.stat(localresultfile).st_size / 1024.0 / 1024.0
+                if (attach_size_mb + filesize_mb) < 22:
+                    message.attach_file(localresultfile)
+
             for localresultfile in localresultfilelist:
                 pdfpath = Path(localresultfile).with_suffix(".pdf")
                 if os.path.exists(pdfpath):
@@ -351,9 +357,6 @@ def send_email_if_needed(task, logfunc):
                     if (attach_size_mb + filesize_mb) < 22:
                         attach_size_mb += filesize_mb
                         message.attach_file(pdfpath)
-
-            for localresultfile in localresultfilelist:
-                message.attach_file(localresultfile)
 
             message.send()
         else:
