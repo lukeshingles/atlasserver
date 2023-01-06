@@ -348,6 +348,7 @@ def send_email_if_needed(task, logfunc):
             for localresultfile in localresultfilelist:
                 filesize_mb = os.stat(localresultfile).st_size / 1024.0 / 1024.0
                 if (attach_size_mb + filesize_mb) < 22:
+                    attach_size_mb += filesize_mb
                     message.attach_file(localresultfile)
 
             for localresultfile in localresultfilelist:
