@@ -10,8 +10,8 @@ from bokeh.layouts import gridplot
 from bokeh.models import DataRange1d
 from bokeh.models import FactorRange
 from bokeh.models import HoverTool
-from bokeh.models import Legend
 from bokeh.models import Range1d
+from bokeh.models.annotations import Legend
 from bokeh.plotting import ColumnDataSource
 from bokeh.plotting import figure
 from django.conf import settings as settings
