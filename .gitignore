@@ -134,3 +134,4 @@ logs/*.txt
 *.mmdb
 _version.py
 .tmp
+.DS_Store
