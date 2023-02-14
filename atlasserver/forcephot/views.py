@@ -530,7 +530,7 @@ def statsusagechart(request):
     fig_api.add_tools(
         bokeh.models.HoverTool(
             tooltips=[
-                ("Day", "@queueday"),
+                # ("Day", "@queueday"),
                 ("Finished (API)", "@dayfinished_api_counts"),
                 ("Waiting (API)", "@waitingtaskcount_api"),
             ],
@@ -580,7 +580,7 @@ def statsusagechart(request):
     fig_nonapi.add_tools(
         bokeh.models.HoverTool(
             tooltips=[
-                ("Day", "@queueday"),
+                # ("Day", "@queueday"),
                 ("Finished (web images)", "@dayfinished_img_counts"),
                 ("Finished (web FP)", "@dayfinished_web_counts"),
                 ("Waiting (web)", "@waitingtaskcount_nonapi"),
