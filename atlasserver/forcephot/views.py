@@ -4,13 +4,10 @@ from pathlib import Path
 from typing import Any
 from typing import Optional
 
+import bokeh.layouts
+import bokeh.models
 import numpy as np
 from bokeh.embed import components
-from bokeh.layouts import gridplot
-from bokeh.models import DataRange1d
-from bokeh.models import FactorRange
-from bokeh.models import HoverTool
-from bokeh.models import Range1d
 from bokeh.models.annotations import Legend
 from bokeh.plotting import ColumnDataSource
 from bokeh.plotting import figure
@@ -428,8 +425,8 @@ def statscoordchart(request):
         title="Recently requested coordinates",
         x_axis_label="Right ascension (deg)",
         y_axis_label="Declination (deg)",
-        x_range=Range1d(0, 360, bounds="auto"),
-        y_range=Range1d(-90.0, 90.0, bounds="auto"),
+        x_range=bokeh.models.Range1d(0, 360, bounds="auto"),
+        y_range=bokeh.models.Range1d(-90.0, 90.0, bounds="auto"),
         # frame_width=600,
         sizing_mode="stretch_both",
         output_backend="webgl",
@@ -442,7 +439,7 @@ def statscoordchart(request):
     )
 
     plot.add_tools(
-        HoverTool(
+        bokeh.models.HoverTool(
             tooltips="Task @taskid, RA Dec: @ra @dec, user: @username",
             mode="mouse",
             point_policy="follow_mouse",
@@ -497,9 +494,10 @@ def statsusagechart(request):
     datasource = ColumnDataSource(data=data)
 
     fig_api = figure(
-        x_range=FactorRange(*data["queueday"]),
-        y_range=DataRange1d(start=0.0),
+        x_range=bokeh.models.FactorRange(*data["queueday"]),
+        y_range=bokeh.models.DataRange1d(start=0.0),
         tools="",
+        toolbar_location=None,
         aspect_ratio=5,
         title="API",
         sizing_mode="stretch_both",
@@ -529,10 +527,26 @@ def statsusagechart(request):
 
     fig_api.add_layout(legend_api, "right")
 
+    fig_api.add_tools(
+        bokeh.models.HoverTool(
+            tooltips=[
+                ("Day", "@queueday"),
+                ("Finished (API)", "@dayfinished_api_counts"),
+                ("Waiting (API)", "@waitingtaskcount_api"),
+            ],
+            # mode="mouse",
+            # point_policy="follow_mouse",
+        )
+    )
+
+    # fig_api.toolbar.logo = None
+    fig_api.toolbar_location = None
+
     fig_nonapi = figure(
-        x_range=FactorRange(*data["queueday"]),
-        y_range=DataRange1d(start=0.0),
+        x_range=bokeh.models.FactorRange(*data["queueday"]),
+        y_range=bokeh.models.DataRange1d(start=0.0),
         tools="",
+        toolbar_location=None,
         aspect_ratio=5,
         title="Web",
         sizing_mode="stretch_both",
@@ -563,21 +577,27 @@ def statsusagechart(request):
 
     fig_nonapi.add_layout(legend_nonapi, "right")
 
-    # fig_nonapi.add_tools(
-    #     HoverTool(
-    #         tooltips=[
-    #             ("Day", "@queueday"),
-    #             ("Finished (web images)", "@dayfinished_img_counts"),
-    #             ("Finished (web FP)", "@dayfinished_web_counts"),
-    #             ("Waiting (web)", "@waitingtaskcount_nonapi"),
-    #         ],
-    #         mode="mouse",
-    #         point_policy="follow_mouse",
-    #         renderers=r,
-    #     )
-    # )
+    fig_nonapi.add_tools(
+        bokeh.models.HoverTool(
+            tooltips=[
+                ("Day", "@queueday"),
+                ("Finished (web images)", "@dayfinished_img_counts"),
+                ("Finished (web FP)", "@dayfinished_web_counts"),
+                ("Waiting (web)", "@waitingtaskcount_nonapi"),
+            ],
+            # mode="mouse",
+            # point_policy="follow_mouse",
+        )
+    )
 
-    plot = gridplot([[fig_api], [fig_nonapi]], toolbar_location=None)
+    # fig_nonapi.toolbar.logo = None
+    fig_nonapi.toolbar_location = None
+
+    plot = bokeh.layouts.column(
+        [fig_api, fig_nonapi],
+        sizing_mode="stretch_both",
+        aspect_ratio=2.5,
+    )
 
     script, strhtml = components(plot)
 
