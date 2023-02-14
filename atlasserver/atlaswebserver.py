@@ -10,7 +10,15 @@ import psutil
 from dotenv import load_dotenv
 
 APACHEPATH = Path("/tmp/atlasforced")
-ATLASSERVERPATH = Path(__file__).resolve().parent.parent
+ATLASSERVERPATH = Path(
+    str(Path(__file__).resolve().parent.parent).replace(
+        # the space in the path causes an issue with apachectl script,
+        # so use a symlink with no space
+        "/Users/luke/Library/Mobile Documents/com~apple~CloudDocs/GitHub",
+        "/Users/luke/GitHub",
+    )
+)
+
 
 load_dotenv(dotenv_path=ATLASSERVERPATH / ".env", override=True)
 
