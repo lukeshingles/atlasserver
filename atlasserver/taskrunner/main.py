@@ -547,7 +547,7 @@ def do_maintenance(maxtime=None):
     def logfunc(x):
         log_general(f"Maintenance: {x}")
 
-    remove_old_tasks(days_ago=31, harddeleterecord=False, request_type="IMGZIP", logfunc=logfunc)
+    remove_old_tasks(days_ago=14, harddeleterecord=False, request_type="IMGZIP", logfunc=logfunc)
 
     remove_old_tasks(days_ago=183, harddeleterecord=False, request_type="FP", logfunc=logfunc)
 
