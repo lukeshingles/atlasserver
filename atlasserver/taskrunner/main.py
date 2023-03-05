@@ -547,15 +547,17 @@ def do_maintenance(maxtime=None):
     def logfunc(x):
         log_general(f"Maintenance: {x}")
 
-    remove_old_tasks(days_ago=35, harddeleterecord=False, request_type="IMGZIP", logfunc=logfunc)
+    remove_old_tasks(days_ago=31, harddeleterecord=False, request_type="IMGZIP", logfunc=logfunc)
 
-    remove_old_tasks(days_ago=365, harddeleterecord=False, request_type="FP", logfunc=logfunc)
+    remove_old_tasks(days_ago=183, harddeleterecord=False, request_type="FP", logfunc=logfunc)
 
-    remove_old_tasks(days_ago=70, harddeleterecord=True, is_archived=True, from_api=True, logfunc=logfunc)
+    # API tasks
+    remove_old_tasks(days_ago=7, harddeleterecord=False, is_archived=True, from_api=True, logfunc=logfunc)
 
-    remove_old_tasks(days_ago=140, harddeleterecord=True, is_archived=False, from_api=True, logfunc=logfunc)
+    remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=logfunc)
 
-    remove_old_tasks(days_ago=365, harddeleterecord=True, logfunc=logfunc)
+    # Any old tasks
+    remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=logfunc)
 
     # # this can get very slow
     # rm_unassociated_files(logprefix, start_maintenancetime, maxtime)
