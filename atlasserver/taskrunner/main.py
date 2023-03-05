@@ -487,17 +487,22 @@ def do_task(task, slotid):
 
 
 def remove_old_tasks(
-    days_ago, harddeleterecord=False, request_type=None, is_archived=None, from_api=None, logfunc=log_general
+    days_ago: int,
+    harddeleterecord: bool = False,
+    request_type: Optional[str] = None,
+    is_archived: Optional[bool] = None,
+    from_api: Optional[bool] = None,
+    logfunc=log_general,
 ):
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     filteropts = dict(finishtimestamp__isnull=False, finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
 
+    if request_type is not None:
+        filteropts["request_type"] = request_type
+
     if not harddeleterecord:
         # exclude tasks that are already soft deleted from soft deletion query
         is_archived = False
-
-    if request_type is not None:
-        filteropts["request_type"] = request_type
 
     strarchived = ""
     if is_archived is not None:
