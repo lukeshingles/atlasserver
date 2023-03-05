@@ -489,8 +489,6 @@ def do_task(task, slotid):
 def remove_old_tasks(
     days_ago, harddeleterecord=False, request_type=None, is_archived=None, from_api=None, logfunc=log_general
 ):
-    assert days_ago > 29
-
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     filteropts = dict(finishtimestamp__isnull=False, finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
 
