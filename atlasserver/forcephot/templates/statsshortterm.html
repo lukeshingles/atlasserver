@@ -1,6 +1,6 @@
 In the last seven days there were {{ sevendaytasks }} tasks ({{ sevendaytaskrate }}) from {{ sevendayusers }} users. In this period:
 <ul style="padding-left: 2em">
-    <li>Load factor (request rate / completion rate): {{ sevendayloadpercent }}</li>
+    <li>Load factor (request rate / completion rate): {{ sevendayloadpercent }} (can by > 100% because of multiple job processors)</li>
     <li>Average queue waiting time: {{ sevendayavgwaittime }}</li>
     <li>Average task running time: {{ sevendayavgruntime }}</li>
     <li>Solar System (MPC name) targets: {{ sevendaympctasks }}</li>
