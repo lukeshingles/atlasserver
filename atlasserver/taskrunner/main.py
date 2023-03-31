@@ -600,7 +600,7 @@ def main() -> None:
                 procs_taskids.pop(slotid)
 
                 numslotsfree = sum([1 if p is None else 0 for p in procs])
-                logfunc(f"slot {slotid} became free. Slots available: {numslotsfree}")
+                logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
         queuedtasks = (
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
