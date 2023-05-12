@@ -1,0 +1,1 @@
+Forced photometry is now available from the Southern Telescopes (El Sauce, Chile and Sutherland, South Africa). Please be aware that the difference imaging template south of -50 degrees declination has been changed, so you may get an unexpected discontinuity in your target's lightcurve.
