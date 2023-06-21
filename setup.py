@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-# coding: utf-8
-"""This is the source code for the ATLAS Forced Photometry Server, a Python Django Rest Framework server with a React frontend."""
+"""Source code for the ATLAS Forced Photometry Server, a Python Django Rest Framework server with a React frontend."""
 from pathlib import Path
 
 from setuptools import find_packages
 from setuptools import setup
 from setuptools_scm import get_version
-
 
 setup(
     name="atlasserver",

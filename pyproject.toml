@@ -13,7 +13,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dynamic = ["version", "dependencies", "entry-points"]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 
 [tool.black]
 line-length = 120
@@ -21,7 +21,7 @@ preview = true
 force-exclude = "plot_atlas_fp.py"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 exclude = "(build)|(tests)|(migrations)|(static)"
 ignore_missing_imports = true
 plugins = "mypy_django_plugin.main,numpy.typing.mypy_plugin"
@@ -45,6 +45,90 @@ django-settings-module = "atlasserver.settings"
 
 [tool.pylint.typecheck]
 ignored-modules = ["astropy", "extinction"]
+
+[tool.ruff]
+select = ["ALL"]
+ignore = [
+    "ARG001", # ignored because variables in df.eval() are not detected
+    "ANN",
+    "B005",  # strip-with-multi-characters
+    "B007",  # variable not used in loop body (but sometimes it is with eval)
+    "C901",  # complex-structure
+    "COM812",  # missing-trailing-comma
+    "D100",  # undocumented-public-module
+    "D101",  # undocumented-public-class
+    "D102",  # undocumented-public-method
+    "D103",  # undocumented-public-function
+    "D104",  # undocumented-public-package
+    "D107",  # undocumented-public-init
+    "D203",  # one-blank-line-before-class
+    "D205",  # blank-line-after-summary
+    "D213",  # multi-line-summary-second-line
+    "D401",  # non-imperative-mood
+    "D417",  # undocumented-param
+    "E501", # Line too long
+    "E741", # Ambiguous variable name
+    "ERA001",  # commented-out-code
+    "F841", # unused-variable. ignored because variables in df.eval() are not detected
+    "FBT",
+    "FIX002",  # line contains TODO
+    "N802",  # Function name should be lowercase
+    "N803",  # Argument name should be lowercase
+    "N806",  # Variable should be lowercase
+    "N999",  # invalid-module-name
+    "PD901",  # df is a bad variable name
+    "PGH001",  # No builtin `eval()` allowed
+    "PLR0911",  # too-many-return-statements
+    "PLR0912",  # too-many-branches
+    "PLR0913",  # too-many-arguments
+    "PLR0915",  # too-many-statements
+    "PLR2004",  # magic-value-comparison
+    "PTH112",  # os-path-isdir
+    "PTH113",  # os-path-isfile
+    "PTH118",  # os-path-join
+    "PTH119",  # os-path-basename
+    "PTH123",  # builtin-openß
+    "PLW2901",  #
+    "RET504",  # unnecessary-assign
+    "S101",  # Use of assert detected
+    "S301",  # suspicious-pickle-usage
+    "S311",  # suspicious-non-cryptographic-random-usage
+    "S506",  # unsafe-yaml-load
+    "S603",  # subprocess-without-shell-equals-true
+    "S607",  # start-process-with-partial-path
+    "SLF001",  # private-member-access
+    "T201",  # print found
+    "TD002",  # missing-todo-author
+    "TD003",  # missing-todo-link
+    "TRY301",  # raise-within-try
+]
+fixable = ["ALL"]
+unfixable = [
+    "COM812",  # missing-trailing-comma
+    "ERA001",  # commented-out-code (will just delete it!)
+    "F841",  # unused-variable
+    "SIM222", # expr-or-true
+    "SIM223", # expr-and-false
+]
+line-length = 120
+target-version = "py311"
+fix = false
+show-fixes = true
+ignore-init-module-imports = true
+
+[tool.ruff.flake8-annotations]
+ignore-fully-untyped = true
+
+[tool.ruff.flake8-import-conventions.extend-aliases]
+"artistools" = "at"
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+"plot_atlas_fp.py" = ["ALL"]
+
+[tool.ruff.isort]
+force-single-line = true
+order-by-type = false
 
 [tool.setuptools_scm]
 write_to = "_version.py"
