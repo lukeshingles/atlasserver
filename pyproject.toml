@@ -91,6 +91,7 @@ ignore = [
     "PLW2901",  #
     "RET504",  # unnecessary-assign
     "S101",  # Use of assert detected
+    "S108", # hardcoded-temp-file
     "S301",  # suspicious-pickle-usage
     "S311",  # suspicious-non-cryptographic-random-usage
     "S506",  # unsafe-yaml-load
