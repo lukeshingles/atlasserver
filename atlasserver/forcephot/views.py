@@ -669,8 +669,9 @@ def statsshortterm(request):
         sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
         sevenday_mean_runtime = np.nanmean(sevenday_runtimes)
         dictparams["sevendayavgruntime"] = "{:.1f}s".format(sevenday_mean_runtime)
+        num_job_processors = 8
         dictparams["sevendayloadpercent"] = "{:.1f}%".format(
-            100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60)
+            100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors
         )
     else:
         dictparams.update(
