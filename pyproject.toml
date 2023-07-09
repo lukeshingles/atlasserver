@@ -96,6 +96,7 @@ ignore = [
     "S311",  # suspicious-non-cryptographic-random-usage
     "S506",  # unsafe-yaml-load
     "S603",  # subprocess-without-shell-equals-true
+    "S605",  # start-process-with-a-shell
     "S607",  # start-process-with-partial-path
     "SIM115", # use context handler for opening files
     "SLF001",  # private-member-access

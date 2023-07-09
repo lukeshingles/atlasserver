@@ -419,7 +419,9 @@ def do_task(task, slotid):
             send_email_if_needed(task=task, logfunc=logfunc)
 
             Task.objects.all().filter(pk=task.id).update(
-                finishtimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.UTC, microsecond=0).isoformat(),
+                finishtimestamp=datetime.datetime.now(datetime.UTC)
+                .replace(tzinfo=datetime.UTC, microsecond=0)
+                .isoformat(),
                 queuepos_relative=None,
                 error_msg=error_msg,
             )
@@ -429,7 +431,7 @@ def do_task(task, slotid):
                 send_email_if_needed(task=task, logfunc=logfunc)
 
                 Task.objects.all().filter(pk=task.id).update(
-                    finishtimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.UTC, microsecond=0).isoformat(),
+                    finishtimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
                     queuepos_relative=None,
                 )
 
@@ -490,7 +492,7 @@ def remove_old_tasks(
     from_api: Optional[bool] = None,
     logfunc=log_general,
 ):
-    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC)
+    now = datetime.datetime.now(datetime.UTC)
     filteropts = dict(finishtimestamp__isnull=False, finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
 
     if request_type is not None:

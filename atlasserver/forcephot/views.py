@@ -138,7 +138,7 @@ def get_tasklist_etag(request, queryset):
     if settings.DEBUG:
         todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M:%S")
     else:
-        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
+        todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M")
 
     last_queued = Task.objects.filter().aggregate(Max("timestamp"))["timestamp__max"]
     last_started = Task.objects.filter().aggregate(Max("starttimestamp"))["starttimestamp__max"]
@@ -223,9 +223,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields: dict[str, Any] = {}  # add computed field values (not user specified)
 
         extra_fields["user"] = self.request.user
-        extra_fields["timestamp"] = (
-            datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
-        )
+        extra_fields["timestamp"] = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
 
         # we store the region but not the IP address itself for privacy reasons
         try:
@@ -375,7 +373,7 @@ def requestimages(request, pk):
         data["parent_task_id"] = parent_task.id
         data["request_type"] = Task.RequestType.IMGZIP
         data["user"] = request.user
-        data["timestamp"] = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
+        data["timestamp"] = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
         data["starttimestamp"] = None
         data["finishtimestamp"] = None
 
@@ -401,9 +399,6 @@ def requestimages(request, pk):
 
 @cache_page(60 * 60 * 24, cache="usagestats")
 def statscoordchart(request):
-    # now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    # tasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
-
     tasks = Task.objects.all().order_by("-timestamp")[:20000].select_related("user")
 
     dictsource = {
@@ -462,7 +457,7 @@ def statsusagechart(request):
 
         return [dictcounts.get(d, 0.0) for d in reversed(range(days_back))]
 
-    today = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
     waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)
 
@@ -605,7 +600,7 @@ def statsusagechart(request):
 @cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
     dictparams = {}
-    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC)
+    now = datetime.datetime.now(datetime.UTC)
     thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
 
     dictparams["thirtydaytasks"] = thirtydaytasks.count()
@@ -646,7 +641,7 @@ def statslongterm(request):
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
     dictparams = {}
-    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC)
+    now = datetime.datetime.now(datetime.UTC)
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
     sevendaytaskcount = int(sevendaytasks.count())
 
