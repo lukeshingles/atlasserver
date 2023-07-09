@@ -11,7 +11,7 @@ from bokeh.embed import components
 from bokeh.models.annotations import Legend
 from bokeh.plotting import ColumnDataSource
 from bokeh.plotting import figure
-from django.conf import settings as settings
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth import login
 from django.core.cache import caches
