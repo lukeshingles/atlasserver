@@ -83,8 +83,8 @@ def calculate_queue_positions() -> None:
 
         queuedtaskcount = queuedtasks.count()
 
-        unassigned_taskids = list([t.id for t in queuedtasks])
-        unassigned_task_userids = list([t.user_id for t in queuedtasks])
+        unassigned_taskids = [t.id for t in queuedtasks]
+        unassigned_task_userids = [t.user_id for t in queuedtasks]
 
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos: int = 0
