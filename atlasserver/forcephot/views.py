@@ -136,7 +136,7 @@ def calculate_queue_positions() -> None:
 
 def get_tasklist_etag(request, queryset):
     if settings.DEBUG:
-        todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M:%S")
+        todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M:%S")
     else:
         todaydate = datetime.datetime.utcnow().strftime("%Y%m%d %H:%M")
 
@@ -185,9 +185,7 @@ class ForcePhotPermission(permissions.BasePermission):
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows force.sh tasks to be created and deleted.
-    """
+    """API endpoint that allows force.sh tasks to be created and deleted."""
 
     queryset = Task.objects.all().order_by("-timestamp", "-id").select_related("user")
     serializer_class = ForcePhotTaskSerializer
@@ -226,7 +224,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         extra_fields["user"] = self.request.user
         extra_fields["timestamp"] = (
-            datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
+            datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
         )
 
         # we store the region but not the IP address itself for privacy reasons
@@ -377,7 +375,7 @@ def requestimages(request, pk):
         data["parent_task_id"] = parent_task.id
         data["request_type"] = Task.RequestType.IMGZIP
         data["user"] = request.user
-        data["timestamp"] = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
+        data["timestamp"] = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
         data["starttimestamp"] = None
         data["finishtimestamp"] = None
 
@@ -464,7 +462,7 @@ def statsusagechart(request):
 
         return [dictcounts.get(d, 0.0) for d in reversed(range(days_back))]
 
-    today = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, hour=0, minute=0, second=0, microsecond=0)
 
     waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)
 
@@ -607,7 +605,7 @@ def statsusagechart(request):
 @cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
     dictparams = {}
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC)
     thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
 
     dictparams["thirtydaytasks"] = thirtydaytasks.count()
@@ -648,7 +646,7 @@ def statslongterm(request):
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
     dictparams = {}
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC)
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
     sevendaytaskcount = int(sevendaytasks.count())
 
@@ -729,10 +727,7 @@ def resultplotdatajs(request, taskid):
         return HttpResponseNotFound("Page not found")
 
     # disable etag for debugging
-    if settings.DEBUG:
-        etag = None
-    else:
-        etag = datetime.datetime.utcnow().strftime("%Y%m%d")
+    etag = None if settings.DEBUG else datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
 
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()

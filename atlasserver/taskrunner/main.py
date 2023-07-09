@@ -47,7 +47,7 @@ def get_localresultfile(id):
 
 def log_general(msg, suffix="", *args, **kwargs):
     global LASTLOGFILEARCHIVED
-    dtnow = datetime.datetime.utcnow()
+    dtnow = datetime.datetime.now(datetime.UTC)
     strtime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
     if suffix == "":
@@ -388,7 +388,7 @@ def do_task(task, slotid):
         log_general(f"slot{slotid:2d} task {task.id:05d}: {x}")
 
     Task.objects.all().filter(pk=task.id).update(
-        starttimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc, microsecond=0).isoformat()
+        starttimestamp=datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
     )
 
     logfunc(f"Starting task for {task.user.username} ({task.user.email}):")
@@ -419,9 +419,7 @@ def do_task(task, slotid):
             send_email_if_needed(task=task, logfunc=logfunc)
 
             Task.objects.all().filter(pk=task.id).update(
-                finishtimestamp=datetime.datetime.utcnow()
-                .replace(tzinfo=datetime.timezone.utc, microsecond=0)
-                .isoformat(),
+                finishtimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.UTC, microsecond=0).isoformat(),
                 queuepos_relative=None,
                 error_msg=error_msg,
             )
@@ -431,9 +429,7 @@ def do_task(task, slotid):
                 send_email_if_needed(task=task, logfunc=logfunc)
 
                 Task.objects.all().filter(pk=task.id).update(
-                    finishtimestamp=datetime.datetime.utcnow()
-                    .replace(tzinfo=datetime.timezone.utc, microsecond=0)
-                    .isoformat(),
+                    finishtimestamp=datetime.datetime.utcnow().replace(tzinfo=datetime.UTC, microsecond=0).isoformat(),
                     queuepos_relative=None,
                 )
 
@@ -494,7 +490,7 @@ def remove_old_tasks(
     from_api: Optional[bool] = None,
     logfunc=log_general,
 ):
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC)
     filteropts = dict(finishtimestamp__isnull=False, finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
 
     if request_type is not None:
