@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-This script is to be run on sc01. A job datafile is converted to a zip of fits images.
-"""
+"""This script is to be run on sc01. A job datafile is converted to a zip of fits images."""
 import os
 import shutil
 import sys

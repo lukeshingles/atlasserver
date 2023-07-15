@@ -1,5 +1,4 @@
-"""
-WSGI config for atlasserver project.
+"""WSGI config for atlasserver project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 

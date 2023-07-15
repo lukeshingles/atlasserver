@@ -87,7 +87,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
 
         badchars = "'\";"
-        if any([c in dict.fromkeys(badchars) for c in value]):
+        if any(c in dict.fromkeys(badchars) for c in value):
             raise serializers.ValidationError(
                 {field: prefix + "Invalid mpc_name. May not contain quotes or seimicolons"}
             )
@@ -140,7 +140,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
         else:
             if "ra" not in attrs and "dec" not in attrs:
-                raise serializers.ValidationError("Either an mpc_name or (ra, dec) must be specified.")
+                msg = "Either an mpc_name or (ra, dec) must be specified."
+                raise serializers.ValidationError(msg)
             elif "dec" not in attrs:
                 raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
             elif "ra" not in attrs:

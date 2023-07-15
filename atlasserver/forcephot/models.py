@@ -74,19 +74,13 @@ class Task(models.Model):
     task_modified_datetime = models.DateTimeField(auto_now=True)
 
     def localresultfileprefix(self, use_parent=False):
-        """
-        return the relative path prefix for the job (no file extension)
-        """
-        if use_parent and self.parent_task:
-            int_id = int(self.parent_task.id)
-        else:
-            int_id = int(self.id)
+        """Return the relative path prefix for the job (no file extension)."""
+        int_id = int(self.parent_task.id) if use_parent and self.parent_task else int(self.id)
         return f"results/job{int_id:05d}"
 
     def localresultfile(self):
-        """
-        return the relative path to the FP data file if the job is finished,
-        and the file exists
+        """Return the relative path to the FP data file if the job is finished,
+        and the file exists.
         """
         if self.finishtimestamp:
             resultfile = self.localresultfileprefix() + ".txt"
@@ -97,9 +91,7 @@ class Task(models.Model):
 
     @property
     def localresultpreviewimagefile(self):
-        """
-        return the full local path to the image file if it exists, otherwise None
-        """
+        """Return the full local path to the image file if it exists, otherwise None."""
         if self.finishtimestamp:
             imagefile = self.localresultfileprefix(use_parent=True) + ".jpg"
             if Path(settings.STATIC_ROOT, imagefile).exists():
@@ -109,9 +101,7 @@ class Task(models.Model):
 
     @property
     def localresultpdfplotfile(self):
-        """
-        return the full local path to the PDF plot file if the job is finished
-        """
+        """Return the full local path to the PDF plot file if the job is finished."""
         if self.finishtimestamp:
             return self.localresultfileprefix() + ".pdf"
 
@@ -119,9 +109,7 @@ class Task(models.Model):
 
     @property
     def localresultimagezipfile(self):
-        """
-        return the full local path to the image zip file if it exists, otherwise None
-        """
+        """Return the full local path to the image zip file if it exists, otherwise None."""
         imagezipfile = Path(self.localresultfileprefix(use_parent=True) + ".zip")
         if Path(settings.STATIC_ROOT, imagezipfile).exists():
             return imagezipfile
@@ -130,9 +118,8 @@ class Task(models.Model):
 
     @property
     def imagerequest_task_id(self):
-        """
-        return the task id of the image request task associated with this
-        forced photometry task if it exists, otherwise None
+        """Return the task id of the image request task associated with this
+        forced photometry task if it exists, otherwise None.
         """
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         if associated_tasks.count() > 0:
@@ -142,9 +129,8 @@ class Task(models.Model):
 
     @property
     def imagerequest_finished(self):
-        """
-        return the task id of the image request task associated with this
-        forced photometry task if it exists, otherwise None
+        """Return the task id of the image request task associated with this
+        forced photometry task if it exists, otherwise None.
         """
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         if associated_tasks.count() > 0:

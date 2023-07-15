@@ -5,7 +5,6 @@ from pathlib import Path
 
 import psutil
 
-
 ATLASSERVERPATH = Path(__file__).resolve().parent.parent
 
 

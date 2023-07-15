@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-This script is to be run on sc01. A job datafile is used to get the first images in JPEG
-"""
+"""This script is to be run on sc01. A job datafile is used to get the first images in JPEG."""
 import os
 import sys
 from pathlib import Path
