@@ -834,12 +834,11 @@ def taskresultdata(request, taskid):
         except ObjectDoesNotExist:
             return HttpResponseNotFound("Page not found")
 
-    if item:
-        if resultfile := item.localresultfile():
-            resultfilepath = Path(settings.STATIC_ROOT, resultfile)
+    if item and (resultfile := item.localresultfile()):
+        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
-            if resultfilepath.is_file():
-                return FileResponse(open(resultfilepath, "rb"))
+        if resultfilepath.is_file():
+            return FileResponse(open(resultfilepath, "rb"))
 
     return HttpResponseNotFound("Page not found")
 
