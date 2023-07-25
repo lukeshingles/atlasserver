@@ -10,7 +10,6 @@ djangorestframework>=3.14
 djangorestframework-stubs>=3.14.2
 flake8>=6.0.0
 fundamentals>=2.4
-#geoip2>=4.5.0
 julian>=0.14
 Markdown>=3.2.2
 matplotlib>=3.7.2
