@@ -21,7 +21,7 @@ jobs:
         strategy:
             max-parallel: 4
             matrix:
-                python-version: ['3.11', 3.12-dev]
+                python-version: ['3.11']
 
         # services:
         #     mysql:
