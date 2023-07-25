@@ -88,7 +88,7 @@ def calculate_queue_positions() -> None:
         queuepos: int = 0
         passnum: int = 0
         # queuepos_updates = []  # for bulk_update()
-        while len(unassigned_taskids) > 0:
+        while unassigned_taskids:
             useridsassigned_currentpass = set()
 
             if passnum == 0 and runningtaskid is not None:
@@ -149,10 +149,7 @@ class ForcePhotPermission(permissions.BasePermission):
     message = "You must be the owner of this object."
 
     def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS or request.user.is_authenticated:
-            return True
-
-        return False
+        return bool(request.method in permissions.SAFE_METHODS or request.user.is_authenticated)
 
     #     return request.user and request.user.is_authenticated
 
@@ -170,11 +167,8 @@ class ForcePhotPermission(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        if request.user.is_staff:
-            return True
-
-        # Instance owner must match current user
-        return obj.user.id == request.user.id
+        # staff and instance owner have all permissions
+        return True if request.user.is_staff else obj.user.id == request.user.id
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
@@ -364,13 +358,10 @@ def requestimages(request, pk):
         data["finishtimestamp"] = None
 
         # we store the region but not the IP address itself for privacy reasons
-        try:
+        with contextlib.suppress(KeyError):
             data["country_code"] = request.geo_data["country_code"]
             data["region"] = request.geo_data["region"]
             # data['city'] = request.geo_data['city']
-        except KeyError:
-            pass
-
         data["from_api"] = False
         data["send_email"] = False
 
@@ -626,13 +617,14 @@ def statslongterm(request):
 
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
-    dictparams = {}
     now = datetime.datetime.now(datetime.UTC)
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
     sevendaytaskcount = int(sevendaytasks.count())
 
-    dictparams["sevendaytasks"] = sevendaytaskcount
-    dictparams["sevendayusers"] = sevendaytasks.values_list("user_id").distinct().count()
+    dictparams = {
+        "sevendaytasks": sevendaytaskcount,
+        "sevendayusers": sevendaytasks.values_list("user_id").distinct().count(),
+    }
     dictparams["sevendaytaskrate"] = "{:.1f}/day".format(dictparams["sevendaytasks"] / 7.0)
 
     dictparams["sevendaympctasks"] = int(sevendaytasks.filter(mpc_name__isnull=False).count())
@@ -663,9 +655,11 @@ def statsshortterm(request):
 
 
 def stats(request):
-    dictparams = {"name": "Usage Statistics"}
+    dictparams = {
+        "name": "Usage Statistics",
+        "queuedtaskcount": Task.objects.filter(finishtimestamp__isnull=True).count(),
+    }
 
-    dictparams["queuedtaskcount"] = Task.objects.filter(finishtimestamp__isnull=True).count()
     try:
         lastfinishtime = (
             Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last().finishtimestamp
@@ -694,14 +688,13 @@ def register(request):
 
 
 def resultplotdatajs(request, taskid):
-    if taskid:
-        try:
-            task = Task.objects.get(id=taskid)
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
-    else:
+    if not taskid:
         return HttpResponseNotFound("Page not found")
 
+    try:
+        task = Task.objects.get(id=taskid)
+    except ObjectDoesNotExist:
+        return HttpResponseNotFound("Page not found")
     if not task.finishtimestamp:
         return HttpResponseNotFound("Page not found")
 
@@ -806,14 +799,13 @@ def resultplotdatajs(request, taskid):
 
 
 def taskpdfplot(request, taskid):
-    if taskid:
-        try:
-            item = Task.objects.get(id=taskid)
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
-    else:
+    if not taskid:
         return HttpResponseNotFound("Page not found")
 
+    try:
+        item = Task.objects.get(id=taskid)
+    except ObjectDoesNotExist:
+        return HttpResponseNotFound("Page not found")
     if resultfile := item.localresultfile():
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
         pdfpath = resultfilepath.with_suffix(".pdf")
