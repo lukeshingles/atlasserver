@@ -138,14 +138,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         if attrs.get("mpc_name", False):
             if attrs.get("ra", False) or attrs.get("dec", False):
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
-        else:
-            if "ra" not in attrs and "dec" not in attrs:
-                msg = "Either an mpc_name or (ra, dec) must be specified."
-                raise serializers.ValidationError(msg)
-            elif "dec" not in attrs:
-                raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
-            elif "ra" not in attrs:
-                raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
+        elif "ra" not in attrs and "dec" not in attrs:
+            msg = "Either an mpc_name or (ra, dec) must be specified."
+            raise serializers.ValidationError(msg)
+        elif "dec" not in attrs:
+            raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
+        elif "ra" not in attrs:
+            raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
 
         if "mjd_min" in attrs and attrs["mjd_min"] is not None and not is_finite_float(attrs["mjd_min"]):
             raise serializers.ValidationError(
