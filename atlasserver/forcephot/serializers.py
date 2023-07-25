@@ -17,10 +17,7 @@ def is_finite_float(val):
     except ValueError:
         return False
 
-    if not math.isfinite(f_val):
-        return False
-
-    return True
+    return bool(math.isfinite(f_val))
 
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
@@ -151,9 +148,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 {"mjd_min": "mjd_min must be either None or a finite floating-point number."}
             )
 
-        if "mjd_max" in attrs and attrs["mjd_max"] is not None:
-            if "mjd_min" in attrs and attrs["mjd_min"] is not None and not attrs["mjd_max"] > attrs["mjd_min"]:
-                raise serializers.ValidationError({"mjd_max": "mjd_max must be greater than mjd_min."})
+        if (
+            "mjd_max" in attrs
+            and attrs["mjd_max"] is not None
+            and ("mjd_min" in attrs and attrs["mjd_min"] is not None and not attrs["mjd_max"] > attrs["mjd_min"])
+        ):
+            raise serializers.ValidationError({"mjd_max": "mjd_max must be greater than mjd_min."})
 
         return attrs
 
