@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from atlasserver.forcephot.misc import datetime_to_mjd
 
 
 def get_mjd_min_default():
-    return round(datetime_to_mjd(datetime.datetime.now() - datetime.timedelta(days=30)), 5)
+    return round(datetime_to_mjd(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=30)), 5)
 
 
 class Task(models.Model):
@@ -72,6 +73,37 @@ class Task(models.Model):
     request_type = models.CharField(max_length=6, choices=RequestType.choices, default=RequestType.FP)
 
     task_modified_datetime = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        user = get_user_model().objects.get(id=self.user_id)
+        targetstr = " MPC[" + self.mpc_name + "]" if self.mpc_name else f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
+
+        if self.finishtimestamp:
+            status = "finished"
+        elif self.starttimestamp:
+            status = "running"
+        else:
+            status = "queued"
+
+        strtask = (
+            f"Task {self.id:d}: "
+            + f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} "
+            + f"{user.username} ({user.email})"
+            + (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "")
+            + f"{' API' if self.from_api else ''}"
+            + f" {self.request_type}"
+            + targetstr
+            + f" {'redimg' if self.use_reduced else 'diffimg'}"
+            + f" {status} "
+            + f"{' archived' if self.is_archived else ''}"
+        )
+
+        if self.starttimestamp:
+            strtask += f" waittime: {self.waittime():.0f}s"
+        if self.finishtimestamp:
+            strtask += f" runtime: {self.runtime():.0f}s"
+
+        return strtask
 
     def localresultfileprefix(self, use_parent=False):
         """Return the relative path prefix for the job (no file extension)."""
@@ -134,7 +166,7 @@ class Task(models.Model):
         """
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         if associated_tasks.count() > 0:
-            return True if associated_tasks[0].finishtimestamp else False
+            return bool(associated_tasks[0].finishtimestamp)
 
         return None
 
@@ -155,7 +187,7 @@ class Task(models.Model):
         return self.queuepos_relative - int(minqueuepos)
 
     def finished(self):
-        return True if self.finishtimestamp else False
+        return bool(self.finishtimestamp)
 
     def waittime(self):
         if self.starttimestamp and self.timestamp:
@@ -175,49 +207,13 @@ class Task(models.Model):
     def username(self):
         return self.user.username
 
-    def __str__(self):
-        user = get_user_model().objects.get(id=self.user_id)
-        if self.mpc_name:
-            targetstr = " MPC[" + self.mpc_name + "]"
-        else:
-            targetstr = f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
-
-        if self.finishtimestamp:
-            status = "finished"
-        elif self.starttimestamp:
-            status = "running"
-        else:
-            status = "queued"
-
-        strtask = (
-            f"Task {self.id:d}: "
-            + f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} "
-            + f"{user.username} ({user.email})"
-            + (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "")
-            + f"{' API' if self.from_api else ''}"
-            + f" {self.request_type}"
-            + targetstr
-            + f" {'redimg' if self.use_reduced else 'diffimg'}"
-            + f" {status} "
-            + f"{' archived' if self.is_archived else ''}"
-        )
-
-        if self.starttimestamp:
-            strtask += f" waittime: {self.waittime():.0f}s"
-        if self.finishtimestamp:
-            strtask += f" runtime: {self.runtime():.0f}s"
-
-        return strtask
-
     def delete(self):
         # cleanup associated files when removing a task object from the database
         if self.request_type == "IMGZIP":
-            zipfile = self.localresultimagezipfile
-            if zipfile:
-                try:
+            if zipfile := self.localresultimagezipfile:
+                with contextlib.suppress(FileNotFoundError):
                     Path(settings.STATIC_ROOT, zipfile).unlink()
-                except FileNotFoundError:
-                    pass
+
         else:
             # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
             delete_extlist = [".txt", ".pdf"]
@@ -226,10 +222,8 @@ class Task(models.Model):
                 delete_extlist.append(".jpg")
 
             for ext in delete_extlist:
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink()
-                except FileNotFoundError:
-                    pass
 
         # keep finished jobs in the database but mark them as archived and hide them from the website
         if self.finished():

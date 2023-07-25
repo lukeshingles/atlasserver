@@ -1,13 +1,10 @@
-import math
 import os
 from multiprocessing import Process
 from pathlib import Path
-from typing import Optional
 
 import astrocalc.coords.unit_conversion
 import fundamentals.logs
 import julian
-import pandas as pd
 import pycountry
 
 from atlasserver import plot_atlas_fp
@@ -271,8 +268,9 @@ dictcountrycodes = {
 
 
 def splitradeclist(data, form=None):
-    from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
     from rest_framework import serializers
+
+    from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
     if "radeclist" not in data:
         return [data]
@@ -346,7 +344,7 @@ def splitradeclist(data, form=None):
                 serializer.is_valid(raise_exception=True)
                 datalist.append(newrow)
 
-            except (IndexError, IOError) as err:
+            except (OSError, IndexError) as err:
                 raise serializers.ValidationError({"radeclist": f"Error on line {index}: {err}"})
 
     return datalist
@@ -358,7 +356,7 @@ def datetime_to_mjd(dt):
 
 def make_pdf_plot_worker(
     localresultfile: Path, taskid: int, taskcomment: str = "", logprefix: str = "", logfunc=None
-) -> Optional[Path]:
+) -> Path | None:
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"
     # if taskcomment:

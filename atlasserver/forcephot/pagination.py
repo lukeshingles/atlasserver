@@ -1,23 +1,8 @@
-from base64 import b64decode
-from base64 import b64encode
-from collections import namedtuple
 from collections import OrderedDict
-from urllib import parse
 
-from django.core.paginator import InvalidPage
-from django.core.paginator import Paginator as DjangoPaginator
-from django.template import loader
-from django.utils.encoding import force_str
-from django.utils.translation import gettext_lazy as _
-from rest_framework.compat import coreapi
-from rest_framework.compat import coreschema
-from rest_framework.exceptions import NotFound
-from rest_framework.pagination import _positive_int
 from rest_framework.pagination import _reverse_ordering
-from rest_framework.pagination import Cursor
 from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
-from rest_framework.settings import api_settings
 from rest_framework.utils.urls import remove_query_param
 
 
@@ -63,9 +48,9 @@ class TaskPagination(CursorPagination):
 
             # Test for: (cursor reversed) XOR (queryset reversed)
             if self.cursor.reverse != is_reversed:
-                kwargs = {order_attr + "__lt": current_position}
+                kwargs = {f"{order_attr}__lt": current_position}
             else:
-                kwargs = {order_attr + "__gt": current_position}
+                kwargs = {f"{order_attr}__gt": current_position}
 
             queryset = queryset.filter(**kwargs)
 
@@ -126,8 +111,7 @@ class TaskPagination(CursorPagination):
     def get_previous_link(self):
         if self.previous_is_top:
             return remove_query_param(self.base_url, "cursor")
-        else:
-            return super().get_previous_link()
+        return super().get_previous_link()
 
     def get_paginated_response(self, data, headers=None):
         return Response(

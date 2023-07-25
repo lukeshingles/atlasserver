@@ -11,7 +11,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
 
     def __init__(self, *args, **kwargs):
         if MiddlewareMixin != object:
-            super(CountryRestrictionMiddleware, self).__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
 
     def process_request(self, request):
         block_message = None

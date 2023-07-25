@@ -1,8 +1,7 @@
+import contextlib
 import datetime
-import time
 from pathlib import Path
 from typing import Any
-from typing import Optional
 
 import bokeh.layouts
 import bokeh.models
@@ -33,7 +32,6 @@ from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from rest_framework import permissions
-from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.response import Response
@@ -111,7 +109,7 @@ def calculate_queue_positions() -> None:
                 except ValueError:  # the task disappeared between the two queries?
                     runningtaskid = None
 
-            for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids)):
+            for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids, strict=True)):
                 if task_userid not in useridsassigned_currentpass and (
                     passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
                 ):
@@ -144,12 +142,7 @@ def get_tasklist_etag(request, queryset):
     last_started = Task.objects.filter().aggregate(Max("starttimestamp"))["starttimestamp__max"]
     last_finished = Task.objects.filter().aggregate(Max("finishtimestamp"))["finishtimestamp__max"]
     taskid_list = "-".join([str(row.id) for row in queryset])
-    etag = (
-        f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}."
-        f"lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.tasks{taskid_list}"
-    )
-
-    return etag
+    return f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.tasks{taskid_list}"
 
 
 class ForcePhotPermission(permissions.BasePermission):
@@ -201,7 +194,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
-            raise PermissionDenied()
+            raise PermissionDenied
 
         if "radeclist" in request.data:
             datalist = splitradeclist(request.data)
@@ -220,19 +213,15 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         #     if (usertaskcount > 10):
         #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
         #     serializer.save(user=self.request.user)
-        extra_fields: dict[str, Any] = {}  # add computed field values (not user specified)
-
-        extra_fields["user"] = self.request.user
-        extra_fields["timestamp"] = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
+        extra_fields: dict[str, Any] = {
+            "user": self.request.user,
+            "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
+        }
 
         # we store the region but not the IP address itself for privacy reasons
-        try:
+        with contextlib.suppress(KeyError):
             extra_fields["country_code"] = self.request.geo_data["country_code"]
             extra_fields["region"] = self.request.geo_data["region"]
-            # extra_fields['city'] = self.request.geo_data['city']
-        except KeyError:
-            pass
-
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
         serializer.save(**extra_fields)
@@ -252,7 +241,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         # if the job we're deleting is in the queue (i.e. not finished), we need to update queue positions
-        update_queue_positions = False if instance.finishtimestamp else True
+        update_queue_positions = not instance.finishtimestamp
         instance.delete()
         if update_queue_positions:
             calculate_queue_positions()
@@ -262,7 +251,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
         else:
             listqueryset = Task.objects.none()
-            raise PermissionDenied()
+            raise PermissionDenied
 
         if request.accepted_renderer.format == "html":
             return Response(
@@ -329,20 +318,17 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
 
 def deletetask(request, pk):
-    """deprecated! remove when sure that this is not used anymore"""
+    """deprecated! remove when sure that this is not used anymore."""
     if not request.user.is_authenticated:
-        raise PermissionDenied()
+        raise PermissionDenied
 
-    try:
+    with contextlib.suppress(ObjectDoesNotExist):
         item = Task.objects.get(id=pk)
 
         if item.user.id != request.user.id and not request.user.is_staff:
-            raise PermissionDenied()
+            raise PermissionDenied
 
         item.delete()
-
-    except ObjectDoesNotExist:
-        pass
 
     calculate_queue_positions()
 
@@ -355,13 +341,13 @@ def deletetask(request, pk):
 
 def requestimages(request, pk):
     if not request.user.is_authenticated:
-        raise PermissionDenied()
+        raise PermissionDenied
 
     try:
         parent_task = Task.objects.get(id=pk)
 
         if parent_task.user.id != request.user.id and not request.user.is_staff:
-            raise PermissionDenied()
+            raise PermissionDenied
 
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Page not found")
@@ -661,7 +647,7 @@ def statsshortterm(request):
 
         sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
         sevenday_mean_runtime = np.nanmean(sevenday_runtimes)
-        dictparams["sevendayavgruntime"] = "{:.1f}s".format(sevenday_mean_runtime)
+        dictparams["sevendayavgruntime"] = f"{sevenday_mean_runtime:.1f}s"
         num_job_processors = 8
         dictparams["sevendayloadpercent"] = "{:.1f}%".format(
             100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors
@@ -752,7 +738,7 @@ def resultplotdatajs(request, taskid):
 
             ujy_min = int(-1e10)
             ujy_max = int(1e10)
-            df.query("uJy > @ujy_min & uJy < @ujy_max", inplace=True)
+            df = df.query("uJy > @ujy_min & uJy < @ujy_max")
 
             jsout.append("var jslcdata = new Array();\n")
             jsout.append("var jslabels = new Array();\n")
@@ -777,7 +763,7 @@ def resultplotdatajs(request, taskid):
                     + "]);\n"
                 )
 
-            mjd_today = datetime_to_mjd(datetime.datetime.now())
+            mjd_today = datetime_to_mjd(datetime.datetime.now(datetime.UTC))
             xmin = df["#MJD"].min()
             xmax = df["#MJD"].max()
             ymin = max(-200, df.uJy.min())
@@ -873,13 +859,11 @@ def taskpreviewimage(request, taskid: int):
         except ObjectDoesNotExist:
             return HttpResponseNotFound("Page not found")
 
-    if item:
-        previewimagefile = item.localresultpreviewimagefile
-        if previewimagefile:
-            previewimagefile = Path(settings.STATIC_ROOT, previewimagefile)
+    if item and (previewimagefile := item.localresultpreviewimagefile):
+        previewimagefile = Path(settings.STATIC_ROOT, previewimagefile)
 
-            if previewimagefile.is_file():
-                return FileResponse(open(previewimagefile, "rb"))
+        if previewimagefile.is_file():
+            return FileResponse(open(previewimagefile, "rb"))
 
     return HttpResponseNotFound("Page not found")
 
@@ -892,12 +876,10 @@ def taskimagezip(request, taskid: int):
         except ObjectDoesNotExist:
             return HttpResponseNotFound("Page not found")
 
-    if item:
-        resultfile = item.localresultimagezipfile
-        if resultfile:
-            resultfilepath = Path(settings.STATIC_ROOT, resultfile)
+    if item and (resultfile := item.localresultimagezipfile):
+        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
-            if resultfilepath.is_file():
-                return FileResponse(open(resultfilepath, "rb"))
+        if resultfilepath.is_file():
+            return FileResponse(open(resultfilepath, "rb"))
 
     return HttpResponseNotFound("Page not found")

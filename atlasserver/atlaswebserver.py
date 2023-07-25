@@ -29,9 +29,9 @@ def get_httpd_pid():
         pid = int(pidfile.open().read().strip())
         if psutil.pid_exists(pid):
             return pid
-        else:
-            # process ended, so the pid file should be deleted
-            pidfile.unlink()
+
+        # process ended, so the pid file should be deleted
+        pidfile.unlink()
 
     return None
 

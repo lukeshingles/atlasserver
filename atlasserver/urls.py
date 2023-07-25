@@ -21,11 +21,6 @@ from django.contrib.staticfiles.storage import staticfiles_storage
 from django.urls import include
 from django.urls import path
 from django.views.generic.base import RedirectView
-from rest_framework import routers
-from rest_framework import serializers
-from rest_framework import viewsets
-
-import atlasserver.forcephot
 
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.

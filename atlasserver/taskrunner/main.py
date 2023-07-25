@@ -8,7 +8,6 @@ from pathlib import Path
 from signal import SIGINT
 from signal import signal
 from signal import SIGTERM
-from typing import Optional
 
 import django
 import pandas as pd
@@ -16,7 +15,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.forms.models import model_to_dict
 
-import atlasserver.settings as settings
+from atlasserver import settings
 
 remoteServer = "atlas"
 localresultdir = Path(settings.RESULTS_DIR)
@@ -25,6 +24,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
 # import atlasserver.wsgi
 django.setup()
+
+import sys
 
 from atlasserver.forcephot.models import Task
 
@@ -48,7 +49,7 @@ def get_localresultfile(id):
 def log_general(msg, suffix="", *args, **kwargs):
     global LASTLOGFILEARCHIVED
     dtnow = datetime.datetime.now(datetime.UTC)
-    strtime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
     if suffix == "":
         print(line, *args, **kwargs)
@@ -75,13 +76,10 @@ def log_general(msg, suffix="", *args, **kwargs):
 def task_exists(taskid):
     try:
         Task.objects.all().get(id=taskid)
-
-        return True
-
     except (ObjectDoesNotExist, IndexError):
-        pass
+        return False
 
-    return False
+    return True
 
 
 def remove_task_resultfiles(taskid, parent_task_id=None, request_type=None, logfunc=log_general):
@@ -94,9 +92,9 @@ def remove_task_resultfiles(taskid, parent_task_id=None, request_type=None, logf
         taskfiles = list(Path(localresultdir).glob(pattern=localresultfileprefix(taskid) + ".*"))
 
     for taskfile in taskfiles:
-        if os.path.exists(taskfile):
+        if Path(taskfile).exists():
             try:
-                os.remove(taskfile)
+                Path(taskfile).unlink(missing_ok=True)
             except OSError:
                 logfunc(f"Error deleting file: {Path(taskfile).relative_to(localresultdir)}")
             else:
@@ -346,7 +344,7 @@ def send_email_if_needed(task, logfunc):
             attach_size_mb = 0.0
 
             for localresultfile in localresultfilelist:
-                filesize_mb = os.stat(localresultfile).st_size / 1024.0 / 1024.0
+                filesize_mb = Path(localresultfile).stat().st_size / 1024.0 / 1024.0
                 if (attach_size_mb + filesize_mb) < 22:
                     attach_size_mb += filesize_mb
                     message.attach_file(localresultfile)
@@ -354,7 +352,7 @@ def send_email_if_needed(task, logfunc):
             for localresultfile in localresultfilelist:
                 pdfpath = Path(localresultfile).with_suffix(".pdf")
                 if os.path.exists(pdfpath):
-                    filesize_mb = os.stat(pdfpath).st_size / 1024.0 / 1024.0
+                    filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
                     if (attach_size_mb + filesize_mb) < 22:
                         attach_size_mb += filesize_mb
                         message.attach_file(pdfpath)
@@ -374,7 +372,7 @@ def send_email_if_needed(task, logfunc):
 def handler(signal_received, frame):
     # Handle any cleanup here
     log_general("SIGINT or CTRL-C detected. Exiting")
-    exit(0)
+    sys.exit(0)
 
 
 def do_task(task, slotid):
@@ -425,22 +423,20 @@ def do_task(task, slotid):
                 queuepos_relative=None,
                 error_msg=error_msg,
             )
+
+        elif localresultfile and os.path.exists(localresultfile):
+            # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+            send_email_if_needed(task=task, logfunc=logfunc)
+
+            Task.objects.all().filter(pk=task.id).update(
+                finishtimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
+                queuepos_relative=None,
+            )
+
         else:
-            if localresultfile and os.path.exists(localresultfile):
-                # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-                send_email_if_needed(task=task, logfunc=logfunc)
-
-                Task.objects.all().filter(pk=task.id).update(
-                    finishtimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
-                    queuepos_relative=None,
-                )
-
-            else:
-                waittime = 5
-                logfunc(
-                    f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries..."
-                )
-                time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
+            waittime = 5
+            logfunc(f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries...")
+            time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
 
 
 # def rm_unassociated_files(logprefix, start_maintenancetime, maxtime):
@@ -487,13 +483,13 @@ def do_task(task, slotid):
 def remove_old_tasks(
     days_ago: int,
     harddeleterecord: bool = False,
-    request_type: Optional[str] = None,
-    is_archived: Optional[bool] = None,
-    from_api: Optional[bool] = None,
+    request_type: str | None = None,
+    is_archived: bool | None = None,
+    from_api: bool | None = None,
     logfunc=log_general,
 ):
     now = datetime.datetime.now(datetime.UTC)
-    filteropts = dict(finishtimestamp__isnull=False, finishtimestamp__lt=now - datetime.timedelta(days=days_ago))
+    filteropts = {"finishtimestamp__isnull": False, "finishtimestamp__lt": now - datetime.timedelta(days=days_ago)}
 
     if request_type is not None:
         filteropts["request_type"] = request_type
@@ -575,7 +571,7 @@ def main() -> None:
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
     numslots: int = 8
-    procs: list[Optional[mp.Process]] = list([None for _ in range(numslots)])
+    procs: list[mp.Process | None] = [None for _ in range(numslots)]
     procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
 
@@ -597,7 +593,7 @@ def main() -> None:
                 procs_userids.pop(slotid)
                 procs_taskids.pop(slotid)
 
-                numslotsfree = sum([1 if p is None else 0 for p in procs])
+                numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
         queuedtasks = (
