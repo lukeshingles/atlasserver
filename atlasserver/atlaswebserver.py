@@ -60,8 +60,7 @@ def run_command(commands, print_output=True):
 
 
 def start():
-    pid = get_httpd_pid()
-    if pid:
+    if pid := get_httpd_pid():
         print(f"ATLAS Apache server is already running (pid {pid})")
         return
 
@@ -133,8 +132,7 @@ def start():
 
 
 def stop():
-    pid = get_httpd_pid()
-    if pid:
+    if pid := get_httpd_pid():
         print(f"Stopping ATLAS Apache server (pid {pid})")
         run_command([f'{APACHEPATH / "apachectl"}', "graceful-stop"])
     else:
@@ -161,8 +159,7 @@ def main():
         print("Usage: atlaswebserver [start|restart|stop]")
         print()
 
-        pid = get_httpd_pid()
-        if pid:
+        if pid := get_httpd_pid():
             print(f"ATLAS Apache server is running with pid {pid}")
         else:
             print("ATLAS Apache server is not running (pid file missing)")

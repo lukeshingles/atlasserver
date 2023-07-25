@@ -421,8 +421,7 @@ def country_code_to_name(country_code):
     if country_code == "XX" or not country_code:
         return "Unknown"
 
-    c = pycountry.countries.get(alpha_2=country_code)
-    if c:
+    if c := pycountry.countries.get(alpha_2=country_code):
         return c.name
 
     return "Unknown"
@@ -433,8 +432,7 @@ def country_region_to_name(country_code, region_code):
 
     if region_code:
         fullcode = f"{country_code}-{region_code}"
-        subdiv = pycountry.subdivisions.get(code=fullcode)
-        if subdiv:
+        if subdiv := pycountry.subdivisions.get(code=fullcode):
             region_name = subdiv.name
 
     return f"{region_name}, {country_code_to_name(country_code)}"

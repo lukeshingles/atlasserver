@@ -808,8 +808,7 @@ def taskpdfplot(request, taskid):
     else:
         return HttpResponseNotFound("Page not found")
 
-    resultfile = item.localresultfile()
-    if resultfile:
+    if resultfile := item.localresultfile():
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
         pdfpath = resultfilepath.with_suffix(".pdf")
 
@@ -838,8 +837,7 @@ def taskresultdata(request, taskid):
             return HttpResponseNotFound("Page not found")
 
     if item:
-        resultfile = item.localresultfile()
-        if resultfile:
+        if resultfile := item.localresultfile():
             resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
             if resultfilepath.is_file():
