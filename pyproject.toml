@@ -68,7 +68,6 @@ ignore = [
     "D203",  # one-blank-line-before-class
     "D204",
     "D213",  # multi-line-summary-second-line
-    "D401",  # non-imperative-mood
     "D417",  # undocumented-param
     "DJ001",
     "E402",
@@ -78,7 +77,6 @@ ignore = [
     "FBT",
     "FIX002",  # line contains TODO
     "INP001",
-    #"N806",  # Variable should be lowercase
     "PD901",  # df is a bad variable name
     "PGH003",
     "PLR0912",  # too-many-branches
@@ -86,7 +84,6 @@ ignore = [
     "PLR0915",  # too-many-statements
     "PLR2004",  # magic-value-comparison
     "PTH110",
-    "PTH123",  # builtin-open
     "PLW2901",  #
     "RUF012",
     "S101",  # Use of assert detected

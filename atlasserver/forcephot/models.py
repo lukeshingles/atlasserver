@@ -75,7 +75,7 @@ class Task(models.Model):
     task_modified_datetime = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        """String representation of the task (as seen in the admin panel list of tasks)."""
+        """Return a string representation of the task (as seen in the admin panel list of tasks)."""
         user = get_user_model().objects.get(id=self.user_id)
         targetstr = f" MPC[{self.mpc_name}]" if self.mpc_name else f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
 

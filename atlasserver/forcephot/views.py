@@ -312,7 +312,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
 
 def deletetask(request, pk):
-    """deprecated! remove when sure that this is not used anymore."""
+    """Delete a task. deprecated! remove when sure that this is not used anymore."""
     if not request.user.is_authenticated:
         raise PermissionDenied
 
@@ -821,7 +821,7 @@ def taskpdfplot(request, taskid):
             )
 
         if pdfpath.is_file():
-            return FileResponse(open(pdfpath, "rb"))
+            return FileResponse(pdfpath.open("rb"))
 
     return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps a lack of data points?)")
 
@@ -838,7 +838,7 @@ def taskresultdata(request, taskid):
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
         if resultfilepath.is_file():
-            return FileResponse(open(resultfilepath, "rb"))
+            return FileResponse(resultfilepath.open("rb"))
 
     return HttpResponseNotFound("Page not found")
 
@@ -856,7 +856,7 @@ def taskpreviewimage(request, taskid: int):
         previewimagefile = Path(settings.STATIC_ROOT, previewimagefile)
 
         if previewimagefile.is_file():
-            return FileResponse(open(previewimagefile, "rb"))
+            return FileResponse(previewimagefile.open("rb"))
 
     return HttpResponseNotFound("Page not found")
 
@@ -873,6 +873,6 @@ def taskimagezip(request, taskid: int):
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
         if resultfilepath.is_file():
-            return FileResponse(open(resultfilepath, "rb"))
+            return FileResponse(resultfilepath.open("rb"))
 
     return HttpResponseNotFound("Page not found")
