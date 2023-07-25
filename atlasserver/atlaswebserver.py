@@ -109,13 +109,9 @@ def start():
     ]
 
     if "ATLASSERVER_NPROCESSES" in os.environ:
-        command.append("--processes")
-        command.append(os.environ["ATLASSERVER_NPROCESSES"])
-
+        command.extend(("--processes", os.environ["ATLASSERVER_NPROCESSES"]))
     if "ATLASSERVER_NTHREADPERPROC" in os.environ:
-        command.append("--threads")
-        command.append(os.environ["ATLASSERVER_NTHREADPERPROC"])
-
+        command.extend(("--threads", os.environ["ATLASSERVER_NTHREADPERPROC"]))
     run_command(command)
 
     os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)

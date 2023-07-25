@@ -738,47 +738,53 @@ def resultplotdatajs(request, taskid):
             ujy_max = int(1e10)
             df = df.query("uJy > @ujy_min & uJy < @ujy_max")
 
-            jsout.append("var jslcdata = new Array();\n")
-            jsout.append("var jslabels = new Array();\n")
-
+            jsout.extend(
+                (
+                    "var jslcdata = new Array();\n",
+                    "var jslabels = new Array();\n",
+                )
+            )
             divid = f"plotforcedflux-task-{taskid}"
 
             for color, filter in [(11, "c"), (12, "o")]:
                 dffilter = df.query("F == @filter", inplace=False)
 
-                jsout.append(
-                    '\njslabels.push({"color": ' + str(color) + ', "display": false, "label": "' + filter + '"});\n'
-                )
-
-                jsout.append(
-                    "jslcdata.push(["
-                    + ", ".join(
-                        [
-                            f"[{mjd},{uJy},{duJy}]"
-                            for _, (mjd, uJy, duJy) in dffilter[["#MJD", "uJy", "duJy"]].iterrows()
-                        ]
+                jsout.extend(
+                    (
+                        '\njslabels.push({"color": '
+                        + str(color)
+                        + ', "display": false, "label": "'
+                        + filter
+                        + '"});\n',
+                        "jslcdata.push(["
+                        + ", ".join(
+                            [
+                                f"[{mjd},{uJy},{duJy}]"
+                                for _, (mjd, uJy, duJy) in dffilter[["#MJD", "uJy", "duJy"]].iterrows()
+                            ]
+                        )
+                        + "]);\n",
                     )
-                    + "]);\n"
                 )
-
             mjd_today = datetime_to_mjd(datetime.datetime.now(datetime.UTC))
             xmin = df["#MJD"].min()
             xmax = df["#MJD"].max()
             ymin = max(-200, df.uJy.min())
             ymax = min(40000, df.uJy.max())
 
-            jsout.append("var jslclimits = {")
-            jsout.append(f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},')
-            jsout.append(f'"discoveryDate": {xmin},')
-            jsout.append(f'"today": {mjd_today},')
-            jsout.append("};\n")
-
-            jsout.append(f'jslimitsglobal["#{divid}"] = jslclimits;\n')
-            jsout.append(f'jslcdataglobal["#{divid}"] = jslcdata;\n')
-            jsout.append(f'jslabelsglobal["#{divid}"] = jslabels;\n')
-
-            jsout.append(f'var lcdivname = "#{divid}";\n')
-
+            jsout.extend(
+                (
+                    "var jslclimits = {",
+                    f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},',
+                    f'"discoveryDate": {xmin},',
+                    f'"today": {mjd_today},',
+                    "};\n",
+                    f'jslimitsglobal["#{divid}"] = jslclimits;\n',
+                    f'jslcdataglobal["#{divid}"] = jslcdata;\n',
+                    f'jslabelsglobal["#{divid}"] = jslabels;\n',
+                    f'var lcdivname = "#{divid}";\n',
+                )
+            )
             if settings.DEBUG:
                 jsout.append(Path(settings.STATIC_ROOT, "js/lightcurveplotly.js").open("rt").read())
             else:
