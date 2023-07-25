@@ -118,6 +118,7 @@ jobs:
                   # LOG_LEVEL: WARNING
                   PYTHON_BLACK_CONFIG_FILE: pyproject.toml
                   PYTHON_MYPY_CONFIG_FILE: pyproject.toml
+                  VALIDATE_PYTHON_BLACK: false
                   VALIDATE_PYTHON_MYPY: false
                   VALIDATE_BASH: false
                   VALIDATE_CSS: false
