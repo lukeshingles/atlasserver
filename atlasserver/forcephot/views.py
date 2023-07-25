@@ -653,13 +653,11 @@ def statsshortterm(request):
             100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors
         )
     else:
-        dictparams.update(
-            {
-                "sevendayavgwaittime": "-",
-                "sevendayavgruntime": "-",
-                "sevendayloadpercent": "0%",
-            }
-        )
+        dictparams |= {
+            "sevendayavgwaittime": "-",
+            "sevendayavgruntime": "-",
+            "sevendayloadpercent": "0%",
+        }
 
     return render(request, "statsshortterm.html", dictparams)
 

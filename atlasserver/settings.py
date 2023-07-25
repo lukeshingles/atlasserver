@@ -8,6 +8,7 @@ https://docs.djangoproject.com/en/3.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/3.1/ref/settings/
 """
+
 import os
 import platform
 from pathlib import Path
@@ -164,7 +165,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 PATHPREFIX = "/forcedphot" if platform.system() != "Darwin" else ""
-STATIC_URL = PATHPREFIX + "/static/"
+STATIC_URL = f"{PATHPREFIX}/static/"
 
 STATIC_ROOT = Path(BASE_DIR, "static")
 RESULTS_DIR = Path(STATIC_ROOT, "results")
@@ -233,7 +234,7 @@ EMAIL_HOST_PASSWORD = os.environ.get("ATLASSERVER_EMAIL_HOST_PASSWORD")
 SERVER_EMAIL = os.environ.get("ATLASSERVER_EMAIL_HOST_USER")
 DEFAULT_FROM_EMAIL = os.environ.get("ATLASSERVER_EMAIL_HOST_USER")
 
-GEOIP_PATH = os.path.dirname(__file__)
+GEOIP_PATH = Path(__file__).parent
 
 LOGGING = {
     "version": 1,

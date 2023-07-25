@@ -75,8 +75,9 @@ class Task(models.Model):
     task_modified_datetime = models.DateTimeField(auto_now=True)
 
     def __str__(self):
+        """String representation of the task (as seen in the admin panel list of tasks)."""
         user = get_user_model().objects.get(id=self.user_id)
-        targetstr = " MPC[" + self.mpc_name + "]" if self.mpc_name else f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
+        targetstr = f" MPC[{self.mpc_name}]" if self.mpc_name else f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
 
         if self.finishtimestamp:
             status = "finished"
@@ -115,7 +116,7 @@ class Task(models.Model):
         and the file exists.
         """
         if self.finishtimestamp:
-            resultfile = self.localresultfileprefix() + ".txt"
+            resultfile = f"{self.localresultfileprefix()}.txt"
             if Path(settings.STATIC_ROOT, resultfile).exists():
                 return resultfile
 
@@ -125,7 +126,7 @@ class Task(models.Model):
     def localresultpreviewimagefile(self):
         """Return the full local path to the image file if it exists, otherwise None."""
         if self.finishtimestamp:
-            imagefile = self.localresultfileprefix(use_parent=True) + ".jpg"
+            imagefile = f"{self.localresultfileprefix(use_parent=True)}.jpg"
             if Path(settings.STATIC_ROOT, imagefile).exists():
                 return imagefile
 
@@ -135,14 +136,14 @@ class Task(models.Model):
     def localresultpdfplotfile(self):
         """Return the full local path to the PDF plot file if the job is finished."""
         if self.finishtimestamp:
-            return self.localresultfileprefix() + ".pdf"
+            return f"{self.localresultfileprefix()}.pdf"
 
         return None
 
     @property
     def localresultimagezipfile(self):
         """Return the full local path to the image zip file if it exists, otherwise None."""
-        imagezipfile = Path(self.localresultfileprefix(use_parent=True) + ".zip")
+        imagezipfile = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
         if Path(settings.STATIC_ROOT, imagezipfile).exists():
             return imagezipfile
 

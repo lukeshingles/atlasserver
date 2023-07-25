@@ -380,7 +380,7 @@ def make_pdf_plot_worker(
 
     except Exception as ex:
         if logfunc:
-            logfunc(logprefix + f"ERROR: plot_atlas_fp caused exception: {ex}")
+            logfunc(f"{logprefix}ERROR: plot_atlas_fp caused exception: {ex}")
         plotfilepaths = [None for f in plotfilepaths_requested]
 
     localresultfile, plotfilepath, plotfilepath_requested = (
@@ -391,7 +391,7 @@ def make_pdf_plot_worker(
 
     if os.path.exists(plotfilepath_requested):
         if logfunc and plotfilepath == plotfilepath_requested:
-            logfunc(logprefix + f"Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
+            logfunc(f"{logprefix}Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
         elif logfunc:
             logfunc(
                 logprefix
@@ -401,7 +401,7 @@ def make_pdf_plot_worker(
         return plotfilepath_requested
 
     if logfunc:
-        logfunc(logprefix + f"Failed to create PDF plot from {Path(localresultfile).relative_to(localresultdir)}")
+        logfunc(f"{logprefix}Failed to create PDF plot from {Path(localresultfile).relative_to(localresultdir)}")
     return None
 
 
@@ -432,9 +432,9 @@ def country_region_to_name(country_code, region_code):
     region_name = "Unknown"
 
     if region_code:
-        fullcode = country_code + "-" + region_code
+        fullcode = f"{country_code}-{region_code}"
         subdiv = pycountry.subdivisions.get(code=fullcode)
         if subdiv:
             region_name = subdiv.name
 
-    return region_name + ", " + country_code_to_name(country_code)
+    return f"{region_name}, {country_code_to_name(country_code)}"

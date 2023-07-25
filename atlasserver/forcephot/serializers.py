@@ -89,7 +89,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         badchars = "'\";"
         if any(c in dict.fromkeys(badchars) for c in value):
             raise serializers.ValidationError(
-                {field: prefix + "Invalid mpc_name. May not contain quotes or seimicolons"}
+                {field: f"{prefix}Invalid mpc_name. May not contain quotes or seimicolons"}
             )
 
         return value
@@ -99,7 +99,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             return value
 
         if not is_finite_float(value):
-            raise serializers.ValidationError({field: prefix + "ra must be a finite floating-point number."})
+            raise serializers.ValidationError({field: f"{prefix}ra must be a finite floating-point number."})
 
         return value
 
@@ -108,7 +108,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             return value
 
         if not is_finite_float(value):
-            raise serializers.ValidationError({field: prefix + "dec must be a finite floating-point number."})
+            raise serializers.ValidationError({field: f"{prefix}dec must be a finite floating-point number."})
 
         return value
 

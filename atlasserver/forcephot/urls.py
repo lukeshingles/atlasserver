@@ -16,6 +16,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 
 """
+
 import rest_framework.authtoken.views
 from django.conf import settings
 from django.contrib import admin
@@ -35,7 +36,7 @@ from atlasserver.forcephot import views
 router = routers.DefaultRouter()
 router.register(r"queue", views.ForcePhotTaskViewSet)
 
-admin.site.site_url = settings.PATHPREFIX + "/"
+admin.site.site_url = f"{settings.PATHPREFIX}/"
 admin.site.site_header = "ATLAS Forced Photometry Admin"
 admin.site.site_title = "ATLAS Forced Photometry"
 
