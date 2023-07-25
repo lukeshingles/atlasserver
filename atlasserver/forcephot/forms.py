@@ -5,9 +5,7 @@ from django.utils.translation import gettext_lazy as _
 
 
 class RegistrationForm(UserCreationForm):
-    """A form that creates a user, with no privileges, from the given username and
-    password.
-    """
+    """A form that creates a user, with no privileges, from the given username and password."""
 
     error_messages = {
         "password_mismatch": _("The two password fields didn't match."),

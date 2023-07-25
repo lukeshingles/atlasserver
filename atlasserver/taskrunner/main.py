@@ -17,7 +17,7 @@ from django.forms.models import model_to_dict
 
 from atlasserver import settings
 
-remoteServer = "atlas"
+remote_server = "atlas"
 localresultdir = Path(settings.RESULTS_DIR)
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
@@ -47,7 +47,6 @@ def get_localresultfile(id):
 
 
 def log_general(msg, suffix="", *args, **kwargs):
-    global LASTLOGFILEARCHIVED
     dtnow = datetime.datetime.now(datetime.UTC)
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
@@ -158,7 +157,7 @@ def runtask(task, logfunc=None, **kwargs):
         localdatafile = Path(localresultdir, f"job{task.parent_task_id:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
 
-        copycommand = ["rsync", str(localdatafile), f"{remoteServer}:{remotedatafile}"]
+        copycommand = ["rsync", str(localdatafile), f"{remote_server}:{remotedatafile}"]
 
         logfunc(" ".join(copycommand))
 
@@ -184,10 +183,10 @@ def runtask(task, logfunc=None, **kwargs):
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"
 
-    logfunc(f"Executing on {remoteServer}: {atlascommand}")
+    logfunc(f"Executing on {remote_server}: {atlascommand}")
 
     p = subprocess.Popen(
-        ["ssh", f"{remoteServer}", atlascommand],
+        ["ssh", f"{remote_server}", atlascommand],
         shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -224,13 +223,13 @@ def runtask(task, logfunc=None, **kwargs):
 
     if stdout:
         stdoutlines = stdout.split("\n")
-        logfunc(f"{remoteServer} STDOUT: ({len(stdoutlines)} lines of output)")
+        logfunc(f"{remote_server} STDOUT: ({len(stdoutlines)} lines of output)")
         # for line in stdoutlines:
         #     log(logprefix + f"{remoteServer} STDOUT: {line}")
 
     if stderr:
         for line in stderr.split("\n"):
-            logfunc(f"{remoteServer} STDERR: {line}")
+            logfunc(f"{remote_server} STDERR: {line}")
 
     # output realtime ssh output line by line
     # while True:
@@ -250,16 +249,16 @@ def runtask(task, logfunc=None, **kwargs):
     # but keep the data files there for possible image requests
     if task.request_type == "FP":
         copycommands = [
-            ["scp", f"{remoteServer}:{remoteresultfile}", str(localresultfile)],
+            ["scp", f"{remote_server}:{remoteresultfile}", str(localresultfile)],
             [
                 "rsync",
                 "--remove-source-files",
-                f'{remoteServer}:{Path(remoteresultdir / filename).with_suffix(".jpg")}',
+                f'{remote_server}:{Path(remoteresultdir / filename).with_suffix(".jpg")}',
                 str(localresultdir),
             ],
         ]
     else:
-        copycommands = [["rsync", "--remove-source-files", f"{remoteServer}:{remoteresultfile}", str(localresultdir)]]
+        copycommands = [["rsync", "--remove-source-files", f"{remote_server}:{remoteresultfile}", str(localresultdir)]]
 
     for copycommand in copycommands:
         logfunc(" ".join(copycommand))

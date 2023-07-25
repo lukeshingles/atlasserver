@@ -200,7 +200,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def perform_create(self, serializer):
+    def perform_create(self, serializer) -> None:
         # if self.request.user and self.request.user.is_authenticated:
         #     usertasks = Task.objects.filter(user_id=self.request.user, finished=False)
         #     usertaskcount = usertasks.count()

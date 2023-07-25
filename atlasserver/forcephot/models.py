@@ -87,16 +87,11 @@ class Task(models.Model):
             status = "queued"
 
         strtask = (
-            f"Task {self.id:d}: "
-            + f"{self.timestamp:%Y-%m-%d %H:%M:%S %Z} "
-            + f"{user.username} ({user.email})"
+            f"Task {self.id:d}: {self.timestamp:%Y-%m-%d %H:%M:%S %Z} {user.username} ({user.email})"
             + (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "")
-            + f"{' API' if self.from_api else ''}"
-            + f" {self.request_type}"
+            + f"{' API' if self.from_api else ''} {self.request_type}"
             + targetstr
-            + f" {'redimg' if self.use_reduced else 'diffimg'}"
-            + f" {status} "
-            + f"{' archived' if self.is_archived else ''}"
+            + f" {'redimg' if self.use_reduced else 'diffimg'} {status} {' archived' if self.is_archived else ''}"
         )
 
         if self.starttimestamp:
@@ -112,9 +107,7 @@ class Task(models.Model):
         return f"results/job{int_id:05d}"
 
     def localresultfile(self):
-        """Return the relative path to the FP data file if the job is finished,
-        and the file exists.
-        """
+        """Return the relative path to the FP data file if the job is finished, and the file exists."""
         if self.finishtimestamp:
             resultfile = f"{self.localresultfileprefix()}.txt"
             if Path(settings.STATIC_ROOT, resultfile).exists():
@@ -148,17 +141,13 @@ class Task(models.Model):
 
     @property
     def imagerequest_task_id(self):
-        """Return the task id of the image request task associated with this
-        forced photometry task if it exists, otherwise None.
-        """
+        """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         return associated_tasks[0].id if associated_tasks.count() > 0 else None
 
     @property
     def imagerequest_finished(self):
-        """Return the task id of the image request task associated with this
-        forced photometry task if it exists, otherwise None.
-        """
+        """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         if associated_tasks.count() > 0:
             return bool(associated_tasks[0].finishtimestamp)
