@@ -295,21 +295,19 @@ def splitradeclist(data, form=None):
 
     for index, line in enumerate(lines, 1):
         if line[:4] in ["mpc_", "MPC_", "mpc ", "MPC "]:
-            mpc_name = line[4:].strip()
-            if not mpc_name:
+            if not (mpc_name := line[4:].strip()):
                 raise serializers.ValidationError({"radeclist": f"Error on line {index}: MPC name is blank"})
-            else:
-                newrow = data.copy()
-                newrow["mpc_name"] = mpc_name
-                newrow["ra"] = None
-                newrow["dec"] = None
-                ForcePhotTaskSerializer.validate_mpc_name(
-                    None, mpc_name, prefix=f"Error on line {index}: ", field="radeclist"
-                )
-                datalist.append(newrow)
+            newrow = data.copy()
+            newrow["mpc_name"] = mpc_name
+            newrow["ra"] = None
+            newrow["dec"] = None
+            ForcePhotTaskSerializer.validate_mpc_name(
+                None, mpc_name, prefix=f"Error on line {index}: ", field="radeclist"
+            )
+            datalist.append(newrow)
 
-                serializer = ForcePhotTaskSerializer(data=newrow, many=False)
-                serializer.is_valid(raise_exception=True)
+            serializer = ForcePhotTaskSerializer(data=newrow, many=False)
+            serializer.is_valid(raise_exception=True)
             continue
 
         if "," in line:
@@ -320,15 +318,16 @@ def splitradeclist(data, form=None):
         else:
             row = line.split()
 
-        if row and len(row) < 2:
-            raise serializers.ValidationError(
-                {
-                    "radeclist": (
-                        f"Error on line {index}: Could not find two columns. Separate RA and Dec by a comma or a space."
-                    )
-                }
-            )
-        elif row:
+        if row:
+            if len(row) < 2:
+                raise serializers.ValidationError(
+                    {
+                        "radeclist": (
+                            f"Error on line {index}: Could not find two columns. Separate RA and Dec by a comma or a"
+                            " space."
+                        )
+                    }
+                )
             try:
                 newrow = data.copy()
                 newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=row[0])
@@ -345,7 +344,7 @@ def splitradeclist(data, form=None):
                 datalist.append(newrow)
 
             except (OSError, IndexError) as err:
-                raise serializers.ValidationError({"radeclist": f"Error on line {index}: {err}"})
+                raise serializers.ValidationError({"radeclist": f"Error on line {index}: {err}"}) from err
 
     return datalist
 
@@ -381,7 +380,7 @@ def make_pdf_plot_worker(
     except Exception as ex:
         if logfunc:
             logfunc(f"{logprefix}ERROR: plot_atlas_fp caused exception: {ex}")
-        plotfilepaths = [None for f in plotfilepaths_requested]
+        plotfilepaths = [None for _ in plotfilepaths_requested]
 
     localresultfile, plotfilepath, plotfilepath_requested = (
         localresultfiles[0],
