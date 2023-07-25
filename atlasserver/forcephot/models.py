@@ -135,10 +135,7 @@ class Task(models.Model):
     @property
     def localresultpdfplotfile(self):
         """Return the full local path to the PDF plot file if the job is finished."""
-        if self.finishtimestamp:
-            return f"{self.localresultfileprefix()}.pdf"
-
-        return None
+        return f"{self.localresultfileprefix()}.pdf" if self.finishtimestamp else None
 
     @property
     def localresultimagezipfile(self):
@@ -155,10 +152,7 @@ class Task(models.Model):
         forced photometry task if it exists, otherwise None.
         """
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
-        if associated_tasks.count() > 0:
-            return associated_tasks[0].id
-
-        return None
+        return associated_tasks[0].id if associated_tasks.count() > 0 else None
 
     @property
     def imagerequest_finished(self):
