@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@babel/cli": "^7.22.9",
+    "@babel/preset-react": "^7.22.5"
+  },
+  "scripts": {
+    "build": "babel --minified --presets @babel/preset-react src/newrequest.jsx src/task.jsx src/tasklist.jsx > ../queuepage.min.js"
+  }
+}

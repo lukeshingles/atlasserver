@@ -131,15 +131,14 @@
       <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
       <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
       <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
-      <script type="text/babel" src="{% static 'js/newrequest.jsx' %}"></script>
-      <script type="text/babel" src="{% static 'js/task.jsx' %}"></script>
-      <script type="text/babel" src="{% static 'js/tasklist.jsx' %}"></script>
-      <!-- <script type="text/javascript" src="{% static 'js/tasklist.v2.min.js' %}"></script> -->
+      <script type="text/babel" src="{% static 'js/queuepage/src/newrequest.jsx' %}"></script>
+      <script type="text/babel" src="{% static 'js/queuepage/src/task.jsx' %}"></script>
+      <script type="text/babel" src="{% static 'js/queuepage/src/tasklist.jsx' %}"></script>
     {% else %}
       <!-- production -->
       <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.24.3/plotly-basic.min.js" integrity="sha512-Qim/xu0OSUPEvOUcNVZoGTDa+m4Ll1EZ+DQhsmMTlMZIj7NxvwQl6pGY0/gwlj19w0KEZ0S8ymSWUpqarPYGBQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
       <script src="https://unpkg.com/react/umd/react.production.min.js" crossorigin></script>
       <script src="https://unpkg.com/react-dom/umd/react-dom.production.min.js" crossorigin></script>
-      <script type="text/javascript" src="{% static 'js/tasklist.min.js' %}?ver=20230726"></script>
+      <script type="text/javascript" src="{% static 'js/queuepage.min.js' %}?ver=20230726"></script>
     {% endif %}
 {% endblock %}
