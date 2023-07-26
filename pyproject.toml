@@ -25,11 +25,6 @@ python_version = "3.11"
 exclude = "(build)|(tests)|(migrations)|(static)|plot_atlas_fp.py"
 ignore_missing_imports = true
 plugins = "mypy_django_plugin.main,numpy.typing.mypy_plugin"
-#warn_unused_ignores = true
-#warn_redundant_casts = true
-#strict_optional = true
-#strict = false
-files = "*.py,atlasserver/*.py,atlasserver/forcephot/*.py,atlasserver/taskrunner/*.py"
 
 [tool.django-stubs]
 django_settings_module = "atlasserver.settings"
@@ -73,18 +68,14 @@ ignore = [
     "E402",
     "E501", # Line too long
     "ERA001",  # commented-out-code
-    "F841", # unused-variable. ignored because variables in df.eval() are not detected
     "FBT",
     "FIX002",  # line contains TODO
     "INP001",
-    "PD901",  # df is a bad variable name
     "PGH003",
     "PLR0912",  # too-many-branches
     "PLR0913",  # too-many-arguments
     "PLR0915",  # too-many-statements
     "PLR2004",  # magic-value-comparison
-    "PTH110",
-    "PLW2901",  #
     "RUF012",
     "S101",  # Use of assert detected
     "S108", # hardcoded-temp-file

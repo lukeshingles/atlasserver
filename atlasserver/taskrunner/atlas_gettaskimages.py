@@ -79,17 +79,17 @@ def main():
 
     datafile = sys.argv[1]
     reduced = sys.argv[2] == "red"
-    df = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
+    dfforcedphot = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
 
     firstfitsoutpath_c = None
     firstfitsoutpath_o = None
     tmpfolder = Path(tempfile.mkdtemp())
-    rowcount = len(df)
+    rowcount = len(dfforcedphot)
     commands = []
     # wpdatelines = ['#obs MJD obsdate wallpapersource wallpaperdate wallpaperdescription\n'] if not reduced else None
 
-    for index, row in df[:500].iterrows():
-        mjd = row["#MJD"]
+    for index, row in dfforcedphot[:500].iterrows():
+        # mjd = row["#MJD"]
         obs = row["Obs"]  # looks like '01a59309o0235c'
         imgfolder = "red" if reduced else "diff"  # difference or reduced image
         fitsext = "fits" if reduced else "diff"

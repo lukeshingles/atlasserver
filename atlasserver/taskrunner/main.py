@@ -282,14 +282,14 @@ def runtask(task, logfunc=None, **kwargs):
             for line in stderr.split("\n"):
                 logfunc(f"STDERR: {line}")
 
-    if not os.path.exists(localresultfile):
+    if not (localresultfile).exists():
         # task failed somehow
         return False, False
 
     if task.request_type == "FP":
-        df = pd.read_csv(localresultfile, delim_whitespace=True, escapechar="#", skipinitialspace=True)
+        dfforcedphot = pd.read_csv(localresultfile, delim_whitespace=True, escapechar="#", skipinitialspace=True)
 
-        if df.empty:
+        if dfforcedphot.empty:
             # file is just a header row without data
             return localresultfile, "No data returned"
 
@@ -350,7 +350,7 @@ def send_email_if_needed(task, logfunc):
 
             for localresultfile in localresultfilelist:
                 pdfpath = Path(localresultfile).with_suffix(".pdf")
-                if os.path.exists(pdfpath):
+                if pdfpath.exists():
                     filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
                     if (attach_size_mb + filesize_mb) < 22:
                         attach_size_mb += filesize_mb
@@ -423,7 +423,7 @@ def do_task(task, slotid):
                 error_msg=error_msg,
             )
 
-        elif localresultfile and os.path.exists(localresultfile):
+        elif localresultfile and localresultfile.exists():
             # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
             send_email_if_needed(task=task, logfunc=logfunc)
 
@@ -436,47 +436,6 @@ def do_task(task, slotid):
             waittime = 5
             logfunc(f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries...")
             time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
-
-
-# def rm_unassociated_files(logprefix, start_maintenancetime, maxtime):
-#     # WARNING: DO NOT USE until it is updated to take into account the connections between photometry and image tasks
-#     log(logprefix + "Checking for unassociated result files...")
-#
-#     taskid_list = list(Task.objects.all().values_list('id', flat=True))
-#     print('taskidlist', taskid_list)
-#     for resultfilepath in Path(localresultdir).glob('job*.*'):
-#         if resultfilepath.suffix in ['.txt', '.pdf', '.js', '.zip', '.jpg']:
-#             try:
-#                 file_taskidstr = resultfilepath.stem[3:]
-#                 file_taskid = int(file_taskidstr)
-#                 # assert task_exists(conn=conn, taskid=file_taskid) == (file_taskid in taskid_list)
-#                 if file_taskid not in taskid_list:
-#                     log(logprefix + f"Deleting unassociated result file {resultfilepath.relative_to(localresultdir)} "
-#                         f"because task {file_taskid} is not in the database")
-#                     resultfilepath.unlink()
-#                 # elif resultfilepath.suffix == '.txt':
-#                 #     if not os.path.exists(resultfilepath.with_suffix('.pdf')):  # result txt file without a PDF
-#                 #         # load the text file to check if it contains any data rows to be plotted
-#                 #         df = pd.read_csv(
-#                 #             resultfilepath, delim_whitespace=True, escapechar='#', skipinitialspace=True)
-#                 #         if not df.empty:
-#                 #             log(logprefix + "Creating missing PDF from result file "
-#                 #                 f"{resultfilepath.relative_to(localresultdir)}")
-#                 #
-#                 #             make_pdf_plot(taskid=file_taskid, localresultfile=resultfilepath, logprefix=logprefix,
-#                 #                           logfunc=log, separate_process=True)
-#
-#             except ValueError:
-#                 # log(f"Could not understand task id of file {resultfilepath.relative_to(localresultdir)}")
-#                 pass
-#
-#         maintenance_duration = time.perf_counter() - start_maintenancetime
-#         if maxtime and maintenance_duration > maxtime:
-#             log(logprefix + f"Maintenance has run for {maintenance_duration:.0f} seconds "
-#                 f"(above limit of {maxtime:.0f}). Resuming normal tasks...")
-#             break
-#
-#     log(logprefix + "Finished checking for unassociated result files")
 
 
 def remove_old_tasks(

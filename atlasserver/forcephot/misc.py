@@ -1,4 +1,3 @@
-import os
 from multiprocessing import Process
 from pathlib import Path
 
@@ -388,7 +387,7 @@ def make_pdf_plot_worker(
         plotfilepaths_requested[0],
     )
 
-    if os.path.exists(plotfilepath_requested):
+    if plotfilepath_requested.exists():
         if logfunc and plotfilepath == plotfilepath_requested:
             logfunc(f"{logprefix}Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
         elif logfunc:

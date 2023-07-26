@@ -16,15 +16,15 @@ def main():
     datafile = sys.argv[1]
     reduced = sys.argv[2] == "red"
 
-    if not os.path.exists(datafile):
+    if not Path(datafile).exists():
         return
 
-    df = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
+    dfforcedphot = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
 
-    if df.empty:
+    if dfforcedphot.empty:
         return
 
-    row = df[df.m == df.m.max()].iloc[0]  # maximum magnitude
+    row = dfforcedphot[dfforcedphot.m == dfforcedphot.m.max()].iloc[0]  # maximum magnitude
     obs = row["Obs"]  # looks like '01a59309o0235c'
     imgfolder = "red" if reduced else "diff"  # difference or reduced image
     fitsext = "fits" if reduced else "diff"

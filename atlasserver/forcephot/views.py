@@ -426,7 +426,7 @@ def statscoordchart(request):
 def statsusagechart(request):
     days_back = 14
 
-    def get_days_ago_counts(tasks):
+    def get_days_ago_counts(tasks) -> list[float]:
         taskcounts = (
             tasks.annotate(queueday=Trunc("timestamp", "day")).values("queueday").annotate(taskcount=Count("id"))
         )
@@ -591,7 +591,7 @@ def statslongterm(request):
         .order_by("-task_count", "country_code")[:15]
     )
 
-    def country_activeusers(country_code):
+    def country_activeusers(country_code: str) -> int:
         return thirtydaytasks.filter(country_code=country_code).values_list("user_id").distinct().count()
 
     dictparams["countrylist"] = [
@@ -718,7 +718,7 @@ def resultplotdatajs(request, taskid):
         if resultfilepath is not None:
             import pandas as pd
 
-            df = pd.read_csv(
+            dfforcedphot = pd.read_csv(
                 resultfilepath,
                 delim_whitespace=True,
                 escapechar="#",
@@ -729,7 +729,7 @@ def resultplotdatajs(request, taskid):
 
             ujy_min = int(-1e10)
             ujy_max = int(1e10)
-            df = df.query("uJy > @ujy_min & uJy < @ujy_max")
+            dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
 
             jsout.extend(
                 (
@@ -740,7 +740,7 @@ def resultplotdatajs(request, taskid):
             divid = f"plotforcedflux-task-{taskid}"
 
             for color, filter in [(11, "c"), (12, "o")]:
-                dffilter = df.query("F == @filter", inplace=False)
+                dffilter = dfforcedphot.query("F == @filter", inplace=False)
 
                 jsout.extend(
                     (
@@ -760,10 +760,10 @@ def resultplotdatajs(request, taskid):
                     )
                 )
             mjd_today = datetime_to_mjd(datetime.datetime.now(datetime.UTC))
-            xmin = df["#MJD"].min()
-            xmax = df["#MJD"].max()
-            ymin = max(-200, df.uJy.min())
-            ymax = min(40000, df.uJy.max())
+            xmin = dfforcedphot["#MJD"].min()
+            xmax = dfforcedphot["#MJD"].max()
+            ymin = max(-200, dfforcedphot.uJy.min())
+            ymax = min(40000, dfforcedphot.uJy.max())
 
             jsout.extend(
                 (
