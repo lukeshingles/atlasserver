@@ -1,3 +1,4 @@
+import typing as t
 from multiprocessing import Process
 from pathlib import Path
 
@@ -353,7 +354,11 @@ def datetime_to_mjd(dt):
 
 
 def make_pdf_plot_worker(
-    localresultfile: Path, taskid: int, taskcomment: str = "", logprefix: str = "", logfunc=None
+    localresultfile: Path,
+    taskid: int,
+    taskcomment: str = "",
+    logprefix: str = "",
+    logfunc: None | t.Callable[[t.Any], t.Any] = None,
 ) -> Path | None:
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"

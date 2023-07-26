@@ -27,11 +27,14 @@ ignore: # A list of paths or files which Sourcery will ignore.
     - rd_cmfgen.py
     - js
     - static
+    - plot_atlas_fp.py
 
 rule_settings:
     enable:
         - default
         - gpsg-standard-import-alias
+    disable:
+        - refactoring:extract-method
     rule_types:
         - suggestion
         - comment

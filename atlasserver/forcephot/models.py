@@ -74,7 +74,7 @@ class Task(models.Model):
 
     task_modified_datetime = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
         user = get_user_model().objects.get(id=self.user_id)
         targetstr = f" MPC[{self.mpc_name}]" if self.mpc_name else f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
@@ -101,12 +101,12 @@ class Task(models.Model):
 
         return strtask
 
-    def localresultfileprefix(self, use_parent=False):
+    def localresultfileprefix(self, use_parent: bool = False) -> str:
         """Return the relative path prefix for the job (no file extension)."""
         int_id = int(self.parent_task.id) if use_parent and self.parent_task else int(self.id)
         return f"results/job{int_id:05d}"
 
-    def localresultfile(self):
+    def localresultfile(self) -> str | None:
         """Return the relative path to the FP data file if the job is finished, and the file exists."""
         if self.finishtimestamp:
             resultfile = f"{self.localresultfileprefix()}.txt"
@@ -116,7 +116,7 @@ class Task(models.Model):
         return None
 
     @property
-    def localresultpreviewimagefile(self):
+    def localresultpreviewimagefile(self) -> str | None:
         """Return the full local path to the image file if it exists, otherwise None."""
         if self.finishtimestamp:
             imagefile = f"{self.localresultfileprefix(use_parent=True)}.jpg"
@@ -126,12 +126,12 @@ class Task(models.Model):
         return None
 
     @property
-    def localresultpdfplotfile(self):
+    def localresultpdfplotfile(self) -> str | None:
         """Return the full local path to the PDF plot file if the job is finished."""
         return f"{self.localresultfileprefix()}.pdf" if self.finishtimestamp else None
 
     @property
-    def localresultimagezipfile(self):
+    def localresultimagezipfile(self) -> Path | None:
         """Return the full local path to the image zip file if it exists, otherwise None."""
         imagezipfile = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
         if Path(settings.STATIC_ROOT, imagezipfile).exists():
@@ -140,13 +140,13 @@ class Task(models.Model):
         return None
 
     @property
-    def imagerequest_task_id(self):
+    def imagerequest_task_id(self) -> int | None:
         """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         return associated_tasks[0].id if associated_tasks.count() > 0 else None
 
     @property
-    def imagerequest_finished(self):
+    def imagerequest_finished(self) -> bool | None:
         """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
         associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
         if associated_tasks.count() > 0:
@@ -155,7 +155,7 @@ class Task(models.Model):
         return None
 
     @property
-    def queuepos(self):
+    def queuepos(self) -> int | None:
         if self.finishtimestamp or self.queuepos_relative is None:
             return None
 
@@ -170,17 +170,17 @@ class Task(models.Model):
 
         return self.queuepos_relative - int(minqueuepos)
 
-    def finished(self):
+    def finished(self) -> bool:
         return bool(self.finishtimestamp)
 
-    def waittime(self):
+    def waittime(self) -> float:
         if self.starttimestamp and self.timestamp:
             timediff = self.starttimestamp - self.timestamp
             return timediff.total_seconds()
 
         return float("NaN")
 
-    def runtime(self):
+    def runtime(self) -> float:
         if self.finishtimestamp and self.starttimestamp:
             timediff = self.finishtimestamp - self.starttimestamp
             return timediff.total_seconds()
@@ -188,7 +188,7 @@ class Task(models.Model):
         return float("NaN")
 
     @property
-    def username(self):
+    def username(self) -> str:
         return self.user.username
 
     def delete(self):

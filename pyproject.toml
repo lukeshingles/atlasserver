@@ -25,6 +25,18 @@ python_version = "3.11"
 exclude = "(build)|(tests)|(migrations)|(static)|plot_atlas_fp.py"
 ignore_missing_imports = true
 plugins = "mypy_django_plugin.main,numpy.typing.mypy_plugin"
+warn_unused_ignores = true
+warn_redundant_casts = true
+strict_optional = true
+files = "**/*.py"
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_untyped_defs = false
+check_untyped_defs = false
+disallow_untyped_decorators = false
+warn_return_any = false
+disallow_any_generics = false
+disallow_subclassing_any = false
 
 [tool.django-stubs]
 django_settings_module = "atlasserver.settings"
@@ -98,9 +110,8 @@ unfixable = [
 ]
 line-length = 120
 target-version = "py311"
-fix = false
+fix = true
 show-fixes = true
-ignore-init-module-imports = true
 
 [tool.ruff.flake8-annotations]
 ignore-fully-untyped = true
@@ -109,7 +120,6 @@ ignore-fully-untyped = true
 "artistools" = "at"
 
 [tool.ruff.per-file-ignores]
-"__init__.py" = ["F401"]
 "plot_atlas_fp.py" = ["ALL"]
 
 [tool.ruff.isort]

@@ -132,7 +132,7 @@ def calculate_queue_positions() -> None:
         # Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
 
 
-def get_tasklist_etag(request, queryset):
+def get_tasklist_etag(request, queryset) -> str:
     if settings.DEBUG:
         todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M:%S")
     else:
@@ -853,10 +853,10 @@ def taskpreviewimage(request, taskid: int):
             return HttpResponseNotFound("Page not found")
 
     if item and (previewimagefile := item.localresultpreviewimagefile):
-        previewimagefile = Path(settings.STATIC_ROOT, previewimagefile)
+        previewimagefilepath = Path(settings.STATIC_ROOT, previewimagefile)
 
-        if previewimagefile.is_file():
-            return FileResponse(previewimagefile.open("rb"))
+        if previewimagefilepath.is_file():
+            return FileResponse(previewimagefilepath.open("rb"))
 
     return HttpResponseNotFound("Page not found")
 
