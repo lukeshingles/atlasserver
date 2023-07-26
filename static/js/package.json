@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "@babel/cli": "^7.22.9",
+    "@babel/preset-react": "^7.22.5",
+    "react": "^18.2.0"
+  },
+  "scripts": {
+    "build": "babel --minified --presets @babel/preset-react newrequest.jsx task.jsx tasklist.jsx > tasklist.min.js"
+  }
+}
