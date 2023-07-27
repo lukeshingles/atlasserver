@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-source .env
+if [ -f .env ]; then
+    source .env
+fi
 
 ATLASSERVERPATH="$(dirname "$(realpath "$0")")"
 
