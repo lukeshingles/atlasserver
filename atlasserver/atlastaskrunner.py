@@ -63,6 +63,8 @@ def start():
             if not psutil.pid_exists(pid):
                 # process ended, so the pid file should be deleted
                 pidfile.unlink(missing_ok=True)
+
+        supervisorpath = ATLASSERVERPATH / "atlasserver" / "taskrunner" / "supervise_atlastaskrunner.sh"
         run_command(
             [
                 "tmux",
@@ -70,7 +72,7 @@ def start():
                 "-d",
                 "-s",
                 "atlastaskrunner",
-                str(ATLASSERVERPATH / "atlasserver" / "taskrunner" / "supervise_atlastaskrunner.sh"),
+                f"'{supervisorpath}'",
             ]
         )
 
