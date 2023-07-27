@@ -109,13 +109,11 @@ class TaskPage extends React.Component {
     if (new_page_url != window.location.href) {
       window.history.pushState({}, document.title, new_page_url);
       const statechanges = { 'scrollToTopAfterUpdate': true, dataurl: new_page_url };
-      if (filtername == 'started') {
-        if (this.state.results != null) {
-          statechanges['results'] = this.state.results.filter(task => { return task.starttimestamp != null });
-          if (statechanges['results'].length == 0) {
-            // prevent flash of "there are no results" for empty ([] non-null) results list
-            statechanges['results'] = null;
-          }
+      if (filtername == 'started' && this.state.results != null) {
+        statechanges['results'] = this.state.results.filter(task => { return task.starttimestamp != null });
+        if (statechanges['results'].length == 0) {
+          // prevent flash of "there are no results" for empty ([] non-null) results list
+          statechanges['results'] = null;
         }
       }
       this.setState(statechanges, () => { this.fetchData(true) });
