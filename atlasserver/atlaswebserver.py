@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Command line tool to start/stop/restart the ATLAS Apache server."""
 import os
 import platform
 import subprocess
@@ -23,7 +24,8 @@ ATLASSERVERPATH = Path(
 load_dotenv(dotenv_path=ATLASSERVERPATH / ".env", override=True)
 
 
-def get_httpd_pid():
+def get_httpd_pid() -> int | None:
+    """Return the pid of the httpd process if it is running, otherwise None."""
     pidfile = Path(APACHEPATH, "httpd.pid")
     if pidfile.is_file():
         pid = int(pidfile.open().read().strip())
@@ -36,8 +38,9 @@ def get_httpd_pid():
     return None
 
 
-def run_command(commands, print_output=True):
-    p = subprocess.Popen(
+def run_command(commands: list[str], print_output: bool = True) -> int:
+    """Run a command and print the output."""
+    proc = subprocess.Popen(
         commands,
         shell=False,
         stdout=subprocess.PIPE,
@@ -47,19 +50,20 @@ def run_command(commands, print_output=True):
         universal_newlines=True,
     )
 
-    if print_output:
-        for line in iter(p.stdout.readline, ""):
+    if print_output and proc.stdout is not None:
+        for line in iter(proc.stdout.readline, ""):
             print(line, end="")
 
-    stdout, stderr = p.communicate()
+    stdout, stderr = proc.communicate()
     if print_output:
         print(stdout, end="")
         print(stderr, end="")
+    assert proc.returncode is not None
+    return proc.returncode
 
-    return p.returncode
 
-
-def start():
+def start() -> None:
+    """Start the ATLAS Apache server."""
     if pid := get_httpd_pid():
         print(f"ATLAS Apache server is already running (pid {pid})")
         return
@@ -127,7 +131,8 @@ def start():
     print(f"ATLAS Apache server is running with pid {get_httpd_pid()}")
 
 
-def stop():
+def stop() -> None:
+    """Stop the ATLAS Apache server."""
     if pid := get_httpd_pid():
         print(f"Stopping ATLAS Apache server (pid {pid})")
         run_command([f'{APACHEPATH / "apachectl"}', "graceful-stop"])
@@ -135,7 +140,8 @@ def stop():
         print("ATLAS Apache server was not running")
 
 
-def main():
+def main() -> None:
+    """Handle commands to start, stop, or restart the ATLAS Apache server."""
     if len(sys.argv) == 2 and sys.argv[1] == "start":
         start()
 

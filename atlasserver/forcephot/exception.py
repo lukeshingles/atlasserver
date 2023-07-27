@@ -14,8 +14,8 @@ def custom_exception_handler(exc, context):
         # login_url = request.build_absolute_uri(reverse('rest_framework:login'))
         login_url = reverse("rest_framework:login")
         request = context.get("request")
-        next = escape(request.path)
-        redirect_url = f"{login_url}?next={next}"
+        nexturl = escape(request.path)
+        redirect_url = f"{login_url}?next={nexturl}"
 
     except NoReverseMatch:
         redirect_url = "/"

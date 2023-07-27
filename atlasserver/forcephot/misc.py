@@ -410,10 +410,10 @@ def make_pdf_plot_worker(
 
 def make_pdf_plot(*args, separate_process=False, **kwargs):
     if separate_process:
-        p = Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
+        proc = Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
 
-        p.start()
-        p.join()
+        proc.start()
+        proc.join()
     else:
         make_pdf_plot_worker(*args, **kwargs)
 

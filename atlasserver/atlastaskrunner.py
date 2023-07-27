@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Command line tool to start/stop/restart the task runner in a tmux session."""
 import subprocess
 import sys
 from pathlib import Path
@@ -8,8 +9,9 @@ import psutil
 ATLASSERVERPATH = Path(__file__).resolve().parent.parent
 
 
-def run_command(commands, print_output=True):
-    p = subprocess.Popen(
+def run_command(commands: list[str], print_output: bool = True) -> int:
+    """Run a command and print the output as it runs."""
+    proc = subprocess.Popen(
         commands,
         shell=False,
         stdout=subprocess.PIPE,
@@ -22,23 +24,26 @@ def run_command(commands, print_output=True):
     exit_now = False
     if print_output:
         try:
-            for line in iter(p.stdout.readline, ""):
-                print(line, end="")
+            if proc.stdout is not None:
+                for line in iter(proc.stdout.readline, ""):
+                    print(line, end="")
         except KeyboardInterrupt:
             exit_now = True
 
-    stdout, stderr = p.communicate()
+    proc.wait()
+    stdout, stderr = proc.communicate()
     if print_output:
         print(stdout, end="")
         print(stderr, end="")
 
     if exit_now:
         sys.exit(130)
+    assert proc.returncode is not None
+    return proc.returncode
 
-    return p.returncode
 
-
-def print_tips():
+def print_tips() -> None:
+    """Print tips for using the task runner."""
     print("")
     print("to attach to the session (be careful not to stop the task runner!):")
     print("  tmux attach -t atlastaskrunner")
@@ -46,14 +51,16 @@ def print_tips():
     print("  atlastaskrunner log [-f]")
 
 
-def check_session_exists():
+def taskrunner_session_exists() -> bool:
+    """Check if the tmux session exists."""
     returncode = run_command(["tmux", "has", "-t", "atlastaskrunner"], print_output=False)
 
     return returncode == 0
 
 
-def start():
-    if check_session_exists():
+def start() -> None:
+    """Start the task runner in a tmux session."""
+    if taskrunner_session_exists():
         print("atlastaskrunner tmux session already exists")
     else:
         print("Starting atlastaskrunner tmux session")
@@ -79,8 +86,9 @@ def start():
     print_tips()
 
 
-def stop():
-    if check_session_exists():
+def stop() -> None:
+    """Stop the task runner."""
+    if taskrunner_session_exists():
         print("Stopping atlastaskrunner tmux session")
         run_command(["tmux", "send-keys", "-t", "atlastaskrunner", "C-C"])
         run_command(["tmux", "kill-session", "-t", "atlastaskrunner"])
@@ -91,7 +99,8 @@ def stop():
         Path("/tmp/atlasforced/taskrunner.pid").unlink()
 
 
-def main():
+def main() -> None:
+    """Handle commands for starting/stopping the task runner or viewing the log."""
     if len(sys.argv) == 2 and sys.argv[1] == "start":
         start()
 

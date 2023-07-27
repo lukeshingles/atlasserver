@@ -28,10 +28,6 @@ from rest_framework import routers
 
 from atlasserver.forcephot import views
 
-# from django.contrib.auth.models import User
-# from django.contrib.auth.decorators import login_required
-# from rest_framework import serializers, viewsets
-
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
 router.register(r"queue", views.ForcePhotTaskViewSet)

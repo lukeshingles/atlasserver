@@ -71,7 +71,7 @@ import pandas as pd
 #     return f'{year:04d}-{month:02d}-{int(day):02d}'
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 3:
         print("ERROR: exactly two argument must be specified: [DATAFILE] ['red' or 'diff']")
         sys.exit(1)

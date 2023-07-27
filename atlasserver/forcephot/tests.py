@@ -3,6 +3,6 @@ from django.test import TestCase
 
 # Create your tests here.
 class YourTestClass(TestCase):
-    def setUp(self):
+    def setup(self) -> None:
         # Setup run before every test method.
         pass

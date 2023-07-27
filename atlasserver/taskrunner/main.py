@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+"""Task runner for forced photometry jobs that are dispatched to ATLAS sc01 over ssh."""
 import datetime
 import multiprocessing as mp
 import os
 import subprocess
 import time
+import typing as t
 from pathlib import Path
 from signal import SIGINT
 from signal import signal
@@ -17,8 +19,7 @@ from django.forms.models import model_to_dict
 
 from atlasserver import settings
 
-remote_server = "atlas"
-localresultdir = Path(settings.RESULTS_DIR)
+REMOTE_SERVER = "atlas"
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
@@ -31,30 +32,28 @@ from atlasserver.forcephot.models import Task
 
 TASKMAXTIME: int = 1200
 
-logdir: Path = Path(__file__).resolve().parent / "logs"
+LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 
 # so that current log can be archived periodically, keep track
 # of the filename with a date, so that it can be created when the date changes
 LASTLOGFILEARCHIVED: dict[str, Path] = {}
 
 
-def localresultfileprefix(id):
-    return str(Path(localresultdir / f"job{int(id):05d}"))
+def localresultfileprefix(id: int) -> str:
+    """Return the absolute path to the job file (with no extension) for a given task id."""
+    return str(Path(settings.RESULTS_DIR / f"job{int(id):05d}"))
 
 
-def get_localresultfile(id):
-    return localresultfileprefix(id) + ".txt"
-
-
-def log_general(msg, suffix="", *args, **kwargs):
+def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
+    """Log a message to the console and to a log file (with given filename suffix)."""
     dtnow = datetime.datetime.now(datetime.UTC)
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
-    if suffix == "":
+    if not suffix:
         print(line, *args, **kwargs)
 
-    logfile_archive = Path(logdir, f"fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}{suffix}.txt")
-    logfile_latest = Path(logdir, f"fprunnerlog_latest{suffix}.txt")
+    logfile_archive = Path(LOG_DIR, f"fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}{suffix}.txt")
+    logfile_latest = Path(LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
 
     if suffix in LASTLOGFILEARCHIVED and LASTLOGFILEARCHIVED[suffix] and logfile_archive != LASTLOGFILEARCHIVED[suffix]:
         import shutil
@@ -72,7 +71,8 @@ def log_general(msg, suffix="", *args, **kwargs):
     flogfile.close()
 
 
-def task_exists(taskid):
+def task_exists(taskid: int) -> bool:
+    """Return true if the task exists in the database."""
     try:
         Task.objects.all().get(id=taskid)
     except (ObjectDoesNotExist, IndexError):
@@ -81,43 +81,49 @@ def task_exists(taskid):
     return True
 
 
-def remove_task_resultfiles(taskid, parent_task_id=None, request_type=None, logfunc=log_general):
-    # delete any associated result files from a deleted task
+def remove_task_resultfiles(
+    taskid: int,
+    parent_task_id: int | None = None,
+    request_type: str | None = None,
+    logfunc: t.Callable[[t.Any], None] = log_general,
+) -> None:
+    """Delete any associated result files from a deleted task."""
     if request_type == "FP":
-        taskfiles = [Path(localresultdir, localresultfileprefix(taskid) + ".txt")]
+        taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(taskid) + ".txt")]
     elif request_type == "IMGZIP" and parent_task_id is not None:
-        taskfiles = [Path(localresultdir, localresultfileprefix(parent_task_id) + ".zip")]
+        taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(parent_task_id) + ".zip")]
     else:
-        taskfiles = list(Path(localresultdir).glob(pattern=localresultfileprefix(taskid) + ".*"))
+        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=localresultfileprefix(taskid) + ".*"))
 
     for taskfile in taskfiles:
         if Path(taskfile).exists():
             try:
                 Path(taskfile).unlink(missing_ok=True)
             except OSError:
-                logfunc(f"Error deleting file: {Path(taskfile).relative_to(localresultdir)}")
+                logfunc(f"Error deleting file: {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
             else:
-                logfunc(f"Deleted {Path(taskfile).relative_to(localresultdir)}")
+                logfunc(f"Deleted {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
 
 
-def runtask(task, logfunc=None, **kwargs):
-    # run the forced photometry on atlas sc01 and retrieve the result
-    # returns (resultfilename, error_msg)
-    # - resultfilename will be False if it could not be created due to an error
-    # - error_msg is False unless there was an error that would make retries pointless (e.g. invalid object name)
+def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
+    """Run the forced photometry on atlas sc01 and retrieve the result.
 
+    returns (resultfilename, error_msg)
+     - resultfilename will be None if it could not be created due to an error
+     - error_msg is None unless there was an error that would make retries pointless (e.g. invalid object name)
+    """
     if task.request_type == "FP":
         filename = f"job{task.id:05d}.txt"
     elif task.request_type == "IMGZIP":
         filename = f"job{task.parent_task_id:05d}.zip"
     else:
-        return False, False
+        return None, None
 
     remoteresultdir = Path("~/atlasserver/results/")
     remoteresultfile = Path(remoteresultdir, filename)
 
-    localresultfile = Path(localresultdir, filename)
-    localresultdir.mkdir(parents=True, exist_ok=True)
+    localresultfile = Path(settings.RESULTS_DIR, filename)
+    settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     atlascommand = "nice -n 19 "
     if task.request_type == "FP":
@@ -154,14 +160,14 @@ def runtask(task, logfunc=None, **kwargs):
         atlascommand += " red" if task.use_reduced else " diff"
 
     elif task.request_type == "IMGZIP":
-        localdatafile = Path(localresultdir, f"job{task.parent_task_id:05d}.txt")
+        localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
 
-        copycommand = ["rsync", str(localdatafile), f"{remote_server}:{remotedatafile}"]
+        copycommand = ["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"]
 
         logfunc(" ".join(copycommand))
 
-        p = subprocess.Popen(
+        proc = subprocess.Popen(
             copycommand,
             shell=False,
             stdout=subprocess.PIPE,
@@ -170,7 +176,7 @@ def runtask(task, logfunc=None, **kwargs):
             bufsize=1,
             universal_newlines=True,
         )
-        stdout, stderr = p.communicate()
+        stdout, stderr = proc.communicate()
 
         if stdout:
             for line in stdout.split("\n"):
@@ -183,10 +189,10 @@ def runtask(task, logfunc=None, **kwargs):
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"
 
-    logfunc(f"Executing on {remote_server}: {atlascommand}")
+    logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
-    p = subprocess.Popen(
-        ["ssh", f"{remote_server}", atlascommand],
+    proc = subprocess.Popen(
+        ["ssh", f"{REMOTE_SERVER}", atlascommand],
         shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -196,12 +202,12 @@ def runtask(task, logfunc=None, **kwargs):
     )
 
     starttime = time.perf_counter()
-    lastlogtime = 0
+    lastlogtime = 0.0
     cancelled = False
     timed_out = False
     while not cancelled and not timed_out:
         try:
-            p.communicate(timeout=1)
+            proc.communicate(timeout=1)
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(taskid=task.id)
@@ -215,21 +221,21 @@ def runtask(task, logfunc=None, **kwargs):
     if cancelled or timed_out:
         if timed_out:
             logfunc(f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASKMAXTIME:.0f} seconds")
-        os.kill(p.pid, SIGTERM)
-        return False, False  # don't finish with an error message, because we'll retry it later
+        os.kill(proc.pid, SIGTERM)
+        return None, None  # don't finish with an error message, because we'll retry it later
 
-    stdout, stderr = p.communicate()
+    stdout, stderr = proc.communicate()
     logfunc(f"ssh finished after running for {time.perf_counter() - starttime:.1f} seconds")
 
     if stdout:
         stdoutlines = stdout.split("\n")
-        logfunc(f"{remote_server} STDOUT: ({len(stdoutlines)} lines of output)")
+        logfunc(f"{REMOTE_SERVER} STDOUT: ({len(stdoutlines)} lines of output)")
         # for line in stdoutlines:
         #     log(logprefix + f"{remoteServer} STDOUT: {line}")
 
     if stderr:
         for line in stderr.split("\n"):
-            logfunc(f"{remote_server} STDERR: {line}")
+            logfunc(f"{REMOTE_SERVER} STDERR: {line}")
 
     # output realtime ssh output line by line
     # while True:
@@ -243,27 +249,29 @@ def runtask(task, logfunc=None, **kwargs):
     #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
     if not task_exists(taskid=task.id):  # check if job was cancelled
-        return False, False
+        return None, None
 
     # make sure the large zip files are not kept around on the remote system
     # but keep the data files there for possible image requests
     if task.request_type == "FP":
         copycommands = [
-            ["scp", f"{remote_server}:{remoteresultfile}", str(localresultfile)],
+            ["scp", f"{REMOTE_SERVER}:{remoteresultfile}", str(localresultfile)],
             [
                 "rsync",
                 "--remove-source-files",
-                f'{remote_server}:{Path(remoteresultdir / filename).with_suffix(".jpg")}',
-                str(localresultdir),
+                f'{REMOTE_SERVER}:{Path(remoteresultdir / filename).with_suffix(".jpg")}',
+                str(settings.RESULTS_DIR),
             ],
         ]
     else:
-        copycommands = [["rsync", "--remove-source-files", f"{remote_server}:{remoteresultfile}", str(localresultdir)]]
+        copycommands = [
+            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
+        ]
 
     for copycommand in copycommands:
         logfunc(" ".join(copycommand))
 
-        p = subprocess.Popen(
+        proc = subprocess.Popen(
             copycommand,
             shell=False,
             stdout=subprocess.PIPE,
@@ -272,7 +280,7 @@ def runtask(task, logfunc=None, **kwargs):
             bufsize=1,
             universal_newlines=True,
         )
-        stdout, stderr = p.communicate()
+        stdout, stderr = proc.communicate()
 
         if stdout:
             for line in stdout.split("\n"):
@@ -284,7 +292,7 @@ def runtask(task, logfunc=None, **kwargs):
 
     if not (localresultfile).exists():
         # task failed somehow
-        return False, False
+        return None, None
 
     if task.request_type == "FP":
         dfforcedphot = pd.read_csv(localresultfile, delim_whitespace=True, escapechar="#", skipinitialspace=True)
@@ -297,10 +305,11 @@ def runtask(task, logfunc=None, **kwargs):
         #     make_pdf_plot(taskid=task.id, taskcomment=task.comment, localresultfile=localresultfile,
         #                   logprefix=logprefix, logfunc=log, separate_process=True)
 
-    return localresultfile, False
+    return localresultfile, None
 
 
-def send_email_if_needed(task, logfunc):
+def send_email_if_needed(task, logfunc) -> None:
+    """Send an email to the user if requested and all tasks in the batch are finished."""
     if task.send_email and task.user.email:
         # if we find an unfinished task in the same batch, hold off sending the email.
         # same batch here is defined as being queued by the same user with identical timestamps
@@ -316,7 +325,7 @@ def send_email_if_needed(task, logfunc):
             if not batchtask.finishtimestamp and batchtask.id != task.id:
                 batchtasks_unfinished += 1
             else:
-                localresultfile = get_localresultfile(batchtask.id)
+                localresultfile = localresultfileprefix(batchtask.id) + ".txt"
                 taskurl = f"https://fallingstar-data.com/forcedphot/queue/{batchtask.id}/"
                 strtask = (
                     f"Task {batchtask.id}: RA {batchtask.ra} Dec {batchtask.dec} "
@@ -354,7 +363,7 @@ def send_email_if_needed(task, logfunc):
                     filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
                     if (attach_size_mb + filesize_mb) < 22:
                         attach_size_mb += filesize_mb
-                        message.attach_file(pdfpath)
+                        message.attach_file(str(pdfpath))
 
             message.send()
         else:
@@ -369,16 +378,18 @@ def send_email_if_needed(task, logfunc):
 
 
 def handler(signal_received, frame):
-    # Handle any cleanup here
+    """Handle any cleanup here."""
     log_general("SIGINT or CTRL-C detected. Exiting")
     sys.exit(0)
 
 
-def do_task(task, slotid):
-    def logfunc_slotonly(x):
+def do_task(task, slotid: int) -> None:
+    """Run a task in a particular slot and send a result email if requested."""
+
+    def logfunc_slotonly(x) -> None:
         log_general(f"slot{slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
-    def logfunc(x):
+    def logfunc(x) -> None:
         log_general(f"slot{slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
         # also log to the main process
@@ -445,7 +456,8 @@ def remove_old_tasks(
     is_archived: bool | None = None,
     from_api: bool | None = None,
     logfunc=log_general,
-):
+) -> None:
+    """Remove old tasks matching given critera from the database and optionally delete their result files (if harddeleterecord)."""
     now = datetime.datetime.now(datetime.UTC)
     filteropts = {"finishtimestamp__isnull": False, "finishtimestamp__lt": now - datetime.timedelta(days=days_ago)}
 
@@ -497,6 +509,7 @@ def remove_old_tasks(
 
 
 def do_maintenance(maxtime=None):
+    """Remove old tasks and associated files according to their type and age."""
     # start_maintenancetime = time.perf_counter()
 
     def logfunc(x):
@@ -519,9 +532,10 @@ def do_maintenance(maxtime=None):
 
 
 def main() -> None:
+    """Run queued tasks and clean up on old tasks."""
     signal(SIGINT, handler)
 
-    logdir.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     def logfunc(x):
         log_general(x)

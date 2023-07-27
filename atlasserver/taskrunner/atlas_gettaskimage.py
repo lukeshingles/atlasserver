@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 3:
         print("ERROR: exactly two argument must be specified: [DATAFILE] ['red' or 'diff']")
         sys.exit(1)

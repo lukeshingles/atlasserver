@@ -1,3 +1,4 @@
+"""Django views for the forcephot app."""
 import contextlib
 import datetime
 from pathlib import Path
@@ -57,6 +58,7 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
 
 def calculate_queue_positions() -> None:
+    """Calculate and assign the queue positions (determining the order of execution in the task runner) for all queued tasks."""
     with transaction.atomic():
         queuedtasks = (
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
@@ -133,6 +135,7 @@ def calculate_queue_positions() -> None:
 
 
 def get_tasklist_etag(request, queryset) -> str:
+    """Return an etag that will change when the task list changes."""
     if settings.DEBUG:
         todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M:%S")
     else:
@@ -141,14 +144,16 @@ def get_tasklist_etag(request, queryset) -> str:
     last_queued = Task.objects.filter().aggregate(Max("timestamp"))["timestamp__max"]
     last_started = Task.objects.filter().aggregate(Max("starttimestamp"))["starttimestamp__max"]
     last_finished = Task.objects.filter().aggregate(Max("finishtimestamp"))["finishtimestamp__max"]
-    taskid_list = "-".join([str(row.id) for row in queryset])
-    return f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.tasks{taskid_list}"
+    taskids = "-".join([str(row.id) for row in queryset])
+    return f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.tasks{taskids}"
 
 
 class ForcePhotPermission(permissions.BasePermission):
+    """Custom permission to only allow owners of an object to edit it."""
+
     message = "You must be the owner of this object."
 
-    def has_permission(self, request, view):
+    def has_permission(self, request, view) -> bool:
         return bool(request.method in permissions.SAFE_METHODS or request.user.is_authenticated)
 
     #     return request.user and request.user.is_authenticated
@@ -158,7 +163,7 @@ class ForcePhotPermission(permissions.BasePermission):
     Assumes the model instance has an `user` attribute.
     """
 
-    def has_object_permission(self, request, view, obj):
+    def has_object_permission(self, request, view, obj) -> bool:
         # Read permissions are allowed to any request,
         # so we'll always allow GET, HEAD or OPTIONS requests.
         if request.method in permissions.SAFE_METHODS:
@@ -186,7 +191,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     # filterset_fields = ['finishtimestamp']
     template_name = "tasklist-react.html"
 
-    def create(self, request, *args, **kwargs):
+    def create(self, request, *args, **kwargs) -> Response:
+        """Create new tasks if the user is authenticated and the request is valid."""
         if not request.user.is_authenticated:
             raise PermissionDenied
 
@@ -201,6 +207,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer) -> None:
+        """Create new task(s)."""
         # if self.request.user and self.request.user.is_authenticated:
         #     usertasks = Task.objects.filter(user_id=self.request.user, finished=False)
         #     usertaskcount = usertasks.count()
@@ -221,26 +228,19 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         serializer.save(**extra_fields)
         calculate_queue_positions()
 
-    def perform_update(self, serializer):
+    def perform_update(self, serializer) -> None:
+        """Update a task."""
         serializer.save(user=self.request.user)
 
-    # def destroy(self, request, *args, **kwargs):
-    #     instance = self.get_object()
-    #     self.perform_destroy(instance)
-    #     # print(reverse('task-list', request=request))
-    #     # if request.accepted_renderer.format == 'html':
-    #     # return Response(status=status.HTTP_303_SEE_OTHER, headers={
-    #     #         'Location': reverse('task-list', request=request)})
-    #     return Response(status=status.HTTP_204_NO_CONTENT)
-
-    def perform_destroy(self, instance):
-        # if the job we're deleting is in the queue (i.e. not finished), we need to update queue positions
+    def perform_destroy(self, instance) -> None:
+        """Delete a task, and if the task is queued (not finished), then update queue positions."""
         update_queue_positions = not instance.finishtimestamp
         instance.delete()
         if update_queue_positions:
             calculate_queue_positions()
 
     def list(self, request, *args, **kwargs):
+        """List tasks belonging to the current user."""
         if request.user.is_authenticated:
             listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
         else:
@@ -404,7 +404,7 @@ def statscoordchart(request):
 
     plot.grid.visible = False
 
-    r = plot.circle(
+    rcirc = plot.circle(
         "ra", "dec", source=source, color="white", radius=0.05, hover_color="orange", alpha=0.7, hover_alpha=1.0
     )
 
@@ -413,7 +413,7 @@ def statscoordchart(request):
             tooltips="Task @taskid, RA Dec: @ra @dec, user: @username",
             mode="mouse",
             point_policy="follow_mouse",
-            renderers=[r],
+            renderers=[rcirc],
         )
     )
 
@@ -477,7 +477,7 @@ def statsusagechart(request):
 
     fig_api.grid.visible = False
 
-    r = fig_api.vbar_stack(
+    rvbar = fig_api.vbar_stack(
         ["waitingtaskcount_api", "dayfinished_api_counts"],
         x="queueday",
         source=datasource,
@@ -488,8 +488,8 @@ def statsusagechart(request):
 
     legend_api = Legend(
         items=[
-            ("Finished (API)", [r[1]]),
-            ("Waiting (API)", [r[0]]),
+            ("Finished (API)", [rvbar[1]]),
+            ("Waiting (API)", [rvbar[0]]),
         ],
         location="top",
         border_line_width=0,
