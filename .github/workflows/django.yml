@@ -58,6 +58,9 @@ jobs:
                   cat atlasserver/settings_test.txt >> atlasserver/settings.py
                   python -m pip install -e .
 
+            - name: Install geoip databases
+              run: ./update_geoipdatabase.sh
+
             - name: Set up MySQL
               run: |
                   sudo /etc/init.d/mysql start
