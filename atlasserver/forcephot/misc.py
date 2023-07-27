@@ -324,7 +324,7 @@ def splitradeclist(data, form=None):
                     {
                         "radeclist": (
                             f"Error on line {index}: Could not find two columns. Separate RA and Dec by a comma or a"
-                            " space."
+                            " space. For MPC object names, start the line with 'mpc ', e.g., 'mpc Makemake'"
                         )
                     }
                 )
