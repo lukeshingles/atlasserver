@@ -19,9 +19,19 @@ git clone https://github.com/lukeshingles/atlasserver.git
 python3 -m pip install -e .
 ```
 
-Copy dotenv_example.txt to .env and edit the relevant sections. Then download the geoip database with your MaxMind API key.
+Copy dotenv_example.txt to .env and edit the relevant sections.
+```sh
+cp dotenv_example.txt .env
+```
+
+Then download the geoip database files with your MaxMind API key (stored in .env).
 ```sh
 ./update_geoipdatabase.sh
+```
+
+A MySQL database server and tmux are required. These can be installed with homebrew:
+```sh
+brew install mysql tmux
 ```
 
 To initialise a new database, run:
@@ -35,6 +45,7 @@ Two processes must be running: the web server and the task runner. These can be 
 atlaswebserver start
 atlastaskrunner start
 ```
+
 For atlastaskrunner to process jobs, there much be an SSH host alias named named 'atlas' that points to atlas-base-sc01.ifa.hawaii.edu with your username. The server side scripts must also be installed in your sc01 home folder:
 ```sh
 scp atlasserver/taskrunner/atlas*.py atlas
