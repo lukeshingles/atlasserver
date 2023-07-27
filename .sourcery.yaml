@@ -24,9 +24,10 @@ ignore: # A list of paths or files which Sourcery will ignore.
     - .*
     - build
     - dist
+    - '*.min.js'
+    - node_modules
+    - lightcurveplotly.js
     - rd_cmfgen.py
-    - js
-    - static
     - plot_atlas_fp.py
     - migrations
 

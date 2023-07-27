@@ -1,6 +1,6 @@
 'use strict';
 
-var submission_in_progress = false;
+let submission_in_progress = false;
 
 function getDefaultMjdMin() {
     return (mjdFromDate(new Date()) - 30.).toFixed(5);
@@ -44,13 +44,13 @@ class NewRequest extends React.Component {
     }
 
     update_mjd_min(strmjdmin) {
-        var isostrmin = '';
+        let isostrmin = '';
         if (strmjdmin == '') {
             isostrmin = '(leave blank to fetch earliest)'
         } else {
             try {
-                var mjdmin = parseFloat(strmjdmin);
-                var isostr_withmilliseconds = dateFromMJD(mjdmin).toISOString();
+                const mjdmin = parseFloat(strmjdmin);
+                const isostr_withmilliseconds = dateFromMJD(mjdmin).toISOString();
                 isostrmin = (
                     isostr_withmilliseconds.includes('.') ?
                         isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
@@ -69,14 +69,14 @@ class NewRequest extends React.Component {
     }
 
     update_mjd_max(strmjdmax) {
-        var isostrmax = '';
+        let isostrmax = '';
         if (strmjdmax == '') {
             isostrmax = '(leave blank to fetch latest)'
         } else {
             try {
-                var mjdmax = parseFloat(strmjdmax);
+                const mjdmax = parseFloat(strmjdmax);
                 console.log("invalid?", strmjdmax, mjdmax);
-                var isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
+                const isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
                 isostrmax = (
                     isostr_withmilliseconds.includes('.') ?
                         isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
@@ -95,7 +95,7 @@ class NewRequest extends React.Component {
     }
 
     async submit() {
-        var datadict = {
+        const datadict = {
             radeclist: this.state.radeclist,
             mjd_min: this.state.mjd_min == '' ? null : this.state.mjd_min,
             mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
@@ -188,7 +188,7 @@ class NewRequest extends React.Component {
     }
 
     render() {
-        var formcontent = [];
+        const formcontent = [];
 
         formcontent.push(
             <ul key="ulradec">
@@ -239,8 +239,8 @@ class NewRequest extends React.Component {
             </ul>
         );
 
-        var submitclassname = submission_in_progress ? 'btn btn-info submitting' : 'btn btn-info';
-        var submitvalue = submission_in_progress ? 'Requesting...' : 'Request';
+        const submitclassname = submission_in_progress ? 'btn btn-info submitting' : 'btn btn-info';
+        const submitvalue = submission_in_progress ? 'Requesting...' : 'Request';
 
         formcontent.push(<input key="submitbutton" className={submitclassname} id="submitrequest" type="submit" value={submitvalue} />);
         if (this.state.httperror != '') {

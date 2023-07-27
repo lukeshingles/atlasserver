@@ -1,12 +1,12 @@
 'use strict';
 
-var jslcdataglobal = new Object();
-var jslabelsglobal = new Object();
-var jslimitsglobal = new Object();
+const jslcdataglobal = new Object();
+const jslabelsglobal = new Object();
+const jslimitsglobal = new Object();
 
-var tasklist_api_request_active = false;
-var tasklist_fetchcache = [];
-var tasklist_api_error = '';
+let tasklist_api_request_active = false;
+const tasklist_fetchcache = [];
+let tasklist_api_error = '';
 
 
 class Pager extends React.PureComponent {
@@ -31,7 +31,7 @@ class Pager extends React.PureComponent {
   // }
 
   static getDerivedStateFromProps(props, state) {
-    var statechanges = {};
+    const statechanges = {};
     if (props.previous != null) {
       statechanges.previous_cursor = new URL(props.previous).searchParams.get('cursor');
     }
@@ -49,11 +49,11 @@ class Pager extends React.PureComponent {
     } else {
       return (
         <div id="paginator" key="paginator">
-            <p key="pagedescription">Showing tasks {this.props.pagefirsttaskposition + 1}-{this.props.pagefirsttaskposition + this.props.pagetaskcount} of {this.props.taskcount}</p>
-            <ul key="prevnext" className="pager">
-              {this.props.previous != null ? <li key="previous" className="previous"><a onClick={() => {this.props.updateCursor(this.state.previous_cursor)}} style={{cursor: 'pointer'}}>&laquo; Newer</a></li> : null}
-              {this.props.next != null ? <li key="next" className="next"><a onClick={() => {this.props.updateCursor(this.state.next_cursor)}} style={{cursor: 'pointer'}}>Older &raquo;</a></li> : null}
-            </ul>
+          <p key="pagedescription">Showing tasks {this.props.pagefirsttaskposition + 1}-{this.props.pagefirsttaskposition + this.props.pagetaskcount} of {this.props.taskcount}</p>
+          <ul key="prevnext" className="pager">
+            {this.props.previous != null ? <li key="previous" className="previous"><a onClick={() => { this.props.updateCursor(this.state.previous_cursor) }} style={{ cursor: 'pointer' }}>&laquo; Newer</a></li> : null}
+            {this.props.next != null ? <li key="next" className="next"><a onClick={() => { this.props.updateCursor(this.state.next_cursor) }} style={{ cursor: 'pointer' }}>Older &raquo;</a></li> : null}
+          </ul>
         </div>
       )
     }
@@ -81,8 +81,8 @@ class TaskPage extends React.Component {
 
   filterclass(filtername, strurl) {
     // var page_url = new URL(window.location.href);
-    var page_url = new URL(strurl);
-    var started = page_url.searchParams.get('started');
+    const page_url = new URL(strurl);
+    const started = page_url.searchParams.get('started');
     if (filtername == null) {
       if (started == null && this.singleTaskViewTaskId(this.state.dataurl) == null) {
         return 'btn-primary'
@@ -100,7 +100,7 @@ class TaskPage extends React.Component {
 
   setFilter(filtername) {
     console.log('changed filter to', filtername);
-    var new_page_url = new URL(api_url_base);
+    const new_page_url = new URL(api_url_base);
     new_page_url.search = '';
     if (filtername != null) {
       new_page_url.searchParams.set(filtername, true);
@@ -108,23 +108,23 @@ class TaskPage extends React.Component {
 
     if (new_page_url != window.location.href) {
       window.history.pushState({}, document.title, new_page_url);
-      var statechanges = {'scrollToTopAfterUpdate': true, dataurl: new_page_url};
+      const statechanges = { 'scrollToTopAfterUpdate': true, dataurl: new_page_url };
       if (filtername == 'started') {
         if (this.state.results != null) {
-          statechanges['results'] = this.state.results.filter(task => {return task.starttimestamp != null});
+          statechanges['results'] = this.state.results.filter(task => { return task.starttimestamp != null });
           if (statechanges['results'].length == 0) {
             // prevent flash of "there are no results" for empty ([] non-null) results list
             statechanges['results'] = null;
           }
         }
       }
-      this.setState(statechanges, () => {this.fetchData(true)});
+      this.setState(statechanges, () => { this.fetchData(true) });
     }
   }
 
   singleTaskViewTaskId(strurl) {
-    var pathext = strurl.toString().replace(
-      api_url_base.toString(), '').split('/').filter(el => {return el.length != 0});
+    const pathext = strurl.toString().replace(
+      api_url_base.toString(), '').split('/').filter(el => { return el.length != 0 });
 
     if (pathext.length == 1 && !isNaN(pathext[0])) {
       return parseInt(pathext[0]);
@@ -138,12 +138,12 @@ class TaskPage extends React.Component {
       return; // let the browser deal with the click natively
     }
     event.preventDefault();
-    var new_page_url = api_url_base + task_id + '/';
+    const new_page_url = api_url_base + task_id + '/';
     window.history.pushState({}, document.title, new_page_url);
 
     console.log('Task list changed to single task view for ', new_page_url.toString());
 
-    var newresults = this.state.results.filter(task => {return task.id == task_id});
+    let newresults = this.state.results.filter(task => { return task.id == task_id });
     if (newresults.length == 0) {
       newresults = null;  // prevent flash of "there are no results" for empty (non-null) results list
     }
@@ -154,7 +154,7 @@ class TaskPage extends React.Component {
       previous: null,
       pagefirsttaskposition: null,
       taskcount: null,
-    }, () => {this.fetchData(true)});
+    }, () => { this.fetchData(true) });
   }
 
   updateCursor(new_cursor) {
@@ -163,7 +163,7 @@ class TaskPage extends React.Component {
     }
     console.log('Task list cursor changed to ', new_cursor);
 
-    var new_page_url = new URL(window.location.href);
+    const new_page_url = new URL(window.location.href);
     if (new_cursor != null) {
       new_page_url.searchParams.set('cursor', new_cursor);
     } else {
@@ -173,7 +173,7 @@ class TaskPage extends React.Component {
 
     window.history.pushState({}, document.title, new_page_url);
 
-    this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData(true)});
+    this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
   }
 
   fetchData(usertriggered) {
@@ -181,13 +181,12 @@ class TaskPage extends React.Component {
       return;
     }
 
-    this.setState({dataurl: window.location.href});
+    this.setState({ dataurl: window.location.href });
 
     // start by applying a cached version if we have it
     // then send out an HTTP request and update when available
-    if (usertriggered)
-    {
-      var tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
+    if (usertriggered) {
+      const tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
       if (tasklist_fetchcachematch) {
         console.log('using tasklist_fetchcache before GET response', window.location.href);
         this.setState(tasklist_fetchcache[window.location.href]);
@@ -202,86 +201,86 @@ class TaskPage extends React.Component {
     }
 
     tasklist_api_request_active = true;
-    var get_url = window.location.href;
+    const get_url = window.location.href;
     console.log('Fetching task list from', get_url);
     fetch(get_url,
-    {
-      credentials: "same-origin",
-      method: "GET",
-      headers: {
-        "X-CSRFToken": getCookie("csrftoken"),
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      redirect: "manual"
-    })
-    .then((response) => {
-      tasklist_api_error = '';
-      tasklist_api_request_active = false;
-      // etag = response.headers.get('ETag');
-      if (response.type === "opaqueredirect") {
-        // redirect to login page
-        window.location.href = response.url;
-        console.log('Fetch got a redirection to ', response.url);
-      } else {
-        if (response.status != 200) {
-          console.log("Fetch recieved HTTP status ", response.status);
-        }
-        if (response.status == 404) {
-          window.history.pushState({}, document.title, api_url_base);
-          this.setState({scrollToTopAfterUpdate: true}, () => {this.fetchData(true)});
-        }
-        if (response.status == 200) {
-          return response.json();
-        }
-      }
-      return null;
-    }).catch(error => {
-      tasklist_api_request_active = false;
-      console.log('Get task list HTTP request failed', error);
-      tasklist_api_error = 'Connection error';
-    }).then(data => {
-      var statechanges = null;
-      if (data != null && data.hasOwnProperty('results')) {
-        if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
-          // page is empty. redirect to main page
-          this.updateCursor(null);
+      {
+        credentials: "same-origin",
+        method: "GET",
+        headers: {
+          "X-CSRFToken": getCookie("csrftoken"),
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        redirect: "manual"
+      })
+      .then((response) => {
+        tasklist_api_error = '';
+        tasklist_api_request_active = false;
+        // etag = response.headers.get('ETag');
+        if (response.type === "opaqueredirect") {
+          // redirect to login page
+          window.location.href = response.url;
+          console.log('Fetch got a redirection to ', response.url);
         } else {
-          statechanges = data;
-        }
-      } else if (data != null && data.hasOwnProperty('id')) {
-        // single task view doesn't put task data inside 'results' list,
-        // so we create a single-item results list
-        statechanges = {
-          results: [data],
-          next: null,
-          previous: null,
-          pagefirsttaskposition: null,
-          taskcount: null,
-        };
-      }
-      if (statechanges != null) {
-        statechanges['tasklist_last_fetch_time'] = new Date();
-        tasklist_fetchcache[window.location.href] = statechanges;
-        if (get_url == window.location.href) {
-          console.log('Applying results from', get_url);
-          if (usertriggered) {
-            statechanges['scrollToTopAfterUpdate'] = true
+          if (response.status != 200) {
+            console.log("Fetch recieved HTTP status ", response.status);
           }
-          this.setState(statechanges);
-        } else {
-          console.log('Not applying results from', get_url, 'location.href', window.location.href);
-          return;
+          if (response.status == 404) {
+            window.history.pushState({}, document.title, api_url_base);
+            this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
+          }
+          if (response.status == 200) {
+            return response.json();
+          }
         }
-      }
-    });
+        return null;
+      }).catch(error => {
+        tasklist_api_request_active = false;
+        console.log('Get task list HTTP request failed', error);
+        tasklist_api_error = 'Connection error';
+      }).then(data => {
+        let statechanges = null;
+        if (data != null && data.hasOwnProperty('results')) {
+          if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
+            // page is empty. redirect to main page
+            this.updateCursor(null);
+          } else {
+            statechanges = data;
+          }
+        } else if (data != null && data.hasOwnProperty('id')) {
+          // single task view doesn't put task data inside 'results' list,
+          // so we create a single-item results list
+          statechanges = {
+            results: [data],
+            next: null,
+            previous: null,
+            pagefirsttaskposition: null,
+            taskcount: null,
+          };
+        }
+        if (statechanges != null) {
+          statechanges['tasklist_last_fetch_time'] = new Date();
+          tasklist_fetchcache[window.location.href] = statechanges;
+          if (get_url == window.location.href) {
+            console.log('Applying results from', get_url);
+            if (usertriggered) {
+              statechanges['scrollToTopAfterUpdate'] = true
+            }
+            this.setState(statechanges);
+          } else {
+            console.log('Not applying results from', get_url, 'location.href', window.location.href);
+            return;
+          }
+        }
+      });
   }
 
   componentDidUpdate() {
     if (this.state.scrollToTopAfterUpdate) {
-        this.setState({ scrollToTopAfterUpdate: false });
-        window.scrollTo(0, 0);
-        window.dispatchEvent(new Event('resize'));
+      this.setState({ scrollToTopAfterUpdate: false });
+      window.scrollTo(0, 0);
+      window.dispatchEvent(new Event('resize'));
     }
   }
 
@@ -296,8 +295,8 @@ class TaskPage extends React.Component {
 
   render() {
     // console.log('TaskPage rendered');
-    var singletaskmode = this.singleTaskViewTaskId(this.state.dataurl) != null;
-    var pagehtml = [];
+    const singletaskmode = this.singleTaskViewTaskId(this.state.dataurl) != null;
+    let pagehtml = [];
     if (!singletaskmode) {
       pagehtml.push(<div key="header" className="page-header"><h1>Task Queue</h1></div>);
     } else {
@@ -320,13 +319,13 @@ class TaskPage extends React.Component {
       pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} />);
     }
 
-    var tasklist;
+    let tasklist;
     if (this.state.results == null) {
       tasklist = <p key="message">Loading tasks...</p>;
     } else if (this.state.results.length == 0) {
       tasklist = <p key="message">There are no tasks.</p>;
     } else {
-      var pagetaskcount = (this.state.results != null) ? this.state.results.length : null;
+      const pagetaskcount = (this.state.results != null) ? this.state.results.length : null;
       tasklist = [
         <ul key="ultasklist" className="tasks">
           {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} hidePlot={pagetaskcount > 10} />))}

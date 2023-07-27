@@ -7,7 +7,7 @@ class TaskPlot extends React.PureComponent {
 
     componentDidMount() {
         console.log('activating plot', this.props.taskid)
-        var plot_url = new URL(this.props.taskurl);
+        const plot_url = new URL(this.props.taskurl);
         plot_url.pathname += 'resultplotdata.js';
         plot_url.search = '';
         $.ajax({ url: plot_url, cache: true, dataType: 'script' });
@@ -37,7 +37,7 @@ class Task extends React.Component {
     }
 
     deleteTask() {
-        var li_id = '#task-' + this.props.taskdata.id
+        const li_id = '#task-' + this.props.taskdata.id
         // $(li_id).hide(300);
         $(li_id).slideUp(200);
         setTimeout(() => {
@@ -54,7 +54,7 @@ class Task extends React.Component {
     }
 
     requestImages() {
-        var request_image_url = new URL(this.props.taskdata.url);
+        const request_image_url = new URL(this.props.taskdata.url);
         request_image_url.pathname += 'requestimages';
         request_image_url.search = '';
 
@@ -71,10 +71,10 @@ class Task extends React.Component {
             .then((response) => {
                 if (response.redirected) {
                     // console.log(response)
-                    var newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
+                    const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
                     newtaskids.push(newimgtask_id);
                     console.log('requestimages created task', newimgtask_id);
-                    var new_page_url = new URL(response.url);
+                    const new_page_url = new URL(response.url);
                     new_page_url.searchParams.delete('newids');
                     window.history.pushState({}, document.title, new_page_url);
                     this.props.fetchData(true);
@@ -83,11 +83,10 @@ class Task extends React.Component {
     }
 
     static getDerivedStateFromProps(props, state) {
-        var statechanges = {};
         if (props.taskdata.starttimestamp != null && props.taskdata.finishtimestamp == null) {
             if (state.interval == null) {
-                var starttime = new Date(props.taskdata.starttimestamp).getTime();
-                var timeelapsed = (new Date().getTime() - starttime) / 1000.;
+                const starttime = new Date(props.taskdata.starttimestamp).getTime();
+                const timeelapsed = (new Date().getTime() - starttime) / 1000.;
                 return { 'interval': setInterval(state.updateTimeElapsed, 1000), 'timeelapsed': timeelapsed.toFixed(0) };
             }
         } else if (state.interval != null) {
@@ -101,7 +100,7 @@ class Task extends React.Component {
         // componentDidUpdate() {
         this.updateTimeElapsed();
         if (newtaskids.includes(this.props.taskdata.id)) {
-            var li_id = '#task-' + this.props.taskdata.id
+            const li_id = '#task-' + this.props.taskdata.id
             console.log('showing new task', this.props.taskdata.id);
             $(li_id).hide();
             // $(li_id).show(600);
@@ -119,8 +118,8 @@ class Task extends React.Component {
 
     updateTimeElapsed() {
         if (this.props.taskdata.starttimestamp != null && this.props.taskdata.finishtimestamp == null) {
-            var starttime = new Date(this.props.taskdata.starttimestamp).getTime();
-            var timeelapsed = (new Date().getTime() - starttime) / 1000.;
+            const starttime = new Date(this.props.taskdata.starttimestamp).getTime();
+            const timeelapsed = (new Date().getTime() - starttime) / 1000.;
             this.setState({ 'timeelapsed': timeelapsed.toFixed(0) });
         } else if (this.state.interval != null) {
             clearInterval(this.state.interval);
@@ -140,9 +139,9 @@ class Task extends React.Component {
     }
 
     render() {
-        var task = this.props.taskdata;
-        var statusclass = 'none';
-        var buttontext = 'none';
+        const task = this.props.taskdata;
+        let statusclass = 'none';
+        let buttontext = 'none';
         if (task.finishtimestamp != null) {
             statusclass = "finished";
             buttontext = 'Delete';
@@ -154,11 +153,11 @@ class Task extends React.Component {
             buttontext = 'Cancel';
         }
         console.log('Task ' + task.id + ' rendered');
-        var delbutton = null;
+        let delbutton = null;
         if (task.user_id == user_id) {
             delbutton = <button className="btn btn-sm btn-danger" onClick={() => this.deleteTask()}>{buttontext}</button>;
         }
-        var taskbox = [
+        let taskbox = [
             <div key="rightside" className="rightside">
                 {delbutton}
                 <img src={task.previewimage_url} style={{ display: 'block', marginTop: '1em', marginLeft: '1em' }} />
@@ -176,7 +175,7 @@ class Task extends React.Component {
         }
 
         if (task.request_type == 'IMGZIP') {
-            var imagetype = task.use_reduced ? 'reduced' : 'difference';
+            const imagetype = task.use_reduced ? 'reduced' : 'difference';
             taskbox.push(<p key="imgrequestnote">Up to the first 500 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
         }
 
@@ -191,7 +190,7 @@ class Task extends React.Component {
         if (task.mpc_name != null && task.mpc_name != '') {
             taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
         } else {
-            var radecepoch = '';
+            let radecepoch = '';
             if (task.radec_epoch_year != null) {
                 radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
             }
@@ -204,8 +203,8 @@ class Task extends React.Component {
         taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
 
         if (task.mjd_min != null || task.mjd_max != null) {
-            var mjdmin = task.mjd_min != null ? task.mjd_min : "0";
-            var mjdmax = task.mjd_max != null ? task.mjd_max : "∞";
+            const mjdmin = task.mjd_min != null ? task.mjd_min : "0";
+            const mjdmax = task.mjd_max != null ? task.mjd_max : "∞";
             taskbox.push(<div key="mjdrange">MJD request: [{mjdmin}, {mjdmax}]</div>);
         }
 
