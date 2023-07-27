@@ -36,6 +36,7 @@ rule_settings:
         - gpsg-standard-import-alias
         - gpsg-import
         #- gpsg-docstrings
+        - gpsg-lambda
         - gpsg-naming
         - gpsg-naming-pep8
     disable:
