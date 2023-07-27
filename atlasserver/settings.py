@@ -22,7 +22,6 @@ load_dotenv(dotenv_path=BASE_DIR / ".env", override=True)
 
 SECRET_KEY = os.environ.get("ATLASSERVER_DJANGO_SECRET_KEY")
 
-# Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
