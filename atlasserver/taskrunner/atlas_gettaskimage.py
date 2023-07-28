@@ -24,7 +24,7 @@ def main() -> None:
     if dfforcedphot.empty:
         return
 
-    row = dfforcedphot[dfforcedphot.m == dfforcedphot.m.max()].iloc[0]  # maximum magnitude
+    row = dfforcedphot[dfforcedphot.uJy == dfforcedphot.uJy.max()].iloc[0]  # brightest data point
     obs = row["Obs"]  # looks like '01a59309o0235c'
     imgfolder = "red" if reduced else "diff"  # difference or reduced image
     fitsext = "fits" if reduced else "diff"
