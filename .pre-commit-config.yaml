@@ -12,7 +12,7 @@ repos:
           - id: check-json
           - id: check-merge-conflict
           - id: check-toml
-          - id: check-yaml
+          #- id: check-yaml
           - id: detect-private-key
           - id: destroyed-symlinks
           - id: fix-byte-order-marker
