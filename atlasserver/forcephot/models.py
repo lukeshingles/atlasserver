@@ -139,7 +139,7 @@ class Task(models.Model):
     @property
     def localresultimagestackfile(self) -> Path | None:
         """Return the full local path to the image stack FITS file if it exists, otherwise None."""
-        imagstackfile = Path(f"{self.localresultfileprefix(use_parent=True)}.fits")
+        imagstackfile = Path(f"{self.localresultfileprefix()}.fits")
         return imagstackfile if Path(settings.STATIC_ROOT, imagstackfile).exists() else None
 
     @property
