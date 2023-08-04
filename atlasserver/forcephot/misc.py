@@ -1,3 +1,4 @@
+import datetime
 import typing as t
 from multiprocessing import Process
 from pathlib import Path
@@ -349,7 +350,7 @@ def splitradeclist(data, form=None):
     return datalist
 
 
-def datetime_to_mjd(dt):
+def datetime_to_mjd(dt: datetime.datetime) -> float:
     return julian.to_jd(dt) - 2400000.5
 
 

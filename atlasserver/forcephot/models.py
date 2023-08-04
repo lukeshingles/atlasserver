@@ -135,10 +135,14 @@ class Task(models.Model):
     def localresultimagezipfile(self) -> Path | None:
         """Return the full local path to the image zip file if it exists, otherwise None."""
         imagezipfile = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
-        if Path(settings.STATIC_ROOT, imagezipfile).exists():
-            return imagezipfile
 
-        return None
+        return imagezipfile if Path(settings.STATIC_ROOT, imagezipfile).exists() else None
+
+    @property
+    def localresultimagestackfits(self) -> Path | None:
+        """Return the full local path to the image zip file if it exists, otherwise None."""
+        stackfitsfile = Path(f"{self.localresultfileprefix()}.fits")
+        return stackfitsfile if Path(settings.STATIC_ROOT, stackfitsfile).exists() else None
 
     @property
     def imagerequest_task_id(self) -> int | None:
