@@ -209,10 +209,10 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
             f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
         )
         atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
-        atlascommand += f' outdir="{remotetaskdir}"'
+        atlascommand += f" outdir={remotetaskdir}"
         atlascommand += f" | tee {remotedatafile}; "
-        atlascommand += f' mv "{remotetaskdir}/*.fits" "{remoteresultfile}"; '
-        atlascommand += f' rm -rf "{remotetaskdir}"'
+        atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
+        atlascommand += f" rm -rf {remotetaskdir}"
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
@@ -328,7 +328,7 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
     if task.request_type == "SSOSTACK" and (
         not localresultfile.exists() and localresultfile.with_suffix(".txt").exists()
     ):
-        return localresultfile, localresultfile.with_suffix(".txt").read_text()
+        return localresultfile, localresultfile.with_suffix(".txt").read_text()[:512]
 
     if not localresultfile.exists():
         # task failed somehow
