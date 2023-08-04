@@ -16,6 +16,7 @@ class NewRequest extends React.Component {
             comment: localStorage.getItem('comment') != null ? localStorage.getItem('comment') : '',
             use_reduced: localStorage.getItem('use_reduced') == 'true',
             send_email: localStorage.getItem('send_email') != 'false',
+            enable_stack_rock: localStorage.getItem('enable_stack_rock') != 'false',
             enable_propermotion: localStorage.getItem('enable_propermotion') == 'true',
             radec_epoch_year: localStorage.getItem('radec_epoch_year') != null ? localStorage.getItem('radec_epoch_year') : '',
             propermotion_ra: localStorage.getItem('propermotion_ra') != null ? localStorage.getItem('propermotion_ra') : 0.,
@@ -101,6 +102,7 @@ class NewRequest extends React.Component {
             mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
             use_reduced: this.state.use_reduced,
             send_email: this.state.send_email,
+            enable_stack_rock: this.state.enable_stack_rock,
             comment: this.state.comment,
         };
 
@@ -128,7 +130,7 @@ class NewRequest extends React.Component {
                 this.setState({ 'httperror': 'HTTP request failed.', 'submission_in_progress': false });
             })
             .then((response) => {
-                submission_in_progress = false;
+                submission_in_progress = falseenable_stack_rock
                 this.setState({ 'httperror': '', 'submission_in_progress': false });
                 console.log('New task: HTTP response ', response.status);
 
@@ -136,6 +138,7 @@ class NewRequest extends React.Component {
                     console.log("New task: successful creation", response.status);
                     localStorage.removeItem('radeclist');
                     localStorage.removeItem('enable_propermotion');
+                    localStorage.removeItem('enable_stack_rock');
                     localStorage.removeItem('radec_epoch_year');
                     localStorage.removeItem('propermotion_ra');
                     localStorage.removeItem('propermotion_dec');
@@ -216,6 +219,20 @@ class NewRequest extends React.Component {
                         <li key="propermotion_ra"><label htmlFor="id_propermotion_ra">PM RA [mas/yr]</label><input type="number" name="propermotion_ra" step="any" id="id_propermotion_ra" value={this.state.propermotion_ra} onChange={e => { this.setState({ 'propermotion_ra': e.target.value }); localStorage.setItem("propermotion_ra", e.target.value); }} /></li>
                         <li key="propermotion_dec"><label htmlFor="id_propermotion_dec">PM Dec [mas/yr]</label><input type="number" name="propermotion_dec" step="any" id="id_propermotion_dec" value={this.state.propermotion_dec} onChange={e => { this.setState({ 'propermotion_dec': e.target.value }); localStorage.setItem("propermotion_dec", e.target.value); }} /></li>
                     </ul>
+                </div>
+            );
+        }
+
+        formcontent.push(
+            <div key="stack_rock" id="stack_rock" style={{ width: '100%' }}>
+                <label style={{ width: '100%' }}>
+                    <input type="checkbox" checked={this.state.enable_stack_rock} onChange={e => { this.setState({ 'enable_stack_rock': e.target.checked }); localStorage.setItem("enable_stack_rock", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Stack SS Object Images
+                </label>
+            </div>);    
+        if (this.state.enable_stack_rock) {
+            formcontent.push(
+                <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
+                    <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
                 </div>
             );
         }
