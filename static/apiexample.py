@@ -38,9 +38,7 @@ while not task_url:
     with requests.Session() as s:
         # alternative to token auth
         # s.auth = ('USERNAME', 'PASSWORD')
-        resp = s.post(
-            f"{BASEURL}/queue/", headers=headers, data={"ra": 110, "dec": 11, "mjd_min": 59248.0, "send_email": False}
-        )
+        resp = s.post(f"{BASEURL}/queue/", headers=headers, data={"ra": 110, "dec": 11, "mjd_min": 59248.0})
 
         if resp.status_code == 201:  # successfully queued
             task_url = resp.json()["url"]
