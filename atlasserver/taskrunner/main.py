@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Task runner for forced photometry jobs that are dispatched to ATLAS sc01 over ssh."""
+import contextlib
 import datetime
 import multiprocessing as mp
 import os
+import smtplib
 import subprocess
 import time
 import typing as t
@@ -365,7 +367,8 @@ def send_email_if_needed(task, logfunc) -> None:
                         attach_size_mb += filesize_mb
                         message.attach_file(str(pdfpath))
 
-            message.send()
+            with contextlib.suppress(smtplib.SMTPDataError):
+                message.send()
         else:
             logfunc(
                 f"Waiting to send email until remaining {batchtasks_unfinished} "
