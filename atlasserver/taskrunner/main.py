@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Task runner for forced photometry jobs that are dispatched to ATLAS sc01 over ssh."""
+import contextlib
 import datetime
 import multiprocessing as mp
 import os
+import smtplib
 import subprocess
 import time
 import typing as t
@@ -310,71 +312,79 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
 
 def send_email_if_needed(task, logfunc) -> None:
     """Send an email to the user if requested and all tasks in the batch are finished."""
-    if task.send_email and task.user.email:
-        # if we find an unfinished task in the same batch, hold off sending the email.
-        # same batch here is defined as being queued by the same user with identical timestamps
-        batchtasks_unfinished = 0
-        batchtaskcount = 0
+    if not task.send_email:
+        logfunc(f"Completed successfully ({task.user.username} did not request an email)")
+        return
 
-        taskdesclist = []
-        localresultfilelist = []
-        batchtasks = Task.objects.all().filter(user_id=task.user_id, send_email=True, timestamp=task.timestamp)
+    if task.from_api:
+        logfunc("Requested email for an API-originated task (not sending email)")
+        return
 
-        for batchtask in batchtasks:
-            batchtaskcount += 1
-            if not batchtask.finishtimestamp and batchtask.id != task.id:
-                batchtasks_unfinished += 1
-            else:
-                localresultfile = localresultfileprefix(batchtask.id) + ".txt"
-                taskurl = f"https://fallingstar-data.com/forcedphot/queue/{batchtask.id}/"
-                strtask = (
-                    f"Task {batchtask.id}: RA {batchtask.ra} Dec {batchtask.dec} "
-                    f"{'img_reduced' if batchtask.use_reduced else 'img_difference'} "
-                    f"\n{taskurl}\n"
-                )
+    if not task.user.email:
+        logfunc(f"Tasked completed ok, but user {task.user.username} has no email address!")
+        return
 
-                if task.comment:
-                    strtask += " comment: '" + task.comment + "'"
+    # if we find an unfinished task in the same batch, hold off sending the email.
+    # same batch here is defined as being queued by the same user with identical timestamps
+    batchtasks_unfinished = 0
+    batchtaskcount = 0
 
-                taskdesclist.append(strtask)
-                localresultfilelist.append(localresultfile)
+    taskdesclist = []
+    localresultfilelist = []
+    batchtasks = Task.objects.all().filter(user_id=task.user_id, send_email=True, timestamp=task.timestamp)
 
-        if batchtasks_unfinished == 0:
-            logfunc(f"Sending email to {task.user.email} containing {batchtaskcount} tasks")
-
-            message = EmailMessage(
-                subject="ATLAS forced photometry results",
-                body=("Your forced photometry results are available for:\n\n" + "\n".join(taskdesclist) + "\n\n"),
-                from_email=settings.EMAIL_HOST_USER,
-                to=[task.user.email],
+    for batchtask in batchtasks:
+        batchtaskcount += 1
+        if not batchtask.finishtimestamp and batchtask.id != task.id:
+            batchtasks_unfinished += 1
+        else:
+            localresultfile = localresultfileprefix(batchtask.id) + ".txt"
+            taskurl = f"https://fallingstar-data.com/forcedphot/queue/{batchtask.id}/"
+            strtask = (
+                f"Task {batchtask.id}: RA {batchtask.ra} Dec {batchtask.dec} "
+                f"{'img_reduced' if batchtask.use_reduced else 'img_difference'} "
+                f"\n{taskurl}\n"
             )
 
-            attach_size_mb = 0.0
+            if task.comment:
+                strtask += " comment: '" + task.comment + "'"
 
-            for localresultfile in localresultfilelist:
-                filesize_mb = Path(localresultfile).stat().st_size / 1024.0 / 1024.0
+            taskdesclist.append(strtask)
+            localresultfilelist.append(localresultfile)
+
+    if batchtasks_unfinished == 0:
+        logfunc(f"Sending email to {task.user.email} containing {batchtaskcount} tasks")
+
+        message = EmailMessage(
+            subject="ATLAS forced photometry results",
+            body=("Your forced photometry results are available for:\n\n" + "\n".join(taskdesclist) + "\n\n"),
+            from_email=settings.EMAIL_HOST_USER,
+            to=[task.user.email],
+        )
+
+        attach_size_mb = 0.0
+
+        for localresultfile in localresultfilelist:
+            filesize_mb = Path(localresultfile).stat().st_size / 1024.0 / 1024.0
+            if (attach_size_mb + filesize_mb) < 22:
+                attach_size_mb += filesize_mb
+                message.attach_file(localresultfile)
+
+        for localresultfile in localresultfilelist:
+            pdfpath = Path(localresultfile).with_suffix(".pdf")
+            if pdfpath.exists():
+                filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
                 if (attach_size_mb + filesize_mb) < 22:
                     attach_size_mb += filesize_mb
-                    message.attach_file(localresultfile)
+                    message.attach_file(str(pdfpath))
 
-            for localresultfile in localresultfilelist:
-                pdfpath = Path(localresultfile).with_suffix(".pdf")
-                if pdfpath.exists():
-                    filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
-                    if (attach_size_mb + filesize_mb) < 22:
-                        attach_size_mb += filesize_mb
-                        message.attach_file(str(pdfpath))
-
+        with contextlib.suppress(smtplib.SMTPDataError):
             message.send()
-        else:
-            logfunc(
-                f"Waiting to send email until remaining {batchtasks_unfinished} "
-                f"of {batchtaskcount} batched tasks are finished."
-            )
-    elif task.send_email:
-        logfunc(f"Tasked completed ok, but user {task.user.username} has no email address!")
     else:
-        logfunc(f"Completed successfully ({task.user.username} did not request an email)")
+        logfunc(
+            f"Waiting to send email until remaining {batchtasks_unfinished} "
+            f"of {batchtaskcount} batched tasks are finished."
+        )
 
 
 def handler(signal_received, frame):
@@ -399,7 +409,7 @@ def do_task(task, slotid: int) -> None:
         starttimestamp=datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
     )
 
-    logfunc(f"Starting task for {task.user.username} ({task.user.email}):")
+    logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
         logfunc_slotonly(f"{key:>17}: {value}")
 

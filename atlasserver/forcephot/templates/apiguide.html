@@ -38,7 +38,7 @@ else:
 while not task_url:
     with requests.Session() as s:
         resp = s.post(f"{BASEURL}/queue/", headers=headers, data={
-            'ra': 44, 'dec': 22, 'mjd_min': 59248., 'send_email': False})
+            'ra': 44, 'dec': 22, 'mjd_min': 59248.})
 
         if resp.status_code == 201:  # successfully queued
             task_url = resp.json()['url']
