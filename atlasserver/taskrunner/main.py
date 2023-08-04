@@ -20,6 +20,7 @@ from django.core.mail import EmailMessage
 from django.forms.models import model_to_dict
 
 from atlasserver import settings
+from atlasserver.forcephot.misc import datetime_to_mjd
 
 REMOTE_SERVER = "atlas"
 
@@ -39,6 +40,11 @@ LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 # so that current log can be archived periodically, keep track
 # of the filename with a date, so that it can be created when the date changes
 LASTLOGFILEARCHIVED: dict[str, Path] = {}
+
+
+def mjdnow() -> float:
+    """Return the current MJD."""
+    return datetime_to_mjd(datetime.datetime.now(datetime.UTC))
 
 
 def localresultfileprefix(id: int) -> str:
@@ -94,7 +100,7 @@ def remove_task_resultfiles(
         taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(taskid) + ".txt")]
     elif request_type == "IMGZIP" and parent_task_id is not None:
         taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(parent_task_id) + ".zip")]
-    else:
+    else:  # SSOSTACK
         taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=localresultfileprefix(taskid) + ".*"))
 
     for taskfile in taskfiles:
@@ -114,14 +120,18 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
      - resultfilename will be None if it could not be created due to an error
      - error_msg is None unless there was an error that would make retries pointless (e.g. invalid object name)
     """
+    # the task can create multiple files, but if this main one wasn't created, then the task failed
     if task.request_type == "FP":
         filename = f"job{task.id:05d}.txt"
     elif task.request_type == "IMGZIP":
         filename = f"job{task.parent_task_id:05d}.zip"
+    elif task.request_type == "SSOSTACK":
+        filename = f"job{task.id:05d}.fits"
     else:
         return None, None
 
     remoteresultdir = Path("~/atlasserver/results/")
+    remotetaskdir = remoteresultdir / f"task{task.id:05d}"
     remoteresultfile = Path(remoteresultdir, filename)
 
     localresultfile = Path(settings.RESULTS_DIR, filename)
@@ -165,6 +175,7 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
         localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
 
+        # copy out the FP data file first, so that it's available on sc01 for the image gathering script
         copycommand = ["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"]
 
         logfunc(" ".join(copycommand))
@@ -190,6 +201,18 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
 
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"
+
+    elif task.request_type == "SSOSTACK":
+        remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
+        atlascommand += f"/atlas/bin/stack_rock.sh '{task.mpc_name}'"
+        atlascommand += (  # stack_rock.sh doesn't suppport float mjds
+            f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
+        )
+        atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
+        atlascommand += f' outdir="{remotetaskdir}"'
+        atlascommand += f" | tee {remotedatafile}; "
+        atlascommand += f' mv "{remotetaskdir}/*.fits" "{remoteresultfile}"; '
+        atlascommand += f' rm -rf "{remotetaskdir}"'
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
@@ -257,7 +280,9 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
     # but keep the data files there for possible image requests
     if task.request_type == "FP":
         copycommands = [
+            # leave the FP data file on SC01 to be used for follow-up image requests
             ["scp", f"{REMOTE_SERVER}:{remoteresultfile}", str(localresultfile)],
+            # move the jpg task image from sc01 (deleting the remote file)
             [
                 "rsync",
                 "--remove-source-files",
@@ -265,7 +290,14 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
                 str(settings.RESULTS_DIR),
             ],
         ]
-    else:
+    elif task.request_type == "SSOSTACK":
+        # move the stack *.fits and *.txt data from sc01 (deleting the remote files)
+        copycommands = [
+            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)],
+            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotedatafile}", str(settings.RESULTS_DIR)],
+        ]
+    else:  # IMGZIP
+        # move the image zip from sc01 (deleting the remote file)
         copycommands = [
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
         ]
@@ -292,7 +324,13 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
             for line in stderr.split("\n"):
                 logfunc(f"STDERR: {line}")
 
-    if not (localresultfile).exists():
+    # got an error message (probably no observations in time range) and no fits file, but task is completed
+    if task.request_type == "SSOSTACK" and (
+        not localresultfile.exists() and localresultfile.with_suffix(".txt").exists()
+    ):
+        return localresultfile, localresultfile.with_suffix(".txt").read_text()
+
+    if not localresultfile.exists():
         # task failed somehow
         return None, None
 
@@ -527,11 +565,14 @@ def do_maintenance(maxtime=None):
 
     remove_old_tasks(days_ago=14, harddeleterecord=False, request_type="IMGZIP", logfunc=logfunc)
 
+    remove_old_tasks(days_ago=14, harddeleterecord=False, request_type="SSOSTACK", logfunc=logfunc)
+
     remove_old_tasks(days_ago=183, harddeleterecord=False, request_type="FP", logfunc=logfunc)
 
-    # API tasks
+    # archived API tasks
     remove_old_tasks(days_ago=7, harddeleterecord=False, is_archived=True, from_api=True, logfunc=logfunc)
 
+    # other API tasks
     remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=logfunc)
 
     # Any old tasks
