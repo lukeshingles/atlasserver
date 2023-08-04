@@ -51,7 +51,7 @@ class Task(models.Model):
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
     # city = models.CharField(default=None, null=True, blank=True, max_length=256)
     error_msg = models.CharField(
-        null=True, blank=True, default=None, max_length=200, verbose_name="Error messages during execution"
+        null=True, blank=True, default=None, max_length=512, verbose_name="Error messages during execution"
     )
     is_archived = models.BooleanField(default=False)
     radec_epoch_year = models.DecimalField(

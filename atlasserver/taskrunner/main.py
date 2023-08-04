@@ -328,7 +328,7 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
     if task.request_type == "SSOSTACK" and (
         not localresultfile.exists() and localresultfile.with_suffix(".txt").exists()
     ):
-        return localresultfile, localresultfile.with_suffix(".txt").read_text()
+        return localresultfile, localresultfile.with_suffix(".txt").read_text()[:512]
 
     if not localresultfile.exists():
         # task failed somehow
