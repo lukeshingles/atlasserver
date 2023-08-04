@@ -200,7 +200,11 @@ class Task extends React.Component {
             }
         }
 
-        taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
+        if (task.request_type == "SSOSTACK") {
+            taskbox.push(<div key="imgtype">Image: Stacked</div>);
+        } else {
+            taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
+        }
 
         if (task.mjd_min != null || task.mjd_max != null) {
             const mjdmin = task.mjd_min != null ? task.mjd_min : "0";
@@ -217,6 +221,13 @@ class Task extends React.Component {
                 if (task.request_type == 'FP') {
                     taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank">Data</a>);
                     taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank">PDF</a>);
+                } else if (task.request_type == 'SSOSTACK') {
+                    taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank">Data</a>);
+                    if (task.result_imagestack_url != null) {
+                        taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagestack_url} target="_blank">Stacked image (FITS)</a>);
+                    } else {
+                        taskbox.push(<p>The download link has expired. Delete this task and request again if necessary.</p>);
+                    }
                 }
 
                 if (task.request_type == 'IMGZIP') {
@@ -231,7 +242,7 @@ class Task extends React.Component {
                     } else {
                         taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => { this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images requested</a>);
                     }
-                } else if (user_id == task.user_id) {
+                } else if (task.request_type == 'FP' && user_id == task.user_id) {
                     taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
                 }
             }

@@ -224,18 +224,21 @@ class NewRequest extends React.Component {
             );
         }
 
-        formcontent.push(
-            <div key="stack_rock" id="stack_rock" style={{ width: '100%' }}>
-                <label style={{ width: '100%' }}>
-                    <input type="checkbox" checked={this.state.enable_stack_rock} onChange={e => { this.setState({ 'enable_stack_rock': e.target.checked }); localStorage.setItem("enable_stack_rock", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Stack SS Object Images
-                </label>
-            </div>);
-        if (this.state.enable_stack_rock) {
+        if (this.props.allow_stack_rock) {
             formcontent.push(
-                <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
-                    <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
-                </div>
-            );
+                <div key="stack_rock" id="stack_rock" style={{ width: '100%' }}>
+                    <label style={{ width: '100%' }}>
+                        <input type="checkbox" checked={this.state.enable_stack_rock} onChange={e => { this.setState({ 'enable_stack_rock': e.target.checked }); localStorage.setItem("enable_stack_rock", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Get stack of SS object images
+                    </label>
+                </div>);
+
+            if (this.state.enable_stack_rock) {
+                formcontent.push(
+                    <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
+                        <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
+                    </div>
+                );
+            }
         }
 
         formcontent.push(

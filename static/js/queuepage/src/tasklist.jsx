@@ -314,7 +314,9 @@ class TaskPage extends React.Component {
     }
 
     if (!singletaskmode) {
-      pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} />);
+      const allow_stack_rock = new URL(this.state.dataurl).searchParams.get('allow_stack_rock') == 'true';
+
+      pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} allow_stack_rock={allow_stack_rock} />);
     }
 
     let tasklist;

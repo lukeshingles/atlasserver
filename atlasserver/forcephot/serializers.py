@@ -66,8 +66,15 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
     def get_result_imagezip_url(self, obj):
         if obj.localresultimagezipfile:
-            request = self.context.get("request")
-            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+            return self.context.get("request").build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+
+        return None
+
+    def get_result_imagestack_url(self, obj):
+        if obj.localresultimagestackfile:
+            return self.context.get("request").build_absolute_uri(
+                staticfiles_storage.url(obj.localresultimagestackfile)
+            )
 
         return None
 
@@ -77,6 +84,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     previewimage_url = serializers.SerializerMethodField("get_previewimage_url")
     imagerequest_url = serializers.SerializerMethodField("get_imagerequest_url")
     result_imagezip_url = serializers.SerializerMethodField("get_result_imagezip_url")
+    result_imagestack_url = serializers.SerializerMethodField("get_result_imagestack_url")
 
     def validate_mpc_name(self, value, prefix="", field="mpc_name"):
         # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -197,6 +205,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "imagerequest_task_id",
             "imagerequest_url",
             "imagerequest_finished",
+            "result_imagestack_url",
             "result_imagezip_url",
         ]
 
@@ -216,5 +225,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "imagerequest_task_id",
             "imagerequest_url",
             "imagerequest_finished",
+            "result_imagestack_url",
             "result_imagezip_url",
         ]
