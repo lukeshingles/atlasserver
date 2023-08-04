@@ -104,6 +104,7 @@ class NewRequest extends React.Component {
             send_email: this.state.send_email,
             enable_stack_rock: this.state.enable_stack_rock,
             comment: this.state.comment,
+            request_type: this.state.enable_stack_rock ? 'SSOSTACK' : 'FP',
         };
 
         if (this.state.enable_propermotion) {
@@ -255,6 +256,12 @@ class NewRequest extends React.Component {
                 <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={this.state.send_email} onChange={e => { this.setState({ 'send_email': e.target.checked }); localStorage.setItem("send_email", e.target.checked); }} /><label htmlFor="id_send_email">Email me when completed</label></li>
             </ul>
         );
+
+        if ('non_field_errors' in this.state.errors) {
+            formcontent.push(
+                <ul className="errorlist"><li>{this.state.errors['non_field_errors']}</li></ul>
+            );
+        }
 
         const submitclassname = submission_in_progress ? 'btn btn-info submitting' : 'btn btn-info';
         const submitvalue = submission_in_progress ? 'Requesting...' : 'Request';
