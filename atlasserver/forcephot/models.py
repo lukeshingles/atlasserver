@@ -21,6 +21,7 @@ class Task(models.Model):
     class RequestType(models.TextChoices):
         FP = "FP", "Forced Photometry Data"
         IMGZIP = "IMGZIP", "Image Zip"
+        IMGSTACK = "SSOSTACK", "Solar System object image stack"
 
     timestamp = models.DateTimeField(default=timezone.now)
     starttimestamp = models.DateTimeField(null=True, blank=True, default=None)
@@ -70,7 +71,7 @@ class Task(models.Model):
         limit_choices_to={"request_type": "FP"},
     )
 
-    request_type = models.CharField(max_length=6, choices=RequestType.choices, default=RequestType.FP)
+    request_type = models.CharField(max_length=8, choices=RequestType.choices, default=RequestType.FP)
 
     task_modified_datetime = models.DateTimeField(auto_now=True)
 
