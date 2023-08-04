@@ -130,7 +130,7 @@ class NewRequest extends React.Component {
                 this.setState({ 'httperror': 'HTTP request failed.', 'submission_in_progress': false });
             })
             .then((response) => {
-                submission_in_progress = falseenable_stack_rock
+                submission_in_progress = false;
                 this.setState({ 'httperror': '', 'submission_in_progress': false });
                 console.log('New task: HTTP response ', response.status);
 
@@ -228,7 +228,7 @@ class NewRequest extends React.Component {
                 <label style={{ width: '100%' }}>
                     <input type="checkbox" checked={this.state.enable_stack_rock} onChange={e => { this.setState({ 'enable_stack_rock': e.target.checked }); localStorage.setItem("enable_stack_rock", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Stack SS Object Images
                 </label>
-            </div>);    
+            </div>);
         if (this.state.enable_stack_rock) {
             formcontent.push(
                 <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
