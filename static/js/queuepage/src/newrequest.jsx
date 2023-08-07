@@ -16,6 +16,7 @@ class NewRequest extends React.Component {
             comment: localStorage.getItem('comment') != null ? localStorage.getItem('comment') : '',
             use_reduced: localStorage.getItem('use_reduced') == 'true',
             send_email: localStorage.getItem('send_email') != 'false',
+            enable_stack_rock: localStorage.getItem('enable_stack_rock') != 'false',
             enable_propermotion: localStorage.getItem('enable_propermotion') == 'true',
             radec_epoch_year: localStorage.getItem('radec_epoch_year') != null ? localStorage.getItem('radec_epoch_year') : '',
             propermotion_ra: localStorage.getItem('propermotion_ra') != null ? localStorage.getItem('propermotion_ra') : 0.,
@@ -101,7 +102,9 @@ class NewRequest extends React.Component {
             mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
             use_reduced: this.state.use_reduced,
             send_email: this.state.send_email,
+            enable_stack_rock: this.state.enable_stack_rock,
             comment: this.state.comment,
+            request_type: this.state.enable_stack_rock ? 'SSOSTACK' : 'FP',
         };
 
         if (this.state.enable_propermotion) {
@@ -136,6 +139,7 @@ class NewRequest extends React.Component {
                     console.log("New task: successful creation", response.status);
                     localStorage.removeItem('radeclist');
                     localStorage.removeItem('enable_propermotion');
+                    localStorage.removeItem('enable_stack_rock');
                     localStorage.removeItem('radec_epoch_year');
                     localStorage.removeItem('propermotion_ra');
                     localStorage.removeItem('propermotion_dec');
@@ -220,6 +224,23 @@ class NewRequest extends React.Component {
             );
         }
 
+        if (this.props.allow_stack_rock) {
+            formcontent.push(
+                <div key="stack_rock" id="stack_rock" style={{ width: '100%' }}>
+                    <label style={{ width: '100%' }}>
+                        <input type="checkbox" checked={this.state.enable_stack_rock} onChange={e => { this.setState({ 'enable_stack_rock': e.target.checked }); localStorage.setItem("enable_stack_rock", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Get stack of SS object images
+                    </label>
+                </div>);
+
+            if (this.state.enable_stack_rock) {
+                formcontent.push(
+                    <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
+                        <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
+                    </div>
+                );
+            }
+        }
+
         formcontent.push(
             <ul key="ulmjdoptions">
                 <li key="mjd_min">
@@ -238,6 +259,12 @@ class NewRequest extends React.Component {
                 <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={this.state.send_email} onChange={e => { this.setState({ 'send_email': e.target.checked }); localStorage.setItem("send_email", e.target.checked); }} /><label htmlFor="id_send_email">Email me when completed</label></li>
             </ul>
         );
+
+        if ('non_field_errors' in this.state.errors) {
+            formcontent.push(
+                <ul className="errorlist"><li>{this.state.errors['non_field_errors']}</li></ul>
+            );
+        }
 
         const submitclassname = submission_in_progress ? 'btn btn-info submitting' : 'btn btn-info';
         const submitvalue = submission_in_progress ? 'Requesting...' : 'Request';

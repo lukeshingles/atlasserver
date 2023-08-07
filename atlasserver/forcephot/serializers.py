@@ -66,8 +66,15 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
     def get_result_imagezip_url(self, obj):
         if obj.localresultimagezipfile:
-            request = self.context.get("request")
-            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+            return self.context.get("request").build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+
+        return None
+
+    def get_result_imagestack_url(self, obj):
+        if obj.localresultimagestackfile:
+            return self.context.get("request").build_absolute_uri(
+                staticfiles_storage.url(obj.localresultimagestackfile)
+            )
 
         return None
 
@@ -77,6 +84,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     previewimage_url = serializers.SerializerMethodField("get_previewimage_url")
     imagerequest_url = serializers.SerializerMethodField("get_imagerequest_url")
     result_imagezip_url = serializers.SerializerMethodField("get_result_imagezip_url")
+    result_imagestack_url = serializers.SerializerMethodField("get_result_imagestack_url")
 
     def validate_mpc_name(self, value, prefix="", field="mpc_name"):
         # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -132,9 +140,15 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        if attrs.get("mpc_name", False):
+        if attrs.get("mpc_name", False):  # it's an MPC object name
             if attrs.get("ra", False) or attrs.get("dec", False):
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
+            if attrs["request_type"] == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
+                msg = "Proper motion cannot be used for SSO image stack requests."
+                raise serializers.ValidationError(msg)
+        elif attrs["request_type"] == "SSOSTACK":
+            msg = "Image stacking only works on MPC objects."
+            raise serializers.ValidationError(msg)
         elif "ra" not in attrs and "dec" not in attrs:
             msg = "Either an mpc_name or (ra, dec) must be specified."
             raise serializers.ValidationError(msg)
@@ -191,6 +205,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "imagerequest_task_id",
             "imagerequest_url",
             "imagerequest_finished",
+            "result_imagestack_url",
             "result_imagezip_url",
         ]
 
@@ -210,5 +225,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "imagerequest_task_id",
             "imagerequest_url",
             "imagerequest_finished",
+            "result_imagestack_url",
             "result_imagezip_url",
         ]

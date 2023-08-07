@@ -1,4 +1,3 @@
-import contextlib
 import datetime
 from pathlib import Path
 
@@ -135,14 +134,13 @@ class Task(models.Model):
     def localresultimagezipfile(self) -> Path | None:
         """Return the full local path to the image zip file if it exists, otherwise None."""
         imagezipfile = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
-
         return imagezipfile if Path(settings.STATIC_ROOT, imagezipfile).exists() else None
 
     @property
-    def localresultimagestackfits(self) -> Path | None:
-        """Return the full local path to the image zip file if it exists, otherwise None."""
-        stackfitsfile = Path(f"{self.localresultfileprefix()}.fits")
-        return stackfitsfile if Path(settings.STATIC_ROOT, stackfitsfile).exists() else None
+    def localresultimagestackfile(self) -> Path | None:
+        """Return the full local path to the image stack FITS file if it exists, otherwise None."""
+        imagstackfile = Path(f"{self.localresultfileprefix()}.fits")
+        return imagstackfile if Path(settings.STATIC_ROOT, imagstackfile).exists() else None
 
     @property
     def imagerequest_task_id(self) -> int | None:
@@ -200,19 +198,15 @@ class Task(models.Model):
         # cleanup associated files when removing a task object from the database
         if self.request_type == "IMGZIP":
             if zipfile := self.localresultimagezipfile:
-                with contextlib.suppress(FileNotFoundError):
-                    Path(settings.STATIC_ROOT, zipfile).unlink()
+                Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
 
         else:
-            # for localfile in Path(settings.STATIC_ROOT).glob(pattern=self.localresultfileprefix() + '.*'):
-            delete_extlist = [".txt", ".pdf"]
-            imgreqtaskid = self.imagerequest_task_id
-            if imgreqtaskid is None:  # image request tasks share this same preview image
+            delete_extlist = [".txt", ".pdf", ".fits"]
+            if self.imagerequest_task_id is None:  # image request tasks share this same preview image
                 delete_extlist.append(".jpg")
 
             for ext in delete_extlist:
-                with contextlib.suppress(FileNotFoundError):
-                    Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink()
+                Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
 
         # keep finished jobs in the database but mark them as archived and hide them from the website
         if self.finished():

@@ -280,7 +280,7 @@ def splitradeclist(data, form=None):
 
     converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
 
-    # if an RA and Dec were specified, add them to the list
+    # if an RA and Dec were specified directly in their fields, add them to the list
     if "ra" in data and data["ra"] and "dec" in data and data["dec"]:
         newrow = data.copy()
         newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=newrow["ra"])
