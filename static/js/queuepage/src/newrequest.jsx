@@ -104,7 +104,7 @@ class NewRequest extends React.Component {
             send_email: this.state.send_email,
             enable_stack_rock: this.props.allow_stack_rock ? this.state.enable_stack_rock : false,
             comment: this.state.comment,
-            request_type: this.state.enable_stack_rock ? 'SSOSTACK' : 'FP',
+            request_type: (this.props.allow_stack_rock && this.state.enable_stack_rock) ? 'SSOSTACK' : 'FP',
         };
 
         if (this.state.enable_propermotion) {
