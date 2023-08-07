@@ -8,6 +8,8 @@ function getDefaultMjdMin() {
 
 class NewRequest extends React.Component {
     get_defaultstate() {
+        // localStorage.getItem('') will be null if the key doesn't exist and null != false,
+        // so != false will default to true, and != true will default to false.
         return {
             showradechelp: false,
             radeclist: localStorage.getItem('radeclist') != null ? localStorage.getItem('radeclist') : '',
@@ -16,7 +18,7 @@ class NewRequest extends React.Component {
             comment: localStorage.getItem('comment') != null ? localStorage.getItem('comment') : '',
             use_reduced: localStorage.getItem('use_reduced') == 'true',
             send_email: localStorage.getItem('send_email') != 'false',
-            enable_stack_rock: localStorage.getItem('enable_stack_rock') != 'false',
+            enable_stack_rock: localStorage.getItem('enable_stack_rock') == 'true',
             enable_propermotion: localStorage.getItem('enable_propermotion') == 'true',
             radec_epoch_year: localStorage.getItem('radec_epoch_year') != null ? localStorage.getItem('radec_epoch_year') : '',
             propermotion_ra: localStorage.getItem('propermotion_ra') != null ? localStorage.getItem('propermotion_ra') : 0.,
@@ -102,7 +104,6 @@ class NewRequest extends React.Component {
             mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
             use_reduced: this.state.use_reduced,
             send_email: this.state.send_email,
-            enable_stack_rock: this.props.allow_stack_rock ? this.state.enable_stack_rock : false,
             comment: this.state.comment,
             request_type: (this.props.allow_stack_rock && this.state.enable_stack_rock) ? 'SSOSTACK' : 'FP',
         };
