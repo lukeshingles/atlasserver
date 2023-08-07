@@ -102,7 +102,7 @@ class NewRequest extends React.Component {
             mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
             use_reduced: this.state.use_reduced,
             send_email: this.state.send_email,
-            enable_stack_rock: this.state.enable_stack_rock,
+            enable_stack_rock: this.props.allow_stack_rock ? this.state.enable_stack_rock : false,
             comment: this.state.comment,
             request_type: this.state.enable_stack_rock ? 'SSOSTACK' : 'FP',
         };
