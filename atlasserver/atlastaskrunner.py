@@ -48,7 +48,7 @@ def print_tips() -> None:
     print("to attach to the session (be careful not to stop the task runner!):")
     print("  tmux attach -t atlastaskrunner")
     print("check the log with:")
-    print("  atlastaskrunner log [-f]")
+    print("  atlastaskrunner log [tail command-line arguments]")
 
 
 def taskrunner_session_exists() -> bool:
@@ -112,11 +112,12 @@ def main() -> None:
         stop()
 
     elif len(sys.argv) >= 2 and sys.argv[1] == "log":
-        # pass through a -f for follow logs
         run_command(
             [
                 "tail",
-                *sys.argv[2:],
+                "-f",
+                "-n30",
+                *sys.argv[2:],  # pass any additional arguments to tail
                 str(ATLASSERVERPATH / "atlasserver" / "taskrunner" / "logs" / "fprunnerlog_latest.txt"),
             ]
         )
