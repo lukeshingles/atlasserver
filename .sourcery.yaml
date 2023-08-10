@@ -30,6 +30,8 @@ ignore: # A list of paths or files which Sourcery will ignore.
     - rd_cmfgen.py
     - plot_atlas_fp.py
     - migrations
+    - admin
+    - rest_framework
 
 rule_settings:
     enable:
