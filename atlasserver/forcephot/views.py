@@ -733,8 +733,8 @@ def resultplotdatajs(request, taskid):
 
             jsout.extend(
                 (
-                    "var jslcdata = new Array();\n",
-                    "var jslabels = new Array();\n",
+                    "const jslcdata = [];\n",
+                    "const jslabels = [];\n",
                 )
             )
             divid = f"plotforcedflux-task-{taskid}"
@@ -767,7 +767,7 @@ def resultplotdatajs(request, taskid):
 
             jsout.extend(
                 (
-                    "var jslclimits = {",
+                    "const jslclimits = {",
                     f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},',
                     f'"discoveryDate": {xmin},',
                     f'"today": {mjd_today},',
@@ -775,7 +775,7 @@ def resultplotdatajs(request, taskid):
                     f'jslimitsglobal["#{divid}"] = jslclimits;\n',
                     f'jslcdataglobal["#{divid}"] = jslcdata;\n',
                     f'jslabelsglobal["#{divid}"] = jslabels;\n',
-                    f'var lcdivname = "#{divid}";\n',
+                    f'const lcdivname = "#{divid}";\n',
                 )
             )
             if settings.DEBUG:
