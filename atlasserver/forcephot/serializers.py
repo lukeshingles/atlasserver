@@ -143,10 +143,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         if attrs.get("mpc_name", False):  # it's an MPC object name
             if attrs.get("ra", False) or attrs.get("dec", False):
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
-            if attrs["request_type"] == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
+            if attrs.get("request_type") == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
                 msg = "Proper motion cannot be used for SSO image stack requests."
                 raise serializers.ValidationError(msg)
-        elif attrs["request_type"] == "SSOSTACK":
+        elif attrs.get("request_type") == "SSOSTACK":
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
         elif "ra" not in attrs and "dec" not in attrs:
