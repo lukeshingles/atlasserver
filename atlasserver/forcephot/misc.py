@@ -7,6 +7,8 @@ import astrocalc.coords.unit_conversion
 import fundamentals.logs
 import julian
 import pycountry
+from django.http import Http404
+from django.utils.log import AdminEmailHandler
 
 from atlasserver import plot_atlas_fp
 
@@ -440,3 +442,14 @@ def country_region_to_name(country_code, region_code):
             region_name = subdiv.name
 
     return f"{region_name}, {country_code_to_name(country_code)}"
+
+
+class AdminEmailHandlerNo404(AdminEmailHandler):
+    """Custom Handler that ignores 404 errors instead of sending them by email."""
+
+    def handle(self, record):
+        if record.exc_info:
+            exc_type, exc_value, tb = record.exc_info
+            if isinstance(exc_value, Http404):
+                return
+        super().handle(record)

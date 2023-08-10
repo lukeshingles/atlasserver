@@ -235,6 +235,7 @@ DEFAULT_FROM_EMAIL = os.environ.get("ATLASSERVER_EMAIL_HOST_USER")
 
 GEOIP_PATH = Path(__file__).parent
 
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -271,7 +272,7 @@ LOGGING = {
         "mail_admins": {
             "level": "ERROR",
             "filters": ["require_debug_false"],
-            "class": "django.utils.log.AdminEmailHandler",
+            "class": "atlasserver.forcephot.misc.AdminEmailHandlerNo404",
             "email_backend": EMAIL_BACKEND,
             "include_html": True,
         },
