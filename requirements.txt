@@ -1,7 +1,7 @@
 astrocalc>=0.4.1
 astropy>=5.3
 black>=23.7
-bokeh==3.2.1
+bokeh==3.3.0
 Django>=4.1.10, <4.2
 django-filter>=23.2
 django-geoip2-extras==3.0
