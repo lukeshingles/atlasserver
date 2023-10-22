@@ -28,6 +28,7 @@ plugins = "mypy_django_plugin.main,numpy.typing.mypy_plugin"
 warn_unused_ignores = true
 warn_redundant_casts = true
 strict_optional = true
+extra_checks = true
 files = "**/*.py"
 disallow_incomplete_defs = false
 disallow_untyped_calls = false
