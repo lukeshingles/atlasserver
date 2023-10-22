@@ -1,4 +1,5 @@
 """Django views for the forcephot app."""
+
 import contextlib
 import datetime
 from pathlib import Path

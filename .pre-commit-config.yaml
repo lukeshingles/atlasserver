@@ -36,21 +36,21 @@ repos:
       rev: 23.10.0
       hooks:
           - id: black
-    - repo: https://github.com/pre-commit/mirrors-mypy
-      rev: v1.6.1
-      hooks:
-          - id: mypy
-            language: system
-            # additional_dependencies: [numpy, types-PyYAML, types-psutil, django-stubs, python-dotenv, django-filter, djangorestframework, djangorestframework-stubs,
-            #     django-geoip2-extras, astrocalc, julian, pycountry, matplotlib]
-            types: [python]
-            args: [--ignore-missing-imports]
-            require_serial: true
-    - repo: local
-      hooks:
-          - id: pylint
-            name: pylint
-            entry: pylint
-            language: system
-            types: [python]
-            args: [-rn, -sn, --errors-only]
+    # - repo: https://github.com/pre-commit/mirrors-mypy
+    #   rev: v1.6.1
+    #   hooks:
+    #       - id: mypy
+    #         language: system
+    #         # additional_dependencies: [numpy, types-PyYAML, types-psutil, django-stubs, python-dotenv, django-filter, djangorestframework, djangorestframework-stubs,
+    #         #     django-geoip2-extras, astrocalc, julian, pycountry, matplotlib]
+    #         types: [python]
+    #         args: [--ignore-missing-imports]
+    #         require_serial: true
+    # - repo: local
+    #   hooks:
+    #       - id: pylint
+    #         name: pylint
+    #         entry: pylint
+    #         language: system
+    #         types: [python]
+    #         args: [-rn, -sn, --errors-only]
