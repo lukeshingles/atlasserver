@@ -17,7 +17,6 @@ requires-python = ">=3.11"
 
 [tool.black]
 line-length = 120
-preview = true
 force-exclude = "plot_atlas_fp.py"
 
 [tool.mypy]
@@ -84,6 +83,7 @@ ignore = [
     "FBT",
     "FIX002",  # line contains TODO
     "INP001",
+    "ISC001",
     "PGH003",
     "PLR0911",  # too-many-return-statements
     "PLR0912",  # too-many-branches
@@ -110,6 +110,7 @@ unfixable = [
     "SIM222", # expr-or-true
     "SIM223", # expr-and-false
 ]
+extend-exclude = ["plot_atlas_fp.py"]
 line-length = 120
 target-version = "py311"
 fix = true
