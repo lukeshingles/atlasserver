@@ -83,4 +83,3 @@ _version.py
 .tmp
 .DS_Store
 node_modules
-.vscode
