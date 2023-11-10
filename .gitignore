@@ -75,6 +75,8 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+.*_cache/
+
 .tags*
 logs
 logs/*.txt
