@@ -400,8 +400,7 @@ def make_pdf_plot_worker(
             logfunc(f"{logprefix}Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
         elif logfunc:
             logfunc(
-                logprefix + "plot_atlas_fp returned an error but the PDF file "
-                f"{plotfilepath_requested.relative_to(localresultdir)} exists"
+                f"{logprefix}plot_atlas_fp returned an error but the PDF file {plotfilepath_requested.relative_to(localresultdir)} exists"
             )
         return plotfilepath_requested
 
