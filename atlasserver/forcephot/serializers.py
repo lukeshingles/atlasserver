@@ -149,6 +149,18 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         elif attrs.get("request_type") == "SSOSTACK":
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
+        elif attrs.get("request_type") == "IMGZIP":
+            if not attrs.get("parent_task_id", False):
+                msg = "IMGZIP requests must have have a parent_task_id set to an FP task."
+                raise serializers.ValidationError(msg)
+            parent_task_id = attrs["parent_task_id"]
+
+            try:
+                Task.objects.all().get(id=parent_task_id, request_type="FP")
+            except (ObjectDoesNotExist, IndexError):
+                msg = "IMGZIP requests must have have a parent_task_id set to an FP task id."
+                raise serializers.ValidationError(msg) from None
+
         elif "ra" not in attrs and "dec" not in attrs:
             msg = "Either an mpc_name or (ra, dec) must be specified."
             raise serializers.ValidationError(msg)
