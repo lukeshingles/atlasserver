@@ -8,12 +8,20 @@ authors = [
     {name = "Luke Shingles", email = "luke.shingles@gmail.com"},
 ]
 description="ATLAS Forced Photometry server"
-readme = "README.md"
 classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
-dynamic = ["version", "dependencies", "entry-points"]
+license = {text = "MIT"}
+dynamic = ["version", "dependencies"]
 requires-python = ">=3.11"
+readme = {file = "README.md", content-type='text/markdown'}
+
+[project.urls]
+Repository ="https://github.com/lukeshingles/atlasserver"
+
+[project.scripts]
+atlaswebserver = 'atlasserver.atlaswebserver:main'
+atlastaskrunner = 'atlasserver.atlastaskrunner:main'
 
 [tool.black]
 line-length = 120
@@ -54,6 +62,13 @@ django-settings-module = "atlasserver.settings"
 ignored-modules = ["astropy", "extinction"]
 
 [tool.ruff]
+extend-exclude = ["plot_atlas_fp.py"]
+line-length = 120
+target-version = "py311"
+fix = true
+show-fixes = true
+
+[tool.ruff.lint]
 select = ["ALL"]
 ignore = [
     "A001",
@@ -110,24 +125,29 @@ unfixable = [
     "SIM222", # expr-or-true
     "SIM223", # expr-and-false
 ]
-extend-exclude = ["plot_atlas_fp.py"]
-line-length = 120
-target-version = "py311"
-fix = true
-show-fixes = true
 
-[tool.ruff.flake8-annotations]
+[tool.ruff.lint.flake8-annotations]
 ignore-fully-untyped = true
 
-[tool.ruff.flake8-import-conventions.extend-aliases]
-"artistools" = "at"
-
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "plot_atlas_fp.py" = ["ALL"]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 force-single-line = true
 order-by-type = false
+
+[tool.setuptools]
+include-package-data = true
+license-files = ["LICENSE"]
+
+[tool.setuptools.packages.find]
+namespaces = false
+where = ["."]
+include = ["*", "**/matplotlibrc", "**/data"]
+exclude = ["tests", "**/dist", "**/lib", "**/build", "*.egg-info", "**/.*"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
 
 [tool.setuptools_scm]
 write_to = "_version.py"

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Command line tool to start/stop/restart the task runner in a tmux session."""
+
 import subprocess
 import sys
 from pathlib import Path

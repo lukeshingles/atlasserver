@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Task runner for forced photometry jobs that are dispatched to ATLAS sc01 over ssh."""
+
 import contextlib
 import datetime
 import multiprocessing as mp

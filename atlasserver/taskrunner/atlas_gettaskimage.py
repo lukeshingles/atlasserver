@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Input a job data file and produce the first (or brightest) image in JPEG. This script is to be run on sc01."""
+
 import os
 import sys
 from pathlib import Path

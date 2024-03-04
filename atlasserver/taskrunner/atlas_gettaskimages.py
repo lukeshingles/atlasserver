@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Input a job data file and produce a zip of FITS images. This script is to be run on sc01."""
+
 import os
 import shutil
 import sys

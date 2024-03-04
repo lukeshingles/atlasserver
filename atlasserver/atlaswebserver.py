@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Command line tool to start/stop/restart the ATLAS Apache server."""
+
 import os
 import platform
 import subprocess
