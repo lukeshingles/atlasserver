@@ -38,25 +38,24 @@ jobs:
 
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
               with:
                   fetch-depth: 0
 
             - name: Set up Python ${{ matrix.python-version }}
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v5
               with:
                   python-version: ${{ matrix.python-version }}
-                  cache: pip
 
             - name: Install dependencies
               run: |
-                  python -m pip install --upgrade pip wheel mod-wsgi-standalone
-                  python -m pip install -r requirements.txt
+                  python -m pip install --upgrade pip uv wheel
+                  uv pip install --system mod-wsgi-standalone
 
             - name: Install package
               run: |
                   cat atlasserver/settings_test.txt >> atlasserver/settings.py
-                  python -m pip install -e .
+                  uv pip install -e .
 
             - name: Install geoip databases
               run: ./update_geoipdatabase.sh

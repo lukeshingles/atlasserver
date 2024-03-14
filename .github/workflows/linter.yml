@@ -2,100 +2,44 @@
 name: Linter
 
 on:
+    merge_group:
     push:
     pull_request:
+    repository_dispatch:
+        types: [trigger_checks]
 
 jobs:
-    flake8:
-        runs-on: ubuntu-latest
+    lint:
+        name: Lint (ruff, mypy, pylint)
+        runs-on: macos-14
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
 
             - name: Set up Python
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v5
               with:
-                  cache: pip
                   python-version-file: .python-version
 
             - name: Install dependencies
               run: |
-                  python3 -m pip install --upgrade pip wheel flake8
-                  # python3 -m pip install -r requirements.txt
-
-                  # upgrade all installed packages to their latest versions
-                  # python3 -m pip list --format=freeze --outdated | cut -d '=' -f1 | xargs -n1 python3 -m pip install --upgrade
-
-            - name: Lint with flake8
-              run: |
-                  # stop the build if there are Python syntax errors or undefined names
-                  flake8 . --count --show-source --statistics
-
-    mypy:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout Code
-              uses: actions/checkout@v3
-
-            - name: Set up Python
-              uses: actions/setup-python@v4
-              with:
-                  cache: pip
-                  python-version-file: .python-version
-
-            - name: Install dependencies
-              run: |
-                  python3 -m pip install --upgrade pip wheel mypy
-                  python3 -m pip install -r requirements.txt
-            - name: Lint with mypy
-              run: |
-                  mkdir -p .mypy_cache
-                  mypy --install-types --non-interactive
-
-    pylint:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout Code
-              uses: actions/checkout@v3
-
-            - name: Set up Python
-              uses: actions/setup-python@v4
-              with:
-                  cache: pip
-                  python-version-file: .python-version
-
-            - name: Install dependencies
-              run: |
-                  python3 -m pip install --upgrade pip wheel pylint
-                  python3 -m pip install -r requirements.txt
-                  cat atlasserver/settings_test.txt >> atlasserver/settings.py
-                  python -m pip install -e .
-
-            - name: Lint with pylint
-              run: pylint atlasserver
-
-    ruff:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v3
-
-            - name: Set up Python
-              uses: actions/setup-python@v4
-              with:
-                  cache: pip
-                  python-version-file: .python-version
-
-            - name: Install dependencies
-              run: |
-                python -m pip install --upgrade pip
-                pip install ruff
+                  python3 -m pip install --upgrade pip uv
+                  uv pip install --system --upgrade pylint mypy ruff
+                  uv pip install --system -r requirements.txt
 
             - name: Run Ruff
               run: ruff check --output-format=github .
 
             - name: Run Ruff Format
-              run: ruff format --check .
+              run: ruff format --diff .
 
+            - name: Run mypy
+              run: |
+                  mypy --install-types --non-interactive
+
+            - name: Run pylint
+              run: |
+                  pylint artistools
 
     superlinter:
         name: Super linter
@@ -103,16 +47,15 @@ jobs:
 
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
               with:
                   # Full git history is needed to get a proper list of changed files within `super-linter`
                   fetch-depth: 0
 
             - name: Set up Python
-              uses: actions/setup-python@v4
+              uses: actions/setup-python@v5
               with:
-                  cache: pip
-                  python-version: 3.10.6
+                  python-version-file: .python-version
 
             - name: Create .env
               run: |

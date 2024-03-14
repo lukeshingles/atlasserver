@@ -8,7 +8,6 @@ django-geoip2-extras==3.0
 django-stubs[compatible-mypy]>=4.2
 djangorestframework>=3.14
 djangorestframework-stubs>=3.14.2
-flake8>=6.0.0
 fundamentals>=2.4
 julian>=0.14
 Markdown>=3.2.2
@@ -23,5 +22,6 @@ pycountry>=22.3.5
 pylint>=2.17
 pylint-django>=2.5.3
 python-dotenv>=1.0
+ruff>=0.3.2
 types-PyYAML>=6.0.12
 types-requests>=2.31
