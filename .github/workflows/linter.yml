@@ -24,7 +24,7 @@ jobs:
             - name: Install dependencies
               run: |
                   python3 -m pip install --upgrade pip uv
-                  uv pip install --system mypy
+                  uv pip install --system --upgrade pylint mypy ruff
                   uv pip install --system -e .
 
             - name: Run Ruff
@@ -39,7 +39,7 @@ jobs:
 
             - name: Run pylint
               run: |
-                  pylint artistools
+                  pylint atlasserver
 
     superlinter:
         name: Super linter
