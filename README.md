@@ -29,9 +29,9 @@ Then download the geoip database files with your MaxMind API key (stored in .env
 ./update_geoipdatabase.sh
 ```
 
-A MySQL database server and tmux are required. These can be installed with homebrew:
+A MySQL or MariaDB server and tmux are required. These can be installed with homebrew on macOS:
 ```sh
-brew install mysql tmux
+brew install mariadb tmux
 ```
 
 To initialise a new database, run:
@@ -59,5 +59,5 @@ atlastaskrunner restart
 ```
 
 ## License
-Copyright (c) 2020-2023 Luke Shingles
+Copyright (c) 2020-2024 Luke Shingles
 <br/>Distributed under the MIT license. See [LICENSE](https://github.com/lukeshingles/atlasserver/blob/main/LICENSE) for more information.
