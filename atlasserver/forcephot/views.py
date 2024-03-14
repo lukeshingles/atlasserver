@@ -634,17 +634,17 @@ def statsshortterm(request):
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
     if sevendaytasks_finished.count() > 0:
-        dictparams["sevendayavgwaittime"] = "{:.1f}s".format(
-            np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished]))
-        )
+        dictparams[
+            "sevendayavgwaittime"
+        ] = f"{np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])):.1f}s"
 
         sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
         sevenday_mean_runtime = np.nanmean(sevenday_runtimes)
         dictparams["sevendayavgruntime"] = f"{sevenday_mean_runtime:.1f}s"
         num_job_processors = 8
-        dictparams["sevendayloadpercent"] = "{:.1f}%".format(
-            100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors
-        )
+        dictparams[
+            "sevendayloadpercent"
+        ] = f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
     else:
         dictparams |= {
             "sevendayavgwaittime": "-",

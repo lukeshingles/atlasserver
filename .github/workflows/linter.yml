@@ -28,7 +28,7 @@ jobs:
                   uv pip install --system -e .
 
             - name: Run Ruff
-              run: ruff check --output-format=github .
+              run: ruff check --output-format=github --exit-non-zero-on-fix .
 
             - name: Run Ruff Format
               run: ruff format --diff .
