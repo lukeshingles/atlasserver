@@ -24,6 +24,7 @@ jobs:
             - name: Install dependencies
               run: |
                   python3 -m pip install --upgrade pip uv
+                  uv pip install --system mypy
                   uv pip install --system -e .
 
             - name: Run Ruff
@@ -70,6 +71,7 @@ jobs:
                   PYTHON_MYPY_CONFIG_FILE: pyproject.toml
                   VALIDATE_PYTHON_BLACK: false
                   VALIDATE_PYTHON_MYPY: false
+                  VALUDATE_PYTHON_FLAKE8: false
                   VALIDATE_BASH: false
                   VALIDATE_CSS: false
                   VALIDATE_HTML: false # can't understand Django templates
