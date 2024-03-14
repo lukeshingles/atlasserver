@@ -71,7 +71,7 @@ jobs:
                   PYTHON_MYPY_CONFIG_FILE: pyproject.toml
                   VALIDATE_PYTHON_BLACK: false
                   VALIDATE_PYTHON_MYPY: false
-                  VALUDATE_PYTHON_FLAKE8: false
+                  VALIDATE_PYTHON_FLAKE8: false
                   VALIDATE_BASH: false
                   VALIDATE_CSS: false
                   VALIDATE_HTML: false # can't understand Django templates
