@@ -11,7 +11,7 @@ on:
 jobs:
     lint:
         name: Lint (ruff, mypy, pylint)
-        runs-on: macos-14
+        runs-on: ubuntu-latest
         steps:
             - name: Checkout Code
               uses: actions/checkout@v4
@@ -24,8 +24,7 @@ jobs:
             - name: Install dependencies
               run: |
                   python3 -m pip install --upgrade pip uv
-                  uv pip install --system --upgrade pylint mypy ruff
-                  uv pip install --system -r requirements.txt
+                  uv pip install --system -e .
 
             - name: Run Ruff
               run: ruff check --output-format=github .
