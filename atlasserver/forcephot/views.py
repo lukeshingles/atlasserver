@@ -31,6 +31,7 @@ from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
+from django.views.decorators.csrf import csrf_exempt
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from rest_framework import permissions
@@ -334,6 +335,7 @@ def deletetask(request, pk):
     return redirect(redirurl, request=request)
 
 
+@csrf_exempt
 def requestimages(request, pk):
     if not request.user.is_authenticated:
         raise PermissionDenied
