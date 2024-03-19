@@ -31,7 +31,6 @@ from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
-from django.views.decorators.csrf import csrf_exempt
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from rest_framework import permissions
@@ -40,6 +39,7 @@ from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.utils.urls import replace_query_param
+from rest_framework.views import APIView
 
 from atlasserver.forcephot.filters import TaskFilter
 from atlasserver.forcephot.forms import RegistrationForm
@@ -335,46 +335,50 @@ def deletetask(request, pk):
     return redirect(redirurl, request=request)
 
 
-@csrf_exempt
-def requestimages(request, pk):
-    if not request.user.is_authenticated:
-        raise PermissionDenied
+class RequestImages(APIView):
+    # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+    permission_classes = [ForcePhotPermission]
 
-    try:
-        parent_task = Task.objects.get(id=pk)
-
-        if parent_task.user.id != request.user.id and not request.user.is_staff:
+    def get(self, request, pk):
+        if not request.user.is_authenticated:
+            print(request.user)
             raise PermissionDenied
 
-    except ObjectDoesNotExist:
-        return HttpResponseNotFound("Page not found")
+        try:
+            parent_task = Task.objects.get(id=pk)
 
-    redirurl = reverse("task-list")
+            if parent_task.user.id != request.user.id and not request.user.is_staff:
+                raise PermissionDenied
 
-    if not parent_task.error_msg and parent_task.finishtimestamp:
-        data = model_to_dict(parent_task, exclude=["id"])
-        data["parent_task_id"] = parent_task.id
-        data["request_type"] = Task.RequestType.IMGZIP
-        data["user"] = request.user
-        data["timestamp"] = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
-        data["starttimestamp"] = None
-        data["finishtimestamp"] = None
+        except ObjectDoesNotExist:
+            return HttpResponseNotFound("Page not found")
 
-        # we store the region but not the IP address itself for privacy reasons
-        with contextlib.suppress(KeyError):
-            data["country_code"] = request.geo_data["country_code"]
-            data["region"] = request.geo_data["region"]
-            # data['city'] = request.geo_data['city']
-        data["from_api"] = False
-        data["send_email"] = False
+        redirurl = reverse("task-list")
 
-        newtask = Task(**data)
-        newtask.save()
-        calculate_queue_positions()
+        if not parent_task.error_msg and parent_task.finishtimestamp:
+            data = model_to_dict(parent_task, exclude=["id"])
+            data["parent_task_id"] = parent_task.id
+            data["request_type"] = Task.RequestType.IMGZIP
+            data["user"] = request.user
+            data["timestamp"] = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
+            data["starttimestamp"] = None
+            data["finishtimestamp"] = None
 
-        redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
+            # we store the region but not the IP address itself for privacy reasons
+            with contextlib.suppress(KeyError):
+                data["country_code"] = request.geo_data["country_code"]
+                data["region"] = request.geo_data["region"]
+                # data['city'] = request.geo_data['city']
+            data["from_api"] = False
+            data["send_email"] = False
 
-    return redirect(redirurl, request=request)
+            newtask = Task(**data)
+            newtask.save()
+            calculate_queue_positions()
+
+            redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
+
+        return redirect(redirurl, request=request)
 
 
 @cache_page(60 * 60 * 24, cache="usagestats")
