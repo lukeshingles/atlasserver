@@ -63,7 +63,7 @@ MIDDLEWARE = [
     "atlasserver.forcephot.countryrestriction.CountryRestrictionMiddleware",
 ]
 
-filecacheroot = Path("/lvm/hdd1/files/atlasforced/django_cache")
+filecacheroot = Path("/files/atlasforced/django_cache")
 if not filecacheroot.is_dir():
     filecacheroot = Path("/tmp/atlasforced/django_cache")
 
@@ -183,7 +183,13 @@ USE_X_FORWARDED_PORT = False
 if platform.system() != "Darwin":
     SECURE_PROXY_SSL_HEADER = ("SERVER_SOFTWARE", "Apache")
 
-CSRF_TRUSTED_ORIGINS = ["https://*.qub.ac.uk", "https://fallingstar-data.com", "http://localhost", "http://127.0.0.1"]
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.qub.ac.uk",
+    "https://fallingstar-data.com",
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://deckard:8086",
+]
 
 # When set to True, if the request URL does not match any of the patterns in the URLconf and it doesn't end in a slash,
 # an HTTP redirect is issued to the same URL with a slash appended. Note that the redirect may cause any data submitted
