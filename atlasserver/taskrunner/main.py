@@ -336,10 +336,13 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
         return None, None
 
     if task.request_type == "FP":
-        dfforcedphot = pd.read_csv(localresultfile, delim_whitespace=True, escapechar="#", skipinitialspace=True)
+        try:
+            dfforcedphot = pd.read_csv(localresultfile, delim_whitespace=True, escapechar="#", skipinitialspace=True)
 
-        if dfforcedphot.empty:
-            # file is just a header row without data
+            if dfforcedphot.empty:
+                # file is just a header row without data
+                return localresultfile, "No data returned"
+        except pd.errors.EmptyDataError:
             return localresultfile, "No data returned"
 
         # if not task.from_api:
