@@ -61,6 +61,9 @@ django-settings-module = "atlasserver.settings"
 [tool.pylint.typecheck]
 ignored-modules = ["astropy", "extinction"]
 
+[tool.pylint.MASTER]
+ignore-paths = "atlasserver/plot_atlas_fp.py"
+
 [tool.ruff]
 extend-exclude = ["plot_atlas_fp.py"]
 line-length = 120
