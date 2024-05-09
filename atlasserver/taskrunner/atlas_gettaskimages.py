@@ -89,7 +89,7 @@ def main() -> None:
     commands = []
     # wpdatelines = ['#obs MJD obsdate wallpapersource wallpaperdate wallpaperdescription\n'] if not reduced else None
 
-    for index, row in dfforcedphot[:500].iterrows():
+    for index, row in dfforcedphot[:1000].iterrows():
         # mjd = row["#MJD"]
         obs = row["Obs"]  # looks like '01a59309o0235c'
         imgfolder = "red" if reduced else "diff"  # difference or reduced image

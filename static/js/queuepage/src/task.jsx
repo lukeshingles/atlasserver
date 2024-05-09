@@ -176,7 +176,7 @@ class Task extends React.Component {
 
         if (task.request_type == 'IMGZIP') {
             const imagetype = task.use_reduced ? 'reduced' : 'difference';
-            taskbox.push(<p key="imgrequestnote">Up to the first 500 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
+            taskbox.push(<p key="imgrequestnote">Up to the first 1000 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
         }
 
         if (task.user_id != user_id) {
@@ -243,7 +243,7 @@ class Task extends React.Component {
                         taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => { this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images requested</a>);
                     }
                 } else if (task.request_type == 'FP' && user_id == task.user_id) {
-                    taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 500 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
+                    taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
                 }
             }
         } else if (task.starttimestamp != null) {
