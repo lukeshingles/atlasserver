@@ -67,7 +67,7 @@ ignore-paths = "atlasserver/plot_atlas_fp.py"
 [tool.ruff]
 extend-exclude = ["plot_atlas_fp.py"]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 fix = true
 show-fixes = true
 
