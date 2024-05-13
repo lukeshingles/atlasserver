@@ -13,7 +13,7 @@ classifiers = [
 ]
 license = {text = "MIT"}
 dynamic = ["version", "dependencies"]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = {file = "README.md", content-type='text/markdown'}
 
 [project.urls]
@@ -28,7 +28,7 @@ line-length = 120
 force-exclude = "plot_atlas_fp.py"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 exclude = "(build)|(tests)|(migrations)|(static)|plot_atlas_fp.py"
 ignore_missing_imports = true
 plugins = "mypy_django_plugin.main,numpy.typing.mypy_plugin"
