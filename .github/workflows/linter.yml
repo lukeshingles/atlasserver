@@ -70,14 +70,15 @@ jobs:
                   PYTHON_BLACK_CONFIG_FILE: pyproject.toml
                   PYTHON_MYPY_CONFIG_FILE: pyproject.toml
                   VALIDATE_PYTHON_BLACK: false
-                  VALIDATE_PYTHON_MYPY: false
                   VALIDATE_PYTHON_FLAKE8: false
+                  VALIDATE_PYTHON_ISORT: false
+                  VALIDATE_PYTHON_MYPY: false
+                  VALIDATE_PYTHON_PYLINT: false
                   VALIDATE_BASH: false
                   VALIDATE_CSS: false
                   VALIDATE_HTML: false # can't understand Django templates
                   VALIDATE_GITLEAKS: false
                   VALIDATE_JSCPD: false
-                  VALIDATE_PYTHON_ISORT: false
                   YAML_ERROR_ON_WARNING: false
                   DEFAULT_BRANCH: main
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
