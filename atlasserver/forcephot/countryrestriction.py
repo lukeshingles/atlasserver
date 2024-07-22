@@ -9,14 +9,13 @@ from django.utils.deprecation import MiddlewareMixin
 class CountryRestrictionMiddleware(MiddlewareMixin):
     """Restrict access to users that are not in an allowed country."""
 
-    log_message = ""
-
     def __init__(self, *args, **kwargs):
         if not isinstance(MiddlewareMixin, object):
             super().__init__(*args, **kwargs)
 
     def process_request(self, request):
         block_message = None
+        log_message = ""
 
         country_code = request.geo_data["country_code"]
         if country_code in ["BY", "RU"]:
