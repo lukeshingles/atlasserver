@@ -15,6 +15,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
 
     def process_request(self, request):
         block_message = None
+        log_message = ""
 
         country_code = request.geo_data["country_code"]
         if country_code in ["BY", "RU"]:
