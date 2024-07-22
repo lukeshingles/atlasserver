@@ -10,7 +10,7 @@ class CountryRestrictionMiddleware(MiddlewareMixin):
     """Restrict access to users that are not in an allowed country."""
 
     def __init__(self, *args, **kwargs):
-        if MiddlewareMixin != object:
+        if not isinstance(MiddlewareMixin, object):
             super().__init__(*args, **kwargs)
 
     def process_request(self, request):

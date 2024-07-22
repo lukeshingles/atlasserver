@@ -45,7 +45,7 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
 
 def print_tips() -> None:
     """Print tips for using the task runner."""
-    print("")
+    print()
     print("to attach to the session (be careful not to stop the task runner!):")
     print("  tmux attach -t atlastaskrunner")
     print("check the log with:")
