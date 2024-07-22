@@ -435,7 +435,9 @@ def statsusagechart(request):
 
     def get_days_ago_counts(tasks) -> list[float]:
         taskcounts = (
-            tasks.annotate(queueday=Trunc("timestamp", "day")).values("queueday").annotate(taskcount=Count("id"))
+            tasks.annotate(queueday=Trunc("timestamp", "day"))  # type: ignore[arg-type]
+            .values("queueday")
+            .annotate(taskcount=Count("id"))
         )
         dictcounts = {(today - task["queueday"]).total_seconds() // 86400: task["taskcount"] for task in taskcounts}
 
