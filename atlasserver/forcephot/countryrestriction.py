@@ -9,6 +9,8 @@ from django.utils.deprecation import MiddlewareMixin
 class CountryRestrictionMiddleware(MiddlewareMixin):
     """Restrict access to users that are not in an allowed country."""
 
+    log_message = ""
+
     def __init__(self, *args, **kwargs):
         if not isinstance(MiddlewareMixin, object):
             super().__init__(*args, **kwargs)
