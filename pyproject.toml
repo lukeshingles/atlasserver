@@ -64,6 +64,12 @@ ignored-modules = ["astropy", "extinction"]
 [tool.pylint.MASTER]
 ignore-paths = "atlasserver/plot_atlas_fp.py"
 
+[tool.pyright]
+exclude=['**/node_modules','**/__pycache__','**/.*', 'build', 'dist', 'target', '**/plot_atlas_fp.py']
+
+[tool.typos]
+files.extend-exclude = ["**/plot_atlas_fp.py"]
+
 [tool.ruff]
 extend-exclude = ["plot_atlas_fp.py"]
 line-length = 120
