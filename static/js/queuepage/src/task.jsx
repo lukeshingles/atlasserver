@@ -34,6 +34,7 @@ class Task extends React.Component {
         this.state.updateTimeElapsed = this.updateTimeElapsed.bind(this);
         this.state.interval = null;
         this.state.timeelapsed = -1;
+        this.state.httperror = '';
     }
 
     deleteTask() {
@@ -68,8 +69,12 @@ class Task extends React.Component {
                     'Content-Type': 'application/json',
                 },
             })
+            .catch(error => {
+                console.log('requestImages HTTP request failed', error);
+                this.setState({ 'httperror': 'HTTP request failed.' });
+            })
             .then((response) => {
-                if (response.redirected) {
+                if (response.status == 200 && response.redirected) {
                     // console.log(response)
                     const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
                     newtaskids.push(newimgtask_id);
@@ -78,6 +83,11 @@ class Task extends React.Component {
                     new_page_url.searchParams.delete('newids');
                     window.history.pushState({}, document.title, new_page_url);
                     this.props.fetchData(true);
+                } else {
+                    response.json().then(data => {
+                        console.log('requestImages: errors returned', data);
+                        this.setState({ 'httperror': 'ERROR: ' + data["error"] });
+                    });
                 }
             });
     }
@@ -128,6 +138,9 @@ class Task extends React.Component {
     }
 
     shouldComponentUpdate(nextProps, nextState) {
+        if (nextState.httperror != this.state.httperror) {
+            return true;
+        }
         if (nextProps.taskdata.starttimestamp != null && nextProps.taskdata.finishtimestamp == null) {
             return true;
         }
@@ -251,6 +264,11 @@ class Task extends React.Component {
         } else {
             taskbox.push(<div key="status" style={{ fontStyle: 'italic', marginTop: '1em' }}>Waiting ({task.queuepos} tasks ahead of this one)</div>);
         }
+
+        if (this.state.httperror != '') {
+            taskbox.push(<p key="httperror" style={{ 'color': 'red' }}>{this.state.httperror}</p>);
+        }
+
 
         if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP' && !this.props.hidePlot) {
             taskbox.push(<TaskPlot key='plot' taskid={task.id} taskurl={task.url} />);

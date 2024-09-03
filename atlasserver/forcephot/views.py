@@ -19,6 +19,8 @@ from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
+
+# from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
@@ -52,12 +54,11 @@ from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
-# from django.contrib.auth.models import User
-# from django.core.exceptions import ValidationError
 # from django.http import HttpResponse
 # from django.http.response import HttpResponseRedirect
 # from django.shortcuts import get_object_or_404
 # from rest_framework.utils.urls import remove_query_param
+maximgziptasks = 5
 
 
 def calculate_queue_positions() -> None:
@@ -212,12 +213,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Create new task(s)."""
         if self.request.user and self.request.user.is_authenticated:
-            maximgziptasks = 10
             usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
             if usertaskcount > maximgziptasks:
                 msg = f"You have too many IMGZIP tasks ({usertaskcount} > {maximgziptasks}). Issue delete requests to remove some."
                 raise ValidationError(msg)
-            # serializer.save(user=self.request.user)
 
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
@@ -344,7 +343,6 @@ class RequestImages(APIView):
 
     def get(self, request, pk):
         if not request.user.is_authenticated:
-            print(request.user)
             raise PermissionDenied
 
         try:
@@ -357,6 +355,12 @@ class RequestImages(APIView):
             return HttpResponseNotFound("Page not found")
 
         redirurl = reverse("task-list")
+
+        if self.request.user and self.request.user.is_authenticated:
+            usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
+            if usertaskcount > maximgziptasks:
+                msg = f"You have too many IMGZIP tasks ({usertaskcount} > {maximgziptasks}). Delete some before making new requests."
+                return JsonResponse({"error": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
             data = model_to_dict(parent_task, exclude=["id"])
