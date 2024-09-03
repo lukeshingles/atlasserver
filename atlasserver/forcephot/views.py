@@ -213,9 +213,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Create new task(s)."""
         if self.request.user and self.request.user.is_authenticated:
-            usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
-            if usertaskcount >= maximgziptasks:
-                msg = f"You have too many IMGZIP tasks ({usertaskcount} >= {maximgziptasks}). Issue delete requests to remove some."
+            userimziptaskcount = Task.objects.filter(
+                user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
+            ).count()
+            if userimziptaskcount >= maximgziptasks:
+                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {maximgziptasks}). Issue delete requests to remove some."
                 raise ValidationError(msg)
 
         extra_fields: dict[str, Any] = {
@@ -357,9 +359,11 @@ class RequestImages(APIView):
         redirurl = reverse("task-list")
 
         if self.request.user and self.request.user.is_authenticated:
-            usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
-            if usertaskcount >= maximgziptasks:
-                msg = f"You have too many IMGZIP tasks ({usertaskcount} >= {maximgziptasks}). Delete some before making new requests."
+            userimziptaskcount = Task.objects.filter(
+                user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
+            ).count()
+            if userimziptaskcount >= maximgziptasks:
+                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {maximgziptasks}). Delete some before making new requests."
                 return JsonResponse({"error": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
