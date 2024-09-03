@@ -215,7 +215,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         if self.request.user and self.request.user.is_authenticated:
             usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
             if usertaskcount >= maximgziptasks:
-                msg = f"You have too many IMGZIP tasks ({usertaskcount} > {maximgziptasks}). Issue delete requests to remove some."
+                msg = f"You have too many IMGZIP tasks ({usertaskcount} >= {maximgziptasks}). Issue delete requests to remove some."
                 raise ValidationError(msg)
 
         extra_fields: dict[str, Any] = {
@@ -359,7 +359,7 @@ class RequestImages(APIView):
         if self.request.user and self.request.user.is_authenticated:
             usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
             if usertaskcount >= maximgziptasks:
-                msg = f"You have too many IMGZIP tasks ({usertaskcount} > {maximgziptasks}). Delete some before making new requests."
+                msg = f"You have too many IMGZIP tasks ({usertaskcount} >= {maximgziptasks}). Delete some before making new requests."
                 return JsonResponse({"error": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
