@@ -18,7 +18,6 @@ from django.contrib.auth import login
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
-from django.core.exceptions import ValidationError
 
 # from django.contrib.auth.models import User
 from django.db import transaction
@@ -212,14 +211,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Create new task(s)."""
-        if self.request.user and self.request.user.is_authenticated:
-            userimziptaskcount = Task.objects.filter(
-                user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
-            ).count()
-            if userimziptaskcount >= maximgziptasks:
-                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {maximgziptasks}). Issue delete requests to remove some."
-                raise ValidationError(msg)
-
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
