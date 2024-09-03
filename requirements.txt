@@ -1,26 +1,26 @@
 astrocalc>=0.4.2
 astropy>=6.1.0
-bokeh==3.4.1
-Django>=5.0.6
-django-filter>=24.2
+bokeh==3.5.2
+Django>=5.1
+django-filter>=24.3
 django-geoip2-extras>=4.1
-django-stubs[compatible-mypy]>=5.0.0
-djangorestframework>=3.15.1
+django-stubs[compatible-mypy]>=5.0.4
+djangorestframework>=3.15.2
 djangorestframework-stubs>=3.15.0
 fundamentals>=2.6.4
 julian>=0.14
 Markdown>=3.6
-matplotlib>=3.8.4
+matplotlib>=3.9.2
 # mod-wsgi>=4.9.3  # for atlspsweb or macOS + apache
 # mod-wsgi-standalone>=4.7.1  # for GitHub Actions
 #mod-wsgi-httpd>=2.4.54.1  # for atlspsweb
 mysqlclient>=2.2.4
 pandas>=2.2.2
-polars>=1.2.1
+polars>=1.6.0
 pycountry>=23.12.11
 pylint>=3.2.6
 pylint-django>=2.5.5
 python-dotenv>=1.0.1
-ruff>=0.5.3
+ruff>=0.6.3
 types-PyYAML>=6.0.12.20240311
 types-requests>=2.31.0.20240406
