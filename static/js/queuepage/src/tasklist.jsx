@@ -222,7 +222,7 @@ class TaskPage extends React.Component {
           console.log('Fetch got a redirection to ', response.url);
         } else {
           if (response.status != 200) {
-            console.log("Fetch recieved HTTP status ", response.status);
+            console.log("Fetch received HTTP status ", response.status);
           }
           if (response.status == 404) {
             window.history.pushState({}, document.title, api_url_base);

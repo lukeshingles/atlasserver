@@ -206,7 +206,7 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
     elif task.request_type == "SSOSTACK":
         remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
         atlascommand += f"/atlas/bin/stack_rock.sh '{task.mpc_name}'"
-        atlascommand += (  # stack_rock.sh doesn't suppport float mjds
+        atlascommand += (  # stack_rock.sh doesn't support float mjds
             f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
         )
         atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
@@ -472,7 +472,7 @@ def do_task(task, slotid: int) -> None:
         logfunc(f"Task ran for {runtask_duration:.1f} seconds")
 
         if error_msg:
-            # an error occured and the task should not be retried (e.g. invalid
+            # an error occurred and the task should not be retried (e.g. invalid
             # minor planet center object name or no data returned)
             logfunc(f"Error_msg: {error_msg}")
 
@@ -509,7 +509,7 @@ def remove_old_tasks(
     from_api: bool | None = None,
     logfunc=log_general,
 ) -> None:
-    """Remove old tasks matching given critera from the database and optionally delete their result files (if harddeleterecord)."""
+    """Remove old tasks matching given criteria from the database and optionally delete their result files (if harddeleterecord)."""
     now = datetime.datetime.now(datetime.UTC)
     filteropts = {"finishtimestamp__isnull": False, "finishtimestamp__lt": now - datetime.timedelta(days=days_ago)}
 
