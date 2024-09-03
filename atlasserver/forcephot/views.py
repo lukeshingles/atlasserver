@@ -18,6 +18,7 @@ from django.contrib.auth import login
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
@@ -210,12 +211,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Create new task(s)."""
-        # if self.request.user and self.request.user.is_authenticated:
-        #     usertasks = Task.objects.filter(user_id=self.request.user, finished=False)
-        #     usertaskcount = usertasks.count()
-        #     if (usertaskcount > 10):
-        #         raise ValidationError(f'You have too many queued tasks ({usertaskcount}).')
-        #     serializer.save(user=self.request.user)
+        if self.request.user and self.request.user.is_authenticated:
+            maximgziptasks = 10
+            usertaskcount = Task.objects.filter(user_id=self.request.user.pk, request_type="IMGZIP").count()
+            if usertaskcount > maximgziptasks:
+                msg = f"You have too many IMGZIP tasks ({usertaskcount} > {maximgziptasks}). Issue delete requests to remove some."
+                raise ValidationError(msg)
+            serializer.save(user=self.request.user)
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
@@ -435,9 +437,7 @@ def statsusagechart(request):
 
     def get_days_ago_counts(tasks) -> list[float]:
         taskcounts = (
-            tasks.annotate(queueday=Trunc("timestamp", "day"))  # type: ignore[arg-type]
-            .values("queueday")
-            .annotate(taskcount=Count("id"))
+            tasks.annotate(queueday=Trunc("timestamp", "day")).values("queueday").annotate(taskcount=Count("id"))
         )
         dictcounts = {(today - task["queueday"]).total_seconds() // 86400: task["taskcount"] for task in taskcounts}
 
