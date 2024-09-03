@@ -217,7 +217,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             if usertaskcount > maximgziptasks:
                 msg = f"You have too many IMGZIP tasks ({usertaskcount} > {maximgziptasks}). Issue delete requests to remove some."
                 raise ValidationError(msg)
-            serializer.save(user=self.request.user)
+            # serializer.save(user=self.request.user)
+
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
