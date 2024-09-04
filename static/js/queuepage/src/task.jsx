@@ -76,6 +76,7 @@ class Task extends React.Component {
             .then((response) => {
                 if (response.status == 200 && response.redirected) {
                     // console.log(response)
+                    this.setState({ 'httperror': '' });
                     const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
                     newtaskids.push(newimgtask_id);
                     console.log('requestimages created task', newimgtask_id);
