@@ -18,8 +18,6 @@ jobs:
 
             - name: Set up Python
               uses: actions/setup-python@v5
-              with:
-                  python-version-file: .python-version
 
             - name: Install dependencies
               run: |
@@ -54,8 +52,6 @@ jobs:
 
             - name: Set up Python
               uses: actions/setup-python@v5
-              with:
-                  python-version-file: .python-version
 
             - name: Create .env
               run: |
