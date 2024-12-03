@@ -92,5 +92,5 @@ with requests.Session() as s:
     # cluttered (and reduce server storage usage) by sending a delete operation
     # s.delete(task_url, headers=headers).json()
 
-dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), sep=r"\s+")
+dfresult = pd.read_csv(StringIO(textdata), sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
 print(dfresult)
