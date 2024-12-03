@@ -1,6 +1,6 @@
 astrocalc>=0.4.2
 astropy>=6.1.0
-bokeh==3.4.1
+bokeh==3.6.1
 Django>=5.0.6
 django-filter>=24.2
 django-geoip2-extras>=4.1
@@ -11,8 +11,7 @@ fundamentals>=2.6.4
 julian>=0.14
 Markdown>=3.6
 matplotlib>=3.8.4
-# mod-wsgi>=4.9.3  # for atlspsweb or macOS + apache
-# mod-wsgi-standalone>=4.7.1  # for GitHub Actions
+#mod-wsgi-standalone>=4.7.1  # for GitHub Actions or macOS
 #mod-wsgi-httpd>=2.4.54.1  # for atlspsweb
 mysqlclient>=2.2.4
 pandas>=2.2.2
