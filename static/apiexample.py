@@ -92,5 +92,5 @@ with requests.Session() as s:
     # cluttered (and reduce server storage usage) by sending a delete operation
     # s.delete(task_url, headers=headers).json()
 
-dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), delim_whitespace=True)
+dfresult = pd.read_csv(StringIO(textdata.replace("###", "")), sep=r"\s+")
 print(dfresult)
