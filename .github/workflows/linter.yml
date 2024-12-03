@@ -22,14 +22,21 @@ jobs:
             - name: Install dependencies
               run: |
                   python3 -m pip install --upgrade pip uv
-                  uv pip install --system --upgrade pylint mypy ruff
+                  uv pip install --system --upgrade pylint mypy
                   uv pip install --system -e .
 
             - name: Run Ruff
-              run: ruff check --output-format=github --exit-non-zero-on-fix .
+              if: always()
+              uses: astral-sh/ruff-action@v1
+              with:
+                version: 0.8.1
 
             - name: Run Ruff Format
-              run: ruff format --diff .
+              if: always()
+              uses: astral-sh/ruff-action@v1
+              with:
+                args: "format --check"
+                version: 0.8.1
 
             - name: Run mypy
               run: |
