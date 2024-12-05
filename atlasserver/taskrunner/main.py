@@ -50,7 +50,7 @@ def mjdnow() -> float:
 
 def localresultfileprefix(id: int) -> str:
     """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / f"job{int(id):05d}"))
+    return str(Path(settings.RESULTS_DIR / f"job{id:05d}"))
 
 
 def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
