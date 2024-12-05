@@ -1,23 +1,24 @@
 [build-system]
-requires = ["psutil>=5.9.0", "setuptools>=45", "setuptools_scm[toml]>=6.3", "wheel"]
+requires = [
+    "psutil>=5.9.0",
+    "setuptools>=45",
+    "setuptools_scm[toml]>=6.3",
+    "wheel",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "atlasserver"
-authors = [
-    {name = "Luke Shingles", email = "luke.shingles@gmail.com"},
-]
-description="ATLAS Forced Photometry server"
-classifiers = [
-    "License :: OSI Approved :: MIT License",
-]
-license = {text = "MIT"}
+authors = [{ name = "Luke Shingles", email = "luke.shingles@gmail.com" }]
+description = "ATLAS Forced Photometry server"
+classifiers = ["License :: OSI Approved :: MIT License"]
+license = { text = "MIT" }
 dynamic = ["version", "dependencies"]
-requires-python = ">=3.12"
-readme = {file = "README.md", content-type='text/markdown'}
+requires-python = ">=3.13"
+readme = { file = "README.md", content-type = 'text/markdown' }
 
 [project.urls]
-Repository ="https://github.com/lukeshingles/atlasserver"
+Repository = "https://github.com/lukeshingles/atlasserver"
 
 [project.scripts]
 atlaswebserver = 'atlasserver.atlaswebserver:main'
@@ -28,7 +29,7 @@ line-length = 120
 force-exclude = "plot_atlas_fp.py"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 exclude = "(build)|(tests)|(migrations)|(static)|plot_atlas_fp.py"
 ignore_missing_imports = true
 plugins = "mypy_django_plugin.main,numpy.typing.mypy_plugin"
@@ -48,8 +49,6 @@ disallow_subclassing_any = false
 
 [tool.django-stubs]
 django_settings_module = "atlasserver.settings"
-
-[mypy.plugins.django]
 ignore_missing_model_attributes = true
 
 [tool.pylint]
@@ -65,7 +64,15 @@ ignored-modules = ["astropy", "extinction"]
 ignore-paths = "atlasserver/plot_atlas_fp.py"
 
 [tool.pyright]
-exclude=['**/node_modules','**/__pycache__','**/.*', 'build', 'dist', 'target', '**/plot_atlas_fp.py']
+exclude = [
+    '**/node_modules',
+    '**/__pycache__',
+    '**/.*',
+    'build',
+    'dist',
+    'target',
+    '**/plot_atlas_fp.py',
+]
 
 [tool.typos]
 files.extend-exclude = ["**/plot_atlas_fp.py"]
@@ -73,7 +80,7 @@ files.extend-exclude = ["**/plot_atlas_fp.py"]
 [tool.ruff]
 extend-exclude = ["plot_atlas_fp.py"]
 line-length = 120
-target-version = "py312"
+target-version = "py313"
 fix = true
 show-fixes = true
 
@@ -83,54 +90,54 @@ ignore = [
     "A001",
     "A002",
     "A003",
-    "ARG001", # ignored because variables in df.eval() are not detected
+    "ARG001",  # ignored because variables in df.eval() are not detected
     "ARG002",
     "ANN",
     "BLE001",
-    "C901",  # complex-structure
+    "C901",    # complex-structure
     "COM812",  # missing-trailing-comma
-    "D100",  # undocumented-public-module
-    "D101",  # undocumented-public-class
-    "D102",  # undocumented-public-method
-    "D103",  # undocumented-public-function
-    "D104",  # undocumented-public-package
+    "D100",    # undocumented-public-module
+    "D101",    # undocumented-public-class
+    "D102",    # undocumented-public-method
+    "D103",    # undocumented-public-function
+    "D104",    # undocumented-public-package
     "D106",
-    "D107",  # undocumented-public-init
-    "D203",  # one-blank-line-before-class
+    "D107",    # undocumented-public-init
+    "D203",    # one-blank-line-before-class
     "D204",
-    "D213",  # multi-line-summary-second-line
-    "D417",  # undocumented-param
+    "D213",    # multi-line-summary-second-line
+    "D417",    # undocumented-param
     "DJ001",
     "E402",
-    "E501", # Line too long
+    "E501",    # Line too long
     "ERA001",  # commented-out-code
     "FBT",
     "FIX002",  # line contains TODO
     "INP001",
     "ISC001",
     "PGH003",
-    "PLR0911",  # too-many-return-statements
-    "PLR0912",  # too-many-branches
-    "PLR0913",  # too-many-arguments
-    "PLR0915",  # too-many-statements
-    "PLR2004",  # magic-value-comparison
+    "PLR0911", # too-many-return-statements
+    "PLR0912", # too-many-branches
+    "PLR0913", # too-many-arguments
+    "PLR0915", # too-many-statements
+    "PLR2004", # magic-value-comparison
     "RUF012",
-    "S101",  # Use of assert detected
-    "S108", # hardcoded-temp-file
+    "S101",    # Use of assert detected
+    "S108",    # hardcoded-temp-file
     "S113",
-    "S603",  # subprocess-without-shell-equals-true
-    "S605",  # start-process-with-a-shell
-    "S607",  # start-process-with-partial-path
-    "SIM115", # use context handler for opening files
-    "T201",  # print found
-    "TD002",  # missing-todo-author
-    "TD003",  # missing-todo-link
+    "S603",    # subprocess-without-shell-equals-true
+    "S605",    # start-process-with-a-shell
+    "S607",    # start-process-with-partial-path
+    "SIM115",  # use context handler for opening files
+    "T201",    # print found
+    "TD002",   # missing-todo-author
+    "TD003",   # missing-todo-link
 ]
 fixable = ["ALL"]
 unfixable = [
-    "COM812",  # missing-trailing-comma
-    "ERA001",  # commented-out-code (will just delete it!)
-    "F841",  # unused-variable
+    "COM812", # missing-trailing-comma
+    "ERA001", # commented-out-code (will just delete it!)
+    "F841",   # unused-variable
     "SIM222", # expr-or-true
     "SIM223", # expr-and-false
 ]
@@ -156,7 +163,7 @@ include = ["*", "**/matplotlibrc", "**/data"]
 exclude = ["tests", "**/dist", "**/lib", "**/build", "*.egg-info", "**/.*"]
 
 [tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
+dependencies = { file = ["requirements.txt"] }
 
 [tool.setuptools_scm]
 write_to = "_version.py"
