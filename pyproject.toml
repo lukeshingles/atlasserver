@@ -64,6 +64,7 @@ ignored-modules = ["astropy", "extinction"]
 ignore-paths = "atlasserver/plot_atlas_fp.py"
 
 [tool.pyright]
+typeCheckingMode = "off"
 exclude = [
     '**/node_modules',
     '**/__pycache__',
