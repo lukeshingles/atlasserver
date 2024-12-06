@@ -15,6 +15,7 @@ from bokeh.plotting import figure
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth import login
+from django.contrib.gis.geoip2 import GeoIP2
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
@@ -216,10 +217,14 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
         }
 
-        # we store the region but not the IP address itself for privacy reasons
-        with contextlib.suppress(KeyError):
-            extra_fields["country_code"] = self.request.geo_data["country_code"]
-            extra_fields["region"] = self.request.geo_data["region"]
+        if x_forwarded_for := self.request.META.get("HTTP_X_FORWARDED_FOR"):
+            ip = x_forwarded_for.split(",")[0]
+        else:
+            ip = self.request.META.get("REMOTE_ADDR")
+        geoip = GeoIP2()
+        location = geoip.city(ip)
+        extra_fields["country_code"] = location["country_code"]
+        extra_fields["region"] = location["region_code"]
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
         serializer.save(**extra_fields)
@@ -366,11 +371,15 @@ class RequestImages(APIView):
             data["starttimestamp"] = None
             data["finishtimestamp"] = None
 
-            # we store the region but not the IP address itself for privacy reasons
-            with contextlib.suppress(KeyError):
-                data["country_code"] = request.geo_data["country_code"]
-                data["region"] = request.geo_data["region"]
-                # data['city'] = request.geo_data['city']
+            if x_forwarded_for := self.request.META.get("HTTP_X_FORWARDED_FOR"):
+                ip = x_forwarded_for.split(",")[0]
+            else:
+                ip = self.request.META.get("REMOTE_ADDR")
+            geoip = GeoIP2()
+            location = geoip.city(ip)
+            data["country_code"] = location["country_code"]
+            data["region"] = location["region_code"]
+
             data["from_api"] = False
             data["send_email"] = False
 

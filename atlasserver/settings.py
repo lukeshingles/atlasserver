@@ -46,7 +46,7 @@ INSTALLED_APPS = [
     "django_filters",
     "rest_framework",
     "rest_framework.authtoken",
-    "geoip2_extras",
+    "geoip2",
 ]
 
 MIDDLEWARE = [
@@ -59,7 +59,6 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
-    "geoip2_extras.middleware.GeoIP2Middleware",
     # "atlasserver.forcephot.countryrestriction.CountryRestrictionMiddleware",
 ]
 
