@@ -35,6 +35,7 @@ from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
+from geoip2.errors import AddressNotFoundError
 from rest_framework import filters
 from rest_framework import permissions
 from rest_framework import status
@@ -221,10 +222,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             ip = x_forwarded_for.split(",")[0]
         else:
             ip = self.request.META.get("REMOTE_ADDR")
+
         geoip = GeoIP2()
-        location = geoip.city(ip)
-        extra_fields["country_code"] = location["country_code"]
-        extra_fields["region"] = location["region_code"]
+        with contextlib.suppress(AddressNotFoundError):
+            location = geoip.city(ip)
+            extra_fields["country_code"] = location["country_code"]
+            extra_fields["region"] = location["region_code"]
+
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
         serializer.save(**extra_fields)
@@ -376,9 +380,10 @@ class RequestImages(APIView):
             else:
                 ip = self.request.META.get("REMOTE_ADDR")
             geoip = GeoIP2()
-            location = geoip.city(ip)
-            data["country_code"] = location["country_code"]
-            data["region"] = location["region_code"]
+            with contextlib.suppress(AddressNotFoundError):
+                location = geoip.city(ip)
+                data["country_code"] = location["country_code"]
+                data["region"] = location["region_code"]
 
             data["from_api"] = False
             data["send_email"] = False
