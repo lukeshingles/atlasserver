@@ -223,6 +223,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         else:
             ip = self.request.META.get("REMOTE_ADDR")
 
+        if ip.startswith(("192.168.", "127.0.", "10.")):
+            ip = "qub.ac.uk"
+
         geoip = GeoIP2()
         with contextlib.suppress(AddressNotFoundError):
             location = geoip.city(ip)
@@ -379,6 +382,10 @@ class RequestImages(APIView):
                 ip = x_forwarded_for.split(",")[0]
             else:
                 ip = self.request.META.get("REMOTE_ADDR")
+
+            if ip.startswith(("192.168.", "127.0.", "10.")):
+                ip = "qub.ac.uk"
+
             geoip = GeoIP2()
             with contextlib.suppress(AddressNotFoundError):
                 location = geoip.city(ip)
