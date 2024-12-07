@@ -1,12 +1,14 @@
 'use strict';
 
+import React from "react"
+
 let submission_in_progress = false;
 
 function getDefaultMjdMin() {
     return (mjdFromDate(new Date()) - 30.).toFixed(5);
 }
 
-class NewRequest extends React.Component {
+export class NewRequest extends React.Component {
     get_defaultstate() {
         // localStorage.getItem('') will be null if the key doesn't exist and null != false,
         // so != false will default to true, and != true will default to false.
@@ -288,4 +290,3 @@ class NewRequest extends React.Component {
             </div>);
     }
 }
-

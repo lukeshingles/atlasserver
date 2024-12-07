@@ -125,20 +125,25 @@
     $(document).ready(inactivityTimer);
     </script>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.0/plotly.min.js" integrity="sha512-L205fVN73b8Ft9dbuwTVGFb4FHVSOPpCLMQzcHa4r0+CuUswxzK/JRW7glZrpC+bO3Yaka0DYYDmtlhVbmnX+g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script type="text/javascript">
+        const jslcdataglobal = new Object();
+        const jslabelsglobal = new Object();
+        const jslimitsglobal = new Object();
+    </script>
+    <script type="importmap">
+        {
+            "imports": {
     {% if debug %}
-      <!-- development -->
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.24.3/plotly-basic.min.js" integrity="sha512-Qim/xu0OSUPEvOUcNVZoGTDa+m4Ll1EZ+DQhsmMTlMZIj7NxvwQl6pGY0/gwlj19w0KEZ0S8ymSWUpqarPYGBQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-      <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-      <script src="https://unpkg.com/react/umd/react.development.js" crossorigin></script>
-      <script src="https://unpkg.com/react-dom/umd/react-dom.development.js" crossorigin></script>
-      <script type="text/babel" src="{% static 'js/queuepage/src/newrequest.jsx' %}"></script>
-      <script type="text/babel" src="{% static 'js/queuepage/src/task.jsx' %}"></script>
-      <script type="text/babel" src="{% static 'js/queuepage/src/tasklist.jsx' %}"></script>
+                "react": "https://esm.sh/react@19/?dev",
+                "reactdom": "https://esm.sh/react-dom@19/client?dev",
     {% else %}
-      <!-- production -->
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.24.3/plotly-basic.min.js" integrity="sha512-Qim/xu0OSUPEvOUcNVZoGTDa+m4Ll1EZ+DQhsmMTlMZIj7NxvwQl6pGY0/gwlj19w0KEZ0S8ymSWUpqarPYGBQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-      <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-      <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-      <script type="text/javascript" src="{% static 'js/queuepage.min.js' %}?ver=20230727"></script>
+                "react": "https://esm.sh/react@19",
+                "reactdom": "https://esm.sh/react-dom@19/client",
     {% endif %}
+                "newrequest": "{% static 'js/newrequest.min.js' %}"
+            }
+        }
+    </script>
+    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver=20241206"></script>
 {% endblock %}
