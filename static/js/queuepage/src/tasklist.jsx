@@ -1,7 +1,7 @@
 'use strict';
 
 import React from "react"
-import ReactDOM from 'reactdom';
+import ReactDOM from 'react-dom';
 import { NewRequest } from "newrequest";
 
 class TaskPlot extends React.PureComponent {
