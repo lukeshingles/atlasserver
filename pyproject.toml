@@ -13,9 +13,34 @@ authors = [{ name = "Luke Shingles", email = "luke.shingles@gmail.com" }]
 description = "ATLAS Forced Photometry server"
 classifiers = ["License :: OSI Approved :: MIT License"]
 license = { text = "MIT" }
-dynamic = ["version", "dependencies"]
+dynamic = ["version"]
 requires-python = ">=3.13"
 readme = { file = "README.md", content-type = 'text/markdown' }
+dependencies = [
+    "astrocalc>=0.4.2",
+    "astropy>=6.1.0",
+    "bokeh==3.6.1",
+    "django>=5.0.9",
+    "django-filter>=24.2",
+    "django-stubs[compatible-mypy]>=5.0.0",
+    "djangorestframework>=3.15.1",
+    "djangorestframework-stubs>=3.15.0",
+    "fundamentals>=2.6.4",
+    "geoip2>=4.8.1",
+    "julian>=0.14",
+    "markdown>=3.6",
+    "matplotlib>=3.8.4",
+    "mysqlclient>=2.2.4",
+    "pandas>=2.2.2",
+    "polars>=1.2.1",
+    "pycountry>=23.12.11",
+    "pylint>=3.2.6",
+    "pylint-django>=2.5.5",
+    "python-dotenv>=1.0.1",
+    "ruff>=0.5.3",
+    "types-pyyaml>=6.0.12.20240311",
+    "types-requests>=2.31.0.20240406",
+]
 
 [project.urls]
 Repository = "https://github.com/lukeshingles/atlasserver"
@@ -162,9 +187,6 @@ namespaces = false
 where = ["."]
 include = ["*", "**/matplotlibrc", "**/data"]
 exclude = ["tests", "**/dist", "**/lib", "**/build", "*.egg-info", "**/.*"]
-
-[tool.setuptools.dynamic]
-dependencies = { file = ["requirements.txt"] }
 
 [tool.setuptools_scm]
 write_to = "_version.py"
