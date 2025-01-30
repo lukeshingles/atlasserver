@@ -809,7 +809,7 @@ def resultplotdatajs(request, taskid):
                 )
             )
             if settings.DEBUG:
-                jsout.append(Path(settings.STATIC_ROOT, "js/lightcurveplotly.js").open("rt").read())
+                jsout.append(Path(settings.STATIC_ROOT, "js/queuepage/src/lightcurveplotly.js").open("rt").read())
             else:
                 jsout.append(Path(settings.STATIC_ROOT, "js/lightcurveplotly.min.js").open("rt").read())
 
