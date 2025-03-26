@@ -19,7 +19,7 @@ readme = { file = "README.md", content-type = 'text/markdown' }
 dependencies = [
     "astrocalc>=0.4.2",
     "astropy>=6.1.0",
-    "bokeh==3.6.1",
+    "bokeh==3.7.1",
     "django>=5.0.9",
     "django-filter>=24.2",
     "django-stubs[compatible-mypy]>=5.0.0",
