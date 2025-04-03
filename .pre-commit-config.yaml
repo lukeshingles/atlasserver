@@ -28,23 +28,12 @@ repos:
     #   hooks:
     #       - id: yamlfmt
     - repo: https://github.com/astral-sh/ruff-pre-commit
-      rev: v0.8.1
+      rev: v0.11.2
       hooks:
-        # Run the linter.
           - id: ruff
             args: [--fix]
-        # Run the formatter.
           - id: ruff-format
-    # - repo: https://github.com/pre-commit/mirrors-mypy
-    #   rev: v1.6.1
-    #   hooks:
-    #       - id: mypy
-    #         language: system
-    #         # additional_dependencies: [numpy, types-PyYAML, types-psutil, django-stubs, python-dotenv, django-filter, djangorestframework, djangorestframework-stubs,
-    #         #     django-geoip2-extras, astrocalc, julian, pycountry, matplotlib]
-    #         types: [python]
-    #         args: [--ignore-missing-imports]
-    #         require_serial: true
+
     - repo: local
       hooks:
           - id: mypy

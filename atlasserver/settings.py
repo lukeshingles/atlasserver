@@ -73,10 +73,6 @@ CACHES = {
         # "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         # "LOCATION": "/tmp/atlasforced/django_cache",
     },
-    # required in order for IP address location lookups to be cached
-    "geoip2-extras": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-    },
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "taskderived",
