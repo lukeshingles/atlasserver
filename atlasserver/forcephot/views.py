@@ -7,11 +7,9 @@ from typing import Any
 
 import bokeh.layouts
 import bokeh.models
+import bokeh.plotting
 import numpy as np
 from bokeh.embed import components
-from bokeh.models.annotations import Legend
-from bokeh.plotting import ColumnDataSource
-from bokeh.plotting import figure
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth import login
@@ -414,9 +412,9 @@ def statscoordchart(request):
         "taskid": [tsk.id for tsk in tasks],
         "username": [tsk.user.username for tsk in tasks],
     }
-    source = ColumnDataSource(dictsource)
+    source = bokeh.plotting.ColumnDataSource(dictsource)
 
-    plot = figure(
+    plot = bokeh.plotting.figure(
         tools="pan,wheel_zoom,box_zoom,reset",
         # match_aspect=True,
         aspect_ratio=2,
@@ -491,12 +489,19 @@ def statsusagechart(request):
         "dayfinished_img_counts": dayfinished_img_counts,
     }
 
-    datasource = ColumnDataSource(data=data)
+    datasource = bokeh.plotting.ColumnDataSource(data=data)
 
-    fig_api = figure(
-        x_range=bokeh.models.FactorRange(*data["queueday"]),
+    fig_api = bokeh.plotting.figure(
+        x_range=bokeh.models.FactorRange(*data["queueday"], " ", "  ", "   "),
         y_range=bokeh.models.DataRange1d(start=0.0),
-        tools="",
+        tools=[
+            bokeh.models.HoverTool(
+                tooltips=[
+                    ("Finished (API)", "@dayfinished_api_counts"),
+                    ("Waiting (API)", "@waitingtaskcount_api"),
+                ],
+            )
+        ],
         toolbar_location=None,
         aspect_ratio=5,
         title="API",
@@ -507,45 +512,28 @@ def statsusagechart(request):
 
     fig_api.grid.visible = False
 
-    rvbar = fig_api.vbar_stack(
+    fig_api.vbar_stack(
         ["waitingtaskcount_api", "dayfinished_api_counts"],
         x="queueday",
         source=datasource,
         color=["red", "lightgrey"],
+        legend_label=["Waiting (API)", "Finished (API)"],
         line_width=0.0,
         width=0.3,
     )
 
-    legend_api = Legend(
-        items=[
-            ("Finished (API)", [rvbar[1]]),
-            ("Waiting (API)", [rvbar[0]]),
-        ],
-        location="top",
-        border_line_width=0,
-    )
-
-    fig_api.add_layout(legend_api, "right")
-
-    fig_api.add_tools(
-        bokeh.models.HoverTool(
-            tooltips=[
-                # ("Day", "@queueday"),
-                ("Finished (API)", "@dayfinished_api_counts"),
-                ("Waiting (API)", "@waitingtaskcount_api"),
-            ],
-            # mode="mouse",
-            # point_policy="follow_mouse",
-        )
-    )
-
-    # fig_api.toolbar.logo = None
-    fig_api.toolbar_location = None
-
-    fig_nonapi = figure(
-        x_range=bokeh.models.FactorRange(*data["queueday"]),
+    fig_nonapi = bokeh.plotting.figure(
+        x_range=bokeh.models.FactorRange(*data["queueday"], " ", "  ", "   "),
         y_range=bokeh.models.DataRange1d(start=0.0),
-        tools="",
+        tools=[
+            bokeh.models.HoverTool(
+                tooltips=[
+                    ("Finished (web images)", "@dayfinished_img_counts"),
+                    ("Finished (web FP)", "@dayfinished_web_counts"),
+                    ("Waiting (web)", "@waitingtaskcount_nonapi"),
+                ],
+            )
+        ],
         toolbar_location=None,
         aspect_ratio=5,
         title="Web",
@@ -554,44 +542,19 @@ def statsusagechart(request):
         y_axis_label="Web tasks per day",
     )
 
-    fig_nonapi.grid.visible = False
-
-    r_nonapi = fig_nonapi.vbar_stack(
+    fig_nonapi.vbar_stack(
         ["waitingtaskcount_nonapi", "dayfinished_web_counts", "dayfinished_img_counts"],
         x="queueday",
         source=datasource,
         color=["red", "green", "blue"],
+        legend_label=["Waiting (web)", "Finished (web FP)", "Finished (web images)"],
         line_width=0.0,
         width=0.3,
     )
 
-    legend_nonapi = Legend(
-        items=[
-            ("Finished (web images)", [r_nonapi[2]]),
-            ("Finished (web FP)", [r_nonapi[1]]),
-            ("Waiting (web)", [r_nonapi[0]]),
-        ],
-        location="top",
-        border_line_width=0,
-    )
+    fig_nonapi.legend[0].border_line_width = 0
 
-    fig_nonapi.add_layout(legend_nonapi, "right")
-
-    fig_nonapi.add_tools(
-        bokeh.models.HoverTool(
-            tooltips=[
-                # ("Day", "@queueday"),
-                ("Finished (web images)", "@dayfinished_img_counts"),
-                ("Finished (web FP)", "@dayfinished_web_counts"),
-                ("Waiting (web)", "@waitingtaskcount_nonapi"),
-            ],
-            # mode="mouse",
-            # point_policy="follow_mouse",
-        )
-    )
-
-    # fig_nonapi.toolbar.logo = None
-    fig_nonapi.toolbar_location = None
+    fig_nonapi.grid.visible = False
 
     plot = bokeh.layouts.column(
         [fig_api, fig_nonapi],
