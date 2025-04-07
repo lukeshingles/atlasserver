@@ -13,7 +13,7 @@
 
     <p>The difference image reference templates are periodically replaced. In order to see whether the step change is real you might want to consider requesting "reduced" (i.e. input) image data. If there are no discontinuities in this lightcurve, the likelihood is that the step features are present because of the template change. The exact template used can be tricky to identify for historical images, but the major wallpaper version 1 to 2 transition happened near MJD 58417 (2018-10-26) and the wallpaper 2 to 3 transition happened near MJD 58882 (2020-02-03). Since early 2021, the exact wallpaper information is now stored in the WPDATE and WPDIR headers in the FITS files, which are available in the results of image requests.</p>
 
-    <h2>Q. How do I get forced photometry for a solar system object?</h2>
+    <h2>Q: How do I get forced photometry for a solar system object?</h2>
     <p>Enter "mpc" followed by a space character then your asteroid name in the RA/Dec box. If the asteroid is "numbered", the name must be the asteroid number enclosed in parentheses, e.g. "(12267)". Otherwise you must use the "packed designation" form of the asteroid name. For example, 2022 WO1 becomes "K22W01O". For comets, use the packed designation. Examples:</p>
 
     <pre>
@@ -29,6 +29,32 @@ mpc CK21Y010</pre>
 
     <h2>Q: How do I report issues with the data or the website?</h2>
     <p>Please file an issue on the <a href="https://github.com/lukeshingles/atlasserver/issues">GitHub atlasserver repository</a>.</p>
+
+
+    <h2>Q: Why are there crazy data points? How do I know what are good data points?</h2>
+
+    <p>ATLAS believes in letting the user choose what to use and what not to use. In general the ATLAS data points should have reasonably accurate errors, but there are many reasons that the forced photometry server may return nonsense values - a star might be saturated or masked out, the observation may have a failed astro/photometric fit because of clouds, there are observations in the narrow band H-alpha filter "H" that you didn't expect, etc. See <a href="https://ui.adsabs.harvard.edu/abs/2023zndo...7897346R/abstract">Rest et. al.</a> for a comprehensive guide to "cleaning" the ATLAS photometry, but basically you will eliminate almost all non-statistical bad points by applying the following, common sense filters:</p>
+    <p>
+    <code>
+       duJy &lt; 10000 &amp;&amp; <br />
+       err == 0 &amp;&amp; <br />
+       x &gt; 100 &amp;&amp;  x &lt; 10460 &amp;&amp;  y &gt; 100 &amp;&amp;  y &lt; 10460 &amp;&amp;  <br />
+       maj  &lt;  5 &amp;&amp;  maj  &gt;  1.6 &amp;&amp;  min  &lt;  5 &amp;&amp;  min  &gt;  1.6 &amp;&amp;  <br />
+       apfit  &gt;  -1 &amp;&amp;  apfit  &lt;  -0.1 &amp;&amp;  <br />
+       mag5sig  &gt;  17 &amp;&amp;  <br />
+       sky  &gt;  17 
+    </code>
+    </p>
+
+    <p>As an example, "<code>mag5sig &gt; 17</code>" eliminates highly obscured (but corrected) observations, "<code>sky &gt; 17</code>" eliminates badly moonlit observations. The user may or may not choose to keep those, which is why the forced photometry server provides them, but generally speaking these are not points that the user wants.</p>
+    <p>Most of the measurements removed by these cuts will actually be perfectly OK - their errors will be in accord with the listed uncertainties. The only measurements guaranteed to be wrong are when <code>mag5sig &lt; 10</code>: this indicates a failure to get a photometric solution. In keeping with the ATLAS philosophy of letting the user decide, such an observation might well be recoverable for a user who really needed it.</p>
+
+
+
+
+
+
+
   </div>
 </div>
 {% endblock %}
