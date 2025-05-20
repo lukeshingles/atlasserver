@@ -34,7 +34,7 @@ import sys
 
 from atlasserver.forcephot.models import Task
 
-TASKMAXTIME: int = 1200
+TASKMAXTIME: int = 1800
 
 LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 
@@ -287,7 +287,7 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
             [
                 "rsync",
                 "--remove-source-files",
-                f'{REMOTE_SERVER}:{Path(remoteresultdir / filename).with_suffix(".jpg")}',
+                f"{REMOTE_SERVER}:{Path(remoteresultdir / filename).with_suffix('.jpg')}",
                 str(settings.RESULTS_DIR),
             ],
         ]
