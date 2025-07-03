@@ -19,8 +19,8 @@ readme = { file = "README.md", content-type = 'text/markdown' }
 dependencies = [
     "astrocalc>=0.4.2",
     "astropy>=6.1.0",
-    "bokeh==3.7.2",
     "django>=5.0.9",
+    "bokeh==3.7.3",
     "django-filter>=24.2",
     "django-stubs[compatible-mypy]>=5.0.0",
     "djangorestframework>=3.15.1",
@@ -37,7 +37,7 @@ dependencies = [
     "pylint>=3.2.6",
     "pylint-django>=2.5.5",
     "python-dotenv>=1.0.1",
-    "ruff>=0.5.3",
+    "ruff>=0.12.1",
     "types-pyyaml>=6.0.12.20240311",
     "types-requests>=2.31.0.20240406",
 ]
