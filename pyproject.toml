@@ -142,6 +142,7 @@ ignore = [
     "INP001",
     "ISC001",
     "PGH003",
+    "PLC0415", # import-outside-toplevel
     "PLR0911", # too-many-return-statements
     "PLR0912", # too-many-branches
     "PLR0913", # too-many-arguments

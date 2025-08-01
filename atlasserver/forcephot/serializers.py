@@ -163,7 +163,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         elif "ra" not in attrs and "dec" not in attrs:
             msg = "Either an mpc_name or (ra, dec) must be specified."
-            raise serializers.ValidationError(msg)
+            raise serializers.ValidationError({"non_field_errors": msg})
         elif "dec" not in attrs:
             raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
         elif "ra" not in attrs:

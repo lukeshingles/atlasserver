@@ -36,6 +36,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from geoip2.errors import AddressNotFoundError
 from rest_framework import filters
 from rest_framework import permissions
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.response import Response
@@ -53,11 +54,8 @@ from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
-# from django.http import HttpResponse
-# from django.http.response import HttpResponseRedirect
-# from django.shortcuts import get_object_or_404
-# from rest_framework.utils.urls import remove_query_param
 maximgziptasks = 5
+maxusertasks = 500
 
 
 def calculate_queue_positions() -> None:
@@ -198,6 +196,15 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         """Create new tasks if the user is authenticated and the request is valid."""
         if not request.user.is_authenticated:
             raise PermissionDenied
+
+        usertaskcount = Task.objects.filter(
+            # starttimestamp__isnull=True,
+            user_id=self.request.user.pk,
+            is_archived=False,
+        ).count()
+        if usertaskcount >= maxusertasks:
+            msg = f"ERROR: You have too many queued tasks ({usertaskcount} >= {maxusertasks})."
+            raise serializers.ValidationError({"non_field_errors": msg})
 
         if "radeclist" in request.data:
             datalist = splitradeclist(request.data)
@@ -365,7 +372,7 @@ class RequestImages(APIView):
             ).count()
             if userimziptaskcount >= maximgziptasks:
                 msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {maximgziptasks}). Delete some before making new requests."
-                return JsonResponse({"error": msg}, status=429)
+                return JsonResponse({"non_field_errors": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
             data = model_to_dict(parent_task, exclude=["id"])
