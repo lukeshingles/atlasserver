@@ -27,16 +27,16 @@ jobs:
 
             - name: Run Ruff
               if: always()
-              uses: astral-sh/ruff-action@v2
+              uses: astral-sh/ruff-action@v3
               with:
-                  version: 0.8.1
+                  version: 0.12.7
                   args: "check --exit-non-zero-on-fix --no-fix"
 
             - name: Run Ruff Format
               if: always()
-              uses: astral-sh/ruff-action@v2
+              uses: astral-sh/ruff-action@v3
               with:
-                  version: 0.8.1
+                  version: 0.12.7
                   args: "format --check"
 
             - name: Run mypy
