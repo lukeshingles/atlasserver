@@ -198,7 +198,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied
 
         usertaskcount = Task.objects.filter(
-            # starttimestamp__isnull=True,
+            starttimestamp__isnull=True,
             user_id=self.request.user.pk,
             is_archived=False,
         ).count()
