@@ -325,28 +325,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, headers={"ETag": etag})
 
 
-def deletetask(request, pk):
-    """Delete a task. deprecated! remove when sure that this is not used anymore."""
-    if not request.user.is_authenticated:
-        raise PermissionDenied
-
-    with contextlib.suppress(ObjectDoesNotExist):
-        item = Task.objects.get(id=pk)
-
-        if item.user.id != request.user.id and not request.user.is_staff:
-            raise PermissionDenied
-
-        item.delete()
-
-    calculate_queue_positions()
-
-    redirurl = request.META.get("HTTP_REFERER", reverse("task-list"))
-    if f"/{pk}/" in redirurl:  # if referrer was the single-task view, it will not exist anymore
-        redirurl = reverse("task-list")
-
-    return redirect(redirurl, request=request)
-
-
 class RequestImages(APIView):
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]

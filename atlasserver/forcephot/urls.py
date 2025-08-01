@@ -41,7 +41,6 @@ admin.site.site_title = "ATLAS Forced Photometry"
 urlpatterns = [
     path("", TemplateView.as_view(template_name="index.html"), name="index"),
     path("", include(router.urls)),
-    path("queue/<str:pk>/delete/", views.deletetask, name="delete"),
     path("queue/<str:pk>/requestimages/", views.RequestImages.as_view(), name="requestimages"),
     re_path(r"^register/$", views.register, name="register"),
     path("faq/", TemplateView.as_view(template_name="faq.html", extra_context={"name": "FAQ"}), name="faq"),
