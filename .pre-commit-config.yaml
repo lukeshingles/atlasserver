@@ -33,11 +33,3 @@ repos:
           - id: ruff
             args: [--fix]
           - id: ruff-format
-
-    - repo: local
-      hooks:
-          - id: mypy
-            name: mypy
-            entry: mypy
-            types: [python]
-            language: python

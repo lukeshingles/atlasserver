@@ -713,7 +713,7 @@ def resultplotdatajs(request, taskid):
 
             dfforcedphot = pd.read_csv(
                 resultfilepath,
-                delim_whitespace=True,
+                sep=r"\s+",
                 escapechar="#",
                 dtype=float,
                 converters={"F": str, "Obs": str, "uJy": int, "duJy": int},

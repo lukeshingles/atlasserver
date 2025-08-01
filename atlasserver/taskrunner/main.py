@@ -337,7 +337,7 @@ def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
 
     if task.request_type == "FP":
         try:
-            dfforcedphot = pd.read_csv(localresultfile, delim_whitespace=True, escapechar="#", skipinitialspace=True)
+            dfforcedphot = pd.read_csv(localresultfile, sep=r"\s+", escapechar="#", skipinitialspace=True)
 
             if dfforcedphot.empty:
                 # file is just a header row without data

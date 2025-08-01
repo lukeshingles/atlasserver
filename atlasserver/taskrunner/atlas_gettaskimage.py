@@ -20,7 +20,7 @@ def main() -> None:
     if not Path(datafile).exists():
         return
 
-    dfforcedphot = pd.read_csv(datafile, delim_whitespace=True, escapechar="#")
+    dfforcedphot = pd.read_csv(datafile, sep=r"\s+", escapechar="#")
 
     if dfforcedphot.empty:
         return
