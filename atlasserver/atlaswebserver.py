@@ -122,7 +122,7 @@ def start() -> None:
     os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)
 
     # socket might not be released, so try until it is
-    while run_command([f'{APACHEPATH / "apachectl"}', "start"]):
+    while run_command([f"{APACHEPATH / 'apachectl'}", "start"]):
         print("Start command unsuccessful. Trying again in one second...")
         time.sleep(1)
 
@@ -136,7 +136,7 @@ def stop() -> None:
     """Stop the ATLAS Apache server."""
     if pid := get_httpd_pid():
         print(f"Stopping ATLAS Apache server (pid {pid})")
-        run_command([f'{APACHEPATH / "apachectl"}', "graceful-stop"])
+        run_command([f"{APACHEPATH / 'apachectl'}", "graceful-stop"])
     else:
         print("ATLAS Apache server was not running")
 
