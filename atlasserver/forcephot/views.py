@@ -194,7 +194,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs) -> Response:
         """Create new tasks if the user is authenticated and the request is valid."""
-        if not request.user.is_authenticated:
+        if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
 
         usertaskcount = Task.objects.filter(

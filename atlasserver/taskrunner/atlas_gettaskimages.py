@@ -104,7 +104,7 @@ def main() -> None:
             firstfitsoutpath_o = fitsoutpath
 
         commands.append(
-            f"echo Image {index + 1:04d} of {rowcount}: {obs}; "
+            f"echo Image {index:04d} of {rowcount}: {obs}; "
             "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
             f"{fitsinput} {fitsoutpath} "
             f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 400"
