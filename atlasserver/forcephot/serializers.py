@@ -161,12 +161,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 msg = "IMGZIP requests must have have a parent_task_id set to an FP task id."
                 raise serializers.ValidationError(msg) from None
 
-        elif "ra" not in attrs and "dec" not in attrs:
+        elif not attrs.get("ra", None) and not attrs.get("dec", None):
             msg = "Either an mpc_name or (ra, dec) must be specified."
             raise serializers.ValidationError({"non_field_errors": msg})
-        elif "dec" not in attrs:
+        elif not attrs.get("dec", None):
             raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
-        elif "ra" not in attrs:
+        elif not attrs.get("ra", None):
             raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
 
         if "mjd_min" in attrs and attrs["mjd_min"] is not None and not is_finite_float(attrs["mjd_min"]):
