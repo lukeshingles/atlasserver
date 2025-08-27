@@ -65,4 +65,5 @@ urlpatterns = [
         name="apiguide",
     ),
     path("api-token-auth/", rest_framework.authtoken.views.obtain_auth_token),
+    path("robots.txt", TemplateView.as_view(template_name="robots.txt", content_type="text/plain")),
 ]
