@@ -80,7 +80,7 @@ def main() -> None:
 
     datafile = sys.argv[1]
     reduced = sys.argv[2] == "red"
-    dfforcedphot = pd.read_csv(datafile, sep=r"\s+", escapechar="#")
+    dfforcedphot = pd.read_csv(datafile, sep=r"\s+", escapechar="#").dropna()
 
     firstfitsoutpath_c = None
     firstfitsoutpath_o = None
