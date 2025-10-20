@@ -68,7 +68,7 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
         import shutil
 
         # os.rename(logfile_latest, logfile_archive)
-        shutil.copyfile(logfile_latest, LASTLOGFILEARCHIVED[suffix])
+        shutil.copyfile(logfile_latest, logfile_archive)
         flogfile = logfile_latest.open("w")
     else:
         flogfile = logfile_latest.open("a")
@@ -114,7 +114,7 @@ def remove_task_resultfiles(
                 logfunc(f"Deleted {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
 
 
-def runtask(task, logfunc=None, **kwargs) -> tuple[Path | None, str | None]:
+def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
 
     returns (resultfilename, error_msg)
