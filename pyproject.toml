@@ -192,3 +192,6 @@ exclude = ["tests", "**/dist", "**/lib", "**/build", "*.egg-info", "**/.*"]
 [tool.setuptools_scm]
 write_to = "_version.py"
 local_scheme = "no-local-version"
+
+[tool.ty.src]
+exclude = ["**/build/", "atlasserver/plot_atlas_fp.py"]
