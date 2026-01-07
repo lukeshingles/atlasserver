@@ -477,7 +477,7 @@ def statsusagechart(request):
     datasource = bokeh.plotting.ColumnDataSource(data=data)
 
     fig_api = bokeh.plotting.figure(
-        x_range=bokeh.models.FactorRange(*data["queueday"], " ", "  ", "   "),
+        x_range=bokeh.models.FactorRange(factors=[*data["queueday"], " ", "  ", "   "]),
         y_range=bokeh.models.DataRange1d(start=0.0),
         tools=[
             bokeh.models.HoverTool(
