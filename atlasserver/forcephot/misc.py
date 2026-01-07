@@ -304,9 +304,7 @@ def splitradeclist(data, form=None):
             newrow["mpc_name"] = mpc_name
             newrow["ra"] = None
             newrow["dec"] = None
-            ForcePhotTaskSerializer.validate_mpc_name(
-                None, mpc_name, prefix=f"Error on line {index}: ", field="radeclist"
-            )
+            ForcePhotTaskSerializer.validate_mpc_name(mpc_name, prefix=f"Error on line {index}: ", field="radeclist")
             datalist.append(newrow)
 
             serializer = ForcePhotTaskSerializer(data=newrow, many=False)
@@ -336,11 +334,9 @@ def splitradeclist(data, form=None):
                 newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=row[0])
                 newrow["dec"] = converter.dec_sexegesimal_to_decimal(dec=row[1])
                 newrow["radeclist"] = [""]
-                ForcePhotTaskSerializer.validate_ra(
-                    None, newrow["ra"], prefix=f"Error on line {index}: ", field="radeclist"
-                )
+                ForcePhotTaskSerializer.validate_ra(newrow["ra"], prefix=f"Error on line {index}: ", field="radeclist")
                 ForcePhotTaskSerializer.validate_dec(
-                    None, newrow["dec"], prefix=f"Error on line {index}: ", field="radeclist"
+                    newrow["dec"], prefix=f"Error on line {index}: ", field="radeclist"
                 )
                 serializer = ForcePhotTaskSerializer(data=newrow, many=False)
                 serializer.is_valid(raise_exception=True)
