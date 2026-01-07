@@ -86,7 +86,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     result_imagezip_url = serializers.SerializerMethodField("get_result_imagezip_url")
     result_imagestack_url = serializers.SerializerMethodField("get_result_imagestack_url")
 
-    def validate_mpc_name(self, value, prefix="", field="mpc_name"):
+    @staticmethod
+    def validate_mpc_name(value, prefix="", field="mpc_name"):
         # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         # if any([c not in dict.fromkeys(okchars) for c in value]):
         #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
@@ -99,7 +100,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate_ra(self, value, prefix="", field="ra"):
+    @staticmethod
+    def validate_ra(value, prefix="", field="ra"):
         if value is None or value == "":
             return value
 
@@ -108,7 +110,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate_dec(self, value, prefix="", field="dec"):
+    @staticmethod
+    def validate_dec(value, prefix="", field="dec"):
         if value is None or value == "":
             return value
 
@@ -117,7 +120,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate_mjd_min(self, value):
+    @staticmethod
+    def validate_mjd_min(value):
         if value is None or value == "":
             return value
 
