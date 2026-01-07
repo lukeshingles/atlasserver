@@ -447,7 +447,7 @@ class AdminEmailHandlerNo404(AdminEmailHandler):
 
     def handle(self, record):
         if record.exc_info:
-            exc_type, exc_value, tb = record.exc_info
+            _exc_type, exc_value, _tb = record.exc_info
             if isinstance(exc_value, Http404):
                 return
         super().handle(record)
