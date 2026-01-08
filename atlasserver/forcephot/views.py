@@ -508,7 +508,7 @@ def statsusagechart(request):
     )
 
     fig_nonapi = bokeh.plotting.figure(
-        x_range=bokeh.models.FactorRange([*data["queueday"], " ", "  ", "   "]),
+        x_range=bokeh.models.FactorRange(*data["queueday"], " ", "  ", "   "),
         y_range=bokeh.models.DataRange1d(start=0.0),
         tools=[
             bokeh.models.HoverTool(
