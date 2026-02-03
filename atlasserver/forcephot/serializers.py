@@ -37,44 +37,39 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                     return None
             except ObjectDoesNotExist:
                 return None
-            request = self.context.get("request")
-            return request.build_absolute_uri(reverse("task-detail", args=[obj.parent_task_id]))
+            if request := self.context.get("request"):
+                return request.build_absolute_uri(reverse("task-detail", args=[obj.parent_task_id]))
 
         return None
 
     def get_pdfplot_url(self, obj):
-        if obj.localresultfile() and not obj.error_msg:
-            request = self.context.get("request")
+        if obj.localresultfile() and not obj.error_msg and (request := self.context.get("request")):
             return request.build_absolute_uri(reverse("taskpdfplot", args=[obj.id]))
 
         return None
 
     def get_previewimage_url(self, obj):
-        if obj.localresultpreviewimagefile:
-            request = self.context.get("request")
+        if obj.localresultpreviewimagefile and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultpreviewimagefile))
             # return request.build_absolute_uri(reverse("taskpreviewimage", args=[obj.id]))
 
         return None
 
     def get_imagerequest_url(self, obj):
-        if obj.imagerequest_task_id:
-            request = self.context.get("request")
+        if obj.imagerequest_task_id and (request := self.context.get("request")):
             return request.build_absolute_uri(reverse("task-detail", args=[obj.imagerequest_task_id]))
 
         return None
 
     def get_result_imagezip_url(self, obj):
-        if obj.localresultimagezipfile:
-            return self.context.get("request").build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+        if obj.localresultimagezipfile and (request := self.context.get("request")):
+            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
 
         return None
 
     def get_result_imagestack_url(self, obj):
-        if obj.localresultimagestackfile:
-            return self.context.get("request").build_absolute_uri(
-                staticfiles_storage.url(obj.localresultimagestackfile)
-            )
+        if obj.localresultimagestackfile and (request := self.context.get("request")):
+            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagestackfile))
 
         return None
 
