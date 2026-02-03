@@ -1,4 +1,5 @@
 import datetime
+import typing as t
 from pathlib import Path
 
 from django.conf import settings
@@ -73,6 +74,9 @@ class Task(models.Model):
     request_type = models.CharField(max_length=8, choices=RequestType.choices, default=RequestType.FP)
 
     task_modified_datetime = models.DateTimeField(auto_now=True)
+
+    id: int
+    user_id: int
 
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
@@ -194,7 +198,7 @@ class Task(models.Model):
     def username(self) -> str:
         return self.user.username
 
-    def delete(self):
+    def delete(self, using: t.Any | None = None, keep_parents: bool = False):
         # cleanup associated files when removing a task object from the database
         if self.request_type == "IMGZIP":
             if zipfile := self.localresultimagezipfile:
@@ -214,4 +218,4 @@ class Task(models.Model):
             self.save()
             caches["taskderived"].delete(f"task{self.id}_resultplotdatajs")
         else:
-            super().delete()
+            super().delete(using=using, keep_parents=keep_parents)
