@@ -228,14 +228,15 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         else:
             ip = self.request.META.get("REMOTE_ADDR")
 
-        if ip.startswith(("192.168.", "127.0.", "10.")):
-            ip = "qub.ac.uk"
-
-        geoip = GeoIP2()
-        with contextlib.suppress(AddressNotFoundError):
-            location = geoip.city(ip)
-            extra_fields["country_code"] = location["country_code"]
-            extra_fields["region"] = location["region_code"]
+        if ip is not None:
+            if ip.startswith(("192.168.", "127.0.", "10.")):
+                ip = "qub.ac.uk"
+            else:
+                geoip = GeoIP2()
+                with contextlib.suppress(AddressNotFoundError):
+                    location = geoip.city(ip)
+                    extra_fields["country_code"] = location["country_code"]
+                    extra_fields["region"] = location["region_code"]
 
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
@@ -366,14 +367,15 @@ class RequestImages(APIView):
             else:
                 ip = self.request.META.get("REMOTE_ADDR")
 
-            if ip.startswith(("192.168.", "127.0.", "10.")):
-                ip = "qub.ac.uk"
-
-            geoip = GeoIP2()
-            with contextlib.suppress(AddressNotFoundError):
-                location = geoip.city(ip)
-                data["country_code"] = location["country_code"]
-                data["region"] = location["region_code"]
+            if ip is not None:
+                if ip.startswith(("192.168.", "127.0.", "10.")):
+                    ip = "qub.ac.uk"
+                else:
+                    geoip = GeoIP2()
+                    with contextlib.suppress(AddressNotFoundError):
+                        location = geoip.city(ip)
+                        data["country_code"] = location["country_code"]
+                        data["region"] = location["region_code"]
 
             data["from_api"] = False
             data["send_email"] = False
