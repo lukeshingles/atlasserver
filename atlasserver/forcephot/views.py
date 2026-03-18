@@ -628,6 +628,10 @@ def statsshortterm(request):
         dictparams["sevendayavgwaittime"] = (
             f"{np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])):.1f}s"
         )
+        sevendaytasks_finished_firstusertasks = sevendaytasks_finished.filter(userqueuedtasks_on_submit=0)
+        dictparams["sevendayavgwaittimeuserfirst"] = (
+            f"{np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished_firstusertasks])):.1f}s"
+        )
 
         sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
         sevenday_mean_runtime = np.nanmean(sevenday_runtimes)
