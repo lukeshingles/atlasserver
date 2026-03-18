@@ -8,8 +8,6 @@
 
     <p>If you notice any issues with the data or this website, please <a href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a> or for urgent/security matters email <a href="mailto:luke.shingles@gmail.com">Luke Shingles</a>. This is an open-source volunteer project and feature requests may be considered as time allows.</p>
 
-    <p>Historical uptime can viewed at <a href="https://statuspage.freshping.io/52636-ATLASForcedPhotometry">FreshPing.io</a></p>
-
     <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at <span id="lastfinishtime">{{ lastfinishtime }}</span> (as of <span id="pagetime">{% now "H:i:s" %}</span>).</p>
     <div id="statsshortterm">Loading short term stats...</div>
     <div id="statsusagechart" style="max-width: 60em; padding-top: 1em; padding-bottom: 2em;">Loading usage chart...</div>
