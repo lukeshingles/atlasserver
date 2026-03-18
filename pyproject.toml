@@ -12,7 +12,7 @@ description = "ATLAS Forced Photometry server"
 classifiers = ["License :: OSI Approved :: MIT License"]
 license = { text = "MIT" }
 dynamic = ["version"]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 readme = { file = "README.md", content-type = 'text/markdown' }
 dependencies = [
     "astrocalc>=0.4.2",
@@ -110,7 +110,6 @@ files.extend-exclude = ["**/plot_atlas_fp.py"]
 [tool.ruff]
 extend-exclude = ["plot_atlas_fp.py"]
 line-length = 120
-target-version = "py313"
 fix = true
 show-fixes = true
 
