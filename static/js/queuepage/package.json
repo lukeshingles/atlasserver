@@ -1,9 +1,9 @@
 {
   "dependencies": {
-    "@babel/cli": "^7.26.4",
-    "@babel/preset-react": "^7.22.5",
-    "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "@babel/cli": "7.28.6",
+    "@babel/preset-react": "^7.28.5",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
   },
   "scripts": {
     "build": "./build.sh"
