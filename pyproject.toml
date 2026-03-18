@@ -40,6 +40,11 @@ dependencies = [
     "types-requests>=2.31.0.20240406",
 ]
 
+[project.optional-dependencies]
+mod_wsgi = [
+    "mod_wsgi>=5.0.2",
+]
+
 [project.urls]
 Repository = "https://github.com/lukeshingles/atlasserver"
 
@@ -96,6 +101,7 @@ exclude = [
     'dist',
     'target',
     '**/plot_atlas_fp.py',
+    '**/.venv',
 ]
 
 [tool.typos]
