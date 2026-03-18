@@ -60,6 +60,9 @@ class Task(models.Model):
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name="Proper motion RA (mas/yr)")
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name="Proper motion Dec (mas/yr)")
     queuepos_relative = models.IntegerField(null=True, blank=True, default=None, verbose_name="Queue position")
+    userqueuedtasks_on_submit = models.IntegerField(
+        null=True, blank=True, default=None, verbose_name="User queued tasks when submitted", editable=False
+    )
 
     parent_task = models.ForeignKey(
         "self",
@@ -102,6 +105,8 @@ class Task(models.Model):
             strtask += f" waittime: {self.waittime():.0f}s"
         if self.finishtimestamp:
             strtask += f" runtime: {self.runtime():.0f}s"
+
+        strtask += f" queuedtasks_on_submit: {self.userqueuedtasks_on_submit}"
 
         return strtask
 

@@ -54,15 +54,17 @@ from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
-maximgziptasks = 5
-maxusertasks = 500
+MAX_USER_IMGZIP_TASKS = 5
+MAX_USER_TASKS = 500
 
 
 def calculate_queue_positions() -> None:
     """Calculate and assign the queue positions (determining the order of execution in the task runner) for all queued tasks."""
     with transaction.atomic():
         queuedtasks = (
-            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("user_id", "timestamp")
+            Task.objects.all()
+            .filter(finishtimestamp__isnull=True, is_archived=False)
+            .order_by("user_id", "timestamp", "id")
         )
 
         # to get position in current pass, check if job currently running
@@ -202,10 +204,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             user_id=self.request.user.pk,
             is_archived=False,
         ).count()
-        if usertaskcount >= maxusertasks:
-            msg = f"ERROR: You have too many queued tasks ({usertaskcount} >= {maxusertasks})."
+        if usertaskcount >= MAX_USER_TASKS:
+            msg = f"ERROR: You have too many queued tasks ({usertaskcount} >= {MAX_USER_TASKS})."
             raise serializers.ValidationError({"non_field_errors": msg})
-
         if "radeclist" in request.data:
             datalist = splitradeclist(request.data)
             serializer = self.get_serializer(data=datalist, many=True)
@@ -218,6 +219,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Create new task(s)."""
+        usertaskcount_before = Task.objects.filter(
+            starttimestamp__isnull=True,
+            user_id=self.request.user.pk,
+            is_archived=False,
+        ).count()
+
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
@@ -241,6 +248,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
         serializer.save(**extra_fields)
+        new_task_ids = (
+            [item["id"] for item in serializer.data] if isinstance(serializer.data, list) else [serializer.data["id"]]
+        )
+        for i, task_id in enumerate(new_task_ids):
+            Task.objects.filter(id=task_id).update(userqueuedtasks_on_submit=usertaskcount_before + i)
         calculate_queue_positions()
 
     def perform_update(self, serializer) -> None:
@@ -349,8 +361,8 @@ class RequestImages(APIView):
             userimziptaskcount = Task.objects.filter(
                 user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
             ).count()
-            if userimziptaskcount >= maximgziptasks:
-                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {maximgziptasks}). Delete some before making new requests."
+            if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
+                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS}). Delete some before making new requests."
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:

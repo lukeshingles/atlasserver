@@ -218,6 +218,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "imagerequest_finished",
             "result_imagestack_url",
             "result_imagezip_url",
+            "userqueuedtasks_on_submit",
         ]
 
         read_only_fields = [
@@ -238,4 +239,5 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "imagerequest_finished",
             "result_imagestack_url",
             "result_imagezip_url",
+            "userqueuedtasks_on_submit",
         ]
