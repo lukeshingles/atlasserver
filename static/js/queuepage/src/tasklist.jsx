@@ -91,7 +91,7 @@ export class Task extends React.Component {
                 } else {
                     response.json().then(data => {
                         console.log('requestImages: errors returned', data);
-                        this.setState({ 'httperror': 'ERROR: ' + data["error"] });
+                        this.setState({ 'httperror': 'ERROR: ' + data["non_field_errors"] });
                     });
                 }
             });
