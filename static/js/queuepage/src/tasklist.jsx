@@ -4,13 +4,18 @@ import React from "react"
 import ReactDOM from 'react-dom';
 import { NewRequest } from "newrequest";
 
+function debug_log(...args) {
+    // uncomment for debugging in development
+    // console.log(...args);
+}
+
 class TaskPlot extends React.PureComponent {
     constructor(props) {
         super(props);
     }
 
     componentDidMount() {
-        console.log('activating plot', this.props.taskid)
+        debug_log('activating plot', this.props.taskid)
         const plot_url = new URL(this.props.taskurl);
         plot_url.pathname += 'resultplotdata.js';
         plot_url.search = '';
@@ -18,7 +23,7 @@ class TaskPlot extends React.PureComponent {
     }
 
     componentWillUnmount() {
-        console.log('Unmounting plot for task ', this.props.taskid);
+        debug_log('Unmounting plot for task ', this.props.taskid);
         delete jslimitsglobal['#plotforcedflux-task-' + this.props.taskid]
         delete jslcdataglobal['#plotforcedflux-task-' + this.props.taskid]
         delete jslabelsglobal['#plotforcedflux-task-' + this.props.taskid]
@@ -46,7 +51,6 @@ export class Task extends React.Component {
         // $(li_id).hide(300);
         $(li_id).slideUp(200);
         setTimeout(() => {
-            // console.log('Starting delete of task ', this.props.taskdata.id);
             $.ajax({
                 headers: {
                     "X-CSRFToken": getCookie("csrftoken")
@@ -170,7 +174,7 @@ export class Task extends React.Component {
             statusclass = "queued notstarted";
             buttontext = 'Cancel';
         }
-        console.log('Task ' + task.id + ' rendered');
+        debug_log('Task ' + task.id + ' rendered');
         let delbutton = null;
         if (task.user_id == user_id) {
             delbutton = <button className="btn btn-sm btn-danger" onClick={() => this.deleteTask()}>{buttontext}</button>;
@@ -325,7 +329,7 @@ class Pager extends React.PureComponent {
     }
 
     render() {
-        console.log('Pager rendered');
+        debug_log('Pager rendered');
         if (this.props.taskcount == null) {
             return null;
         } else {
@@ -468,21 +472,21 @@ export class TaskPage extends React.Component {
         if (usertriggered) {
             const tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
             if (tasklist_fetchcachematch) {
-                console.log('using tasklist_fetchcache before GET response', window.location.href);
+                debug_log('using tasklist_fetchcache before GET response', window.location.href);
                 this.setState(tasklist_fetchcache[window.location.href]);
             } else {
-                console.log('no tasklist_fetchcache for', window.location.href);
+                debug_log('no tasklist_fetchcache for', window.location.href);
             }
         }
 
         if (tasklist_api_request_active && !usertriggered) {
-            console.log('prevent overlapping GET requests');
+            debug_log('prevent overlapping GET requests');
             return;
         }
 
         tasklist_api_request_active = true;
         const get_url = window.location.href;
-        console.log('Fetching task list from', get_url);
+        debug_log('Fetching task list from', get_url);
         fetch(get_url,
             {
                 credentials: "same-origin",
@@ -543,13 +547,13 @@ export class TaskPage extends React.Component {
                     statechanges['tasklist_last_fetch_time'] = new Date();
                     tasklist_fetchcache[window.location.href] = statechanges;
                     if (get_url == window.location.href) {
-                        console.log('Applying results from', get_url);
+                        debug_log('Applying results from', get_url);
                         if (usertriggered) {
                             statechanges['scrollToTopAfterUpdate'] = true
                         }
                         this.setState(statechanges);
                     } else {
-                        console.log('Not applying results from', get_url, 'location.href', window.location.href);
+                        debug_log('Not applying results from', get_url, 'location.href', window.location.href);
                         return;
                     }
                 }
@@ -574,7 +578,6 @@ export class TaskPage extends React.Component {
     }
 
     render() {
-        // console.log('TaskPage rendered');
         const singletaskmode = this.singleTaskViewTaskId(this.state.dataurl) != null;
         let pagehtml = [];
         if (!singletaskmode) {
