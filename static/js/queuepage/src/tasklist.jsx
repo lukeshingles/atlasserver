@@ -83,11 +83,10 @@ export class Task extends React.Component {
             })
             .then((response) => {
                 if (response.status == 200 && response.redirected) {
-                    // console.log(response)
                     this.setState({ 'httperror': '' });
                     const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
                     newtaskids.push(newimgtask_id);
-                    console.log('requestimages created task', newimgtask_id);
+                    debug_log('requestimages created task', newimgtask_id);
                     const new_page_url = new URL(response.url);
                     new_page_url.searchParams.delete('newids');
                     window.history.pushState({}, document.title, new_page_url);
@@ -120,7 +119,7 @@ export class Task extends React.Component {
         this.updateTimeElapsed();
         if (newtaskids.includes(this.props.taskdata.id)) {
             const li_id = '#task-' + this.props.taskdata.id
-            console.log('showing new task', this.props.taskdata.id);
+            debug_log('showing new task', this.props.taskdata.id);
             $(li_id).hide();
             // $(li_id).show(600);
             $(li_id).slideDown(200);
@@ -385,7 +384,7 @@ export class TaskPage extends React.Component {
     }
 
     setFilter(filtername) {
-        console.log('changed filter to', filtername);
+        debug_log('changed filter to', filtername);
         const new_page_url = new URL(api_url_base);
         new_page_url.search = '';
         if (filtername != null) {
@@ -425,7 +424,7 @@ export class TaskPage extends React.Component {
         const new_page_url = api_url_base + task_id + '/';
         window.history.pushState({}, document.title, new_page_url);
 
-        console.log('Task list changed to single task view for ', new_page_url.toString());
+        debug_log('Task list changed to single task view for ', new_page_url.toString());
 
         let newresults = this.state.results.filter(task => { return task.id == task_id });
         if (newresults.length == 0) {
