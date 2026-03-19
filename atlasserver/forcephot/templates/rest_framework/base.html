@@ -335,12 +335,13 @@
     {% endif %}
 
     {% block script %}
+      <script type="application/json" id="drf_csrf">
+        {
+          "csrfHeaderName": "{{ csrf_header_name|default:'X-CSRFToken' }}",
+          "csrfToken": "{% if request %}{{ csrf_token }}{% endif %}"
+        }
+      </script>
       <script>
-        window.drf = {
-          csrfHeaderName: "{{ csrf_header_name|default:'X-CSRFToken' }}",
-          csrfToken: "{% if request %}{{ csrf_token }}{% endif %}"
-        };
-
         var coll = document.getElementsByClassName("collapsible");
         var i;
 
