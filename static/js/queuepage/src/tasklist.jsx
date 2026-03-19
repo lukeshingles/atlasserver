@@ -445,7 +445,7 @@ export class TaskPage extends React.Component {
         if (new_cursor == new URL(window.location.href).searchParams.get('cursor')) {
             return;
         }
-        console.log('Task list cursor changed to ', new_cursor);
+        debug_log('Task list cursor changed to ', new_cursor);
 
         const new_page_url = new URL(window.location.href);
         if (new_cursor != null) {
