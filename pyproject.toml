@@ -35,7 +35,7 @@ dependencies = [
     "pylint>=3.2.6",
     "pylint-django>=2.5.5",
     "python-dotenv>=1.0.1",
-    "ruff>=0.15.6",
+    "ruff>=0.15.10",
     "types-pyyaml>=6.0.12.20240311",
     "types-requests>=2.31.0.20240406",
 ]
