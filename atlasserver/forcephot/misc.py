@@ -1,3 +1,4 @@
+import datetime
 import typing as t
 from multiprocessing import Process
 from pathlib import Path
@@ -10,9 +11,6 @@ from django.http import Http404
 from django.utils.log import AdminEmailHandler
 
 from atlasserver import plot_atlas_fp
-
-if t.TYPE_CHECKING:
-    import datetime
 
 dictcountrycodes = {
     "A2": "Satellite Provider",
