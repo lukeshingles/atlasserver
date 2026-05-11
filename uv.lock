@@ -229,11 +229,6 @@ dependencies = [
     { name = "python-dotenv" },
 ]
 
-[package.optional-dependencies]
-mod-wsgi = [
-    { name = "mod-wsgi" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "django-stubs", extra = ["compatible-mypy"] },
@@ -262,7 +257,6 @@ requires-dist = [
     { name = "julian", specifier = ">=0.14" },
     { name = "markdown", specifier = ">=3.6" },
     { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "mod-wsgi", marker = "extra == 'mod-wsgi'", specifier = ">=5.0.2" },
     { name = "mod-wsgi-standalone", specifier = ">=5.0.2" },
     { name = "mysqlclient", specifier = ">=2.2.4" },
     { name = "pandas", specifier = ">=2.3.1" },
@@ -270,7 +264,6 @@ requires-dist = [
     { name = "pycountry", specifier = ">=23.12.11" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
 ]
-provides-extras = ["mod-wsgi"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1023,12 +1016,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/e7/ff/0ffefdcac38932a54
 wheels = [
     { url = "https://files.pythonhosted.org/packages/27/1a/1f68f9ba0c207934b35b86a8ca3aad8395a3d6dd7921c0686e23853ff5a9/mccabe-0.7.0-py2.py3-none-any.whl", hash = "sha256:6c2d30ab6be0e4a46919781807b4f0d834ebdd6c6e3dca0bda5a15f863427b6e", size = 7350, upload-time = "2022-01-24T01:14:49.62Z" },
 ]
-
-[[package]]
-name = "mod-wsgi"
-version = "5.0.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ca/4d/275853efa4d2a4efe1614aa0df06295e71f2082cebccc4d40d0f0a551c24/mod_wsgi-5.0.2.tar.gz", hash = "sha256:6fe5557c3ef25c184c2c994905fe52be1c06ae5c46235ecafe558e84789e2159", size = 498627, upload-time = "2024-11-22T08:53:22.752Z" }
 
 [[package]]
 name = "mod-wsgi-httpd"
