@@ -23,7 +23,7 @@ jobs:
 
             - name: Install atlasserver
               run: |
-                  uv pip install --system -e .
+                  uv pip install -e .
 
             - name: Run Ruff
               if: always()

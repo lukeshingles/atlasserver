@@ -2,8 +2,11 @@
 name: Django CI
 
 on:
+    merge_group:
     push:
     pull_request:
+    repository_dispatch:
+        types: [trigger_checks]
 
 env:
     ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
@@ -44,7 +47,7 @@ jobs:
             - name: Install atlasserver
               run: |
                   cat atlasserver/settings_test.txt >> atlasserver/settings.py
-                  uv pip install --system -e .
+                  uv pip install -e .
 
             - name: Install geoip databases
               run: ./update_geoipdatabase.sh
