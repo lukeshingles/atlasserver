@@ -14,7 +14,7 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
 
             - name: Set up Python and uv
               uses: astral-sh/setup-uv@v7
@@ -27,25 +27,21 @@ jobs:
 
             - name: Run Ruff
               if: always()
-              uses: astral-sh/ruff-action@v3
-              with:
-                  version: 0.12.7
-                  args: check --exit-non-zero-on-fix --no-fix
+              run: |
+                  uv run -- ruff --version
+                  uv run -- ruff check --exit-non-zero-on-fix --no-fix
 
             - name: Run Ruff Format
               if: always()
-              uses: astral-sh/ruff-action@v3
-              with:
-                  version: 0.12.7
-                  args: format --check
+              run: uv run -- ruff format --check --exit-non-zero-on-format
 
             - name: Run mypy
               run: |
-                  mypy --install-types --non-interactive
+                  uv run -- mypy --install-types --non-interactive
 
             - name: Run pylint
               run: |
-                  pylint atlasserver
+                  uv run -- pylint atlasserver
 
     superlinter:
         name: Super linter
@@ -53,7 +49,7 @@ jobs:
 
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   # Full git history is needed to get a proper list of changed files within `super-linter`
                   fetch-depth: 0
