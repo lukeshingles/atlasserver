@@ -1,24 +1,57 @@
 ---
-name: Django CI
+name: Test and lint
 
 on:
     merge_group:
     push:
-    pull_request:
     repository_dispatch:
         types: [trigger_checks]
 
-env:
-    ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
-    ATLASSERVER_DJANGO_MYSQL_USER: root
-    ATLASSERVER_DJANGO_MYSQL_PASSWORD: root
-    ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
-    ATLASSERVER_DJANGO_SECRET_KEY: ${{secrets.ATLASSERVER_DJANGO_SECRET_KEY}}
-
 jobs:
-    build:
+    lint:
+        name: Lint and type check
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v6
+
+            - name: Set up Python and uv
+              uses: astral-sh/setup-uv@v7
+              with:
+                  activate-environment: true
+
+            - name: Install atlasserver
+              run: uv pip install -e .
+
+            - name: Run Ruff
+              if: always()
+              run: |
+                  uv run -- ruff --version
+                  uv run -- ruff check --exit-non-zero-on-fix --no-fix
+
+            - name: Run Ruff Format
+              if: always()
+              run: uv run -- ruff format --check --exit-non-zero-on-format
+
+            - name: Run mypy
+              run: uv run -- mypy --install-types --non-interactive
+
+            - name: Run pylint
+              run: uv run -- pylint atlasserver
+
+            - name: Run prek pre-commit checks
+              uses: j178/prek-action@v2
+
+    test:
+        name: Run tests
         environment: test
         runs-on: ubuntu-latest
+        env:
+            ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
+            ATLASSERVER_DJANGO_MYSQL_USER: root
+            ATLASSERVER_DJANGO_MYSQL_PASSWORD: root
+            ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
+            ATLASSERVER_DJANGO_SECRET_KEY: ${{secrets.ATLASSERVER_DJANGO_SECRET_KEY}}
 
         # services:
         #     mysql:
