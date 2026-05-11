@@ -38,14 +38,12 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Set up Python
-              uses: actions/setup-python@v5
+            - name: Set up Python and uv
+              uses: astral-sh/setup-uv@v7
+              with:
+                  activate-environment: true
 
-            - name: Install dependencies
-              run: |
-                  python -m pip install --upgrade pip uv wheel mod-wsgi-standalone mysqlclient
-
-            - name: Install package
+            - name: Install atlasserver
               run: |
                   cat atlasserver/settings_test.txt >> atlasserver/settings.py
                   uv pip install --system -e .

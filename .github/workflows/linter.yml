@@ -16,13 +16,13 @@ jobs:
             - name: Checkout Code
               uses: actions/checkout@v4
 
-            - name: Set up Python
-              uses: actions/setup-python@v5
+            - name: Set up Python and uv
+              uses: astral-sh/setup-uv@v7
+              with:
+                  activate-environment: true
 
-            - name: Install dependencies
+            - name: Install atlasserver
               run: |
-                  python3 -m pip install --upgrade pip uv
-                  uv pip install --system --upgrade pylint mypy
                   uv pip install --system -e .
 
             - name: Run Ruff
@@ -30,14 +30,14 @@ jobs:
               uses: astral-sh/ruff-action@v3
               with:
                   version: 0.12.7
-                  args: "check --exit-non-zero-on-fix --no-fix"
+                  args: check --exit-non-zero-on-fix --no-fix
 
             - name: Run Ruff Format
               if: always()
               uses: astral-sh/ruff-action@v3
               with:
                   version: 0.12.7
-                  args: "format --check"
+                  args: format --check
 
             - name: Run mypy
               run: |
