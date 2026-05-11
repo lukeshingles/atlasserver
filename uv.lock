@@ -241,6 +241,9 @@ dev = [
     { name = "pylint" },
     { name = "pylint-django" },
     { name = "ruff" },
+    { name = "types-markdown" },
+    { name = "types-pycurl" },
+    { name = "types-python-dateutil" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -276,6 +279,9 @@ dev = [
     { name = "pylint", specifier = ">=3.2.6" },
     { name = "pylint-django", specifier = ">=2.5.5" },
     { name = "ruff", specifier = ">=0.15.6" },
+    { name = "types-markdown" },
+    { name = "types-pycurl" },
+    { name = "types-python-dateutil" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311" },
     { name = "types-requests", specifier = ">=2.31.0.20240406" },
 ]
@@ -1762,6 +1768,33 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl", hash = "sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf", size = 78374, upload-time = "2026-02-03T17:35:50.982Z" },
+]
+
+[[package]]
+name = "types-markdown"
+version = "3.10.2.20260508"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/62/4ca11db82799590117d9b6ef8fcd6515039cff80838304face5440f7d95c/types_markdown-3.10.2.20260508.tar.gz", hash = "sha256:64c405a30decd46cf78443bbcde8331f561f83752cc6d962ff3f5ccaabe26a8e", size = 19818, upload-time = "2026-05-08T04:49:45.095Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cf/9d/eae7125bcf063ff5f79aadad58f3d37675263941f84e025bf53de1735fe1/types_markdown-3.10.2.20260508-py3-none-any.whl", hash = "sha256:2ee5e462c7b821c27c3d8f75f4da873d3e3c87d24d7f2d741f8f4261e4024a99", size = 25811, upload-time = "2026-05-08T04:49:43.962Z" },
+]
+
+[[package]]
+name = "types-pycurl"
+version = "7.46.0.20260509"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/3e/9b7e3779b7baf42d650ccc9943f3fd620207446bbdd5103c6a2be3bf2fbb/types_pycurl-7.46.0.20260509.tar.gz", hash = "sha256:719d328744d0a0f1765c7a2eb3e3b081edc8ddec4ca668b61e82625a4519b359", size = 16277, upload-time = "2026-05-09T04:58:55.002Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/b9/9635032e42e92d466edbed314d1ddbaf0e0dedc81bed4083e09f44a71799/types_pycurl-7.46.0.20260509-py3-none-any.whl", hash = "sha256:9399a9e0c2682e8740a8027bbc76e4510380bc71165d27c9f6107e5042926334", size = 14351, upload-time = "2026-05-09T04:58:53.891Z" },
+]
+
+[[package]]
+name = "types-python-dateutil"
+version = "2.9.0.20260508"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/9b/ee1674cbe9ec50bb824f35a5dc0ce5fd1f1b6196ba1213e3fe6f33b4ce32/types_python_dateutil-2.9.0.20260508.tar.gz", hash = "sha256:596a6d63d81f587bf04c8254fb78df9d2344e915ce67948d7400512e3a6206d5", size = 17033, upload-time = "2026-05-08T04:47:08.248Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/7c/1788ff10edf56031d74ad3fba40947e0e8b82e3a529b30e6b7d71c191dec/types_python_dateutil-2.9.0.20260508-py3-none-any.whl", hash = "sha256:bfc6fd2d81aa86e5ac97206a64304f6bd247426eedbca9b98619bbc48c6a1c10", size = 18425, upload-time = "2026-05-08T04:47:07.207Z" },
 ]
 
 [[package]]

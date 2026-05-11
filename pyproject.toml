@@ -49,6 +49,9 @@ dev = [
     "ruff>=0.15.6",
     "types-pyyaml>=6.0.12.20240311",
     "types-requests>=2.31.0.20240406",
+    "types-Markdown",
+    "types-pycurl",
+    "types-python-dateutil",
 ]
 
 [project.urls]
