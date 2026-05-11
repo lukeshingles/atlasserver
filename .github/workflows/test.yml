@@ -1,0 +1,105 @@
+---
+name: Test and lint
+
+on:
+    merge_group:
+    push:
+    repository_dispatch:
+        types: [trigger_checks]
+
+jobs:
+    lint:
+        name: Lint and type check
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v6
+
+            - name: Set up Python and uv
+              uses: astral-sh/setup-uv@v7
+              with:
+                  activate-environment: true
+
+            - name: Install atlasserver
+              run: uv pip install -e .
+
+            - name: Run Ruff
+              if: always()
+              run: |
+                  uv run -- ruff --version
+                  uv run -- ruff check --exit-non-zero-on-fix --no-fix
+
+            - name: Run Ruff Format
+              if: always()
+              run: uv run -- ruff format --check --exit-non-zero-on-format
+
+            - name: Run mypy
+              run: uv run -- mypy --install-types --non-interactive
+
+            - name: Run pylint
+              run: uv run -- pylint atlasserver
+
+            - name: Run prek pre-commit checks
+              uses: j178/prek-action@v2
+
+    test:
+        name: Run tests
+        environment: test
+        runs-on: ubuntu-latest
+        env:
+            ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
+            ATLASSERVER_DJANGO_MYSQL_USER: root
+            ATLASSERVER_DJANGO_MYSQL_PASSWORD: root
+            ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
+            ATLASSERVER_DJANGO_SECRET_KEY: ${{secrets.ATLASSERVER_DJANGO_SECRET_KEY}}
+
+        # services:
+        #     mysql:
+        #         image: mysql:5.7
+        #         env:
+        #             MYSQL_ALLOW_EMPTY_PASSWORD: yes
+        #             MYSQL_DATABASE: atlasserver
+        #             MYSQL_USER: root
+        #             MYSQL_PASSWORD: password
+        #             MYSQL_ROOT_PASSWORD: password
+        #         ports:
+        #             - 3306
+        #         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Python and uv
+              uses: astral-sh/setup-uv@v7
+              with:
+                  activate-environment: true
+
+            - name: Install atlasserver
+              run: |
+                  cat atlasserver/settings_test.txt >> atlasserver/settings.py
+                  uv pip install -e .
+
+            - name: Install geoip databases
+              run: ./update_geoipdatabase.sh
+
+            - name: Set up MySQL
+              run: |
+                  sudo /etc/init.d/mysql start
+                  echo "mysql started"
+                  mysql -e "CREATE DATABASE ${{env.ATLASSERVER_DJANGO_MYSQL_DBNAME}};" -u${{env.ATLASSERVER_DJANGO_MYSQL_USER}} -p${{env.ATLASSERVER_DJANGO_MYSQL_PASSWORD}}
+                  ./manage.py makemigrations
+                  ./manage.py migrate
+
+            - name: Run Django Tests
+              run: |
+                  ./manage.py test
+
+            - name: Start and stop server
+              run: |
+                  atlaswebserver start
+                  atlastaskrunner start
+                  atlastaskrunner stop
+                  atlaswebserver stop

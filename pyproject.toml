@@ -20,7 +20,6 @@ dependencies = [
     "django>=6.0.3",
     "bokeh~=3.9.0",
     "django-filter>=25.2",
-    "django-stubs[compatible-mypy]>=6.0.1",
     "djangorestframework>=3.17.0",
     "djangorestframework-stubs>=3.16.8",
     "fundamentals>=2.6.4",
@@ -28,21 +27,31 @@ dependencies = [
     "julian>=0.14",
     "markdown>=3.6",
     "matplotlib>=3.10.8",
+    "mod-wsgi-standalone>=5.0.2",
     "mysqlclient>=2.2.4",
-    "pandas>=2.2.2",
+    "pandas>=2.3.1",
     "psutil>=5.9.0",
     "pycountry>=23.12.11",
-    "pylint>=3.2.6",
-    "pylint-django>=2.5.5",
     "python-dotenv>=1.0.1",
-    "ruff>=0.15.6",
-    "types-pyyaml>=6.0.12.20240311",
-    "types-requests>=2.31.0.20240406",
 ]
 
 [project.optional-dependencies]
 mod_wsgi = [
     "mod_wsgi>=5.0.2",
+]
+
+[dependency-groups]
+dev = [
+    "django-stubs[compatible-mypy]>=6.0.1",
+    "mypy>=2.0",
+    "pylint>=3.2.6",
+    "pylint-django>=2.5.5",
+    "ruff>=0.15.6",
+    "types-pyyaml>=6.0.12.20240311",
+    "types-requests>=2.31.0.20240406",
+    "types-Markdown",
+    "types-pycurl",
+    "types-python-dateutil",
 ]
 
 [project.urls]

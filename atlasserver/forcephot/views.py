@@ -219,11 +219,15 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Create new task(s)."""
-        usertaskcount_before = Task.objects.filter(
-            starttimestamp__isnull=True,
-            user_id=self.request.user.pk,
-            is_archived=False,
-        ).count()
+        usertaskcount_before = (
+            Task.objects.filter(
+                starttimestamp__isnull=True,
+                user_id=self.request.user.pk,
+                is_archived=False,
+            ).count()
+            if self.request.user and self.request.user.pk is not None
+            else 0
+        )
 
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
