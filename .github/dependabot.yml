@@ -6,6 +6,10 @@ updates:
       directory: /
       schedule:
           interval: weekly
+      groups:
+          - name: actions
+            patterns:
+                - '*'
 
     - package-ecosystem: uv
       directory: /
@@ -20,3 +24,7 @@ updates:
       directory: /
       schedule:
           interval: weekly
+      groups:
+          - name: pre-commit
+            patterns:
+                - '*'
