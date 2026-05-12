@@ -1,7 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=80.9",
-    "setuptools_scm>=8.0",
+    "setuptools>=82.0.1",
+    "setuptools_scm>=10.0.5",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -29,7 +29,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "mod-wsgi-standalone>=5.0.2",
     "mysqlclient>=2.2.4",
-    "pandas>=2.3.1",
+    "pandas>=3.0.3",
     "psutil>=5.9.0",
     "pycountry>=23.12.11",
     "python-dotenv>=1.0.1",
@@ -37,7 +37,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "django-stubs[compatible-mypy]>=6.0.1",
+    "django-stubs[compatible-mypy]>=6.0.4",
     "mypy>=2.0",
     "pylint>=3.2.6",
     "pylint-django>=2.5.5",
