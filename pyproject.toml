@@ -31,7 +31,7 @@ dependencies = [
     "mysqlclient>=2.2.4",
     "pandas>=3.0.3",
     "psutil>=5.9.0",
-    "pycountry>=23.12.11",
+    "pycountry>=26.2.16",
     "python-dotenv>=1.0.1",
 ]
 
