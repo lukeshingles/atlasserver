@@ -439,13 +439,13 @@ def do_task(task, slotid: int) -> None:
     """Run a task in a particular slot and send a result email if requested."""
 
     def logfunc_slotonly(x) -> None:
-        log_general(f"slot{slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
+        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
     def logfunc(x) -> None:
-        log_general(f"slot{slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
+        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
         # also log to the main process
-        log_general(f"slot{slotid:2d} task {task.id:05d}: {x}")
+        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
 
     Task.objects.all().filter(pk=task.id).update(
         starttimestamp=datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
