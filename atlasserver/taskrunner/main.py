@@ -162,7 +162,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         if task.mjd_max:
             atlascommand += f" m1={float(task.mjd_max)}"
 
-        atlascommand += " dodb=1 parallel=8"
+        atlascommand += " dodb=1 parallel=4"
 
         # for debugging because force.sh takes a long time to run
         # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
@@ -597,7 +597,7 @@ def main() -> None:
 
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
-    numslots: int = 8
+    numslots: int = 16
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
     procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
