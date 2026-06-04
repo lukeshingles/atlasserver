@@ -739,7 +739,7 @@ def resultplotdatajs(request, taskid):
             )
             divid = f"plotforcedflux-task-{taskid}"
 
-            for color, filter in [(11, "c"), (12, "o")]:
+            for color, filter in [(11, "c"), (12, "o"), (8, "w")]:
                 dffilter = dfforcedphot.query("F == @filter", inplace=False)
 
                 jsout.extend(
