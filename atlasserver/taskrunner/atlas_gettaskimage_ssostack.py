@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Convert the solar system stack FITS file to a JPEG. This script is to be run on sc01.
    Also depends on a new monsta script, which is not in standard ATLAS pipeline bin directory
-   (tvjpeg_ssostack.pro)"""
+   (tvjpeg_ssostack.pro)
+"""
 
 import os
 import sys
