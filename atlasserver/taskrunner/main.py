@@ -141,19 +141,9 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     atlascommand = "nice -n 19 "
     if task.request_type == "FP":
         if task.mpc_name:
-            # 2026-06-3 KWS Temporary hack - use ksmith code and add tdo.
-            #               This setting will disappear as soon as changes to ssforce.sh are accepted.
-            if task.user_id in settings.TEST_USERS:
-                atlascommand += f"~/bin/ssforce.sh '{task.mpc_name}'"
-            else:
-                atlascommand += f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
+            atlascommand += f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
         else:
-            # 2026-06-3 KWS Temporary hack - use ksmith code.
-            #               This setting will disappear as soon as changes to ssforce.sh are accepted.
-            if task.user_id in settings.TEST_USERS:
-                atlascommand += f"~/bin/force.sh {float(task.ra)} {float(task.dec)}"
-            else:
-                atlascommand += f"/atlas/bin/force.sh {float(task.ra)} {float(task.dec)}"
+            atlascommand += f"/atlas/bin/force.sh {float(task.ra)} {float(task.dec)}"
 
         if task.use_reduced:
             atlascommand += " red=1"
