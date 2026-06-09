@@ -25,11 +25,7 @@ def main() -> None:
     # Force a timeout if monsta takes longer than 5 seconds. Should be instant.
     # The new script has jpeg levels settings. These can be adjusted, but the
     # default settings of -1 10 seem to suffice in most cases.
-    os.system(
-        "timeout 5 /atlas/vendor/monsta/bin/monsta ~/tvjpeg_ssostack.pro "
-        f"{stackedfitsfile} -1 10"
-        "\n"
-    )
+    os.system(f"timeout 5 /atlas/vendor/monsta/bin/monsta ~/tvjpeg_ssostack.pro {stackedfitsfile} -1 10\n")
 
     # Rename jobxxxxx.fits.jpg to jobxxxxx.jpg.
     Path(stackedfitsfile).with_suffix(".fits.jpg").rename(Path(stackedfitsfile).with_suffix(".jpg"))

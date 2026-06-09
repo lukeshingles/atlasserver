@@ -303,7 +303,12 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         # move the stack *.fits, *.jpg and *.txt data from sc01 (deleting the remote files)
         copycommands = [
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)],
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{Path(remoteresultfile).with_suffix('.jpg')}", str(settings.RESULTS_DIR)],
+            [
+                "rsync",
+                "--remove-source-files",
+                f"{REMOTE_SERVER}:{Path(remoteresultfile).with_suffix('.jpg')}",
+                str(settings.RESULTS_DIR),
+            ],
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotedatafile}", str(settings.RESULTS_DIR)],
         ]
     else:  # IMGZIP
