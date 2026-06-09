@@ -1,10 +1,10 @@
 ! Just tv and make a jpeg - allow min and max params to be sent
 !
-! E.g. monsta $PRODIR/tvjpeg.pro /tmp/foo.fits 
+! E.g. monsta $PRODIR/tvjpeg.pro /tmp/foo.fits
 ! OR
 ! E.g. monsta $PRODIR/tvjpeg.pro /tmp/foo.fits -1 10
 
-rd 1 '{arg2}' cfitsio silent 
+rd 1 '{arg2}' cfitsio silent
 set JPGMIN=-50 JPGMAX=100
 
 ! Syntax: monsta tvjpeg.pro infile min max
