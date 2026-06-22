@@ -181,7 +181,7 @@ export class Task extends React.Component {
         let taskbox = [
             <div key="rightside" className="rightside">
                 {delbutton}
-                <img src={task.previewimage_url} style={{ display: 'block', marginTop: '1em', marginLeft: '1em' }} />
+                <img src={task.previewimage_url} style={{ display: 'block', marginTop: '1em', marginLeft: '1em' }} height="100" />
             </div>
         ];
 

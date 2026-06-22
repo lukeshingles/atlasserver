@@ -164,6 +164,10 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
         atlascommand += " dodb=1 parallel=4"
 
+        # 2026-06-03 KWS Temporary hack. Only specified users can request TDO data.
+        if task.user_id in settings.TEST_USERS:
+            atlascommand += " tdo=1"
+
         # for debugging because force.sh takes a long time to run
         # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
@@ -211,8 +215,12 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         )
         atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
         atlascommand += f" outdir={remotetaskdir}"
+        # 2026-06-03 KWS Need to add tdo to sites. Double backslash needed because we call nice.
+        if task.user_id in settings.TEST_USERS:
+            atlascommand += " sites=\\'hko mlo chl sth tdo\\'"
         atlascommand += f" | tee {remotedatafile}; "
         atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
+        atlascommand += f"~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
         atlascommand += f" rm -rf {remotetaskdir}"
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
@@ -292,9 +300,15 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             ],
         ]
     elif task.request_type == "SSOSTACK":
-        # move the stack *.fits and *.txt data from sc01 (deleting the remote files)
+        # move the stack *.fits, *.jpg and *.txt data from sc01 (deleting the remote files)
         copycommands = [
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)],
+            [
+                "rsync",
+                "--remove-source-files",
+                f"{REMOTE_SERVER}:{Path(remoteresultfile).with_suffix('.jpg')}",
+                str(settings.RESULTS_DIR),
+            ],
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotedatafile}", str(settings.RESULTS_DIR)],
         ]
     else:  # IMGZIP
