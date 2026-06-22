@@ -285,13 +285,11 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     if not task_exists(taskid=task.id):  # check if job was cancelled
         return None, None
 
-    # make sure the large zip files are not kept around on the remote system
-    # but keep the data files there for possible image requests
+    # copy files from sc01 to local machine, deleting the remote files after successful copy
     if task.request_type == "FP":
         copycommands = [
-            # leave the FP data file on SC01 to be used for follow-up image requests
-            ["scp", f"{REMOTE_SERVER}:{remoteresultfile}", str(localresultfile)],
             # move the jpg task image from sc01 (deleting the remote file)
+            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(localresultfile)],
             [
                 "rsync",
                 "--remove-source-files",
@@ -316,6 +314,15 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         copycommands = [
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
         ]
+        # the data file should already be copied, but just in case, copy it again (deleting the remote file)
+        copycommands.append(
+            [
+                "rsync",
+                "--remove-source-files",
+                f"{REMOTE_SERVER}:{remotedatafile}",
+                str(settings.RESULTS_DIR),
+            ]
+        )
 
     for copycommand in copycommands:
         logfunc(" ".join(copycommand))
