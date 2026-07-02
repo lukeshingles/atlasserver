@@ -34,7 +34,7 @@ import sys
 
 from atlasserver.forcephot.models import Task
 
-TASKMAXTIME: int = 1800
+TASKMAXTIME: int = 45 * 60  # in seconds
 
 LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 
