@@ -138,7 +138,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     localresultfile = Path(settings.RESULTS_DIR, filename)
     settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    atlascommand = "nice -n 19 "
+    atlascommand = "nice -n 19 timeout 3h "
     if task.request_type == "FP":
         if task.mpc_name:
             atlascommand += f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
