@@ -13,7 +13,7 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v6
+              uses: actions/checkout@v7
 
             - name: Set up Python and uv
               uses: astral-sh/setup-uv@v7
@@ -68,7 +68,7 @@ jobs:
 
         steps:
             - name: Checkout Code
-              uses: actions/checkout@v6
+              uses: actions/checkout@v7
               with:
                   fetch-depth: 0
 
