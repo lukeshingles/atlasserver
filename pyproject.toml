@@ -203,6 +203,7 @@ ignore-fully-untyped = true
 
 [tool.ruff.lint.per-file-ignores]
 "plot_atlas_fp.py" = ["ALL"]
+"**/tests.py" = ["S106"]
 
 [tool.ruff.lint.isort]
 force-single-line = true

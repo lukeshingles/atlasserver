@@ -14,6 +14,7 @@ from bokeh.embed import components
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth import login
+from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geoip2 import GeoIP2
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
@@ -46,6 +47,7 @@ from rest_framework.utils.urls import replace_query_param
 from rest_framework.views import APIView
 
 from atlasserver.forcephot.filters import TaskFilter
+from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
@@ -691,6 +693,21 @@ def register(request):
         form = RegistrationForm()
 
     return render(request, "registration/register.html", {"form": form})
+
+
+@login_required
+def change_email(request):
+    success = False
+    if request.method == "POST":
+        form = EmailChangeForm(request.user, request.POST)
+        if form.is_valid():
+            form.save()
+            success = True
+            form = EmailChangeForm(request.user)
+    else:
+        form = EmailChangeForm(request.user)
+
+    return render(request, "registration/email_change_form.html", {"form": form, "success": success})
 
 
 def resultplotdatajs(request, taskid):

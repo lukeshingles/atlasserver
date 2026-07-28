@@ -43,6 +43,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("queue/<int:pk>/requestimages/", views.RequestImages.as_view(), name="requestimages"),
     re_path(r"^register/$", views.register, name="register"),
+    path("emailchange/", views.change_email, name="email_change"),
     path("faq/", TemplateView.as_view(template_name="faq.html", extra_context={"name": "FAQ"}), name="faq"),
     path(
         "resultdesc/",
