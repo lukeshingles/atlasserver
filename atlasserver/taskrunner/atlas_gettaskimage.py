@@ -54,7 +54,11 @@ def main() -> None:
         fitsoutpath.unlink()
 
     # jobxxxxx.fits.jpg to jobxxxx.jpg
-    fitsoutpath.with_suffix(".fits.jpg").rename(Path(datafile).with_suffix(".jpg"))
+    jpgpath = fitsoutpath.with_suffix(".fits.jpg")
+    if jpgpath.exists():
+        jpgpath.rename(Path(datafile).with_suffix(".jpg"))
+    else:
+        print(f"ERROR: {jpgpath} was not created")
 
 
 if __name__ == "__main__":

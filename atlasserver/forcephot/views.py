@@ -115,7 +115,11 @@ def calculate_queue_positions() -> None:
                 except ValueError:  # the task disappeared between the two queries?
                     runningtaskid = None
 
-            for i, (taskid, task_userid) in enumerate(zip(unassigned_taskids, unassigned_task_userids, strict=True)):
+            # collect the tasks not assigned in this pass rather than popping from
+            # the lists during iteration (which would skip elements)
+            remaining_taskids: list[int] = []
+            remaining_task_userids: list[int] = []
+            for taskid, task_userid in zip(unassigned_taskids, unassigned_task_userids, strict=True):
                 if task_userid not in useridsassigned_currentpass and (
                     passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
                 ):
@@ -125,10 +129,14 @@ def calculate_queue_positions() -> None:
                     # method 2
                     # queuepos_updates.append((task.id, queuepos))
 
-                    unassigned_taskids.pop(i)
-                    unassigned_task_userids.pop(i)
                     useridsassigned_currentpass.add(task_userid)
                     queuepos += 1
+                else:
+                    remaining_taskids.append(taskid)
+                    remaining_task_userids.append(task_userid)
+
+            unassigned_taskids = remaining_taskids
+            unassigned_task_userids = remaining_task_userids
 
             assert passnum < (2 * queuedtaskcount + 1)  # prevent infinite loop if we're failing to assign anything
 
@@ -352,7 +360,7 @@ class RequestImages(APIView):
             raise PermissionDenied
 
         try:
-            parent_task = Task.objects.get(id=pk)
+            parent_task = Task.objects.get(id=pk, request_type="FP", is_archived=False)
 
             if parent_task.user.id != request.user.id and not request.user.is_staff:
                 raise PermissionDenied
@@ -408,7 +416,7 @@ class RequestImages(APIView):
 
 @cache_page(60 * 60 * 24, cache="usagestats")
 def statscoordchart(request):
-    tasks = Task.objects.all().order_by("-timestamp")[:20000].select_related("user")
+    tasks = list(Task.objects.all().order_by("-timestamp")[:20000].select_related("user"))
 
     dictsource = {
         "ra": [tsk.ra for tsk in tasks],
@@ -584,15 +592,12 @@ def statslongterm(request):
         thirtydaytasks.filter(country_code__isnull=False)
         .exclude(country_code="XX")
         .values_list("country_code")
-        .annotate(task_count=Count("country_code"))
+        .annotate(task_count=Count("country_code"), user_count=Count("user_id", distinct=True))
         .order_by("-task_count", "country_code")[:15]
     )
 
-    def country_activeusers(country_code: str) -> int:
-        return thirtydaytasks.filter(country_code=country_code).values_list("user_id").distinct().count()
-
     dictparams["countrylist"] = [
-        (country_code_to_name(code), task_count, country_activeusers(code)) for code, task_count in countrylist
+        (country_code_to_name(code), task_count, user_count) for code, task_count, user_count in countrylist
     ]
 
     regionlist = (
