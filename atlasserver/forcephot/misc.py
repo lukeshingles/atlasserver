@@ -357,7 +357,7 @@ def make_pdf_plot_worker(
     taskid: int,
     taskcomment: str = "",
     logprefix: str = "",
-    logfunc: None | t.Callable[[t.Any], t.Any] = None,
+    logfunc: t.Callable[[t.Any], t.Any] | None = None,
 ) -> Path | None:
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"

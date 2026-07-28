@@ -18,7 +18,7 @@ dependencies = [
     "astrocalc>=0.4.2",
     "astropy>=6.1.0",
     "django>=6.0.6",
-    "bokeh~=3.9.1",
+    "bokeh~=3.9.2",
     "django-filter>=25.2",
     "djangorestframework>=3.17.0",
     "djangorestframework-stubs>=3.16.8",
@@ -42,7 +42,7 @@ dev = [
     "pip>=26.1.2",
     "pylint>=4.0.6",
     "pylint-django>=2.5.5",
-    "ruff>=0.15.17",
+    "ruff>=0.16.0",
     "types-pyyaml>=6.0.12.20240311",
     "types-requests>=2.31.0.20240406",
     "types-Markdown",
@@ -129,6 +129,7 @@ ignore = [
     "ANN",
     "BLE001",
     "C901",    # complex-structure
+    "CPY001",
     "COM812",  # missing-trailing-comma
     "D100",    # undocumented-public-module
     "D101",    # undocumented-public-class
@@ -155,6 +156,7 @@ ignore = [
     "PLR0912", # too-many-branches
     "PLR0913", # too-many-arguments
     "PLR0915", # too-many-statements
+    "PLR0917",
     "PLR2004", # magic-value-comparison
     "RUF012",
     "S101",    # Use of assert detected

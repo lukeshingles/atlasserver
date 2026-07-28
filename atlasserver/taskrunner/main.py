@@ -34,7 +34,7 @@ import sys
 
 from atlasserver.forcephot.models import Task
 
-TASKMAXTIME: int = 45 * 60  # in seconds
+TASK_MAXTIME_SECONDS: int = 4 * 3600
 
 LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 
@@ -138,7 +138,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     localresultfile = Path(settings.RESULTS_DIR, filename)
     settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    atlascommand = "nice -n 19 timeout 3h "
+    atlascommand = f"nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
     if task.request_type == "FP":
         if task.mpc_name:
             atlascommand += f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
@@ -245,7 +245,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(taskid=task.id)
-            timed_out = (time.perf_counter() - starttime) >= TASKMAXTIME
+            timed_out = (time.perf_counter() - starttime) >= TASK_MAXTIME_SECONDS
             if (time.perf_counter() - lastlogtime) >= 10:
                 logfunc(f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ")
                 lastlogtime = time.perf_counter()
@@ -254,7 +254,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     if cancelled or timed_out:
         if timed_out:
-            logfunc(f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASKMAXTIME:.0f} seconds")
+            logfunc(f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds")
         os.kill(proc.pid, SIGTERM)
         return None, None  # don't finish with an error message, because we'll retry it later
 

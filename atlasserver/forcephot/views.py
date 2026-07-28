@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+import typing as t
 from pathlib import Path
 from typing import Any
 
@@ -615,9 +616,9 @@ def statslongterm(request):
 def statsshortterm(request):
     now = datetime.datetime.now(datetime.UTC)
     sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
-    sevendaytaskcount = int(sevendaytasks.count())
+    sevendaytaskcount = sevendaytasks.count()
 
-    dictparams = {
+    dictparams: dict[str, t.Any] = {
         "sevendaytasks": sevendaytaskcount,
         "sevendayusers": sevendaytasks.values_list("user_id").distinct().count(),
     }
