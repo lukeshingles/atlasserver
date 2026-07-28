@@ -533,9 +533,13 @@ def remove_old_tasks(
 ) -> None:
     """Remove old tasks matching given criteria from the database and optionally delete their result files (if harddeleterecord)."""
     now = datetime.datetime.now(datetime.UTC)
-    filteropts = {"finishtimestamp__isnull": False, "finishtimestamp__lt": now - datetime.timedelta(days=days_ago)}
+    filteropts: dict[str, t.Any] = {
+        "finishtimestamp__isnull": False,
+        "finishtimestamp__lt": now - datetime.timedelta(days=days_ago),
+    }
 
     if request_type is not None:
+        # pyrefly: ignore [bad-assignment]
         filteropts["request_type"] = request_type
 
     if not harddeleterecord:

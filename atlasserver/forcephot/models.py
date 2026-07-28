@@ -94,6 +94,7 @@ class Task(models.Model):
             status = "queued"
 
         strtask = (
+            # pyrefly: ignore [missing-attribute]
             f"Task {self.id:d}: {self.timestamp:%Y-%m-%d %H:%M:%S %Z} {user.username} ({user.email})"
             + (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "")
             + f"{' API' if self.from_api else ''} {self.request_type}"

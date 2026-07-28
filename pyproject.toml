@@ -96,6 +96,24 @@ ignored-modules = ["astropy", "extinction"]
 [tool.pylint.MASTER]
 ignore-paths = "atlasserver/plot_atlas_fp.py"
 
+[tool.pyrefly]
+project-includes = ["**/*.py"]
+project-excludes = [
+    "**/build*",
+    "**/tests*",
+    "**/migrations*",
+    "**/static*",
+    "**/.*",
+    "**/.venv*",
+    "**/plot_atlas_fp.py",
+]
+python-version = "3.13"
+preset = "legacy"
+ignore-missing-imports = ["*"]
+
+[tool.pyrefly.errors]
+redundant-cast = "warn"
+
 [tool.pyright]
 typeCheckingMode = "off"
 exclude = [

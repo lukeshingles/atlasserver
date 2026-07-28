@@ -12,6 +12,7 @@ class RegistrationForm(UserCreationForm):
     }
     email = forms.EmailField(max_length=254, help_text="Required. Give a valid email address.")
 
+    # pyrefly: ignore [bad-override]
     class Meta:
         model = get_user_model()
         fields = (
