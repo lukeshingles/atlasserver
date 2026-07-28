@@ -6,7 +6,8 @@ This code depends on a new monsta script, which is not in standard ATLAS pipelin
 atlas user's home directory.
 """
 
-import os
+import contextlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,7 +26,18 @@ def main() -> None:
     # Force a timeout if monsta takes longer than 5 seconds. Should be instant.
     # The new script has jpeg levels settings. These can be adjusted, but the
     # default settings of -1 10 seem to suffice in most cases.
-    os.system(f"timeout 5 /atlas/vendor/monsta/bin/monsta ~/tvjpeg_ssostack.pro {stackedfitsfile} -1 10\n")
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        subprocess.run(
+            [
+                "/atlas/vendor/monsta/bin/monsta",
+                str(Path("~/tvjpeg_ssostack.pro").expanduser()),
+                stackedfitsfile,
+                "-1",
+                "10",
+            ],
+            check=False,
+            timeout=5,
+        )
 
     # Rename jobxxxxx.fits.jpg to jobxxxxx.jpg.
     Path(stackedfitsfile).with_suffix(".fits.jpg").rename(Path(stackedfitsfile).with_suffix(".jpg"))

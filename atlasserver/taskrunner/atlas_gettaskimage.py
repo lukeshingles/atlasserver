@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Input a job data file and produce the first (or brightest) image in JPEG. This script is to be run on sc01."""
 
-import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -31,11 +31,22 @@ def main() -> None:
     fitsext = "fits" if reduced else "diff"
     fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
     fitsoutpath = Path(datafile).with_suffix(".fits")
-    os.system(
-        "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
-        f"{fitsinput} {fitsoutpath} "
-        f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 100"
-        "\n"
+    pixcoords = subprocess.run(
+        ["/atlas/bin/pix2sky", "-sky2pix", fitsinput, str(row["RA"]), str(row["Dec"])],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    subprocess.run(
+        [
+            "/atlas/vendor/monsta/bin/monsta",
+            "/atlas/lib/monsta/subarray.pro",
+            fitsinput,
+            str(fitsoutpath),
+            *pixcoords,
+            "100",
+        ],
+        check=False,
     )
 
     # delete the .fits (but keep the .jpeg)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Input a job data file and produce a zip of FITS images. This script is to be run on sc01."""
 
-import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -10,7 +10,6 @@ from pathlib import Path
 import pandas as pd
 
 # import math
-# import subprocess
 
 
 # def mjd_to_date(mjd):
@@ -141,19 +140,28 @@ def main() -> None:
     #     with wpdatefile.open('w') as f:
     #         f.writelines(wpdatelines)
 
-    os.system(f"parallel --jobs 16 < {commandfile}")
+    with commandfile.open() as f:
+        subprocess.run(["parallel", "--jobs", "16"], check=False, stdin=f)
 
     for firstfitsoutpath in [firstfitsoutpath_c, firstfitsoutpath_o]:
         if firstfitsoutpath is not None:
             origext = ".fits" if reduced else "_diff.fits"
             refoutputpath = str(firstfitsoutpath).replace(origext, "_ref.fits")
-            command_getref = f"/atlas/bin/wpwarp2 -novar -nomask -nozerosat -wp {refoutputpath} {firstfitsoutpath}\n"
+            command_getref = [
+                "/atlas/bin/wpwarp2",
+                "-novar",
+                "-nomask",
+                "-nozerosat",
+                "-wp",
+                refoutputpath,
+                str(firstfitsoutpath),
+            ]
             with commandfile.open("a") as f:
-                f.write(command_getref)
-            print(command_getref)
-            os.system(command_getref)
+                f.write(" ".join(command_getref) + "\n")
+            print(" ".join(command_getref))
+            subprocess.run(command_getref, check=False)
 
-    os.system(f"cp {datafile} {tmpfolder}")
+    shutil.copy(datafile, tmpfolder)
 
     zipoutpath = Path(datafile).with_suffix(".zip").resolve()
 
@@ -161,9 +169,9 @@ def main() -> None:
     if zipoutpath.exists():
         zipoutpath.unlink()
 
-    cmd = f"zip --junk-paths -r {zipoutpath} {tmpfolder}"
-    print(cmd)
-    os.system(cmd)
+    cmd = ["zip", "--junk-paths", "-r", str(zipoutpath), str(tmpfolder)]
+    print(" ".join(cmd))
+    subprocess.run(cmd, check=False)
 
     shutil.rmtree(tmpfolder)
 
