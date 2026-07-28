@@ -245,7 +245,9 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
         except subprocess.TimeoutExpired:
             cancelled = not task_exists(taskid=task.id)
-            timed_out = (time.perf_counter() - starttime) >= TASK_MAXTIME_SECONDS
+            timed_out = (time.perf_counter() - starttime) >= (
+                TASK_MAXTIME_SECONDS + 30
+            )  # give a little extra time for cleanup after timeout
             if (time.perf_counter() - lastlogtime) >= 10:
                 logfunc(f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ")
                 lastlogtime = time.perf_counter()
@@ -254,7 +256,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     if cancelled or timed_out:
         if timed_out:
-            logfunc(f"ERROR: ssh was killed after reaching TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds")
+            logfunc(f"ERROR: ssh was killed after exceeding TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds")
         os.kill(proc.pid, SIGTERM)
         return None, None  # don't finish with an error message, because we'll retry it later
 
