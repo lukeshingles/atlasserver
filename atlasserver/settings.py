@@ -61,7 +61,6 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
-    # "atlasserver.forcephot.countryrestriction.CountryRestrictionMiddleware",
 ]
 
 filecacheroot = Path("/files/atlasforced/django_cache")
