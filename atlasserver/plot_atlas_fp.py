@@ -256,7 +256,7 @@ class plotter():
         # ADD SECOND Y-AXIS
         ax2 = ax.twinx()
         ax2.yaxis.set_major_formatter(y_formatter)
-        ax2.set_ylabel('Flux ($\mu$Jy)', rotation=-90., labelpad=27)
+        ax2.set_ylabel(r'Flux ($\mu$Jy)', rotation=-90., labelpad=27)
         ax2.grid(False)
 
         # ADD SECOND X-AXIS
