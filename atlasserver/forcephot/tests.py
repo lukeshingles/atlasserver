@@ -49,7 +49,7 @@ class EmailChangeTests(TestCase):
     def test_requires_login(self) -> None:
         response = self.client.get(reverse("email_change"))
         assert response.status_code == 302
-        assert reverse("login") in response.url
+        assert reverse("login") in response["Location"]
 
     def test_change_email(self) -> None:
         self.client.force_login(self.user)
