@@ -40,6 +40,45 @@ class TaskQueueTests(TestCase):
             assert {task.user_id for task in passtasks} == userids
 
 
+class EmailChangeTests(TestCase):
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(
+            username="emailchanger", email="old@example.com", password="testpassword123"
+        )
+
+    def test_requires_login(self) -> None:
+        response = self.client.get(reverse("email_change"))
+        assert response.status_code == 302
+        assert reverse("login") in response.url
+
+    def test_change_email(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("email_change"), {"password": "testpassword123", "new_email": "new@example.com"}
+        )
+        assert response.status_code == 200
+        self.user.refresh_from_db()
+        assert self.user.email == "new@example.com"
+
+    def test_wrong_password_rejected(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("email_change"), {"password": "wrongpassword", "new_email": "new@example.com"}
+        )
+        assert response.status_code == 200
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
+
+    def test_invalid_email_rejected(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("email_change"), {"password": "testpassword123", "new_email": "not-an-email"}
+        )
+        assert response.status_code == 200
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
+
+
 class TaskRunnerResultFileTests(TestCase):
     def test_remove_ssostack_resultfiles(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
