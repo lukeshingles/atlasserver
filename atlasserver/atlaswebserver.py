@@ -45,7 +45,7 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
         commands,
         shell=False,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merged, so a full stderr pipe can't deadlock the stdout read
         encoding="utf-8",
         bufsize=1,
         universal_newlines=True,
@@ -55,10 +55,9 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
         for line in iter(proc.stdout.readline, ""):
             print(line, end="")
 
-    stdout, stderr = proc.communicate()
-    if print_output:
+    stdout, _stderr = proc.communicate()
+    if print_output and stdout:
         print(stdout, end="")
-        print(stderr, end="")
     assert proc.returncode is not None
     return proc.returncode
 
@@ -71,8 +70,9 @@ def start() -> None:
 
     print("Starting ATLAS Apache server")
 
-    if Path(".env").is_file():
-        Path(".env").chmod(0o600)
+    envfile = ATLASSERVERPATH / ".env"
+    if envfile.is_file():
+        envfile.chmod(0o600)
 
     APACHEPATH.mkdir(parents=True, exist_ok=True)
 
@@ -127,7 +127,7 @@ def start() -> None:
         time.sleep(1)
 
     while not get_httpd_pid():
-        pass
+        time.sleep(0.2)
 
     print(f"ATLAS Apache server is running with pid {get_httpd_pid()}")
 
@@ -151,7 +151,7 @@ def main() -> None:
 
         # wait for httpd process to be ended
         while get_httpd_pid():
-            pass
+            time.sleep(0.2)
 
         start()
 

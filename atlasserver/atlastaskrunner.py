@@ -16,7 +16,7 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
         commands,
         shell=False,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merged, so a full stderr pipe can't deadlock the stdout read
         encoding="utf-8",
         bufsize=1,
         universal_newlines=True,
@@ -31,11 +31,9 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
         except KeyboardInterrupt:
             exit_now = True
 
-    proc.wait()
-    stdout, stderr = proc.communicate()
-    if print_output:
+    stdout, _stderr = proc.communicate()
+    if print_output and stdout:
         print(stdout, end="")
-        print(stderr, end="")
 
     if exit_now:
         sys.exit(130)

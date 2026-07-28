@@ -40,7 +40,11 @@ def main() -> None:
         )
 
     # Rename jobxxxxx.fits.jpg to jobxxxxx.jpg.
-    Path(stackedfitsfile).with_suffix(".fits.jpg").rename(Path(stackedfitsfile).with_suffix(".jpg"))
+    jpgpath = Path(stackedfitsfile).with_suffix(".fits.jpg")
+    if jpgpath.exists():
+        jpgpath.rename(Path(stackedfitsfile).with_suffix(".jpg"))
+    else:
+        print(f"ERROR: {jpgpath} was not created")
 
 
 if __name__ == "__main__":

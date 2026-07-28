@@ -6,6 +6,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 from rest_framework.reverse import reverse
 
+from atlasserver.forcephot.models import get_mjd_min_default
 from atlasserver.forcephot.models import Task
 
 
@@ -90,7 +91,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         badchars = "'\";"
         if any(c in dict.fromkeys(badchars) for c in value):
             raise serializers.ValidationError(
-                {field: f"{prefix}Invalid mpc_name. May not contain quotes or seimicolons"}
+                {field: f"{prefix}Invalid mpc_name. May not contain quotes or semicolons"}
             )
 
         return value
@@ -150,14 +151,14 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(msg)
         elif attrs.get("request_type") == "IMGZIP":
             if not attrs.get("parent_task_id", False):
-                msg = "IMGZIP requests must have have a parent_task_id set to an FP task."
+                msg = "IMGZIP requests must have a parent_task_id set to an FP task."
                 raise serializers.ValidationError(msg)
             parent_task_id = attrs["parent_task_id"]
 
             try:
                 Task.objects.all().get(id=parent_task_id, request_type="FP")
             except (ObjectDoesNotExist, IndexError):
-                msg = "IMGZIP requests must have have a parent_task_id set to an FP task id."
+                msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
                 raise serializers.ValidationError(msg) from None
 
         elif not attrs.get("ra", None) and not attrs.get("dec", None):
@@ -173,12 +174,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 {"mjd_min": "mjd_min must be either None or a finite floating-point number."}
             )
 
-        if (
-            "mjd_max" in attrs
-            and attrs["mjd_max"] is not None
-            and ("mjd_min" in attrs and attrs["mjd_min"] is not None and not attrs["mjd_max"] > attrs["mjd_min"])
-        ):
-            raise serializers.ValidationError({"mjd_max": "mjd_max must be greater than mjd_min."})
+        if attrs.get("mjd_max") not in (None, ""):
+            # when mjd_min is not given, the model default (30 days ago) will be applied on save
+            mjd_min = attrs["mjd_min"] if attrs.get("mjd_min") not in (None, "") else get_mjd_min_default()
+            if not float(attrs["mjd_max"]) > float(mjd_min):
+                raise serializers.ValidationError(
+                    {"mjd_max": f"mjd_max must be greater than mjd_min ({mjd_min} was applied)."}
+                )
 
         return attrs
 

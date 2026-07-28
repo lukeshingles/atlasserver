@@ -38,10 +38,6 @@ TASK_MAXTIME_SECONDS: int = 4 * 3600
 
 LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
 
-# so that current log can be archived periodically, keep track
-# of the filename with a date, so that it can be created when the date changes
-LASTLOGFILEARCHIVED: dict[str, Path] = {}
-
 
 def mjdnow() -> float:
     """Return the current MJD."""
@@ -61,23 +57,24 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
     if not suffix:
         print(line, *args, **kwargs)
 
-    logfile_archive = Path(LOG_DIR, f"fprunnerlog_{dtnow.year:4d}-{dtnow.month:02d}-{dtnow.day:02d}{suffix}.txt")
     logfile_latest = Path(LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
 
-    if suffix in LASTLOGFILEARCHIVED and LASTLOGFILEARCHIVED[suffix] and logfile_archive != LASTLOGFILEARCHIVED[suffix]:
-        import shutil
+    # archive the latest log when its last write was on an earlier UTC day. The check is
+    # mtime-based so that the short-lived worker processes also rotate their slot logs
+    openmode = "a"
+    if logfile_latest.exists():
+        lastwrite = datetime.datetime.fromtimestamp(logfile_latest.stat().st_mtime, tz=datetime.UTC)
+        if lastwrite.date() < dtnow.date():
+            import shutil
 
-        # os.rename(logfile_latest, logfile_archive)
-        shutil.copyfile(logfile_latest, logfile_archive)
-        flogfile = logfile_latest.open("w")
-    else:
-        flogfile = logfile_latest.open("a")
+            logfile_archive = Path(
+                LOG_DIR, f"fprunnerlog_{lastwrite.year:4d}-{lastwrite.month:02d}-{lastwrite.day:02d}{suffix}.txt"
+            )
+            shutil.copyfile(logfile_latest, logfile_archive)
+            openmode = "w"
 
-    LASTLOGFILEARCHIVED[suffix] = logfile_archive
-
-    # with logfile_latest.open("a") as flogfile:
-    flogfile.write(line + "\n")
-    flogfile.close()
+    with logfile_latest.open(openmode) as flogfile:
+        flogfile.write(line + "\n")
 
 
 def task_exists(taskid: int) -> bool:
@@ -102,7 +99,8 @@ def remove_task_resultfiles(
     elif request_type == "IMGZIP" and parent_task_id is not None:
         taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(parent_task_id) + ".zip")]
     else:  # SSOSTACK
-        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=localresultfileprefix(taskid) + ".*"))
+        # glob patterns must be relative to the globbed directory
+        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
 
     for taskfile in taskfiles:
         if Path(taskfile).exists():
@@ -258,6 +256,8 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         if timed_out:
             logfunc(f"ERROR: ssh was killed after exceeding TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds")
         os.kill(proc.pid, SIGTERM)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
         return None, None  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = proc.communicate()
@@ -411,8 +411,8 @@ def send_email_if_needed(task, logfunc) -> None:
                 f"\n{taskurl}\n"
             )
 
-            if task.comment:
-                strtask += " comment: '" + task.comment + "'"
+            if batchtask.comment:
+                strtask += " comment: '" + batchtask.comment + "'"
 
             taskdesclist.append(strtask)
             localresultfilelist.append(localresultfile)
@@ -545,6 +545,9 @@ def remove_old_tasks(
         filteropts["request_type"] = request_type
 
     if not harddeleterecord:
+        if is_archived:
+            msg = "is_archived=True requires harddeleterecord=True (archiving already-archived tasks is a no-op)"
+            raise ValueError(msg)
         # exclude tasks that are already soft deleted from soft deletion query
         is_archived = False
 
@@ -601,8 +604,8 @@ def do_maintenance(maxtime=None):
 
     remove_old_tasks(days_ago=183, harddeleterecord=False, request_type="FP", logfunc=logfunc)
 
-    # archived API tasks
-    remove_old_tasks(days_ago=7, harddeleterecord=False, is_archived=True, from_api=True, logfunc=logfunc)
+    # archived (user-deleted) API tasks: remove the database records and files
+    remove_old_tasks(days_ago=7, harddeleterecord=True, is_archived=True, from_api=True, logfunc=logfunc)
 
     # other API tasks
     remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=logfunc)
