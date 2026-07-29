@@ -140,8 +140,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        if attrs.get("mpc_name", False):  # it's an MPC object name
-            if attrs.get("ra", False) or attrs.get("dec", False):
+        if attrs.get("mpc_name", None) is not None:  # it's an MPC object name
+            if attrs.get("ra", None) is not None or attrs.get("dec", None) is not None:
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
             if attrs.get("request_type") == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
                 msg = "Proper motion cannot be used for SSO image stack requests."
@@ -150,7 +150,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
         elif attrs.get("request_type") == "IMGZIP":
-            if not attrs.get("parent_task_id", False):
+            if attrs.get("parent_task_id", None) is None:
                 msg = "IMGZIP requests must have a parent_task_id set to an FP task."
                 raise serializers.ValidationError(msg)
             parent_task_id = attrs["parent_task_id"]
@@ -161,12 +161,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
                 raise serializers.ValidationError(msg) from None
 
-        elif not attrs.get("ra", None) and not attrs.get("dec", None):
+        elif attrs.get("ra", None) is None and attrs.get("dec", None) is None:
             msg = "Either an mpc_name or (ra, dec) must be specified."
             raise serializers.ValidationError({"non_field_errors": msg})
-        elif not attrs.get("dec", None):
+        elif attrs.get("dec", None) is None:
             raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
-        elif not attrs.get("ra", None):
+        elif attrs.get("ra", None) is None:
             raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
 
         if "mjd_min" in attrs and attrs["mjd_min"] is not None and not is_finite_float(attrs["mjd_min"]):
