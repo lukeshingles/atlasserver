@@ -205,7 +205,7 @@ class PaginationTests(TestCase):
         self.client.force_login(self.user)
 
         page = self.get_json(reverse("task-list"), pagesize=5, ordering="timestamp")
-        allids = []
+        allids: list[int] = []
         pages = [page]
         while page["next"]:
             page = self.get_json(page["next"])
