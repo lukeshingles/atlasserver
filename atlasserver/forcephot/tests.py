@@ -268,6 +268,47 @@ class TaskUpdateTests(TestCase):
         assert task.ra == 1.0
 
 
+class RequestImagesTests(TestCase):
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(username="imgreq", email="i@example.com", password=None)
+
+    def test_get_is_not_allowed(self) -> None:
+        # creating a task from a GET handler is not CSRF protected
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("requestimages", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 405, response.status_code
+        assert not Task.objects.filter(parent_task_id=task.id).exists()
+
+    def test_post_creates_an_image_request(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.touch()
+
+            self.client.force_login(self.user)
+            response = self.client.post(reverse("requestimages", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 302, response.status_code
+        imagerequest = Task.objects.get(parent_task_id=task.id)
+        assert imagerequest.request_type == "IMGZIP"
+        assert imagerequest.user_id == self.user.pk
+        assert imagerequest.finishtimestamp is None
+
+    def test_post_requires_ownership(self) -> None:
+        other = get_user_model().objects.create_user(username="other", email="o2@example.com", password=None)
+        task = Task.objects.create(user=other, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("requestimages", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code in {302, 403}, response.status_code
+        assert not Task.objects.filter(parent_task_id=task.id).exists()
+
+
 class TaskCreateLimitTests(TestCase):
     def setUp(self) -> None:
         self.user = get_user_model().objects.create_user(username="submitter", email="s2@example.com", password=None)
