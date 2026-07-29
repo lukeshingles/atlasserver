@@ -124,6 +124,16 @@ class TaskCoordValidationTests(TestCase):
         assert serializer.is_valid(), serializer.errors
 
 
+def splitradeclist_rejects(data: dict) -> bool:
+    """Return whether splitradeclist raises a ValidationError for the given request data."""
+    try:
+        splitradeclist(data)
+    except ValidationError:
+        return True
+
+    return False
+
+
 class SplitRaDecListTests(TestCase):
     def test_one_hundred_coords_with_trailing_newline(self) -> None:
         # a trailing newline must not push a full list of 100 targets over the limit
@@ -132,13 +142,7 @@ class SplitRaDecListTests(TestCase):
 
     def test_over_the_limit_is_rejected(self) -> None:
         radeclist = "".join(f"{10.0 + i:.4f} 20.0\n" for i in range(101))
-        rejected = False
-        try:
-            splitradeclist({"radeclist": radeclist})
-        except ValidationError:
-            rejected = True
-
-        assert rejected, "expected a ValidationError for more than 100 targets"
+        assert splitradeclist_rejects({"radeclist": radeclist})
 
     def test_crlf_line_endings(self) -> None:
         # browsers normalise textarea contents to CRLF, which must not end up in the Dec value
@@ -151,22 +155,10 @@ class SplitRaDecListTests(TestCase):
 
     def test_blank_radeclist_is_rejected(self) -> None:
         # an empty result would otherwise be serialised as an empty list and answered with 201
-        rejected = False
-        try:
-            splitradeclist({"radeclist": "\n  \n"})
-        except ValidationError:
-            rejected = True
-
-        assert rejected, "expected a ValidationError for a radeclist with no targets"
+        assert splitradeclist_rejects({"radeclist": "\n  \n"})
 
     def test_non_string_radeclist_is_rejected(self) -> None:
-        rejected = False
-        try:
-            splitradeclist({"radeclist": ["10.0 20.0"]})
-        except ValidationError:
-            rejected = True
-
-        assert rejected, "expected a ValidationError for a radeclist that is not a string"
+        assert splitradeclist_rejects({"radeclist": ["10.0 20.0"]})
 
     def test_zero_ra_and_dec_fields_are_kept(self) -> None:
         datalist = splitradeclist({"ra": 0.0, "dec": 0.0, "radeclist": "10.0 20.0"})
@@ -199,6 +191,42 @@ class PaginationTests(TestCase):
 
         assert len(self.get_json(reverse("task-list"), pagesize=100000)["results"]) == 100
         assert len(self.get_json(reverse("task-list"), pagesize=20)["results"]) == 20
+
+    def test_walking_backwards_with_tied_ordering_values(self) -> None:
+        # tasks from one radeclist submission share a timestamp, so paging back under
+        # ?ordering=timestamp exercises offset cursors: the pk tiebreaker keeps tied rows in a
+        # deterministic order, and the position arithmetic must count the offset correctly
+        Task.objects.all().delete()
+        now = timezone.now()
+        for batch in range(3):
+            stamp = now + datetime.timedelta(minutes=batch)
+            for _ in range(9):
+                Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=stamp)
+        self.client.force_login(self.user)
+
+        page = self.get_json(reverse("task-list"), pagesize=5, ordering="timestamp")
+        allids = []
+        pages = [page]
+        while page["next"]:
+            page = self.get_json(page["next"])
+            pages.append(page)
+        for forwardpage in pages:
+            allids.extend(row["id"] for row in forwardpage["results"])
+        assert len(allids) == 27
+
+        # walking back via the previous links must revisit the same pages with correct positions
+        page = pages[-1]
+        for _ in range(10):
+            if not page.get("previous"):
+                break
+            page = self.get_json(page["previous"])
+            ids = [row["id"] for row in page["results"]]
+            assert ids, "a previous page must never be empty"
+            startpos = allids.index(ids[0])
+            assert allids[startpos : startpos + len(ids)] == ids, (startpos, ids)
+            assert page["pagefirsttaskposition"] == startpos, (page["pagefirsttaskposition"], startpos)
+
+        assert page["results"][0]["id"] == allids[0], "the backward walk must reach the first page"
 
     def test_page_positions_with_tied_ordering_values(self) -> None:
         # every task from one radeclist submission shares a timestamp, so ?ordering=timestamp

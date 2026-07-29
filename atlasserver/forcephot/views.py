@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+import operator
 import typing as t
 from pathlib import Path
 from typing import Any
@@ -74,15 +75,14 @@ def calculate_queue_positions() -> None:
             .order_by("user_id", "timestamp", "id")
         )
 
-        # to get position in current pass, check if job currently running (the one started last)
-        runningtask = None
-        runningtask_starttime = None
-        for tsk in queuedtasks:
-            starttime = tsk.starttimestamp
-            if starttime is not None and (runningtask_starttime is None or starttime > runningtask_starttime):
-                runningtask = tsk
-                runningtask_starttime = starttime
-
+        # to get position in current pass, check if job currently running (the one started last).
+        # attrgetter rather than a lambda: the generator's None filter cannot narrow the
+        # attribute type inside a lambda, so a lambda key would not type check
+        runningtask = max(
+            (tsk for tsk in queuedtasks if tsk.starttimestamp is not None),
+            key=operator.attrgetter("starttimestamp"),
+            default=None,
+        )
         runningtaskid = runningtask.id if runningtask is not None else None
         runningtask_userid = runningtask.user_id if runningtask is not None else None
 

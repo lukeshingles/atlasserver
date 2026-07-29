@@ -8,6 +8,19 @@ function getDefaultMjdMin() {
     return (mjdFromDate(new Date()) - 30.).toFixed(5);
 }
 
+function errortext(value) {
+    // DRF error values can be strings, lists of strings, or nested objects (a field validator
+    // that raises a dict produces e.g. {"mjd_min": {"mjd_min": "..."}}). Rendering an object as
+    // a React child throws and unmounts the page, so flatten everything to a string.
+    if (Array.isArray(value)) {
+        return value.map(errortext).join(' ');
+    }
+    if (value != null && typeof value === 'object') {
+        return Object.values(value).map(errortext).join(' ');
+    }
+    return String(value);
+}
+
 export class NewRequest extends React.Component {
     get_defaultstate() {
         // localStorage.getItem('') will be null if the key doesn't exist and null != false,
@@ -205,7 +218,7 @@ export class NewRequest extends React.Component {
                     &nbsp;<a onClick={() => { this.setState({ 'showradechelp': !this.state.showradechelp }) }}>Help</a>
                     {this.state.showradechelp ? <div id="radec_help" style={{ display: 'block', clear: 'right', fontSize: 'small' }} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
                 </li>
-                {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['radeclist']}</li></ul> : ''}
+                {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['radeclist'])}</li></ul> : ''}
             </ul>
         );
 
@@ -255,7 +268,7 @@ export class NewRequest extends React.Component {
                 <li key="mjd_max">
                     <label htmlFor="id_mjd_max">MJD max:</label><input type="number" name="mjd_max" step="any" id="id_mjd_max" value={this.state.mjd_max} onChange={this.handlechange_mjd_max} />
                     <p className="inputisodate" id='id_mjd_max_isoformat'>{this.state.mjd_max_isoformat}</p>
-                    {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['mjd_max']}</li></ul> : ''}
+                    {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['mjd_max'])}</li></ul> : ''}
                 </li>
                 <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={this.state.comment} onChange={e => { this.setState({ 'comment': e.target.value }); localStorage.setItem("comment", e.target.value); }} /></li>
 
@@ -275,7 +288,7 @@ export class NewRequest extends React.Component {
             formcontent.push(
                 <ul key="othererrors" className="errorlist">
                     {remainingerrors.map(([key, value]) => (
-                        <li key={key}>{key == 'non_field_errors' ? '' : key + ': '}{value}</li>
+                        <li key={key}>{key == 'non_field_errors' ? '' : key + ': '}{errortext(value)}</li>
                     ))}
                 </ul>
             );

@@ -17,6 +17,19 @@ class TaskPagination(CursorPagination):
     pagefirsttaskposition: int | None = None  # with ordered tasks, the position of the first page time
     previous_is_top = False
 
+    def get_ordering(self, request, queryset, view):
+        """Return the requested ordering with the primary key appended as a tiebreaker.
+
+        Rows sharing an ordering value (every task from one radeclist submission has the same
+        timestamp) otherwise have no deterministic order, and the database may return them
+        differently for the ascending scan of a next page and the descending scan of a previous
+        page, giving reversed or mixed page contents when walking backwards.
+        """
+        ordering = tuple(super().get_ordering(request, queryset, view))
+        if not any(field.lstrip("-") == "id" for field in ordering):
+            ordering = (*ordering, "-id" if ordering[0].startswith("-") else "id")
+        return ordering
+
     def paginate_queryset(self, queryset, request, view=None):
         queryset_full = queryset
         self.querysetcount = queryset.count()
@@ -67,25 +80,33 @@ class TaskPagination(CursorPagination):
         # (which is not necessarily by id, see the view's ordering_fields), and current_position
         # is passed through as the string that decode_cursor produced. The cursor offset is how
         # DRF pages through rows that share an ordering value (every task from one radeclist
-        # submission has the same timestamp), so those rows precede this page as well.
-        prev_records = offset
-        if current_position is not None:
-            if is_reversed:  # e.g. "-id": later values are shown first
-                strictlybefore = {f"{order_attr}__gt": current_position}
-                beforeorat = {f"{order_attr}__gte": current_position}
-            else:
-                strictlybefore = {f"{order_attr}__lt": current_position}
-                beforeorat = {f"{order_attr}__lte": current_position}
+        # submission has the same timestamp): a forward cursor skips offset rows after the
+        # boundary, a reverse cursor skips offset rows back from the boundary.
+        if is_reversed:  # e.g. "-id": later values are shown first
+            strictlybefore = {f"{order_attr}__gt": current_position}
+            beforeorat = {f"{order_attr}__gte": current_position}
+        else:
+            strictlybefore = {f"{order_attr}__lt": current_position}
+            beforeorat = {f"{order_attr}__lte": current_position}
 
-            if reverse:
-                # a reverse cursor page ends just before current_position, so the rows on this
-                # page are part of the "before" count and have to be subtracted again
-                prev_records += max(0, queryset_full.filter(**strictlybefore).count() - len(self.page))
-            else:
+        if reverse:
+            # rows before the boundary, minus those skipped by the offset and the page itself
+            totalbefore = (
+                queryset_full.filter(**strictlybefore).count()
+                if current_position is not None
+                else (self.querysetcount or 0)  # a positionless reverse cursor pages from the end
+            )
+            prev_records = max(0, totalbefore - offset - len(self.page))
+        else:
+            prev_records = offset
+            if current_position is not None:
                 prev_records += queryset_full.filter(**beforeorat).count()
 
         self.pagefirsttaskposition = prev_records
-        if current_position is not None and prev_records <= self.page_size:
+        # any cursor (including the offset-only kind that paging through tied values produces)
+        # near the top gets the cursor-less link: a reverse cursor rebuilt by DRF would filter
+        # out rows tied with the boundary and could return an empty page
+        if self.cursor is not None and prev_records <= self.page_size:
             self.previous_is_top = True
 
         # Determine the position of the final item following the page.
