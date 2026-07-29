@@ -277,16 +277,27 @@ def splitradeclist(data, form=None):
 
     if "radeclist" not in data:
         return [data]
+
+    if not isinstance(data["radeclist"], str):
+        raise serializers.ValidationError(
+            {"radeclist": "radeclist must be a string of newline-separated coordinates or MPC names"}
+        )
+
     # multi-add functionality with a list of RA,DEC coords
     datalist = []
 
     converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
 
-    # if an RA and Dec were specified directly in their fields, add them to the list
-    if "ra" in data and data["ra"] and "dec" in data and data["dec"]:
+    # if an RA and Dec were specified directly in their fields, add them to the list.
+    # RA 0 and Dec 0 are valid, so test for "not given" rather than falsiness
+    if data.get("ra") not in (None, "") and data.get("dec") not in (None, ""):
         newrow = data.copy()
-        newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=newrow["ra"])
-        newrow["dec"] = converter.dec_sexegesimal_to_decimal(dec=newrow["dec"])
+        try:
+            newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=newrow["ra"])
+            newrow["dec"] = converter.dec_sexegesimal_to_decimal(dec=newrow["dec"])
+        except (OSError, IndexError) as err:
+            # astrocalc raises IOError for input that it cannot parse
+            raise serializers.ValidationError({"ra": f"Could not parse RA/Dec: {err}"}) from err
         del newrow["radeclist"]
         datalist.append(newrow)
 
@@ -347,6 +358,11 @@ def splitradeclist(data, form=None):
 
             except (OSError, IndexError) as err:
                 raise serializers.ValidationError({"radeclist": f"Error on line {index}: {err}"}) from err
+
+    if not datalist:
+        # otherwise an all-blank radeclist is serialised as an empty list, and the request
+        # succeeds with HTTP 201 without having created anything
+        raise serializers.ValidationError({"radeclist": "No coordinates or MPC object names were given."})
 
     return datalist
 

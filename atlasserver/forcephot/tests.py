@@ -134,6 +134,59 @@ class SplitRaDecListTests(TestCase):
     def test_blank_lines_are_skipped(self) -> None:
         assert len(splitradeclist({"radeclist": "\n10.0 20.0\n\n11.0 21.0\n\n"})) == 2
 
+    def test_blank_radeclist_is_rejected(self) -> None:
+        # an empty result would otherwise be serialised as an empty list and answered with 201
+        rejected = False
+        try:
+            splitradeclist({"radeclist": "\n  \n"})
+        except ValidationError:
+            rejected = True
+
+        assert rejected, "expected a ValidationError for a radeclist with no targets"
+
+    def test_non_string_radeclist_is_rejected(self) -> None:
+        rejected = False
+        try:
+            splitradeclist({"radeclist": ["10.0 20.0"]})
+        except ValidationError:
+            rejected = True
+
+        assert rejected, "expected a ValidationError for a radeclist that is not a string"
+
+    def test_zero_ra_and_dec_fields_are_kept(self) -> None:
+        datalist = splitradeclist({"ra": 0.0, "dec": 0.0, "radeclist": "10.0 20.0"})
+        assert len(datalist) == 2
+
+
+class PaginationTests(TestCase):
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(username="pager", email="p@example.com", password=None)
+        now = timezone.now()
+        for i in range(10):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=now + datetime.timedelta(seconds=i))
+
+    def get_json(self, url, **params):
+        response = self.client.get(url, params, HTTP_ACCEPT="application/json")
+        assert response.status_code == 200, response.status_code
+        return response.json()
+
+    def test_second_page_with_default_ordering(self) -> None:
+        self.client.force_login(self.user)
+        page1 = self.get_json(reverse("task-list"))
+        assert page1["next"] is not None
+        page2 = self.get_json(page1["next"])
+        assert page2["pagefirsttaskposition"] == 6
+
+    def test_second_page_with_timestamp_ordering(self) -> None:
+        # ordering is not necessarily by id, and the page position used to be counted with
+        # int(current_position), which raises ValueError for a timestamp cursor
+        self.client.force_login(self.user)
+        page1 = self.get_json(reverse("task-list"), ordering="timestamp")
+        assert page1["next"] is not None
+        page2 = self.get_json(page1["next"])
+        assert page2["pagefirsttaskposition"] == 6
+        assert len(page2["results"]) == 4
+
 
 class TaskStrTests(TestCase):
     def test_str_without_a_target(self) -> None:

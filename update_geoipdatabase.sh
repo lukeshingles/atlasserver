@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
-if [ -f .env ]; then
-    # shellcheck disable=SC1091
-    source .env
-fi
-
 ATLASSERVERPATH="$(dirname "$(realpath "$0")")"
+
+# resolve .env relative to the script, so that this works from any working directory (e.g. cron)
+if [ -f "$ATLASSERVERPATH/.env" ]; then
+    # shellcheck disable=SC1091
+    source "$ATLASSERVERPATH/.env"
+fi
 
 MAXMIND_ACCOUNT_ID="${MAXMIND_ACCOUNT_ID:-504450}"
 

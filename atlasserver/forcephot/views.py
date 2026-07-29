@@ -64,32 +64,23 @@ MAX_USER_TASKS = 500
 def calculate_queue_positions() -> None:
     """Calculate and assign the queue positions (determining the order of execution in the task runner) for all queued tasks."""
     with transaction.atomic():
-        # lock the queued rows: without this, two concurrent recalculations can each renumber
-        # from a snapshot that is missing the other's changes and assign duplicate positions
-        queuedtasks = (
+        # Lock the queued rows and read them once. Without the lock, two concurrent
+        # recalculations can each renumber from a snapshot that is missing the other's changes
+        # and end up assigning duplicate queue positions.
+        queuedtasks = list(
             Task.objects.select_for_update()
             .filter(finishtimestamp__isnull=True, is_archived=False)
             .order_by("user_id", "timestamp", "id")
         )
 
         # to get position in current pass, check if job currently running
-        query_currentlyrunningtask = queuedtasks.filter(starttimestamp__isnull=False).order_by("-starttimestamp")
+        runningtasks = [tsk for tsk in queuedtasks if tsk.starttimestamp is not None]
+        runningtask = max(runningtasks, key=lambda tsk: tsk.starttimestamp) if runningtasks else None
 
-        runningtaskid = None
-        runningtask_userid = None
+        runningtaskid = runningtask.id if runningtask is not None else None
+        runningtask_userid = runningtask.user_id if runningtask is not None else None
 
-        try:
-            if query_currentlyrunningtask.exists():
-                runningtask = query_currentlyrunningtask.first()
-                if runningtask is not None:
-                    runningtaskid = runningtask.id
-                    runningtask_userid = runningtask.user_id
-
-        except AttributeError:
-            runningtaskid = None
-            runningtask_userid = None
-
-        queuedtaskcount = queuedtasks.count()
+        queuedtaskcount = len(queuedtasks)
 
         unassigned_taskids = [t.id for t in queuedtasks]
         unassigned_task_userids = [t.user_id for t in queuedtasks]

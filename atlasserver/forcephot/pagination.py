@@ -40,12 +40,13 @@ class TaskPagination(CursorPagination):
 
         self.previous_is_top = False
         self.pagefirsttaskposition = 0
+
+        order = self.ordering[0]
+        is_reversed = order.startswith("-")
+        order_attr = order.lstrip("-")
+
         # If we have a cursor with a fixed position then filter by that.
         if current_position is not None:
-            order = self.ordering[0]
-            is_reversed = order.startswith("-")
-            order_attr = order.lstrip("-")
-
             # Test for: (cursor reversed) XOR (queryset reversed)
             if self.cursor.reverse != is_reversed:
                 kwargs = {f"{order_attr}__lt": current_position}
@@ -54,21 +55,33 @@ class TaskPagination(CursorPagination):
 
             queryset = queryset.filter(**kwargs)
 
-            if reverse:
-                prev_records = queryset_full.filter(id__gt=int(current_position)).count() - self.page_size
-                # print(prior_records, queryset[self.page_size:].count())
-            else:
-                prev_records = queryset_full.filter(id__gt=int(current_position) - 1).count()
-
-            self.pagefirsttaskposition = prev_records
-            if prev_records <= self.page_size:
-                self.previous_is_top = True
-
         # If we have an offset cursor then offset the entire page by that amount.
         # We also always fetch an extra item in order to determine if there is a
         # page following on from this one.
         results = list(queryset[offset : offset + self.page_size + 1])
         self.page = list(results[: self.page_size])
+
+        if current_position is not None:
+            # Count the tasks displayed before this page. The comparison follows the ordering
+            # in use (which is not necessarily by id, see the view's ordering_fields), and
+            # current_position is passed through as the string that decode_cursor produced.
+            if is_reversed:  # e.g. "-id": later values are shown first
+                strictlybefore = {f"{order_attr}__gt": current_position}
+                beforeorat = {f"{order_attr}__gte": current_position}
+            else:
+                strictlybefore = {f"{order_attr}__lt": current_position}
+                beforeorat = {f"{order_attr}__lte": current_position}
+
+            if reverse:
+                # a reverse cursor page ends just before current_position, so the rows on this
+                # page are part of the "before" count and have to be subtracted again
+                prev_records = max(0, queryset_full.filter(**strictlybefore).count() - len(self.page))
+            else:
+                prev_records = queryset_full.filter(**beforeorat).count()
+
+            self.pagefirsttaskposition = prev_records
+            if prev_records <= self.page_size:
+                self.previous_is_top = True
 
         # Determine the position of the final item following the page.
         if len(results) > len(self.page):
@@ -109,7 +122,8 @@ class TaskPagination(CursorPagination):
         return self.page
 
     def get_previous_link(self):
-        if self.previous_is_top:
+        # has_previous must be checked too, otherwise the first page can advertise a link to itself
+        if self.previous_is_top and self.has_previous:
             return remove_query_param(self.base_url, "cursor")
         return super().get_previous_link()
 

@@ -77,13 +77,20 @@ def main() -> None:
         sys.exit(1)
         return
 
-    datafile = sys.argv[1]
-    reduced = sys.argv[2] == "red"
+    tmpfolder = Path(tempfile.mkdtemp())
+    try:
+        gather_images(datafile=sys.argv[1], reduced=sys.argv[2] == "red", tmpfolder=tmpfolder)
+    finally:
+        # this can hold up to 1000 image cutouts, so it must not be left behind when the remote
+        # timeout kills the script or an image conversion raises
+        shutil.rmtree(tmpfolder, ignore_errors=True)
+
+
+def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     dfforcedphot = pd.read_csv(datafile, sep=r"\s+", escapechar="#").dropna()
 
     firstfitsoutpath_c = None
     firstfitsoutpath_o = None
-    tmpfolder = Path(tempfile.mkdtemp())
     rowcount = len(dfforcedphot)
     commands = []
     # wpdatelines = ['#obs MJD obsdate wallpapersource wallpaperdate wallpaperdescription\n'] if not reduced else None
@@ -172,8 +179,6 @@ def main() -> None:
     cmd = ["zip", "--junk-paths", "-r", str(zipoutpath), str(tmpfolder)]
     print(" ".join(cmd))
     subprocess.run(cmd, check=False)
-
-    shutil.rmtree(tmpfolder)
 
 
 if __name__ == "__main__":
