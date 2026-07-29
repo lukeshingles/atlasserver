@@ -523,8 +523,11 @@ class ResultPlotDataTests(TestCase):
             assert response.status_code == 200
             assert response.content == b""
 
-            Path(tmpdir, "js").mkdir()
+            # the view appends the plotting script from STATIC_ROOT: the minified bundle
+            # normally, the source file when DEBUG is on (as it is in the CI settings)
+            Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True)
             Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n")
+            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text("// plot script\n")
             resultfile.write_text(self.HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
