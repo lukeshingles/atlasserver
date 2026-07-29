@@ -205,6 +205,34 @@ span.helptext {
   display: block;
 }
 
+/* account forms (change email, change/reset password). These pages used to pull in the Django
+   admin stylesheet, which shrank the text to 13px, uppercased the submit button and depended on
+   CSS variables from an admin stylesheet that is not loaded here. */
+.form-row {
+  margin-bottom: 1em;
+}
+
+.form-row label {
+  display: inline-block;
+  min-width: 12em;
+  vertical-align: top;
+}
+
+.form-row .help {
+  color: #737373;
+  margin: 0.3em 0 0 14.5em;
+}
+
+.errornote,
+.form-row .errorlist {
+  color: #a94442;
+  font-weight: bold;
+}
+
+.submit-row {
+  margin-top: 1.5em;
+}
+
 table {
   margin: 1em;
 }
