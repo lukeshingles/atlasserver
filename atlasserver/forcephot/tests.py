@@ -8,6 +8,7 @@ from unittest import mock
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import mail as django_mail
+from django.core.cache import caches
 from django.test import override_settings
 from django.test import TestCase
 from django.urls import reverse
@@ -499,6 +500,9 @@ class ResultPlotDataTests(TestCase):
 
     def setUp(self) -> None:
         self.user = get_user_model().objects.create_user(username="plotter", email="pl@example.com", password=None)
+        # the taskderived cache is file-based and outlives the test database, so an entry from a
+        # previous run (whose task received the same id) would poison the ragged-file assertion
+        caches["taskderived"].clear()
 
     def datarow(self, index: int) -> str:
         return (
