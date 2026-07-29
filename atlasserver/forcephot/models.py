@@ -3,7 +3,6 @@ import typing as t
 from pathlib import Path
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
@@ -84,7 +83,7 @@ class Task(models.Model):
 
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
-        user = get_user_model().objects.get(id=self.user_id)
+        user = self.user
         if self.mpc_name:
             targetstr = f" MPC[{self.mpc_name}]"
         elif self.ra is not None and self.dec is not None:
@@ -100,7 +99,6 @@ class Task(models.Model):
             status = "queued"
 
         strtask = (
-            # pyrefly: ignore [missing-attribute]
             f"Task {self.id:d}: {self.timestamp:%Y-%m-%d %H:%M:%S %Z} {user.username} ({user.email})"
             + (f" '{country_code_to_name(self.country_code)}'" if self.country_code else "")
             + f"{' API' if self.from_api else ''} {self.request_type}"

@@ -3,10 +3,10 @@ import typing as t
 from multiprocessing import Process
 from pathlib import Path
 
-import astrocalc.coords.unit_conversion
 import fundamentals.logs
 import julian
 import pycountry
+from astrocalc.coords.unit_conversion import unit_conversion
 from django.http import Http404
 from django.utils.log import AdminEmailHandler
 
@@ -286,7 +286,7 @@ def splitradeclist(data, form=None):
     # multi-add functionality with a list of RA,DEC coords
     datalist = []
 
-    converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
+    converter = unit_conversion(log=fundamentals.logs.emptyLogger())
 
     # if an RA and Dec were specified directly in their fields, add them to the list.
     # RA 0 and Dec 0 are valid, so test for "not given" rather than falsiness

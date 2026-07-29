@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest import mock
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
+
+# the project uses the default user model, and the concrete class is needed for typing
+from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
 from django.core import mail as django_mail
 from django.core.cache import caches
 from django.test import override_settings
@@ -24,8 +26,7 @@ from atlasserver.forcephot.views import calculate_queue_positions
 class TaskQueueTests(TestCase):
     def setUp(self) -> None:
         self.users = [
-            get_user_model().objects.create_user(username=f"user{i}", email=f"user{i}@example.com", password=None)
-            for i in range(3)
+            User.objects.create_user(username=f"user{i}", email=f"user{i}@example.com", password=None) for i in range(3)
         ]
 
     def test_tasklist_requires_login(self) -> None:
@@ -52,7 +53,7 @@ class TaskQueueTests(TestCase):
 
 class EmailChangeTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(
+        self.user = User.objects.create_user(
             username="emailchanger", email="old@example.com", password="testpassword123"
         )
 
@@ -168,7 +169,7 @@ class SplitRaDecListTests(TestCase):
 
 class PaginationTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="pager", email="p@example.com", password=None)
+        self.user = User.objects.create_user(username="pager", email="p@example.com", password=None)
         now = timezone.now()
         for i in range(10):
             Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=now + datetime.timedelta(seconds=i))
@@ -246,13 +247,13 @@ class TaskStrTests(TestCase):
     def test_str_without_a_target(self) -> None:
         # a task with no mpc_name, ra or dec can be created in the admin panel, and formatting
         # None with a float format spec used to raise TypeError
-        user = get_user_model().objects.create_user(username="nocoords", email="n@example.com", password=None)
+        user = User.objects.create_user(username="nocoords", email="n@example.com", password=None)
         assert "RA Dec" in str(Task.objects.create(user=user))
 
 
 class TaskDeleteFileTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="deleter", email="d@example.com", password=None)
+        self.user = User.objects.create_user(username="deleter", email="d@example.com", password=None)
 
     def make_finished_task(self, staticroot: Path, **kwargs) -> Task:
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), **kwargs)
@@ -310,8 +311,8 @@ class TaskDeleteFileTests(TestCase):
 
 class TaskUpdateTests(TestCase):
     def setUp(self) -> None:
-        self.owner = get_user_model().objects.create_user(username="owner", email="o@example.com", password=None)
-        self.staffuser = get_user_model().objects.create_user(
+        self.owner = User.objects.create_user(username="owner", email="o@example.com", password=None)
+        self.staffuser = User.objects.create_user(
             username="staffer", email="s@example.com", password=None, is_staff=True
         )
 
@@ -352,7 +353,7 @@ class TaskUpdateTests(TestCase):
 
 class RequestImagesTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="imgreq", email="i@example.com", password=None)
+        self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
 
     def test_get_is_not_allowed(self) -> None:
         # creating a task from a GET handler is not CSRF protected
@@ -394,7 +395,7 @@ class RequestImagesTests(TestCase):
         assert response["Location"] == reverse("requestimages", args=[task.id])
 
     def test_post_requires_ownership(self) -> None:
-        other = get_user_model().objects.create_user(username="other", email="o2@example.com", password=None)
+        other = User.objects.create_user(username="other", email="o2@example.com", password=None)
         task = Task.objects.create(user=other, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
         self.client.force_login(self.user)
 
@@ -406,7 +407,7 @@ class RequestImagesTests(TestCase):
 
 class TaskCreateLimitTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="submitter", email="s2@example.com", password=None)
+        self.user = User.objects.create_user(username="submitter", email="s2@example.com", password=None)
 
     def test_radeclist_cannot_overshoot_the_task_limit(self) -> None:
         from atlasserver.forcephot.views import MAX_USER_TASKS
@@ -432,7 +433,7 @@ class TaskCreateLimitTests(TestCase):
 
 class TaskCreateResponseTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="creator", email="c@example.com", password=None)
+        self.user = User.objects.create_user(username="creator", email="c@example.com", password=None)
 
     def post_tasks(self, payload):
         self.client.force_login(self.user)
@@ -474,7 +475,7 @@ class ResultPlotDataTests(TestCase):
     HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
 
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="plotter", email="pl@example.com", password=None)
+        self.user = User.objects.create_user(username="plotter", email="pl@example.com", password=None)
         # the taskderived cache is file-based and outlives the test database, so an entry from a
         # previous run (whose task received the same id) would poison the ragged-file assertion
         caches["taskderived"].clear()
@@ -518,7 +519,7 @@ class TaskRunnerEmailTests(TestCase):
     """
 
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="mailer", email="m@example.com", password=None)
+        self.user = User.objects.create_user(username="mailer", email="m@example.com", password=None)
         self.stamp = timezone.now()
         django_mail.outbox.clear()
 
@@ -577,9 +578,7 @@ class TaskRunnerEmailTests(TestCase):
 
 class LogoutTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(
-            username="leaver", email="l@example.com", password="pw12345678"
-        )
+        self.user = User.objects.create_user(username="leaver", email="l@example.com", password="pw12345678")
 
     def test_logout_link_is_a_post_form(self) -> None:
         # Django's LogoutView has only accepted POST since 5.0, so a plain link returns HTTP 405
@@ -621,7 +620,7 @@ class ApiGuideTests(TestCase):
 
 class ContentNegotiationTests(TestCase):
     def setUp(self) -> None:
-        self.user = get_user_model().objects.create_user(username="apiclient", email="a@example.com", password=None)
+        self.user = User.objects.create_user(username="apiclient", email="a@example.com", password=None)
         self.client.force_login(self.user)
 
     def test_wildcard_accept_gets_json(self) -> None:
@@ -653,7 +652,7 @@ class AllowedHostsTests(TestCase):
     def test_unknown_host_is_rejected(self) -> None:
         # django.contrib.sites is not installed, so the password reset email takes its domain from
         # the Host header: accepting any host hands an attacker the reset link
-        get_user_model().objects.create_user(username="victim", email="victim@example.com", password="pw12345678")
+        User.objects.create_user(username="victim", email="victim@example.com", password="pw12345678")
 
         response = self.client.post(
             reverse("password_reset"), {"email": "victim@example.com"}, HTTP_HOST="evil.example.com"
@@ -663,7 +662,7 @@ class AllowedHostsTests(TestCase):
         assert not django_mail.outbox
 
     def test_known_host_is_accepted(self) -> None:
-        get_user_model().objects.create_user(username="victim2", email="victim2@example.com", password="pw12345678")
+        User.objects.create_user(username="victim2", email="victim2@example.com", password="pw12345678")
 
         response = self.client.post(
             reverse("password_reset"), {"email": "victim2@example.com"}, HTTP_HOST="fallingstar-data.com"
