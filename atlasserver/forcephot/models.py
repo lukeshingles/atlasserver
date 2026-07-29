@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 
 
 def get_mjd_min_default():
@@ -84,7 +85,12 @@ class Task(models.Model):
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
         user = get_user_model().objects.get(id=self.user_id)
-        targetstr = f" MPC[{self.mpc_name}]" if self.mpc_name else f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
+        if self.mpc_name:
+            targetstr = f" MPC[{self.mpc_name}]"
+        elif self.ra is not None and self.dec is not None:
+            targetstr = f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
+        else:  # a task with no target at all can be created in the admin panel
+            targetstr = " RA Dec: (none)"
 
         if self.finishtimestamp:
             status = "finished"
@@ -152,20 +158,25 @@ class Task(models.Model):
         imagstackfile = Path(f"{self.localresultfileprefix()}.fits")
         return imagstackfile if Path(settings.STATIC_ROOT, imagstackfile).exists() else None
 
+    def _imagerequest_task(self) -> "Task | None":
+        """Return the image request task associated with this forced photometry task, or None.
+
+        A parent can end up with more than one live image request (e.g. a double-clicked
+        button), so order the query to make sure that every caller agrees on which one it is.
+        """
+        return Task.objects.filter(parent_task_id=self.id, is_archived=False).order_by("id").first()
+
     @property
     def imagerequest_task_id(self) -> int | None:
         """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
-        associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
-        return associated_tasks[0].id if associated_tasks.count() > 0 else None
+        imagerequest = self._imagerequest_task()
+        return imagerequest.id if imagerequest is not None else None
 
     @property
     def imagerequest_finished(self) -> bool | None:
-        """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
-        associated_tasks = Task.objects.filter(parent_task_id=self.id, is_archived=False)
-        if associated_tasks.count() > 0:
-            return bool(associated_tasks[0].finishtimestamp)
-
-        return None
+        """Return whether the image request task associated with this forced photometry task has finished, otherwise None."""
+        imagerequest = self._imagerequest_task()
+        return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
 
     @property
     def queuepos(self) -> int | None:
@@ -210,10 +221,22 @@ class Task(models.Model):
             if zipfile := self.localresultimagezipfile:
                 Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
 
+            # the parent's .txt and .jpg are kept while a live image request needs them, so once
+            # this was the last one they have to be collected here or nothing reclaims them until
+            # the maintenance sweep runs months later
+            parent = self.parent_task
+            if parent is not None and parent.is_archived:
+                siblings = Task.objects.filter(parent_task_id=parent.id, is_archived=False).exclude(id=self.id)
+                if not siblings.exists():
+                    for ext in (".txt", ".jpg"):
+                        Path(settings.STATIC_ROOT, parent.localresultfileprefix() + ext).unlink(missing_ok=True)
+
         else:
-            delete_extlist = [".txt", ".pdf", ".fits"]
-            if self.imagerequest_task_id is None:  # image request tasks share this same preview image
-                delete_extlist.append(".jpg")
+            delete_extlist = [".pdf", ".fits"]
+            if self.imagerequest_task_id is None:
+                # image request tasks share this preview image, and need the .txt data file
+                # as the input that lists the observations to fetch images for
+                delete_extlist += [".jpg", ".txt"]
 
             for ext in delete_extlist:
                 Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
@@ -222,6 +245,6 @@ class Task(models.Model):
         if self.finished():
             self.is_archived = True
             self.save()
-            caches["taskderived"].delete(f"task{self.id}_resultplotdatajs")
+            caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
         else:
             super().delete(using=using, keep_parents=keep_parents)

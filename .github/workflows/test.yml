@@ -83,6 +83,12 @@ jobs:
                   uv pip install -e .
 
             - name: Install geoip databases
+              # the script now exits non-zero when a download fails (so cron notices a stale
+              # database), but CI may have no MaxMind key and the Django tests don't need the
+              # databases (test requests come from 127.0.0.1, which skips the GeoIP lookup)
+              continue-on-error: true
+              env:
+                  MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
               run: ./update_geoipdatabase.sh
 
             - name: Set up MySQL

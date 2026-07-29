@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 
-if [ -f .env ]; then
-    source .env
-fi
-
 ATLASSERVERPATH="$(dirname "$(realpath "$0")")"
 
-tempdir=$(mktemp -d)
-if curl -J -L -u 504450:$MAXMIND_LICENSE_KEY "https://download.maxmind.com/geoip/databases/GeoLite2-ASN/download?suffix=tar.gz" --output "$tempdir/GeoLite2-ASN.tar.gz"; then
-    tar -zxvf "$tempdir/GeoLite2-ASN.tar.gz" -C $tempdir
-    cp $tempdir/GeoLite2-*/GeoLite2-ASN.mmdb "$ATLASSERVERPATH/atlasserver/GeoLite2-ASN.mmdb"
-    rm -rf "$tempdir"
+# resolve .env relative to the script, so that this works from any working directory (e.g. cron)
+if [ -f "$ATLASSERVERPATH/.env" ]; then
+    # shellcheck disable=SC1091
+    source "$ATLASSERVERPATH/.env"
 fi
 
+MAXMIND_ACCOUNT_ID="${MAXMIND_ACCOUNT_ID:-504450}"
 
-tempdir=$(mktemp -d)
-if curl -J -L -u 504450:$MAXMIND_LICENSE_KEY "https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz" --output "$tempdir/GeoLite2-City.tar.gz"; then
-    tar -zxvf "$tempdir/GeoLite2-City.tar.gz" -C "$tempdir"
-    cp $tempdir/GeoLite2-*/GeoLite2-City.mmdb "$ATLASSERVERPATH/atlasserver/GeoLite2-City.mmdb"
+exitcode=0
+
+for edition in GeoLite2-ASN GeoLite2-City; do
+    tempdir=$(mktemp -d)
+    # --fail so that an HTTP error (e.g. a bad licence key) is not saved as a bogus .tar.gz
+    if curl --fail -J -L -u "$MAXMIND_ACCOUNT_ID:$MAXMIND_LICENSE_KEY" \
+        "https://download.maxmind.com/geoip/databases/$edition/download?suffix=tar.gz" \
+        --output "$tempdir/$edition.tar.gz"; then
+        tar -zxvf "$tempdir/$edition.tar.gz" -C "$tempdir"
+        cp "$tempdir"/GeoLite2-*/"$edition.mmdb" "$ATLASSERVERPATH/atlasserver/$edition.mmdb"
+    else
+        echo "ERROR: failed to download $edition (is MAXMIND_LICENSE_KEY set in .env?)"
+        exitcode=1
+    fi
+    # clean up even when the download failed, so the temporary directory is not left behind
     rm -rf "$tempdir"
-fi
+done
+
+# exit non-zero if any edition failed, so that cron/automation notices a stale database
+exit $exitcode

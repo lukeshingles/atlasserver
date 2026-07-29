@@ -8,6 +8,19 @@ function getDefaultMjdMin() {
     return (mjdFromDate(new Date()) - 30.).toFixed(5);
 }
 
+function errortext(value) {
+    // DRF error values can be strings, lists of strings, or nested objects (a field validator
+    // that raises a dict produces e.g. {"mjd_min": {"mjd_min": "..."}}). Rendering an object as
+    // a React child throws and unmounts the page, so flatten everything to a string.
+    if (Array.isArray(value)) {
+        return value.map(errortext).join(' ');
+    }
+    if (value != null && typeof value === 'object') {
+        return Object.values(value).map(errortext).join(' ');
+    }
+    return String(value);
+}
+
 export class NewRequest extends React.Component {
     get_defaultstate() {
         // localStorage.getItem('') will be null if the key doesn't exist and null != false,
@@ -80,7 +93,6 @@ export class NewRequest extends React.Component {
         } else {
             try {
                 const mjdmax = parseFloat(strmjdmax);
-                console.log("invalid?", strmjdmax, mjdmax);
                 const isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
                 isostrmax = (
                     isostr_withmilliseconds.includes('.') ?
@@ -92,11 +104,11 @@ export class NewRequest extends React.Component {
             }
         }
         this.setState({ 'mjd_max': strmjdmax, 'mjd_max_isoformat': isostrmax });
-        localStorage.setItem('mjd_max', strmjdmax);
     }
 
     handlechange_mjd_max(event) {
         this.update_mjd_max(event.target.value);
+        localStorage.setItem('mjd_max', event.target.value);
     }
 
     async submit() {
@@ -128,11 +140,6 @@ export class NewRequest extends React.Component {
                     'Content-Type': 'application/json',
                 },
             })
-            .catch(error => {
-                submission_in_progress = false;
-                console.log('New task HTTP request failed', error);
-                this.setState({ 'httperror': 'HTTP request failed.', 'submission_in_progress': false });
-            })
             .then((response) => {
                 submission_in_progress = false;
                 this.setState({ 'httperror': '', 'submission_in_progress': false });
@@ -151,6 +158,10 @@ export class NewRequest extends React.Component {
                     localStorage.removeItem('comment');
 
                     this.setState(this.get_defaultstate());
+                    // the ISO date captions are derived state, so recompute them or they keep
+                    // describing the values from the request that was just submitted
+                    this.update_mjd_min(getDefaultMjdMin());
+                    this.update_mjd_max('');
                     response.json().then(data => {
                         // console.log('Creation data', data);
                         data.forEach((task, i) => {
@@ -169,6 +180,9 @@ export class NewRequest extends React.Component {
                 }
                 else {
                     console.log("New task: Error on submission: ", response.status);
+                    this.setState({
+                        'httperror': 'Request failed (HTTP ' + response.status + '). You may need to log in again.'
+                    });
                 };
             })
             .catch(error => {
@@ -181,7 +195,7 @@ export class NewRequest extends React.Component {
             });
     }
 
-    onSubmit() {
+    onSubmit(event) {
         event.preventDefault();
         if (submission_in_progress) {
             console.log('New task: Submission already in progress');
@@ -190,7 +204,7 @@ export class NewRequest extends React.Component {
 
         console.log('New task: Submitting', api_url_base);
         submission_in_progress = true;
-        this.setState({ 'submission_in_progress': false });
+        this.setState({ 'submission_in_progress': true });
         this.submit();
     }
 
@@ -204,7 +218,7 @@ export class NewRequest extends React.Component {
                     &nbsp;<a onClick={() => { this.setState({ 'showradechelp': !this.state.showradechelp }) }}>Help</a>
                     {this.state.showradechelp ? <div id="radec_help" style={{ display: 'block', clear: 'right', fontSize: 'small' }} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
                 </li>
-                {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['radeclist']}</li></ul> : ''}
+                {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['radeclist'])}</li></ul> : ''}
             </ul>
         );
 
@@ -254,7 +268,7 @@ export class NewRequest extends React.Component {
                 <li key="mjd_max">
                     <label htmlFor="id_mjd_max">MJD max:</label><input type="number" name="mjd_max" step="any" id="id_mjd_max" value={this.state.mjd_max} onChange={this.handlechange_mjd_max} />
                     <p className="inputisodate" id='id_mjd_max_isoformat'>{this.state.mjd_max_isoformat}</p>
-                    {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{this.state.errors['mjd_max']}</li></ul> : ''}
+                    {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['mjd_max'])}</li></ul> : ''}
                 </li>
                 <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={this.state.comment} onChange={e => { this.setState({ 'comment': e.target.value }); localStorage.setItem("comment", e.target.value); }} /></li>
 
@@ -263,9 +277,20 @@ export class NewRequest extends React.Component {
             </ul>
         );
 
-        if ('non_field_errors' in this.state.errors) {
+        // radeclist and mjd_max are shown next to their own inputs above. Everything else the API
+        // rejects (comment, mjd_min, radec_epoch_year, propermotion_*, ...) is shown here, so that
+        // a validation error can never leave the form looking like it simply did nothing.
+        const shownerrorkeys = ['radeclist', 'mjd_max'];
+        const remainingerrors = Object.entries(this.state.errors).filter(
+            ([key]) => !shownerrorkeys.includes(key));
+
+        if (remainingerrors.length > 0) {
             formcontent.push(
-                <ul className="errorlist"><li>{this.state.errors['non_field_errors']}</li></ul>
+                <ul key="othererrors" className="errorlist">
+                    {remainingerrors.map(([key, value]) => (
+                        <li key={key}>{key == 'non_field_errors' ? '' : key + ': '}{errortext(value)}</li>
+                    ))}
+                </ul>
             );
         }
 

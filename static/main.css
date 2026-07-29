@@ -164,12 +164,73 @@ ul {
   padding: 0;
 }
 
-.navbar-nav>li>a[href~="{{ request.get_full_path }}"] {
+/* the active class is set in base.html: a CSS file is not rendered by the template engine, so
+   the {{ request.get_full_path }} that used to be in this selector never matched anything */
+.navbar-nav>li.active>a {
   text-decoration: underline;
+}
+
+/* the log out control has to be a POST form (Django's LogoutView rejects GET), but its button
+   should be indistinguishable from the sibling links: same colour, font, padding and pointer
+   cursor as bootstrap's .dropdown-menu>li>a rule */
+.dropdown-menu>li>form.logoutform {
+  margin: 0;
+}
+
+.dropdown-menu>li>form.logoutform>button {
+  background: none;
+  border: none;
+  clear: both;
+  color: #333;
+  cursor: pointer;
+  display: block;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: normal;
+  line-height: 1.42857143;
+  padding: 3px 20px;
+  text-align: left;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.dropdown-menu>li>form.logoutform>button:hover,
+.dropdown-menu>li>form.logoutform>button:focus {
+  background-color: #f5f5f5;
+  color: #262626;
+  text-decoration: none;
 }
 
 span.helptext {
   display: block;
+}
+
+/* account forms (change email, change/reset password). These pages used to pull in the Django
+   admin stylesheet, which shrank the text to 13px, uppercased the submit button and depended on
+   CSS variables from an admin stylesheet that is not loaded here. */
+.form-row {
+  margin-bottom: 1em;
+}
+
+.form-row label {
+  display: inline-block;
+  min-width: 12em;
+  vertical-align: top;
+}
+
+.form-row .help {
+  color: #737373;
+  margin: 0.3em 0 0 14.5em;
+}
+
+.errornote,
+.form-row .errorlist {
+  color: #a94442;
+  font-weight: bold;
+}
+
+.submit-row {
+  margin-top: 1.5em;
 }
 
 table {

@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+import operator
 import typing as t
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
+from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
@@ -64,30 +66,27 @@ MAX_USER_TASKS = 500
 def calculate_queue_positions() -> None:
     """Calculate and assign the queue positions (determining the order of execution in the task runner) for all queued tasks."""
     with transaction.atomic():
-        queuedtasks = (
-            Task.objects.all()
+        # Lock the queued rows and read them once. Without the lock, two concurrent
+        # recalculations can each renumber from a snapshot that is missing the other's changes
+        # and end up assigning duplicate queue positions.
+        queuedtasks = list(
+            Task.objects.select_for_update()
             .filter(finishtimestamp__isnull=True, is_archived=False)
             .order_by("user_id", "timestamp", "id")
         )
 
-        # to get position in current pass, check if job currently running
-        query_currentlyrunningtask = queuedtasks.filter(starttimestamp__isnull=False).order_by("-starttimestamp")
+        # to get position in current pass, check if job currently running (the one started last).
+        # attrgetter rather than a lambda: the generator's None filter cannot narrow the
+        # attribute type inside a lambda, so a lambda key would not type check
+        runningtask = max(
+            (tsk for tsk in queuedtasks if tsk.starttimestamp is not None),
+            key=operator.attrgetter("starttimestamp"),
+            default=None,
+        )
+        runningtaskid = runningtask.id if runningtask is not None else None
+        runningtask_userid = runningtask.user_id if runningtask is not None else None
 
-        runningtaskid = None
-        runningtask_userid = None
-
-        try:
-            if query_currentlyrunningtask.exists():
-                runningtask = query_currentlyrunningtask.first()
-                if runningtask is not None:
-                    runningtaskid = runningtask.id
-                    runningtask_userid = runningtask.user_id
-
-        except AttributeError:
-            runningtaskid = None
-            runningtask_userid = None
-
-        queuedtaskcount = queuedtasks.count()
+        queuedtaskcount = len(queuedtasks)
 
         unassigned_taskids = [t.id for t in queuedtasks]
         unassigned_task_userids = [t.user_id for t in queuedtasks]
@@ -155,11 +154,17 @@ def get_tasklist_etag(request, queryset) -> str:
     else:
         todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M")
 
-    last_queued = Task.objects.filter().aggregate(Max("timestamp"))["timestamp__max"]
-    last_started = Task.objects.filter().aggregate(Max("starttimestamp"))["starttimestamp__max"]
-    last_finished = Task.objects.filter().aggregate(Max("finishtimestamp"))["finishtimestamp__max"]
+    # one aggregate query instead of several. task_modified_datetime (auto_now) is included so
+    # that edits which don't change any of the other timestamps still invalidate the etag
+    lasttimes = Task.objects.aggregate(
+        Max("timestamp"), Max("starttimestamp"), Max("finishtimestamp"), Max("task_modified_datetime")
+    )
+    last_queued = lasttimes["timestamp__max"]
+    last_started = lasttimes["starttimestamp__max"]
+    last_finished = lasttimes["finishtimestamp__max"]
+    last_modified = lasttimes["task_modified_datetime__max"]
     taskids = "-".join([str(row.id) for row in queryset])
-    return f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.tasks{taskids}"
+    return f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.lastmod{last_modified}.tasks{taskids}"
 
 
 class ForcePhotPermission(permissions.BasePermission):
@@ -215,14 +220,23 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             user_id=self.request.user.pk,
             is_archived=False,
         ).count()
-        if usertaskcount >= MAX_USER_TASKS:
-            msg = f"ERROR: You have too many queued tasks ({usertaskcount} >= {MAX_USER_TASKS})."
-            raise serializers.ValidationError({"non_field_errors": msg})
+
+        # a radeclist can hold up to 100 targets, so the limit must account for the size of this
+        # request rather than only the tasks that are already queued
         if "radeclist" in request.data:
             datalist = splitradeclist(request.data)
+            newtaskcount = len(datalist)
             serializer = self.get_serializer(data=datalist, many=True)
         else:
+            newtaskcount = 1
             serializer = self.get_serializer(data=request.data)
+
+        if usertaskcount + newtaskcount > MAX_USER_TASKS:
+            msg = (
+                f"ERROR: You have too many queued tasks ({usertaskcount} queued"
+                f" + {newtaskcount} requested > {MAX_USER_TASKS})."
+            )
+            raise serializers.ValidationError({"non_field_errors": msg})
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
@@ -263,16 +277,26 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
 
         serializer.save(**extra_fields)
-        new_task_ids = (
-            [item["id"] for item in serializer.data] if isinstance(serializer.data, list) else [serializer.data["id"]]
-        )
-        for i, task_id in enumerate(new_task_ids):
-            Task.objects.filter(id=task_id).update(userqueuedtasks_on_submit=usertaskcount_before + i)
+
+        # take the ids from the saved objects rather than serializer.data: accessing .data here
+        # would cache the response body before the updates below have been applied
+        newtasks = serializer.instance if isinstance(serializer.instance, list) else [serializer.instance]
+
+        for i, task in enumerate(newtasks):
+            Task.objects.filter(id=task.id).update(userqueuedtasks_on_submit=usertaskcount_before + i)
+
         calculate_queue_positions()
+
+        # the updates above went straight to the database, so reload the in-memory objects that
+        # will be serialised into the response
+        for task in newtasks:
+            task.refresh_from_db()
 
     def perform_update(self, serializer) -> None:
         """Update a task."""
-        serializer.save(user=self.request.user)
+        # don't pass user=request.user here: a staff user editing someone else's task would
+        # otherwise take ownership of it
+        serializer.save()
 
     def perform_destroy(self, instance) -> None:
         """Delete a task, and if the task is queued (not finished), then update queue positions."""
@@ -357,7 +381,12 @@ class RequestImages(APIView):
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
 
-    def get(self, request, pk):
+    def post(self, request, pk):
+        """Create an image request task for a finished forced photometry task.
+
+        This creates a task, so it must not be reachable by GET: a safe method is not CSRF
+        protected, and any page (or link prefetcher) could otherwise queue work for a logged-in user.
+        """
         if not request.user.is_authenticated:
             raise PermissionDenied
 
@@ -478,7 +507,9 @@ def statsusagechart(request):
 
     today = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    waitingtasks = Task.objects.filter(timestamp__gt=today - datetime.timedelta(days=14), finishtimestamp__isnull=True)
+    waitingtasks = Task.objects.filter(
+        timestamp__gt=today - datetime.timedelta(days=days_back), finishtimestamp__isnull=True
+    )
 
     waitingtasks_api = waitingtasks.filter(from_api=True)
     waitingtasks_nonapi = waitingtasks.filter(from_api=False)
@@ -636,25 +667,31 @@ def statsshortterm(request):
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
+    def mean_seconds_str(values: list[float]) -> str:
+        """Format the mean of a list of second counts, ignoring NaNs and empty lists."""
+        finitevalues = [value for value in values if np.isfinite(value)]
+        return f"{np.mean(finitevalues):.1f}s" if finitevalues else "-"
+
     if sevendaytasks_finished.count() > 0:
-        dictparams["sevendayavgwaittime"] = (
-            f"{np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished])):.1f}s"
-        )
+        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
+
         sevendaytasks_finished_firstusertasks = sevendaytasks_finished.filter(userqueuedtasks_on_submit=0)
-        dictparams["sevendayavgwaittimeuserfirst"] = (
-            f"{np.nanmean(np.array([tsk.waittime() for tsk in sevendaytasks_finished_firstusertasks])):.1f}s"
+        dictparams["sevendayavgwaittimeuserfirst"] = mean_seconds_str(
+            [tsk.waittime() for tsk in sevendaytasks_finished_firstusertasks]
         )
 
-        sevenday_runtimes = np.array([tsk.runtime() for tsk in sevendaytasks_finished])
-        sevenday_mean_runtime = np.nanmean(sevenday_runtimes)
-        dictparams["sevendayavgruntime"] = f"{sevenday_mean_runtime:.1f}s"
+        sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
+        sevenday_finite_runtimes = [runtime for runtime in sevenday_runtimes if np.isfinite(runtime)]
+        dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
         num_job_processors = 16
+        sevenday_mean_runtime = np.mean(sevenday_finite_runtimes) if sevenday_finite_runtimes else 0.0
         dictparams["sevendayloadpercent"] = (
             f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
         )
     else:
         dictparams |= {
             "sevendayavgwaittime": "-",
+            "sevendayavgwaittimeuserfirst": "-",
             "sevendayavgruntime": "-",
             "sevendayloadpercent": "0%",
         }
@@ -727,10 +764,10 @@ def resultplotdatajs(request, taskid):
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()
 
-    strjs = caches["taskderived"].get(f"task{taskid}_resultplotdatajs", default=None)
+    strjs = caches["taskderived"].get(resultplotdatajs_cachekey(taskid), default=None)
 
     if strjs is None:
-        jsout = ['"use strict";\n']
+        jsout = []
 
         resultfilepath = None
         if task.localresultfile() is not None:
@@ -738,22 +775,34 @@ def resultplotdatajs(request, taskid):
             if not resultfilepath.is_file():
                 resultfilepath = None
 
+        dfforcedphot = None
         if resultfilepath is not None:
             import pandas as pd
 
-            dfforcedphot = pd.read_csv(
-                resultfilepath,
-                sep=r"\s+",
-                escapechar="#",
-                dtype=float,
-                converters={"F": str, "Obs": str, "uJy": int, "duJy": int},
-            )
-            # df.rename(columns={'#MJD': 'MJD'})
+            try:
+                dfforcedphot = pd.read_csv(
+                    resultfilepath,
+                    sep=r"\s+",
+                    escapechar="#",
+                    dtype=float,
+                    converters={"F": str, "Obs": str, "uJy": int, "duJy": int},
+                )
+            except ValueError:
+                # an empty, truncated or ragged result file: EmptyDataError and ParserError are
+                # both ValueError subclasses, and a non-numeric token in a well-formed row (e.g.
+                # a diagnostic line mixed into the output) fails the dtype=float conversion with
+                # a plain ValueError
+                dfforcedphot = None
+            else:
+                # df.rename(columns={'#MJD': 'MJD'})
 
-            ujy_min = int(-1e10)
-            ujy_max = int(1e10)
-            dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
+                ujy_min = int(-1e10)
+                ujy_max = int(1e10)
+                dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
 
+        # with no rows, the limits below would be NaN, which is not a JavaScript literal
+        if dfforcedphot is not None and not dfforcedphot.empty:
+            jsout.append('"use strict";\n')
             jsout.extend(
                 (
                     "var jslcdata = new Array();\n",
@@ -801,17 +850,21 @@ def resultplotdatajs(request, taskid):
                     f'var lcdivname = "#{divid}";\n',
                 )
             )
-            if settings.DEBUG:
-                jsout.append(Path(settings.STATIC_ROOT, "js/queuepage/src/lightcurveplotly.js").open("rt").read())
-            else:
-                jsout.append(Path(settings.STATIC_ROOT, "js/lightcurveplotly.min.js").open("rt").read())
-
         strjs = "".join(jsout)
 
         # with jsplotfile.open("w") as f:
         #     f.writelines(jsout)
 
-        caches["taskderived"].set(f"task{taskid}_resultplotdatajs", strjs)
+        # an empty result (e.g. a transiently unreadable file) must not be stored, or the plot
+        # would stay blank until the entry expires even after the file is fixed
+        if strjs:
+            caches["taskderived"].set(resultplotdatajs_cachekey(taskid), strjs)
+
+    if strjs:
+        # the plotting code is appended outside of the cache, so that a redeployed
+        # lightcurveplotly script takes effect immediately rather than after the cache timeout
+        plotscript = "js/queuepage/src/lightcurveplotly.js" if settings.DEBUG else "js/lightcurveplotly.min.js"
+        strjs += Path(settings.STATIC_ROOT, plotscript).read_text()
 
     return HttpResponse(strjs, content_type="text/javascript", headers={"ETag": etag})
 
@@ -866,7 +919,8 @@ def taskresultdata(request, taskid):
     return HttpResponseNotFound("Page not found")
 
 
-@cache_page(60 * 60, cache="taskderived")
+# no @cache_page here: Django's cache middleware skips streaming responses, so decorating a view
+# that returns a FileResponse only adds a lookup that can never hit
 def taskpreviewimage(request, taskid: int):
     item = None
     if taskid:

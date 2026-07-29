@@ -77,6 +77,44 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
         flogfile.write(line + "\n")
 
 
+def run_rsync(copycommand: list[str], logfunc: t.Callable[[t.Any], None]) -> int | None:
+    """Run an rsync command, logging its output. Return the exit code, or None if it timed out."""
+    logfunc(" ".join(copycommand))
+
+    proc = subprocess.Popen(
+        copycommand,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        bufsize=1,
+        universal_newlines=True,
+    )
+
+    try:
+        # without a timeout an rsync against a wedged host blocks the worker slot indefinitely
+        stdout, stderr = proc.communicate(timeout=TASK_MAXTIME_SECONDS)
+    except subprocess.TimeoutExpired:
+        logfunc(f"ERROR: rsync timed out after {TASK_MAXTIME_SECONDS:.0f} seconds")
+        proc.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
+        return None
+
+    if stdout:
+        for line in stdout.split("\n"):
+            logfunc(f"STDOUT: {line}")
+
+    if stderr:
+        for line in stderr.split("\n"):
+            logfunc(f"STDERR: {line}")
+
+    if proc.returncode != 0:
+        logfunc(f"ERROR: rsync exited with code {proc.returncode}")
+
+    return proc.returncode
+
+
 def task_exists(taskid: int) -> bool:
     """Return true if the task exists in the database."""
     try:
@@ -95,7 +133,10 @@ def remove_task_resultfiles(
 ) -> None:
     """Delete any associated result files from a deleted task."""
     if request_type == "FP":
-        taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(taskid) + ".txt")]
+        # an FP task also produces a .jpg preview (and possibly a .pdf plot). The database row is
+        # already gone by the time this runs, so anything left behind is orphaned forever.
+        # glob patterns must be relative to the globbed directory
+        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
     elif request_type == "IMGZIP" and parent_task_id is not None:
         taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(parent_task_id) + ".zip")]
     else:  # SSOSTACK
@@ -155,9 +196,11 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         if task.propermotion_dec:
             atlascommand += f" pmdec={task.propermotion_dec}"
 
-        if task.mjd_min:
+        # "is not None" rather than truthiness, so that an explicit bound of 0 is passed through
+        # instead of being silently dropped
+        if task.mjd_min is not None:
             atlascommand += f" m0={float(task.mjd_min)}"
-        if task.mjd_max:
+        if task.mjd_max is not None:
             atlascommand += f" m1={float(task.mjd_max)}"
 
         atlascommand += " dodb=1 parallel=4"
@@ -178,29 +221,16 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
 
+        if not localdatafile.exists():
+            # the parent forced photometry data file lists the images to fetch. Without it the task
+            # can never succeed, so finish with an error instead of retrying it forever.
+            return None, "The forced photometry data file for the parent task is no longer available."
+
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
-        copycommand = ["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"]
-
-        logfunc(" ".join(copycommand))
-
-        proc = subprocess.Popen(
-            copycommand,
-            shell=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            bufsize=1,
-            universal_newlines=True,
-        )
-        stdout, stderr = proc.communicate()
-
-        if stdout:
-            for line in stdout.split("\n"):
-                logfunc(f"STDOUT: {line}")
-
-        if stderr:
-            for line in stderr.split("\n"):
-                logfunc(f"STDERR: {line}")
+        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc) != 0:
+            # without the data file the remote script cannot select any images, so retry later
+            # instead of burning a remote run that is certain to fail
+            return None, None
 
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"
@@ -213,9 +243,11 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         )
         atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
         atlascommand += f" outdir={remotetaskdir}"
-        # 2026-06-03 KWS Need to add tdo to sites. Double backslash needed because we call nice.
+        # 2026-06-03 KWS Need to add tdo to sites. The whole command is passed to ssh as a single
+        # argument and evaluated by one remote shell, so plain quotes are what's needed here:
+        # escaped quotes end up as literal characters and the site list is split into five arguments.
         if task.user_id in settings.TEST_USERS:
-            atlascommand += " sites=\\'hko mlo chl sth tdo\\'"
+            atlascommand += " sites='hko mlo chl sth tdo'"
         atlascommand += f" | tee {remotedatafile}; "
         atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
         atlascommand += f"~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
@@ -327,32 +359,16 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         )
 
     for copycommand in copycommands:
-        logfunc(" ".join(copycommand))
-
-        proc = subprocess.Popen(
-            copycommand,
-            shell=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            bufsize=1,
-            universal_newlines=True,
-        )
-        stdout, stderr = proc.communicate()
-
-        if stdout:
-            for line in stdout.split("\n"):
-                logfunc(f"STDOUT: {line}")
-
-        if stderr:
-            for line in stderr.split("\n"):
-                logfunc(f"STDERR: {line}")
+        run_rsync(copycommand, logfunc)
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
         not localresultfile.exists() and localresultfile.with_suffix(".txt").exists()
     ):
-        return localresultfile, localresultfile.with_suffix(".txt").read_text()[:512]
+        # the fallback matters: an empty error message is falsy, and the task would be retried
+        # forever instead of being marked as finished
+        errortext = localresultfile.with_suffix(".txt").read_text()[:512].strip()
+        return localresultfile, errortext or "No image stack was produced."
 
     if not localresultfile.exists():
         # task failed somehow
@@ -367,6 +383,11 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
                 return localresultfile, "No data returned"
         except pd.errors.EmptyDataError:
             return localresultfile, "No data returned"
+        except pd.errors.ParserError:
+            # a ragged file (e.g. a diagnostic line mixed into the output) must not raise out of
+            # here, because the task would then never be marked finished and would be retried forever
+            logfunc("ERROR: could not parse the result file")
+            return localresultfile, "Could not parse the result file"
 
         # if not task.from_api:
         #     make_pdf_plot(taskid=task.id, taskcomment=task.comment, localresultfile=localresultfile,
@@ -444,8 +465,12 @@ def send_email_if_needed(task, logfunc) -> None:
                     attach_size_mb += filesize_mb
                     message.attach_file(str(pdfpath))
 
-        with contextlib.suppress(smtplib.SMTPDataError):
+        try:
             message.send()
+        except (OSError, smtplib.SMTPException) as ex:
+            # a refused recipient or an unreachable mail server must not propagate: it would kill
+            # the worker before the task is marked finished, and the task would be re-run forever
+            logfunc(f"ERROR: could not send email to {task.user.email}: {ex}")
     else:
         logfunc(
             f"Waiting to send email until remaining {batchtasks_unfinished} "
@@ -495,12 +520,12 @@ def do_task(task, slotid: int) -> None:
 
         logfunc(f"Task ran for {runtask_duration:.1f} seconds")
 
+        # the task is marked finished before the email is sent, so that a mail failure can never
+        # leave the task looking unfinished and get it re-run
         if error_msg:
             # an error occurred and the task should not be retried (e.g. invalid
             # minor planet center object name or no data returned)
             logfunc(f"Error_msg: {error_msg}")
-
-            send_email_if_needed(task=task, logfunc=logfunc)
 
             Task.objects.all().filter(pk=task.id).update(
                 finishtimestamp=datetime.datetime.now(datetime.UTC)
@@ -510,14 +535,16 @@ def do_task(task, slotid: int) -> None:
                 error_msg=error_msg,
             )
 
-        elif localresultfile and localresultfile.exists():
-            # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
             send_email_if_needed(task=task, logfunc=logfunc)
 
+        elif localresultfile and localresultfile.exists():
+            # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
             Task.objects.all().filter(pk=task.id).update(
                 finishtimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
                 queuepos_relative=None,
             )
+
+            send_email_if_needed(task=task, logfunc=logfunc)
 
         else:
             waittime = 5

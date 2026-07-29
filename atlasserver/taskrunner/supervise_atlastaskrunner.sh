@@ -4,18 +4,21 @@ taskrunnerpath=$(dirname "$0")
 
 pidfile=/tmp/atlasforced/taskrunner.pid
 
-if [ -f $pidfile ]; then
+# without this, the pid file write below fails and the single-instance guard stops working
+mkdir -p "$(dirname "$pidfile")"
+
+if [ -f "$pidfile" ]; then
   echo "ERROR: pid file $pidfile already exists. Exiting to prevent multiple instances of the task runner process." | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
   exit 1
 fi
 
-echo $$ > $pidfile
+echo $$ > "$pidfile"
 
 clean_up() {
   # sig=$(($? - 128))
   sig=$?
   echo "$(date "+%F %H:%M:%S")" "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
-  rm $pidfile
+  rm -f "$pidfile"
   exit
 }
 

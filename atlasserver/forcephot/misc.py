@@ -277,23 +277,37 @@ def splitradeclist(data, form=None):
 
     if "radeclist" not in data:
         return [data]
+
+    if not isinstance(data["radeclist"], str):
+        raise serializers.ValidationError(
+            {"radeclist": "radeclist must be a string of newline-separated coordinates or MPC names"}
+        )
+
     # multi-add functionality with a list of RA,DEC coords
     datalist = []
 
     converter = astrocalc.coords.unit_conversion(log=fundamentals.logs.emptyLogger())
 
-    # if an RA and Dec were specified directly in their fields, add them to the list
-    if "ra" in data and data["ra"] and "dec" in data and data["dec"]:
+    # if an RA and Dec were specified directly in their fields, add them to the list.
+    # RA 0 and Dec 0 are valid, so test for "not given" rather than falsiness
+    if data.get("ra") not in (None, "") and data.get("dec") not in (None, ""):
         newrow = data.copy()
-        newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=newrow["ra"])
-        newrow["dec"] = converter.dec_sexegesimal_to_decimal(dec=newrow["dec"])
+        try:
+            newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=newrow["ra"])
+            newrow["dec"] = converter.dec_sexegesimal_to_decimal(dec=newrow["dec"])
+        except (OSError, IndexError) as err:
+            # astrocalc raises IOError for input that it cannot parse
+            raise serializers.ValidationError({"ra": f"Could not parse RA/Dec: {err}"}) from err
         del newrow["radeclist"]
         datalist.append(newrow)
 
-    lines = data["radeclist"].split("\n")
+    # browsers submit textarea contents with CRLF line endings, so strip the trailing \r from each
+    # line. Blank lines are skipped below, so don't let them count towards the limit.
+    lines = [line.strip() for line in data["radeclist"].splitlines()]
 
-    if len(lines) > 100:
-        raise serializers.ValidationError({"radeclist": f"Number of lines ({len(lines)}) is above the limit of 100"})
+    linecount = sum(1 for line in lines if line)
+    if linecount > 100:
+        raise serializers.ValidationError({"radeclist": f"Number of lines ({linecount}) is above the limit of 100"})
         # lines = lines[:1]
 
     for index, line in enumerate(lines, 1):
@@ -345,7 +359,22 @@ def splitradeclist(data, form=None):
             except (OSError, IndexError) as err:
                 raise serializers.ValidationError({"radeclist": f"Error on line {index}: {err}"}) from err
 
+    if not datalist:
+        # otherwise an all-blank radeclist is serialised as an empty list, and the request
+        # succeeds with HTTP 201 without having created anything
+        raise serializers.ValidationError({"radeclist": "No coordinates or MPC object names were given."})
+
     return datalist
+
+
+def resultplotdatajs_cachekey(taskid: int) -> str:
+    """Return the cache key holding the generated plot data for a task.
+
+    The suffix is a version marker. Entries written by an earlier release hold a different
+    payload, and the cache timeout is long enough (30 days) that they would otherwise be served
+    for weeks after a deployment; bumping the suffix makes them be ignored immediately.
+    """
+    return f"task{taskid}_resultplotdatajs_v2"
 
 
 def datetime_to_mjd(dt: datetime.datetime) -> float:

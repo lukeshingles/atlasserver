@@ -64,22 +64,20 @@ export class Task extends React.Component {
 
     requestImages() {
         const request_image_url = new URL(this.props.taskdata.url);
-        request_image_url.pathname += 'requestimages';
+        // the trailing slash matters: without it APPEND_SLASH answers with a 301, and a browser
+        // retries a redirected POST as a GET, which this endpoint does not accept
+        request_image_url.pathname += 'requestimages/';
         request_image_url.search = '';
 
         fetch(request_image_url,
             {
                 credentials: "same-origin",
-                method: "GET",
+                method: "POST",
                 headers: {
                     "X-CSRFToken": getCookie("csrftoken"),
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
                 },
-            })
-            .catch(error => {
-                console.log('requestImages HTTP request failed', error);
-                this.setState({ 'httperror': 'HTTP request failed.' });
             })
             .then((response) => {
                 if (response.status == 200 && response.redirected) {
@@ -92,11 +90,25 @@ export class Task extends React.Component {
                     window.history.pushState({}, document.title, new_page_url);
                     this.props.fetchData(true);
                 } else {
-                    response.json().then(data => {
-                        console.log('requestImages: errors returned', data);
-                        this.setState({ 'httperror': 'ERROR: ' + data["non_field_errors"] });
+                    // the body is not always JSON (e.g. a plain-text 404), and DRF reports its
+                    // own errors under 'detail' rather than 'non_field_errors'
+                    return response.text().then(text => {
+                        let message = response.statusText || ('HTTP ' + response.status);
+                        try {
+                            const data = JSON.parse(text);
+                            message = data["non_field_errors"] || data["detail"] || message;
+                        } catch (err) {
+                            console.log('requestImages: non-JSON error body', text);
+                        }
+                        console.log('requestImages: error returned', response.status, message);
+                        this.setState({ 'httperror': 'ERROR: ' + message });
                     });
                 }
+                return null;
+            })
+            .catch(error => {
+                console.log('requestImages HTTP request failed', error);
+                this.setState({ 'httperror': 'HTTP request failed.' });
             });
     }
 
@@ -108,6 +120,9 @@ export class Task extends React.Component {
                 return { 'interval': setInterval(state.updateTimeElapsed, 1000), 'timeelapsed': timeelapsed.toFixed(0) };
             }
         } else if (state.interval != null) {
+            // the task is no longer running, so stop the timer. It must be cleared here:
+            // once state.interval is null, updateTimeElapsed() can no longer find it.
+            clearInterval(state.interval);
             return { 'interval': null };
         }
 
@@ -216,7 +231,9 @@ export class Task extends React.Component {
                 radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
             }
             taskbox.push(<div key="target">RA Dec: {radecepoch}{task.ra} {task.dec}</div>);
-            if (task.propermotion_ra > 0 || task.propermotion_dec > 0) {
+            // proper motion components are signed, so testing for > 0 hides half of all real values
+            if ((task.propermotion_ra != null && task.propermotion_ra != 0)
+                || (task.propermotion_dec != null && task.propermotion_dec != 0)) {
                 taskbox.push(<div key="propermotion">Proper motion [mas/yr]: {task.propermotion_ra} {task.propermotion_dec}</div>);
             }
         }

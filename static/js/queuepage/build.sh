@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 
-npx babel --minified --presets @babel/preset-react src/newrequest.jsx > ../newrequest.min.js
-npx babel --minified --presets @babel/preset-react src/tasklist.jsx > ../tasklist.min.js
+# fail on the first error. With --out-file, a compile error exits non-zero and leaves the
+# published bundle untouched (redirecting stdout with > would truncate it before babel runs)
+set -euo pipefail
 
-npx babel --minified --presets @babel/preset-react src/lightcurveplotly.js > ../lightcurveplotly.min.js
+cd "$(dirname "$0")"
+
+npx babel --minified --presets @babel/preset-react src/newrequest.jsx -o ../newrequest.min.js
+npx babel --minified --presets @babel/preset-react src/tasklist.jsx -o ../tasklist.min.js
+npx babel --minified --presets @babel/preset-react src/lightcurveplotly.js -o ../lightcurveplotly.min.js

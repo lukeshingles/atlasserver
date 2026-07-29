@@ -65,15 +65,23 @@
               {% endblock %}
             </span>
 
+            {# the current page is marked here rather than in main.css, which is served as a #}
+            {# static file and so is never rendered by the template engine #}
+            {% url 'index' as index_url %}
+            {% url 'resultdesc' as resultdesc_url %}
+            {% url 'task-list' as tasklist_url %}
+            {% url 'apiguide' as apiguide_url %}
+            {% url 'faq' as faq_url %}
+            {% url 'stats' as stats_url %}
             <ul class="nav navbar-nav">
-                <li><a href="{% url 'index' %}">Home</a></li>
-                <li><a href="{% url 'resultdesc' %}">Output</a></li>
-                <li><a href="{% url 'task-list' %}" rel="nofollow" class="loginrequired">Queue</a></li>
-                <li><a href="{% url 'task-list' %}?format=api" rel="nofollow" class="loginrequired">API</a></li>
-                <li><a href="{% url 'apiguide' %}">API Guide</a></li>
-                <li><a href="{% url 'faq' %}">FAQ</a></li>
-                <li><a href="{% url 'stats' %}">Stats &amp; Issues</a></li>
-                <!-- <li><a href="{% url 'task-list' %}?format=json" rel="nofollow">JSON</a></li> -->
+                <li{% if request.path == index_url %} class="active"{% endif %}><a href="{{ index_url }}">Home</a></li>
+                <li{% if request.path == resultdesc_url %} class="active"{% endif %}><a href="{{ resultdesc_url }}">Output</a></li>
+                <li{% if request.path == tasklist_url %} class="active"{% endif %}><a href="{{ tasklist_url }}" rel="nofollow" class="loginrequired">Queue</a></li>
+                <li><a href="{{ tasklist_url }}?format=api" rel="nofollow" class="loginrequired">API</a></li>
+                <li{% if request.path == apiguide_url %} class="active"{% endif %}><a href="{{ apiguide_url }}">API Guide</a></li>
+                <li{% if request.path == faq_url %} class="active"{% endif %}><a href="{{ faq_url }}">FAQ</a></li>
+                <li{% if request.path == stats_url %} class="active"{% endif %}><a href="{{ stats_url }}">Stats &amp; Issues</a></li>
+                <!-- <li><a href="{{ tasklist_url }}?format=json" rel="nofollow">JSON</a></li> -->
             </ul>
 
             <ul class="nav navbar-nav pull-right">
@@ -91,7 +99,15 @@
                         <li><a href="{% url 'email_change' %}">{{request.user.email}}</a></li>
                         <li><a href="{% url 'email_change' %}">Change email</a></li>
                         <li><a href="{% url 'password_change' %}">Change password</a></li>
-                        <li><a href="{% url 'logout' %}?next={{ request.get_full_path }}">Log out</a></li>
+                        <li>
+                          {# Django's LogoutView only accepts POST, so a plain link would return HTTP 405. #}
+                          {# No "next" field: LogoutView prefers it over LOGOUT_REDIRECT_URL, which would #}
+                          {# send the now-anonymous user back to a login-protected page. #}
+                          <form action="{% url 'logout' %}" method="post" class="logoutform">
+                            {% csrf_token %}
+                            <button type="submit">Log out</button>
+                          </form>
+                        </li>
                       </ul>
                     </li>
                 {% else %}
