@@ -143,25 +143,42 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate(self, attrs):
-        # RA 0 and Dec 0 are valid coordinates, so test for "not given" rather than falsiness
-        ra_missing = attrs.get("ra") in (None, "")
-        dec_missing = attrs.get("dec") in (None, "")
+    def submitted(self, attrs, field, default=None):
+        """Return the value of a field, falling back to the stored task for a partial update.
 
-        if attrs.get("mpc_name", False):  # it's an MPC object name
+        Without the fallback, a PATCH is judged only on the fields it changes, so changing
+        (say) just the comment of an existing task is rejected for having no target.
+        """
+        if field in attrs:
+            return attrs[field]
+
+        if self.partial and self.instance is not None:
+            return getattr(self.instance, field, default)
+
+        return default
+
+    def validate(self, attrs):
+        mpc_name = self.submitted(attrs, "mpc_name")
+        request_type = self.submitted(attrs, "request_type")
+
+        # RA 0 and Dec 0 are valid coordinates, so test for "not given" rather than falsiness
+        ra_missing = self.submitted(attrs, "ra") in (None, "")
+        dec_missing = self.submitted(attrs, "dec") in (None, "")
+
+        if mpc_name:  # it's an MPC object name
             if not ra_missing or not dec_missing:
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
-            if attrs.get("request_type") == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
+            if request_type == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
                 msg = "Proper motion cannot be used for SSO image stack requests."
                 raise serializers.ValidationError(msg)
-        elif attrs.get("request_type") == "SSOSTACK":
+        elif request_type == "SSOSTACK":
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
-        elif attrs.get("request_type") == "IMGZIP":
-            if not attrs.get("parent_task_id", False):
+        elif request_type == "IMGZIP":
+            parent_task_id = self.submitted(attrs, "parent_task_id")
+            if not parent_task_id:
                 msg = "IMGZIP requests must have a parent_task_id set to an FP task."
                 raise serializers.ValidationError(msg)
-            parent_task_id = attrs["parent_task_id"]
 
             try:
                 Task.objects.all().get(id=parent_task_id, request_type="FP")
@@ -182,11 +199,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 {"mjd_min": "mjd_min must be either None or a finite floating-point number."}
             )
 
-        if attrs.get("mjd_max") not in (None, ""):
+        mjd_max = self.submitted(attrs, "mjd_max")
+        if mjd_max not in (None, ""):
             # an explicit mjd_min of None means "no lower bound" and is saved as-is, so only
             # substitute the model default (30 days ago) when mjd_min was not given at all
-            mjd_min = attrs["mjd_min"] if "mjd_min" in attrs else get_mjd_min_default()
-            if mjd_min not in (None, "") and not float(attrs["mjd_max"]) > float(mjd_min):
+            mjd_min = self.submitted(attrs, "mjd_min", default=get_mjd_min_default())
+            if mjd_min not in (None, "") and not float(mjd_max) > float(mjd_min):
                 raise serializers.ValidationError(
                     {"mjd_max": f"mjd_max must be greater than mjd_min ({mjd_min} was applied)."}
                 )

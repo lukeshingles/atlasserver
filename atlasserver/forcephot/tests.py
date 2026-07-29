@@ -249,6 +249,24 @@ class TaskUpdateTests(TestCase):
         assert task.user_id == self.owner.pk
         assert task.comment == "edited by staff"
 
+    def test_partial_update_keeps_the_existing_target(self) -> None:
+        # a PATCH used to be judged only on the fields it changed, so changing just the comment
+        # was rejected for having neither an mpc_name nor coordinates
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0)
+        self.client.force_login(self.owner)
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"comment": "just a comment"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.comment == "just a comment"
+        assert task.ra == 1.0
+
 
 class TaskCreateLimitTests(TestCase):
     def setUp(self) -> None:
