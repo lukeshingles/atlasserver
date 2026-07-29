@@ -3,7 +3,9 @@ import typing as t
 from pathlib import Path
 
 from django.conf import settings
-from django.contrib.auth.models import User
+
+# the project uses the default user model, and the concrete class is needed for typing
+from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min

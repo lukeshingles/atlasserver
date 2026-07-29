@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest import mock
 
 from django.conf import settings
-from django.contrib.auth.models import User
+
+# the project uses the default user model, and the concrete class is needed for typing
+from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
 from django.core import mail as django_mail
 from django.core.cache import caches
 from django.test import override_settings
