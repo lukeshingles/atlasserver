@@ -178,6 +178,11 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
         remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
 
+        if not localdatafile.exists():
+            # the parent forced photometry data file lists the images to fetch. Without it the task
+            # can never succeed, so finish with an error instead of retrying it forever.
+            return None, "The forced photometry data file for the parent task is no longer available."
+
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
         copycommand = ["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"]
 

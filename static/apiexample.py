@@ -70,6 +70,10 @@ while not result_url:
 
         if resp.status_code == 200:  # HTTP OK
             if resp.json()["finishtimestamp"]:
+                if resp.json()["error_msg"]:
+                    # the task finished without producing a result file, so there is nothing to wait for
+                    print(f"Task failed with error: {resp.json()['error_msg']}")
+                    sys.exit(1)
                 result_url = resp.json()["result_url"]
                 print(f"Task is complete with results available at {result_url}")
             elif resp.json()["starttimestamp"]:

@@ -91,7 +91,14 @@
                         <li><a href="{% url 'email_change' %}">{{request.user.email}}</a></li>
                         <li><a href="{% url 'email_change' %}">Change email</a></li>
                         <li><a href="{% url 'password_change' %}">Change password</a></li>
-                        <li><a href="{% url 'logout' %}?next={{ request.get_full_path }}">Log out</a></li>
+                        <li>
+                          {# Django's LogoutView only accepts POST, so a plain link would return HTTP 405 #}
+                          <form action="{% url 'logout' %}" method="post" class="logoutform">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}" />
+                            <button type="submit">Log out</button>
+                          </form>
+                        </li>
                       </ul>
                     </li>
                 {% else %}

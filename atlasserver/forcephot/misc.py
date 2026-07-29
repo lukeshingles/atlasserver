@@ -290,10 +290,13 @@ def splitradeclist(data, form=None):
         del newrow["radeclist"]
         datalist.append(newrow)
 
-    lines = data["radeclist"].split("\n")
+    # browsers submit textarea contents with CRLF line endings, so strip the trailing \r from each
+    # line. Blank lines are skipped below, so don't let them count towards the limit.
+    lines = [line.strip() for line in data["radeclist"].splitlines()]
 
-    if len(lines) > 100:
-        raise serializers.ValidationError({"radeclist": f"Number of lines ({len(lines)}) is above the limit of 100"})
+    linecount = sum(1 for line in lines if line)
+    if linecount > 100:
+        raise serializers.ValidationError({"radeclist": f"Number of lines ({linecount}) is above the limit of 100"})
         # lines = lines[:1]
 
     for index, line in enumerate(lines, 1):

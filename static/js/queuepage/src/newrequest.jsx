@@ -80,7 +80,6 @@ export class NewRequest extends React.Component {
         } else {
             try {
                 const mjdmax = parseFloat(strmjdmax);
-                console.log("invalid?", strmjdmax, mjdmax);
                 const isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
                 isostrmax = (
                     isostr_withmilliseconds.includes('.') ?
@@ -92,11 +91,11 @@ export class NewRequest extends React.Component {
             }
         }
         this.setState({ 'mjd_max': strmjdmax, 'mjd_max_isoformat': isostrmax });
-        localStorage.setItem('mjd_max', strmjdmax);
     }
 
     handlechange_mjd_max(event) {
         this.update_mjd_max(event.target.value);
+        localStorage.setItem('mjd_max', event.target.value);
     }
 
     async submit() {
@@ -127,11 +126,6 @@ export class NewRequest extends React.Component {
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
                 },
-            })
-            .catch(error => {
-                submission_in_progress = false;
-                console.log('New task HTTP request failed', error);
-                this.setState({ 'httperror': 'HTTP request failed.', 'submission_in_progress': false });
             })
             .then((response) => {
                 submission_in_progress = false;
@@ -181,7 +175,7 @@ export class NewRequest extends React.Component {
             });
     }
 
-    onSubmit() {
+    onSubmit(event) {
         event.preventDefault();
         if (submission_in_progress) {
             console.log('New task: Submission already in progress');
@@ -190,7 +184,7 @@ export class NewRequest extends React.Component {
 
         console.log('New task: Submitting', api_url_base);
         submission_in_progress = true;
-        this.setState({ 'submission_in_progress': false });
+        this.setState({ 'submission_in_progress': true });
         this.submit();
     }
 

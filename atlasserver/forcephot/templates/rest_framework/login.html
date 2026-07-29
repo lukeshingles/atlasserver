@@ -1,7 +1,7 @@
 {% extends "rest_framework/base.html" %}
 
 {% block content %}
-<body class="container">
+<div class="container">
   <div class="container-fluid" style="margin-top: 30px">
     <div class="row-fluid">
       <div class="well" style="width: 320px; margin-left: auto; margin-right: auto">
@@ -56,12 +56,11 @@
               </div>
                 <br /><p>New user? <a href="{% url 'register' %}">Register for an account</a>
                 <br />Forgot password? <a href ="{% url 'password_reset' %}">Reset password</a></p>
-              </p>
             </form>
           </div>
         </div><!-- /.row-fluid -->
       </div><!--/.well-->
     </div><!-- /.row-fluid -->
   </div><!-- /.container-fluid -->
-</body>
+</div><!-- /.container -->
 {% endblock %}

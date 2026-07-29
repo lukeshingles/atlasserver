@@ -88,6 +88,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         # if any([c not in dict.fromkeys(okchars) for c in value]):
         #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
 
+        # mpc_name is nullable, and DRF calls validate_<field> even when the value is None
+        if value is None or value == "":
+            return value
+
         badchars = "'\";"
         if any(c in dict.fromkeys(badchars) for c in value):
             raise serializers.ValidationError(
@@ -140,8 +144,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
+        # RA 0 and Dec 0 are valid coordinates, so test for "not given" rather than falsiness
+        ra_missing = attrs.get("ra") in (None, "")
+        dec_missing = attrs.get("dec") in (None, "")
+
         if attrs.get("mpc_name", False):  # it's an MPC object name
-            if attrs.get("ra", False) or attrs.get("dec", False):
+            if not ra_missing or not dec_missing:
                 raise serializers.ValidationError({"mpc_name": "mpc_name was given but RA and Dec were not empty."})
             if attrs.get("request_type") == "SSOSTACK" and ("propermotion_ra" in attrs or "propermotion_dec" in attrs):
                 msg = "Proper motion cannot be used for SSO image stack requests."
@@ -161,12 +169,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
                 msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
                 raise serializers.ValidationError(msg) from None
 
-        elif not attrs.get("ra", None) and not attrs.get("dec", None):
+        elif ra_missing and dec_missing:
             msg = "Either an mpc_name or (ra, dec) must be specified."
             raise serializers.ValidationError({"non_field_errors": msg})
-        elif not attrs.get("dec", None):
+        elif dec_missing:
             raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
-        elif not attrs.get("ra", None):
+        elif ra_missing:
             raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
 
         if "mjd_min" in attrs and attrs["mjd_min"] is not None and not is_finite_float(attrs["mjd_min"]):
@@ -175,9 +183,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             )
 
         if attrs.get("mjd_max") not in (None, ""):
-            # when mjd_min is not given, the model default (30 days ago) will be applied on save
-            mjd_min = attrs["mjd_min"] if attrs.get("mjd_min") not in (None, "") else get_mjd_min_default()
-            if not float(attrs["mjd_max"]) > float(mjd_min):
+            # an explicit mjd_min of None means "no lower bound" and is saved as-is, so only
+            # substitute the model default (30 days ago) when mjd_min was not given at all
+            mjd_min = attrs["mjd_min"] if "mjd_min" in attrs else get_mjd_min_default()
+            if mjd_min not in (None, "") and not float(attrs["mjd_max"]) > float(mjd_min):
                 raise serializers.ValidationError(
                     {"mjd_max": f"mjd_max must be greater than mjd_min ({mjd_min} was applied)."}
                 )

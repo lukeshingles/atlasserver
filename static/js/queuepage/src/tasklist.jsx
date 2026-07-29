@@ -70,16 +70,12 @@ export class Task extends React.Component {
         fetch(request_image_url,
             {
                 credentials: "same-origin",
-                method: "GET",
+                method: "POST",
                 headers: {
                     "X-CSRFToken": getCookie("csrftoken"),
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
                 },
-            })
-            .catch(error => {
-                console.log('requestImages HTTP request failed', error);
-                this.setState({ 'httperror': 'HTTP request failed.' });
             })
             .then((response) => {
                 if (response.status == 200 && response.redirected) {
@@ -97,6 +93,10 @@ export class Task extends React.Component {
                         this.setState({ 'httperror': 'ERROR: ' + data["non_field_errors"] });
                     });
                 }
+            })
+            .catch(error => {
+                console.log('requestImages HTTP request failed', error);
+                this.setState({ 'httperror': 'HTTP request failed.' });
             });
     }
 
@@ -108,6 +108,9 @@ export class Task extends React.Component {
                 return { 'interval': setInterval(state.updateTimeElapsed, 1000), 'timeelapsed': timeelapsed.toFixed(0) };
             }
         } else if (state.interval != null) {
+            // the task is no longer running, so stop the timer. It must be cleared here:
+            // once state.interval is null, updateTimeElapsed() can no longer find it.
+            clearInterval(state.interval);
             return { 'interval': null };
         }
 

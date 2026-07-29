@@ -104,6 +104,9 @@ def main(arguments=None):
             filepath = os.path.join(resultsPath, d)
             if os.path.isfile(filepath) and os.path.splitext(filepath)[1] == ".txt":
                 resultFilePaths.append(filepath)
+    else:
+        print(f'ERROR: {resultsPath} is neither a file nor a directory')
+        sys.exit(1)
 
     log.info("""starting plotter""")
     myplotter = plotter(
@@ -663,8 +666,8 @@ class plotter():
         if not len(allData):
             return summedMagnitudes
 
-        # SORT FULL DATASET BY MJD
-        allData = sorted(allData, key=itemgetter('MJD'))
+        # SORT FULL DATASET BY MJD (numerically - MJD has already been formatted as a string)
+        allData = sorted(allData, key=lambda row: float(row['MJD']))
 
         header = """
 # MJD (average of the points included, after clipping)
@@ -699,14 +702,6 @@ class plotter():
 
         self.log.debug('completed the ``stack_photometry`` method')
         return summedMagnitudes
-
-
-def get_twin(ax, axis):
-
-    for sibling in siblings:
-        if sibling.bbox.bounds == ax.bbox.bounds and sibling is not ax:
-            return sibling
-    return None
 
 
 def get_twin_axis(ax, axis):

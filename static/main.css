@@ -168,6 +168,24 @@ ul {
   text-decoration: underline;
 }
 
+/* the log out control is a POST form, but should look like the other dropdown links */
+.dropdown-menu>li>form.logoutform {
+  margin: 0;
+}
+
+.dropdown-menu>li>form.logoutform>button {
+  background: none;
+  border: none;
+  clear: both;
+  display: block;
+  font-weight: normal;
+  line-height: 1.42857143;
+  padding: 3px 20px;
+  text-align: left;
+  white-space: nowrap;
+  width: 100%;
+}
+
 span.helptext {
   display: block;
 }
