@@ -36,6 +36,13 @@
     var locallcdivname = lcdivname;
     //var lightcurve = $(locallcdivname);
 
+    // The data script is fetched asynchronously, so by the time it runs the plot may have been
+    // unmounted (which deletes these globals and removes the div). Bail out instead of throwing.
+    if (!jslimitsglobal[locallcdivname] || !jslcdataglobal[locallcdivname]
+        || !document.getElementById(locallcdivname.replace('#', ''))) {
+        return;
+    }
+
     // Always refer to the external data via the global variable and lcdivname.
 
     var pad = 20.0; // i.e. 5 percent

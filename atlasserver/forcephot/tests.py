@@ -307,6 +307,19 @@ class RequestImagesTests(TestCase):
         assert imagerequest.user_id == self.user.pk
         assert imagerequest.finishtimestamp is None
 
+    def test_url_used_by_the_frontend_has_a_trailing_slash(self) -> None:
+        # APPEND_SLASH answers a slashless POST with a 301, and a browser retries a redirected
+        # POST as a GET, which this endpoint no longer accepts
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        frontendpath = Path("static/js/queuepage/src/tasklist.jsx").read_text()
+        assert "'requestimages/'" in frontendpath, "tasklist.jsx must post to the slashed URL"
+
+        self.client.force_login(self.user)
+        response = self.client.post(f"/queue/{task.id}/requestimages", HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 301, response.status_code
+        assert response["Location"] == reverse("requestimages", args=[task.id])
+
     def test_post_requires_ownership(self) -> None:
         other = get_user_model().objects.create_user(username="other", email="o2@example.com", password=None)
         task = Task.objects.create(user=other, ra=1.0, dec=2.0, finishtimestamp=timezone.now())

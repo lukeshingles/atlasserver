@@ -145,6 +145,10 @@ export class NewRequest extends React.Component {
                     localStorage.removeItem('comment');
 
                     this.setState(this.get_defaultstate());
+                    // the ISO date captions are derived state, so recompute them or they keep
+                    // describing the values from the request that was just submitted
+                    this.update_mjd_min(getDefaultMjdMin());
+                    this.update_mjd_max('');
                     response.json().then(data => {
                         // console.log('Creation data', data);
                         data.forEach((task, i) => {
@@ -163,6 +167,9 @@ export class NewRequest extends React.Component {
                 }
                 else {
                     console.log("New task: Error on submission: ", response.status);
+                    this.setState({
+                        'httperror': 'Request failed (HTTP ' + response.status + '). You may need to log in again.'
+                    });
                 };
             })
             .catch(error => {
@@ -257,9 +264,20 @@ export class NewRequest extends React.Component {
             </ul>
         );
 
-        if ('non_field_errors' in this.state.errors) {
+        // radeclist and mjd_max are shown next to their own inputs above. Everything else the API
+        // rejects (comment, mjd_min, radec_epoch_year, propermotion_*, ...) is shown here, so that
+        // a validation error can never leave the form looking like it simply did nothing.
+        const shownerrorkeys = ['radeclist', 'mjd_max'];
+        const remainingerrors = Object.entries(this.state.errors).filter(
+            ([key]) => !shownerrorkeys.includes(key));
+
+        if (remainingerrors.length > 0) {
             formcontent.push(
-                <ul className="errorlist"><li>{this.state.errors['non_field_errors']}</li></ul>
+                <ul key="othererrors" className="errorlist">
+                    {remainingerrors.map(([key, value]) => (
+                        <li key={key}>{key == 'non_field_errors' ? '' : key + ': '}{value}</li>
+                    ))}
+                </ul>
             );
         }
 
