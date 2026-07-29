@@ -398,6 +398,71 @@ class TaskCreateResponseTests(TestCase):
         assert task.dec == 0.0
 
 
+class TaskRunnerEmailTests(TestCase):
+    """Tests for the batch result email.
+
+    The task is marked finished before the email is sent, so batching must not rely on the
+    finishing task still looking unfinished, and a send failure must not propagate.
+    """
+
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(username="mailer", email="m@example.com", password=None)
+        self.stamp = timezone.now()
+        django_mail.outbox.clear()
+
+    def make_batch_task(self, finished: bool) -> Task:
+        return Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            timestamp=self.stamp,
+            send_email=True,
+            finishtimestamp=timezone.now() if finished else None,
+        )
+
+    def test_email_waits_for_the_rest_of_the_batch(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        finishing = self.make_batch_task(finished=True)
+        self.make_batch_task(finished=False)
+
+        taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
+
+        assert not django_mail.outbox
+
+    def test_email_sent_once_the_batch_is_complete(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        first = self.make_batch_task(finished=True)
+        finishing = self.make_batch_task(finished=True)
+
+        taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
+
+        assert len(django_mail.outbox) == 1
+        body = django_mail.outbox[0].body
+        assert django_mail.outbox[0].to == ["m@example.com"]
+        for task in (first, finishing):
+            assert f"Task {task.id}:" in body
+
+    def test_send_failure_does_not_propagate(self) -> None:
+        # an exception here used to kill the worker before finishtimestamp was written,
+        # so the task was re-dispatched and the remote job re-run forever
+        import smtplib
+
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        finishing = self.make_batch_task(finished=True)
+        logged: list[str] = []
+
+        with mock.patch(
+            "django.core.mail.message.EmailMessage.send",
+            side_effect=smtplib.SMTPRecipientsRefused({"m@example.com": (550, b"nope")}),
+        ):
+            taskrunner_main.send_email_if_needed(task=finishing, logfunc=logged.append)
+
+        assert any("could not send email" in line for line in logged), logged
+
+
 class LogoutTests(TestCase):
     def setUp(self) -> None:
         self.user = get_user_model().objects.create_user(
