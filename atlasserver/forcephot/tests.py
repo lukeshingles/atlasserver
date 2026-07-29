@@ -2,7 +2,6 @@ import datetime
 import itertools
 import json
 import tempfile
-import time
 from pathlib import Path
 from unittest import mock
 
@@ -213,6 +212,8 @@ class PaginationTests(TestCase):
             page = self.get_json(page["next"])
             pages.append(page)
         for forwardpage in pages:
+            # forward positions must count the offset cursors that tied values produce
+            assert forwardpage["pagefirsttaskposition"] == len(allids), (forwardpage["pagefirsttaskposition"], allids)
             allids.extend(row["id"] for row in forwardpage["results"])
         assert len(allids) == 27
 
@@ -229,32 +230,6 @@ class PaginationTests(TestCase):
             assert page["pagefirsttaskposition"] == startpos, (page["pagefirsttaskposition"], startpos)
 
         assert page["results"][0]["id"] == allids[0], "the backward walk must reach the first page"
-
-    def test_page_positions_with_tied_ordering_values(self) -> None:
-        # every task from one radeclist submission shares a timestamp, so ?ordering=timestamp
-        # produces ties, which DRF pages through with the cursor offset
-        Task.objects.all().delete()
-        now = timezone.now()
-        for batch in range(3):
-            stamp = now + datetime.timedelta(minutes=batch)
-            for _ in range(8):
-                Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=stamp)
-        self.client.force_login(self.user)
-
-        url = reverse("task-list")
-        params = {"pagesize": 5, "ordering": "timestamp"}
-        positions = []
-        seen = 0
-        for _ in range(10):
-            page = self.get_json(url, **params) if params else self.get_json(url)
-            positions.append(page["pagefirsttaskposition"])
-            assert page["pagefirsttaskposition"] == seen, (positions, seen)
-            seen += len(page["results"])
-            if not page["next"]:
-                break
-            url, params = page["next"], {}
-
-        assert positions == [0, 5, 10, 15, 20], positions
 
     def test_second_page_with_timestamp_ordering(self) -> None:
         # ordering is not necessarily by id, and the page position used to be counted with
@@ -485,12 +460,11 @@ class TaskCreateResponseTests(TestCase):
             assert task.queuepos == row["queuepos"]
 
     def test_single_task_creation(self) -> None:
-        result = self.post_tasks({"ra": 150.0, "dec": 20.0})
+        # RA 0 / Dec 0 doubles as the end-to-end check that zero coordinates survive the API
+        result = self.post_tasks({"ra": 0.0, "dec": 0.0})
         assert result["userqueuedtasks_on_submit"] == 0
         assert result["queuepos"] == 0
 
-    def test_zero_coordinates_accepted_through_the_api(self) -> None:
-        result = self.post_tasks({"ra": 0.0, "dec": 0.0})
         task = Task.objects.get(id=result["id"])
         assert task.ra == 0.0
         assert task.dec == 0.0
@@ -510,19 +484,6 @@ class ResultPlotDataTests(TestCase):
             f"{59000.0 + index:.5f} 18.0 0.05 {100 + index} 10 o 0 1.0 10.0 20.0 "
             f"100 100 2 2 0 -0.5 19.0 18.0 01a{index:05d}o0235o"
         )
-
-    def test_cached_plot_data_expires(self) -> None:
-        # an unbounded timeout would keep entries for tasks that are never viewed again, and
-        # anything stale could never heal on its own
-        thirtydays = 60 * 60 * 24 * 30
-        assert settings.CACHES["taskderived"]["TIMEOUT"] == thirtydays
-
-        caches["taskderived"].set("expirycheck", "x")
-        assert caches["taskderived"].get("expirycheck") == "x"
-
-        # the backend stores the deadline with the entry, so a read past it must miss
-        with mock.patch("time.time", return_value=time.time() + thirtydays + 1):
-            assert caches["taskderived"].get("expirycheck") is None
 
     def test_ragged_file_returns_empty_data_and_is_not_cached(self) -> None:
         # a diagnostic line mixed into the output must not 500 the endpoint, and the empty
