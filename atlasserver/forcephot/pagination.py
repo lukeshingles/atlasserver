@@ -42,10 +42,13 @@ class TaskPagination(CursorPagination):
         self.ordering = self.get_ordering(request, queryset, view)
 
         self.cursor = self.decode_cursor(request)
+        current_position: str | None
         if self.cursor is None:
             (offset, reverse, current_position) = (0, False, None)
         else:
-            (offset, reverse, current_position) = self.cursor
+            # the stubs declare Cursor.position as int | None, but decode_cursor produces str | None
+            (offset, reverse, rawposition) = self.cursor
+            current_position = str(rawposition) if rawposition is not None else None
 
         # Cursor pagination always enforces an ordering.
         if reverse:
@@ -63,7 +66,7 @@ class TaskPagination(CursorPagination):
         # If we have a cursor with a fixed position then filter by that.
         if current_position is not None:
             # Test for: (cursor reversed) XOR (queryset reversed)
-            if self.cursor.reverse != is_reversed:
+            if reverse != is_reversed:
                 kwargs = {f"{order_attr}__lt": current_position}
             else:
                 kwargs = {f"{order_attr}__gt": current_position}
@@ -150,6 +153,7 @@ class TaskPagination(CursorPagination):
     def get_previous_link(self):
         # has_previous must be checked too, otherwise the first page can advertise a link to itself
         if self.previous_is_top and self.has_previous:
+            assert self.base_url is not None
             return remove_query_param(self.base_url, "cursor")
         return super().get_previous_link()
 

@@ -57,6 +57,7 @@ from atlasserver.forcephot.misc import make_pdf_plot
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
 MAX_USER_IMGZIP_TASKS = 5
@@ -342,7 +343,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
             serializer = self.get_serializer(page, many=True)
             # return self.get_paginated_response(serializer.data)
-            return self.paginator.get_paginated_response(serializer.data, headers={"ETag": etag})
+            paginator = self.paginator
+            assert isinstance(paginator, TaskPagination)
+            return paginator.get_paginated_response(serializer.data, headers={"ETag": etag})
 
         return Response(serializer.data)
 
@@ -449,7 +452,7 @@ class RequestImages(APIView):
 def statscoordchart(request):
     tasks = list(Task.objects.all().order_by("-timestamp")[:20000].select_related("user"))
 
-    dictsource = {
+    dictsource: dict[str, Any] = {
         "ra": [tsk.ra for tsk in tasks],
         "dec": [tsk.dec for tsk in tasks],
         "taskid": [tsk.id for tsk in tasks],
@@ -466,8 +469,8 @@ def statscoordchart(request):
         title="Recently requested coordinates",
         x_axis_label="Right ascension (deg)",
         y_axis_label="Declination (deg)",
-        x_range=bokeh.models.Range1d(0, 360),
-        y_range=bokeh.models.Range1d(-90.0, 90.0),
+        x_range=bokeh.models.Range1d(start=0, end=360),
+        y_range=bokeh.models.Range1d(start=-90.0, end=90.0),
         # frame_width=600,
         sizing_mode="stretch_both",
         output_backend="webgl",
@@ -568,7 +571,7 @@ def statsusagechart(request):
     )
 
     fig_nonapi = bokeh.plotting.figure(
-        x_range=bokeh.models.FactorRange(*data["queueday"], " ", "  ", "   "),
+        x_range=bokeh.models.FactorRange(factors=[*data["queueday"], " ", "  ", "   "]),
         y_range=bokeh.models.DataRange1d(start=0.0),
         tools=[
             bokeh.models.HoverTool(
@@ -705,12 +708,10 @@ def stats(request):
         "queuedtaskcount": Task.objects.filter(finishtimestamp__isnull=True).count(),
     }
 
-    try:
-        lastfinishtime = (
-            Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last().finishtimestamp
-        )
-        dictparams["lastfinishtime"] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
-    except AttributeError:
+    lastfinishedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last()
+    if lastfinishedtask is not None:
+        dictparams["lastfinishtime"] = f"{lastfinishedtask.finishtimestamp:%Y-%m-%d %H:%M:%S %Z}"
+    else:
         dictparams["lastfinishtime"] = "N/A"
 
     return render(request, "stats.html", dictparams)
@@ -770,8 +771,9 @@ def resultplotdatajs(request, taskid):
         jsout = []
 
         resultfilepath = None
-        if task.localresultfile() is not None:
-            resultfilepath = Path(settings.STATIC_ROOT, task.localresultfile())
+        localresultfile = task.localresultfile()
+        if localresultfile is not None:
+            resultfilepath = Path(settings.STATIC_ROOT, localresultfile)
             if not resultfilepath.is_file():
                 resultfilepath = None
 
