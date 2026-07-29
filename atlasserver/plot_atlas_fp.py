@@ -279,16 +279,21 @@ class plotter():
             for r, o in zip(self.resultFilePaths, self.outputPlotPaths):
                 self.outputLookupDict[r] = o
 
-        if len(self.resultFilePaths) == 1:
-            plotPaths = []
-            for rf in self.resultFilePaths:
-                plotPaths.append(self.plot_single_result(
-                    fpFile=rf, fig=fig, converter=converter, ax=ax))
-        else:
-            self.log.info("""starting multiprocessing""")
-            plotPaths = fmultiprocess(log=self.log, function=self.plot_single_result,
-                                      inputArray=self.resultFilePaths, poolSize=False, timeout=7200, fig=fig, converter=converter, ax=ax)
-            self.log.info("""finished multiprocessing""")
+        try:
+            if len(self.resultFilePaths) == 1:
+                plotPaths = []
+                for rf in self.resultFilePaths:
+                    plotPaths.append(self.plot_single_result(
+                        fpFile=rf, fig=fig, converter=converter, ax=ax))
+            else:
+                self.log.info("""starting multiprocessing""")
+                plotPaths = fmultiprocess(log=self.log, function=self.plot_single_result,
+                                          inputArray=self.resultFilePaths, poolSize=False, timeout=7200, fig=fig, converter=converter, ax=ax)
+                self.log.info("""finished multiprocessing""")
+        finally:
+            # pyplot keeps a global reference to every figure it creates, so without this each
+            # call leaks a full figure (and its artists) for the lifetime of the process
+            plt.close(fig)
 
         self.log.info('completed the ``plot`` method')
         return plotPaths
@@ -310,8 +315,11 @@ class plotter():
         """
         self.log.info('starting the ``read_and_sigma_clip_data`` function')
 
-        mjdMin = self.mjdMin
-        mjdMax = self.mjdMax
+        # THE TWO BOUNDS ARE INDEPENDENT (EITHER CAN BE GIVEN ON ITS OWN), AND 0 IS A VALID
+        # BOUND, SO NORMALISE THE "NOT GIVEN" DEFAULT OF False TO None RATHER THAN TESTING
+        # THEM FOR TRUTHINESS
+        mjdMin = self.mjdMin if self.mjdMin is not None and self.mjdMin is not False else None
+        mjdMax = self.mjdMax if self.mjdMax is not None and self.mjdMax is not False else None
 
         # CLEAN UP FILE FOR EASIER READING
         with codecs.open(fpFile, encoding='utf-8', mode='r') as readFile:
@@ -331,12 +339,17 @@ class plotter():
                     row[k] = float(v)
                 except:
                     pass
+            # SKIP ROWS WHOSE NUMBERS DID NOT PARSE. A TRUNCATED LAST LINE LEAVES None IN THE
+            # MISSING COLUMNS, WHICH WOULD RAISE TypeError BELOW AND LOSE THE WHOLE PLOT
+            if not all(isinstance(row.get(k), float) for k in ("MJD", "uJy", "duJy", "chi/N")):
+                continue
             # REMOVE VERY HIGH ERROR DATA POINTS & POOR CHI SQUARED
             if row["duJy"] > 4000 or row["chi/N"] > 100:
                 continue
-            if mjdMin and mjdMax:
-                if row["MJD"] < mjdMin or row["MJD"] > mjdMax:
-                    continue
+            if mjdMin is not None and row["MJD"] < mjdMin:
+                continue
+            if mjdMax is not None and row["MJD"] > mjdMax:
+                continue
             if row["F"] == "c":
                 cepochs.append(row)
             if row["F"] == "o":
@@ -359,6 +372,17 @@ class plotter():
                 array=flux,
                 clippingSigma=clippingSigma,
                 windowSize=11)
+            # THE CLIPPER RETURNS A SHORTER MASK FOR SOME INPUT LENGTHS (E.G. EXACTLY 11
+            # POINTS), AND THE zip() BELOW WOULD THEN SILENTLY DISCARD THE TRAILING EPOCHS.
+            # KEEP EVERY POINT RATHER THAN LOSING DATA WITHOUT ANY INDICATION.
+            try:
+                masklength = len(fullMask)
+            except TypeError:
+                masklength = -1
+            if masklength != len(flux):
+                self.log.warning(
+                    f'sigma clip returned {masklength} mask values for {len(flux)} points - not clipping')
+                fullMask = [False] * len(flux)
             maskList.append(fullMask)
 
         try:
