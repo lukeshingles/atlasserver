@@ -40,3 +40,10 @@ repos:
       rev: 0.12.0
       hooks:
           - id: uv-lock
+
+    - repo: https://github.com/astral-sh/ty-pre-commit
+      rev: v0.0.63
+      hooks:
+          - id: ty
+            name: ty
+            args: [--all-extras]
