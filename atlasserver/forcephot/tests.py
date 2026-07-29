@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import mail as django_mail
 from django.test import override_settings
@@ -378,7 +379,7 @@ class RequestImagesTests(TestCase):
         # APPEND_SLASH answers a slashless POST with a 301, and a browser retries a redirected
         # POST as a GET, which this endpoint no longer accepts
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
-        frontendpath = Path("static/js/queuepage/src/tasklist.jsx").read_text()
+        frontendpath = Path(settings.BASE_DIR, "static/js/queuepage/src/tasklist.jsx").read_text()
         assert "'requestimages/'" in frontendpath, "tasklist.jsx must post to the slashed URL"
 
         self.client.force_login(self.user)
@@ -561,7 +562,7 @@ class ApiGuideTests(TestCase):
         import html as htmlmodule
         import re
 
-        page = Path("atlasserver/forcephot/templates/apiguide.html").read_text()
+        page = Path(settings.BASE_DIR, "atlasserver/forcephot/templates/apiguide.html").read_text()
         blocks = re.findall(r"<pre><code>(.*?)</code></pre>", page, flags=re.DOTALL)
         assert blocks, "no code blocks found in the API guide"
 
