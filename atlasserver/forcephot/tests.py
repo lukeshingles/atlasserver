@@ -335,6 +335,47 @@ class TaskCreateLimitTests(TestCase):
         assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS - 1
 
 
+class TaskCreateResponseTests(TestCase):
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(username="creator", email="c@example.com", password=None)
+
+    def post_tasks(self, payload):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+        assert response.status_code == 201, response.content
+        return response.json()
+
+    def test_created_tasks_report_their_queue_position(self) -> None:
+        # serializer.data used to be materialised (and cached) before the queue position and
+        # userqueuedtasks_on_submit updates were applied, so both were always null in the response
+        results = self.post_tasks({"radeclist": "150.0 20.0\n151.0 21.0\n152.0 22.0\n"})
+
+        assert len(results) == 3
+        assert [row["userqueuedtasks_on_submit"] for row in results] == [0, 1, 2]
+        assert [row["queuepos"] for row in results] == [0, 1, 2]
+
+        for row in results:
+            task = Task.objects.get(id=row["id"])
+            assert task.userqueuedtasks_on_submit == row["userqueuedtasks_on_submit"]
+            assert task.queuepos == row["queuepos"]
+
+    def test_single_task_creation(self) -> None:
+        result = self.post_tasks({"ra": 150.0, "dec": 20.0})
+        assert result["userqueuedtasks_on_submit"] == 0
+        assert result["queuepos"] == 0
+
+    def test_zero_coordinates_accepted_through_the_api(self) -> None:
+        result = self.post_tasks({"ra": 0.0, "dec": 0.0})
+        task = Task.objects.get(id=result["id"])
+        assert task.ra == 0.0
+        assert task.dec == 0.0
+
+
 class TaskRunnerResultFileTests(TestCase):
     def test_remove_ssostack_resultfiles(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
