@@ -787,7 +787,11 @@ def resultplotdatajs(request, taskid):
                     dtype=float,
                     converters={"F": str, "Obs": str, "uJy": int, "duJy": int},
                 )
-            except pd.errors.EmptyDataError:  # a truncated or empty result file
+            except ValueError:
+                # an empty, truncated or ragged result file: EmptyDataError and ParserError are
+                # both ValueError subclasses, and a non-numeric token in a well-formed row (e.g.
+                # a diagnostic line mixed into the output) fails the dtype=float conversion with
+                # a plain ValueError
                 dfforcedphot = None
             else:
                 # df.rename(columns={'#MJD': 'MJD'})
@@ -851,7 +855,10 @@ def resultplotdatajs(request, taskid):
         # with jsplotfile.open("w") as f:
         #     f.writelines(jsout)
 
-        caches["taskderived"].set(resultplotdatajs_cachekey(taskid), strjs)
+        # the cache never expires, so an empty result (e.g. a transiently unreadable file) must
+        # not be stored: a later request should get the chance to regenerate the plot data
+        if strjs:
+            caches["taskderived"].set(resultplotdatajs_cachekey(taskid), strjs)
 
     if strjs:
         # the plotting code is appended outside of the cache (which never expires), so that a

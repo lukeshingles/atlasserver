@@ -227,7 +227,10 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             return None, "The forced photometry data file for the parent task is no longer available."
 
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
-        run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc)
+        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc) != 0:
+            # without the data file the remote script cannot select any images, so retry later
+            # instead of burning a remote run that is certain to fail
+            return None, None
 
         atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"

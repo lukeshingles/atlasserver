@@ -10,6 +10,8 @@ fi
 
 MAXMIND_ACCOUNT_ID="${MAXMIND_ACCOUNT_ID:-504450}"
 
+exitcode=0
+
 for edition in GeoLite2-ASN GeoLite2-City; do
     tempdir=$(mktemp -d)
     # --fail so that an HTTP error (e.g. a bad licence key) is not saved as a bogus .tar.gz
@@ -20,7 +22,11 @@ for edition in GeoLite2-ASN GeoLite2-City; do
         cp "$tempdir"/GeoLite2-*/"$edition.mmdb" "$ATLASSERVERPATH/atlasserver/$edition.mmdb"
     else
         echo "ERROR: failed to download $edition (is MAXMIND_LICENSE_KEY set in .env?)"
+        exitcode=1
     fi
     # clean up even when the download failed, so the temporary directory is not left behind
     rm -rf "$tempdir"
 done
+
+# exit non-zero if any edition failed, so that cron/automation notices a stale database
+exit $exitcode

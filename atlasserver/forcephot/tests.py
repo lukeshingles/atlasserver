@@ -494,6 +494,40 @@ class TaskCreateResponseTests(TestCase):
         assert task.dec == 0.0
 
 
+class ResultPlotDataTests(TestCase):
+    HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
+
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(username="plotter", email="pl@example.com", password=None)
+
+    def datarow(self, index: int) -> str:
+        return (
+            f"{59000.0 + index:.5f} 18.0 0.05 {100 + index} 10 o 0 1.0 10.0 20.0 "
+            f"100 100 2 2 0 -0.5 19.0 18.0 01a{index:05d}o0235o"
+        )
+
+    def test_ragged_file_returns_empty_data_and_is_not_cached(self) -> None:
+        # a diagnostic line mixed into the output must not 500 the endpoint, and the empty
+        # response must not be cached forever: once the file is fixed, the plot must appear
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text(self.HEADER + "\nWARNING: bad line\n" + self.datarow(0) + "\n")
+
+            response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
+            assert response.status_code == 200
+            assert response.content == b""
+
+            Path(tmpdir, "js").mkdir()
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n")
+            resultfile.write_text(self.HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
+
+            response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
+            assert response.status_code == 200
+            assert b"jslcdata.push" in response.content, response.content[:200]
+
+
 class TaskRunnerEmailTests(TestCase):
     """Tests for the batch result email.
 
