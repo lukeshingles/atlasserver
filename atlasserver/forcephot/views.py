@@ -53,6 +53,7 @@ from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
+from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
@@ -758,7 +759,7 @@ def resultplotdatajs(request, taskid):
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()
 
-    strjs = caches["taskderived"].get(f"task{taskid}_resultplotdatajs", default=None)
+    strjs = caches["taskderived"].get(resultplotdatajs_cachekey(taskid), default=None)
 
     if strjs is None:
         jsout = []
@@ -845,7 +846,7 @@ def resultplotdatajs(request, taskid):
         # with jsplotfile.open("w") as f:
         #     f.writelines(jsout)
 
-        caches["taskderived"].set(f"task{taskid}_resultplotdatajs", strjs)
+        caches["taskderived"].set(resultplotdatajs_cachekey(taskid), strjs)
 
     if strjs:
         # the plotting code is appended outside of the cache (which never expires), so that a

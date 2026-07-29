@@ -367,6 +367,15 @@ def splitradeclist(data, form=None):
     return datalist
 
 
+def resultplotdatajs_cachekey(taskid: int) -> str:
+    """Return the cache key holding the generated plot data for a task.
+
+    The taskderived cache never expires, so the suffix acts as a version marker: entries written
+    by an earlier release hold a different payload and must be ignored rather than served.
+    """
+    return f"task{taskid}_resultplotdatajs_v2"
+
+
 def datetime_to_mjd(dt: datetime.datetime) -> float:
     return julian.to_jd(dt) - 2400000.5
 

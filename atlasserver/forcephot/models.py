@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 
 
 def get_mjd_min_default():
@@ -234,6 +235,6 @@ class Task(models.Model):
         if self.finished():
             self.is_archived = True
             self.save()
-            caches["taskderived"].delete(f"task{self.id}_resultplotdatajs")
+            caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
         else:
             super().delete(using=using, keep_parents=keep_parents)
