@@ -104,9 +104,6 @@ def main(arguments=None):
             filepath = os.path.join(resultsPath, d)
             if os.path.isfile(filepath) and os.path.splitext(filepath)[1] == ".txt":
                 resultFilePaths.append(filepath)
-    else:
-        print(f'ERROR: {resultsPath} is neither a file nor a directory')
-        sys.exit(1)
 
     log.info("""starting plotter""")
     myplotter = plotter(
@@ -279,21 +276,16 @@ class plotter():
             for r, o in zip(self.resultFilePaths, self.outputPlotPaths):
                 self.outputLookupDict[r] = o
 
-        try:
-            if len(self.resultFilePaths) == 1:
-                plotPaths = []
-                for rf in self.resultFilePaths:
-                    plotPaths.append(self.plot_single_result(
-                        fpFile=rf, fig=fig, converter=converter, ax=ax))
-            else:
-                self.log.info("""starting multiprocessing""")
-                plotPaths = fmultiprocess(log=self.log, function=self.plot_single_result,
-                                          inputArray=self.resultFilePaths, poolSize=False, timeout=7200, fig=fig, converter=converter, ax=ax)
-                self.log.info("""finished multiprocessing""")
-        finally:
-            # pyplot keeps a global reference to every figure it creates, so without this each
-            # call leaks a full figure (and its artists) for the lifetime of the process
-            plt.close(fig)
+        if len(self.resultFilePaths) == 1:
+            plotPaths = []
+            for rf in self.resultFilePaths:
+                plotPaths.append(self.plot_single_result(
+                    fpFile=rf, fig=fig, converter=converter, ax=ax))
+        else:
+            self.log.info("""starting multiprocessing""")
+            plotPaths = fmultiprocess(log=self.log, function=self.plot_single_result,
+                                      inputArray=self.resultFilePaths, poolSize=False, timeout=7200, fig=fig, converter=converter, ax=ax)
+            self.log.info("""finished multiprocessing""")
 
         self.log.info('completed the ``plot`` method')
         return plotPaths
@@ -315,11 +307,8 @@ class plotter():
         """
         self.log.info('starting the ``read_and_sigma_clip_data`` function')
 
-        # THE TWO BOUNDS ARE INDEPENDENT (EITHER CAN BE GIVEN ON ITS OWN), AND 0 IS A VALID
-        # BOUND, SO NORMALISE THE "NOT GIVEN" DEFAULT OF False TO None RATHER THAN TESTING
-        # THEM FOR TRUTHINESS
-        mjdMin = self.mjdMin if self.mjdMin is not None and self.mjdMin is not False else None
-        mjdMax = self.mjdMax if self.mjdMax is not None and self.mjdMax is not False else None
+        mjdMin = self.mjdMin
+        mjdMax = self.mjdMax
 
         # CLEAN UP FILE FOR EASIER READING
         with codecs.open(fpFile, encoding='utf-8', mode='r') as readFile:
@@ -339,17 +328,12 @@ class plotter():
                     row[k] = float(v)
                 except:
                     pass
-            # SKIP ROWS WHOSE NUMBERS DID NOT PARSE. A TRUNCATED LAST LINE LEAVES None IN THE
-            # MISSING COLUMNS, WHICH WOULD RAISE TypeError BELOW AND LOSE THE WHOLE PLOT
-            if not all(isinstance(row.get(k), float) for k in ("MJD", "uJy", "duJy", "chi/N")):
-                continue
             # REMOVE VERY HIGH ERROR DATA POINTS & POOR CHI SQUARED
             if row["duJy"] > 4000 or row["chi/N"] > 100:
                 continue
-            if mjdMin is not None and row["MJD"] < mjdMin:
-                continue
-            if mjdMax is not None and row["MJD"] > mjdMax:
-                continue
+            if mjdMin and mjdMax:
+                if row["MJD"] < mjdMin or row["MJD"] > mjdMax:
+                    continue
             if row["F"] == "c":
                 cepochs.append(row)
             if row["F"] == "o":
@@ -372,17 +356,6 @@ class plotter():
                 array=flux,
                 clippingSigma=clippingSigma,
                 windowSize=11)
-            # THE CLIPPER RETURNS A SHORTER MASK FOR SOME INPUT LENGTHS (E.G. EXACTLY 11
-            # POINTS), AND THE zip() BELOW WOULD THEN SILENTLY DISCARD THE TRAILING EPOCHS.
-            # KEEP EVERY POINT RATHER THAN LOSING DATA WITHOUT ANY INDICATION.
-            try:
-                masklength = len(fullMask)
-            except TypeError:
-                masklength = -1
-            if masklength != len(flux):
-                self.log.warning(
-                    f'sigma clip returned {masklength} mask values for {len(flux)} points - not clipping')
-                fullMask = [False] * len(flux)
             maskList.append(fullMask)
 
         try:
@@ -690,8 +663,8 @@ class plotter():
         if not len(allData):
             return summedMagnitudes
 
-        # SORT FULL DATASET BY MJD (numerically - MJD has already been formatted as a string)
-        allData = sorted(allData, key=lambda row: float(row['MJD']))
+        # SORT FULL DATASET BY MJD
+        allData = sorted(allData, key=itemgetter('MJD'))
 
         header = """
 # MJD (average of the points included, after clipping)
@@ -726,6 +699,14 @@ class plotter():
 
         self.log.debug('completed the ``stack_photometry`` method')
         return summedMagnitudes
+
+
+def get_twin(ax, axis):
+
+    for sibling in siblings:
+        if sibling.bbox.bounds == ax.bbox.bounds and sibling is not ax:
+            return sibling
+    return None
 
 
 def get_twin_axis(ax, axis):
