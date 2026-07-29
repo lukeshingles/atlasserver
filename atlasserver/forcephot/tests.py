@@ -348,3 +348,19 @@ class TaskRunnerResultFileTests(TestCase):
                 taskrunner_main.remove_task_resultfiles(taskid=42, request_type="SSOSTACK", logfunc=lambda _msg: None)
 
             assert not list(resultsdir.glob("job00042.*"))
+
+    def test_remove_fp_resultfiles(self) -> None:
+        # the .jpg and .pdf used to be left behind, and nothing can reach them once the row is gone
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultsdir = Path(tmpdir)
+            for ext in (".txt", ".jpg", ".pdf"):
+                (resultsdir / f"job00042{ext}").touch()
+            (resultsdir / "job00420.txt").touch()  # a different task, must be left alone
+
+            with mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", resultsdir):
+                taskrunner_main.remove_task_resultfiles(taskid=42, request_type="FP", logfunc=lambda _msg: None)
+
+            assert not list(resultsdir.glob("job00042.*"))
+            assert (resultsdir / "job00420.txt").exists()
