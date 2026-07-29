@@ -24,8 +24,7 @@ def is_finite_float(val):
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_result_url(self, obj):
         localresultfile = obj.localresultfile()
-        if localresultfile and not obj.error_msg:
-            request = self.context["request"]
+        if localresultfile and not obj.error_msg and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(localresultfile))
             # return request.build_absolute_uri(reverse("taskresultdata", args=[obj.id]))
 

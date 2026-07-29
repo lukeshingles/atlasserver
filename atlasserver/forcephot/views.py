@@ -344,7 +344,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(page, many=True)
             # return self.get_paginated_response(serializer.data)
             paginator = self.paginator
-            assert isinstance(paginator, TaskPagination)
+            if not isinstance(paginator, TaskPagination):
+                msg = f"expected TaskPagination, got {type(paginator).__name__}"
+                raise TypeError(msg)
             return paginator.get_paginated_response(serializer.data, headers={"ETag": etag})
 
         return Response(serializer.data)

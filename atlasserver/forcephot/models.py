@@ -3,9 +3,6 @@ import typing as t
 from pathlib import Path
 
 from django.conf import settings
-
-# the project uses the default user model, and the concrete class is needed for typing
-from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
@@ -86,7 +83,7 @@ class Task(models.Model):
 
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
-        user = User.objects.get(id=self.user_id)
+        user = self.user
         if self.mpc_name:
             targetstr = f" MPC[{self.mpc_name}]"
         elif self.ra is not None and self.dec is not None:
