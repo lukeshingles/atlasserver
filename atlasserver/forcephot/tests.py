@@ -109,6 +109,19 @@ class TaskCoordValidationTests(TestCase):
         assert not serializer.is_valid()
         assert "non_field_errors" in serializer.errors
 
+    def test_mjd_max_must_be_positive(self) -> None:
+        # the task runner treats a falsy mjd_max as "not given", so a 0 upper bound would widen
+        # the request to the whole archive rather than narrowing it
+        for mjd_max in (0, -500):
+            serializer = ForcePhotTaskSerializer(data={"ra": 1.0, "dec": 2.0, "mjd_min": None, "mjd_max": mjd_max})
+            assert not serializer.is_valid(), mjd_max
+            assert "mjd_max" in serializer.errors, mjd_max
+
+    def test_mjd_max_older_than_the_default_window_is_allowed(self) -> None:
+        # an explicit mjd_min of None means "no lower bound", so an archival upper bound is valid
+        serializer = ForcePhotTaskSerializer(data={"ra": 1.0, "dec": 2.0, "mjd_min": None, "mjd_max": 57000.0})
+        assert serializer.is_valid(), serializer.errors
+
 
 class SplitRaDecListTests(TestCase):
     def test_one_hundred_coords_with_trailing_newline(self) -> None:
@@ -186,6 +199,32 @@ class PaginationTests(TestCase):
         assert len(self.get_json(reverse("task-list"), pagesize=100000)["results"]) == 100
         assert len(self.get_json(reverse("task-list"), pagesize=20)["results"]) == 20
 
+    def test_page_positions_with_tied_ordering_values(self) -> None:
+        # every task from one radeclist submission shares a timestamp, so ?ordering=timestamp
+        # produces ties, which DRF pages through with the cursor offset
+        Task.objects.all().delete()
+        now = timezone.now()
+        for batch in range(3):
+            stamp = now + datetime.timedelta(minutes=batch)
+            for _ in range(8):
+                Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=stamp)
+        self.client.force_login(self.user)
+
+        url = reverse("task-list")
+        params = {"pagesize": 5, "ordering": "timestamp"}
+        positions = []
+        seen = 0
+        for _ in range(10):
+            page = self.get_json(url, **params) if params else self.get_json(url)
+            positions.append(page["pagefirsttaskposition"])
+            assert page["pagefirsttaskposition"] == seen, (positions, seen)
+            seen += len(page["results"])
+            if not page["next"]:
+                break
+            url, params = page["next"], {}
+
+        assert positions == [0, 5, 10, 15, 20], positions
+
     def test_second_page_with_timestamp_ordering(self) -> None:
         # ordering is not necessarily by id, and the page position used to be counted with
         # int(current_position), which raises ValueError for a timestamp cursor
@@ -224,6 +263,34 @@ class TaskDeleteFileTests(TestCase):
             parent.delete()
 
             # the queued image request rsyncs this file to the compute host as its input
+            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+
+    def test_datafile_removed_once_the_image_request_is_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            parent = self.make_finished_task(Path(tmpdir))
+            Path(tmpdir, f"{parent.localresultfileprefix()}.jpg").touch()
+            imagerequest = Task.objects.create(
+                user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent
+            )
+
+            parent.delete()
+            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+
+            imagerequest.delete()
+
+            # nothing else revisits the parent, so its files must be collected here
+            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.jpg").exists()
+
+    def test_datafile_kept_while_another_image_request_remains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            parent = self.make_finished_task(Path(tmpdir))
+            first = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
+
+            parent.delete()
+            first.delete()
+
             assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
 
     def test_datafile_deleted_when_no_image_request_exists(self) -> None:

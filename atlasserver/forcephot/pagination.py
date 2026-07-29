@@ -63,10 +63,13 @@ class TaskPagination(CursorPagination):
         results = list(queryset[offset : offset + self.page_size + 1])
         self.page = list(results[: self.page_size])
 
+        # Count the tasks displayed before this page. The comparison follows the ordering in use
+        # (which is not necessarily by id, see the view's ordering_fields), and current_position
+        # is passed through as the string that decode_cursor produced. The cursor offset is how
+        # DRF pages through rows that share an ordering value (every task from one radeclist
+        # submission has the same timestamp), so those rows precede this page as well.
+        prev_records = offset
         if current_position is not None:
-            # Count the tasks displayed before this page. The comparison follows the ordering
-            # in use (which is not necessarily by id, see the view's ordering_fields), and
-            # current_position is passed through as the string that decode_cursor produced.
             if is_reversed:  # e.g. "-id": later values are shown first
                 strictlybefore = {f"{order_attr}__gt": current_position}
                 beforeorat = {f"{order_attr}__gte": current_position}
@@ -77,13 +80,13 @@ class TaskPagination(CursorPagination):
             if reverse:
                 # a reverse cursor page ends just before current_position, so the rows on this
                 # page are part of the "before" count and have to be subtracted again
-                prev_records = max(0, queryset_full.filter(**strictlybefore).count() - len(self.page))
+                prev_records += max(0, queryset_full.filter(**strictlybefore).count() - len(self.page))
             else:
-                prev_records = queryset_full.filter(**beforeorat).count()
+                prev_records += queryset_full.filter(**beforeorat).count()
 
-            self.pagefirsttaskposition = prev_records
-            if prev_records <= self.page_size:
-                self.previous_is_top = True
+        self.pagefirsttaskposition = prev_records
+        if current_position is not None and prev_records <= self.page_size:
+            self.previous_is_top = True
 
         # Determine the position of the final item following the page.
         if len(results) > len(self.page):

@@ -221,6 +221,16 @@ class Task(models.Model):
             if zipfile := self.localresultimagezipfile:
                 Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
 
+            # the parent's .txt and .jpg are kept while a live image request needs them, so once
+            # this was the last one they have to be collected here or nothing reclaims them until
+            # the maintenance sweep runs months later
+            parent = self.parent_task
+            if parent is not None and parent.is_archived:
+                siblings = Task.objects.filter(parent_task_id=parent.id, is_archived=False).exclude(id=self.id)
+                if not siblings.exists():
+                    for ext in (".txt", ".jpg"):
+                        Path(settings.STATIC_ROOT, parent.localresultfileprefix() + ext).unlink(missing_ok=True)
+
         else:
             delete_extlist = [".pdf", ".fits"]
             if self.imagerequest_task_id is None:

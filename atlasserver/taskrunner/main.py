@@ -196,9 +196,11 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         if task.propermotion_dec:
             atlascommand += f" pmdec={task.propermotion_dec}"
 
-        if task.mjd_min:
+        # "is not None" rather than truthiness, so that an explicit bound of 0 is passed through
+        # instead of being silently dropped
+        if task.mjd_min is not None:
             atlascommand += f" m0={float(task.mjd_min)}"
-        if task.mjd_max:
+        if task.mjd_max is not None:
             atlascommand += f" m1={float(task.mjd_max)}"
 
         atlascommand += " dodb=1 parallel=4"

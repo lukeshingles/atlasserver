@@ -201,6 +201,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         mjd_max = self.submitted(attrs, "mjd_max")
         if mjd_max not in (None, ""):
+            # a zero or negative upper bound cannot select any observation, and the task runner
+            # treats a falsy mjd_max as "not given", which would silently widen the request to
+            # the whole archive rather than narrowing it
+            if float(mjd_max) <= 0:
+                raise serializers.ValidationError({"mjd_max": "mjd_max must be a positive MJD."})
+
             # an explicit mjd_min of None means "no lower bound" and is saved as-is, so only
             # substitute the model default (30 days ago) when mjd_min was not given at all
             mjd_min = self.submitted(attrs, "mjd_min", default=get_mjd_min_default())

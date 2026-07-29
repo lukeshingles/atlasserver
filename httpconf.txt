@@ -1,2 +1,7 @@
 RequestHeader set HOST fallingstar-data.com
-RequestHeader set X_FORWARDED_PROTO https
+
+# Must use the standard dashed spelling: Apache does not export a header whose name contains an
+# underscore into the WSGI environment, so X_FORWARDED_PROTO would never reach Django as
+# HTTP_X_FORWARDED_PROTO (which is what SECURE_PROXY_SSL_HEADER in settings.py reads).
+# "set" (not "setifempty") so that a client-supplied value cannot spoof it.
+RequestHeader set X-Forwarded-Proto "https"
