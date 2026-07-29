@@ -170,7 +170,9 @@ ul {
   text-decoration: underline;
 }
 
-/* the log out control is a POST form, but should look like the other dropdown links */
+/* the log out control has to be a POST form (Django's LogoutView rejects GET), but its button
+   should be indistinguishable from the sibling links: same colour, font, padding and pointer
+   cursor as bootstrap's .dropdown-menu>li>a rule */
 .dropdown-menu>li>form.logoutform {
   margin: 0;
 }
@@ -179,7 +181,11 @@ ul {
   background: none;
   border: none;
   clear: both;
+  color: #333;
+  cursor: pointer;
   display: block;
+  font-family: inherit;
+  font-size: inherit;
   font-weight: normal;
   line-height: 1.42857143;
   padding: 3px 20px;
