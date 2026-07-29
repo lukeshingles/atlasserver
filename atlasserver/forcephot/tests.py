@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.core import mail as django_mail
 from django.test import override_settings
 from django.test import TestCase
 from django.urls import reverse
@@ -176,6 +177,14 @@ class PaginationTests(TestCase):
         assert page1["next"] is not None
         page2 = self.get_json(page1["next"])
         assert page2["pagefirsttaskposition"] == 6
+
+    def test_pagesize_is_bounded(self) -> None:
+        # without max_page_size, ?pagesize=100000 serialises the user's whole task history
+        Task.objects.bulk_create([Task(user=self.user, ra=1.0, dec=2.0) for _ in range(200)])
+        self.client.force_login(self.user)
+
+        assert len(self.get_json(reverse("task-list"), pagesize=100000)["results"]) == 100
+        assert len(self.get_json(reverse("task-list"), pagesize=20)["results"]) == 20
 
     def test_second_page_with_timestamp_ordering(self) -> None:
         # ordering is not necessarily by id, and the page position used to be counted with
@@ -374,6 +383,61 @@ class TaskCreateResponseTests(TestCase):
         task = Task.objects.get(id=result["id"])
         assert task.ra == 0.0
         assert task.dec == 0.0
+
+
+class ContentNegotiationTests(TestCase):
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(username="apiclient", email="a@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_wildcard_accept_gets_json(self) -> None:
+        # a script that sets no Accept header sends */*, and used to receive an HTML page
+        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="*/*")
+        assert response.status_code == 200
+        assert response["Content-Type"].startswith("application/json"), response["Content-Type"]
+
+    def test_wildcard_accept_keeps_validation_errors(self) -> None:
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": "notanumber", "dec": 11}),
+            content_type="application/json",
+            HTTP_ACCEPT="*/*",
+        )
+        assert response.status_code == 400
+        assert "ra" in response.json(), response.content
+
+    def test_browser_still_gets_html(self) -> None:
+        response = self.client.get(
+            reverse("task-list"),
+            HTTP_ACCEPT="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        assert response.status_code == 200
+        assert response["Content-Type"].startswith("text/html"), response["Content-Type"]
+
+
+class AllowedHostsTests(TestCase):
+    def test_unknown_host_is_rejected(self) -> None:
+        # django.contrib.sites is not installed, so the password reset email takes its domain from
+        # the Host header: accepting any host hands an attacker the reset link
+        get_user_model().objects.create_user(username="victim", email="victim@example.com", password="pw12345678")
+
+        response = self.client.post(
+            reverse("password_reset"), {"email": "victim@example.com"}, HTTP_HOST="evil.example.com"
+        )
+
+        assert response.status_code == 400, response.status_code
+        assert not django_mail.outbox
+
+    def test_known_host_is_accepted(self) -> None:
+        get_user_model().objects.create_user(username="victim2", email="victim2@example.com", password="pw12345678")
+
+        response = self.client.post(
+            reverse("password_reset"), {"email": "victim2@example.com"}, HTTP_HOST="fallingstar-data.com"
+        )
+
+        assert response.status_code == 302, response.status_code
+        assert len(django_mail.outbox) == 1
+        assert "fallingstar-data.com" in django_mail.outbox[0].body
 
 
 class TaskRunnerResultFileTests(TestCase):

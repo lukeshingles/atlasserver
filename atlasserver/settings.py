@@ -29,7 +29,18 @@ TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = platform.system() == "Darwin"
 
-ALLOWED_HOSTS = ["*"]
+# Not "*": django.contrib.sites is not installed, so the password reset email builds its link from
+# the Host header. Accepting any host lets an attacker send a victim a reset link pointing at a
+# server they control. Override with a comma-separated ATLASSERVER_ALLOWED_HOSTS if the server is
+# reached under another name.
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get(
+        "ATLASSERVER_ALLOWED_HOSTS",
+        "fallingstar-data.com,.fallingstar-data.com,.qub.ac.uk,deckard,localhost,127.0.0.1,[::1]",
+    ).split(",")
+    if host.strip()
+]
 
 ADMINS = [
     ("Luke Shingles", "luke.shingles@gmail.com"),
@@ -68,10 +79,11 @@ if not filecacheroot.is_dir():
 
 
 CACHES = {
+    # file-based rather than locmem, because the DRF throttle counters live in the default cache
+    # and each mod_wsgi process would otherwise keep its own, multiplying the effective rate limit
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        # "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-        # "LOCATION": "/tmp/atlasforced/django_cache",
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": filecacheroot / "default",
     },
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
@@ -174,7 +186,11 @@ USE_X_FORWARDED_PORT = False
 # you may be opening yourself up to a security risk.
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
 if platform.system() != "Darwin":
-    SECURE_PROXY_SSL_HEADER = ("SERVER_SOFTWARE", "Apache")
+    # httpconf.txt sets this header unconditionally (so a client cannot spoof it). The previous
+    # value keyed off SERVER_SOFTWARE, which Apache always populates with its own banner, so
+    # request.scheme was a constant that depended on the ServerTokens setting rather than on the
+    # protocol the request actually arrived over.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 CSRF_TRUSTED_ORIGINS = [
     "https://*.qub.ac.uk",
@@ -214,9 +230,13 @@ REST_FRAMEWORK = {
         "forcephottasks": "60/min",
     },
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
+    # JSON first: DRF picks the first renderer for an "Accept: */*" request (what a script sends
+    # when it sets no Accept header), and TemplateHTMLRenderer answers those with an HTML page,
+    # reducing validation errors to a bare "400 Bad Request". Browsers ask for text/html
+    # explicitly, so they still get the HTML pages.
     "DEFAULT_RENDERER_CLASSES": (
-        "rest_framework.renderers.TemplateHTMLRenderer",
         "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.TemplateHTMLRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
     ),
     "EXCEPTION_HANDLER": "atlasserver.forcephot.exception.custom_exception_handler",
@@ -226,6 +246,9 @@ EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.gmail.com"
 EMAIL_USE_TLS = True
 EMAIL_PORT = 587
+# admin error mail is sent synchronously from the request thread, so without a timeout an
+# unreachable mail server holds that worker (and eventually the whole pool) indefinitely
+EMAIL_TIMEOUT = 10
 
 EMAIL_HOST_USER = os.environ.get("ATLASSERVER_EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.environ.get("ATLASSERVER_EMAIL_HOST_PASSWORD")

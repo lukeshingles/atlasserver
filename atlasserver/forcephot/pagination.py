@@ -11,6 +11,8 @@ class TaskPagination(CursorPagination):
     ordering = ["id"]
     template = "rest_framework/pagination/older_and_newer.html"
     page_size_query_param = "pagesize"
+    # without a bound, ?pagesize=100000 serialises a user's entire task history in one response
+    max_page_size = 100
     querysetcount: int | None = None
     pagefirsttaskposition: int | None = None  # with ordered tasks, the position of the first page time
     previous_is_top = False
