@@ -74,9 +74,14 @@ def calculate_queue_positions() -> None:
             .order_by("user_id", "timestamp", "id")
         )
 
-        # to get position in current pass, check if job currently running
-        runningtasks = [tsk for tsk in queuedtasks if tsk.starttimestamp is not None]
-        runningtask = max(runningtasks, key=lambda tsk: tsk.starttimestamp) if runningtasks else None
+        # to get position in current pass, check if job currently running (the one started last)
+        runningtask = None
+        runningtask_starttime = None
+        for tsk in queuedtasks:
+            starttime = tsk.starttimestamp
+            if starttime is not None and (runningtask_starttime is None or starttime > runningtask_starttime):
+                runningtask = tsk
+                runningtask_starttime = starttime
 
         runningtaskid = runningtask.id if runningtask is not None else None
         runningtask_userid = runningtask.user_id if runningtask is not None else None
