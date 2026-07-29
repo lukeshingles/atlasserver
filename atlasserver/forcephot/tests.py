@@ -2,6 +2,7 @@ import datetime
 import itertools
 import json
 import tempfile
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -509,6 +510,19 @@ class ResultPlotDataTests(TestCase):
             f"{59000.0 + index:.5f} 18.0 0.05 {100 + index} 10 o 0 1.0 10.0 20.0 "
             f"100 100 2 2 0 -0.5 19.0 18.0 01a{index:05d}o0235o"
         )
+
+    def test_cached_plot_data_expires(self) -> None:
+        # an unbounded timeout would keep entries for tasks that are never viewed again, and
+        # anything stale could never heal on its own
+        thirtydays = 60 * 60 * 24 * 30
+        assert settings.CACHES["taskderived"]["TIMEOUT"] == thirtydays
+
+        caches["taskderived"].set("expirycheck", "x")
+        assert caches["taskderived"].get("expirycheck") == "x"
+
+        # the backend stores the deadline with the entry, so a read past it must miss
+        with mock.patch("time.time", return_value=time.time() + thirtydays + 1):
+            assert caches["taskderived"].get("expirycheck") is None
 
     def test_ragged_file_returns_empty_data_and_is_not_cached(self) -> None:
         # a diagnostic line mixed into the output must not 500 the endpoint, and the empty

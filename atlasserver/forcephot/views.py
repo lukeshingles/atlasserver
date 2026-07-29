@@ -855,14 +855,14 @@ def resultplotdatajs(request, taskid):
         # with jsplotfile.open("w") as f:
         #     f.writelines(jsout)
 
-        # the cache never expires, so an empty result (e.g. a transiently unreadable file) must
-        # not be stored: a later request should get the chance to regenerate the plot data
+        # an empty result (e.g. a transiently unreadable file) must not be stored, or the plot
+        # would stay blank until the entry expires even after the file is fixed
         if strjs:
             caches["taskderived"].set(resultplotdatajs_cachekey(taskid), strjs)
 
     if strjs:
-        # the plotting code is appended outside of the cache (which never expires), so that a
-        # redeployed lightcurveplotly script takes effect without having to clear the cache
+        # the plotting code is appended outside of the cache, so that a redeployed
+        # lightcurveplotly script takes effect immediately rather than after the cache timeout
         plotscript = "js/queuepage/src/lightcurveplotly.js" if settings.DEBUG else "js/lightcurveplotly.min.js"
         strjs += Path(settings.STATIC_ROOT, plotscript).read_text()
 

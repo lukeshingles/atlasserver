@@ -88,7 +88,10 @@ CACHES = {
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "taskderived",
-        "TIMEOUT": None,
+        # generated plot data for finished tasks. It only changes when the result file does, so a
+        # long timeout is fine, but not an unbounded one: entries for tasks that are never viewed
+        # again would otherwise be kept forever, and any that were somehow stale could never heal
+        "TIMEOUT": 60 * 60 * 24 * 30,  # 30 days
         "OPTIONS": {"MAX_ENTRIES": 5000},
     },
     "usagestats": {

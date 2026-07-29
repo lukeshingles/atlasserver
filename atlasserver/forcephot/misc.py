@@ -370,8 +370,9 @@ def splitradeclist(data, form=None):
 def resultplotdatajs_cachekey(taskid: int) -> str:
     """Return the cache key holding the generated plot data for a task.
 
-    The taskderived cache never expires, so the suffix acts as a version marker: entries written
-    by an earlier release hold a different payload and must be ignored rather than served.
+    The suffix is a version marker. Entries written by an earlier release hold a different
+    payload, and the cache timeout is long enough (30 days) that they would otherwise be served
+    for weeks after a deployment; bumping the suffix makes them be ignored immediately.
     """
     return f"task{taskid}_resultplotdatajs_v2"
 
