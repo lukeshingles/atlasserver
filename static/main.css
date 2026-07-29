@@ -164,7 +164,9 @@ ul {
   padding: 0;
 }
 
-.navbar-nav>li>a[href~="{{ request.get_full_path }}"] {
+/* the active class is set in base.html: a CSS file is not rendered by the template engine, so
+   the {{ request.get_full_path }} that used to be in this selector never matched anything */
+.navbar-nav>li.active>a {
   text-decoration: underline;
 }
 
@@ -184,6 +186,13 @@ ul {
   text-align: left;
   white-space: nowrap;
   width: 100%;
+}
+
+.dropdown-menu>li>form.logoutform>button:hover,
+.dropdown-menu>li>form.logoutform>button:focus {
+  background-color: #f5f5f5;
+  color: #262626;
+  text-decoration: none;
 }
 
 span.helptext {

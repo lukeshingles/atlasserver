@@ -398,6 +398,50 @@ class TaskCreateResponseTests(TestCase):
         assert task.dec == 0.0
 
 
+class LogoutTests(TestCase):
+    def setUp(self) -> None:
+        self.user = get_user_model().objects.create_user(
+            username="leaver", email="l@example.com", password="pw12345678"
+        )
+
+    def test_logout_link_is_a_post_form(self) -> None:
+        # Django's LogoutView has only accepted POST since 5.0, so a plain link returns HTTP 405
+        self.client.force_login(self.user)
+        body = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html").content.decode()
+
+        assert 'action="/logout/" method="post"' in body, "the log out control must be a POST form"
+        assert self.client.get(reverse("logout")).status_code == 405
+
+    def test_logout_returns_to_the_index_page(self) -> None:
+        # a "next" field would win over LOGOUT_REDIRECT_URL and bounce the anonymous user to a login form
+        self.client.force_login(self.user)
+
+        response = self.client.post(reverse("logout"), follow=True)
+
+        assert response.redirect_chain == [(reverse("index"), 302)], response.redirect_chain
+        assert not response.wsgi_request.user.is_authenticated
+
+
+class ApiGuideTests(TestCase):
+    def test_documented_code_blocks_are_valid_python(self) -> None:
+        # users copy these snippets straight out of the page
+        import ast
+        import html as htmlmodule
+        import re
+
+        page = Path("atlasserver/forcephot/templates/apiguide.html").read_text()
+        blocks = re.findall(r"<pre><code>(.*?)</code></pre>", page, flags=re.DOTALL)
+        assert blocks, "no code blocks found in the API guide"
+
+        for index, block in enumerate(blocks):
+            source = htmlmodule.unescape(block)
+            try:
+                ast.parse(source)
+            except SyntaxError as exc:
+                msg = f"API guide code block {index} does not parse: {exc}"
+                raise AssertionError(msg) from exc
+
+
 class ContentNegotiationTests(TestCase):
     def setUp(self) -> None:
         self.user = get_user_model().objects.create_user(username="apiclient", email="a@example.com", password=None)
