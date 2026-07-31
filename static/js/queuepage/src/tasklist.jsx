@@ -577,10 +577,14 @@ export class TaskPage extends React.Component {
                 }
                 if (statechanges != null) {
                     statechanges['tasklist_last_fetch_time'] = new Date();
-                    tasklist_fetchcache[window.location.href] = statechanges;
+                    // keyed off get_url, not window.location.href: if the user navigated while
+                    // this request was in flight those differ, and storing the old page's body
+                    // under the new page's key would both show the wrong tasks on a later revisit
+                    // and let an If-None-Match be sent for a page we do not actually hold
+                    tasklist_fetchcache[get_url] = statechanges;
                     // an If-None-Match is only worth sending once a rendered copy exists to fall
                     // back on, since a 304 carries no body
-                    tasklist_pollcache.storeBody(window.location.href, statechanges);
+                    tasklist_pollcache.storeBody(get_url, statechanges);
                     if (get_url == window.location.href) {
                         debug_log('Applying results from', get_url);
                         if (usertriggered) {

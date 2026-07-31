@@ -3,7 +3,6 @@
 
 import contextlib
 import datetime
-import itertools
 import json
 import multiprocessing as mp
 import os
@@ -694,10 +693,7 @@ def remove_old_tasks(
 
     matchingtasks = Task.objects.all().filter(**filteropts)
 
-    # read the ids up front rather than iterating the queryset while modifying the rows it selects
-    # on, and so that the count below needs no separate query
-    taskids = list(matchingtasks.values_list("id", flat=True))
-    taskcount = len(taskids)
+    taskcount = matchingtasks.count()
 
     strrequesttype = f"{request_type} " if request_type else ""
     strdeletetype = "hard deleted" if harddeleterecord else "archived"
@@ -710,31 +706,45 @@ def remove_old_tasks(
         strdeleteaction = (
             "Deleting files and database rows" if harddeleterecord else "Deleting files and marking archived"
         )
-        logfunc(f"  {strdeleteaction}... (first few task ids: {taskids[:10]})")
+        taskid_examples = list(matchingtasks.values_list("id", flat=True)[:10])
+        logfunc(f"  {strdeleteaction}... (first few task ids: {taskid_examples})")
 
         # The sweeps reach back up to 183 days, so the widest of them can match a lot of rows.
-        # Work in batches, and do the database write once per batch rather than once per task: the
-        # old loop issued a full-row save() for every archived task and an UPDATE-then-DELETE for
-        # every hard-deleted one. select_related and the prefetch cover the lookups that
-        # delete_result_files() makes, so those cost one query per batch instead of one per task.
-        for idbatch in itertools.batched(taskids, MAINTENANCE_BATCH_SIZE, strict=False):
+        # Take one bounded batch at a time rather than reading every matching id into memory, and
+        # do the database write once per batch rather than once per task: the old loop issued a
+        # full-row save() for every archived task and an UPDATE-then-DELETE for every hard-deleted
+        # one. select_related and the prefetch cover the lookups that delete_result_files() makes,
+        # so those cost one query per batch instead of one per task.
+        #
+        # No offset is needed: processing a task removes it from this queryset, because it is
+        # either deleted or marked archived (and the non-archived case filters on is_archived
+        # above). The pass limit is a safety net so that a write which somehow left a row matching
+        # could not spin here forever.
+        maxpasses = taskcount // MAINTENANCE_BATCH_SIZE + 2
+        for _ in range(maxpasses):
             tasks = list(
-                Task.objects.filter(id__in=idbatch)
-                .select_related("parent_task")
-                .prefetch_related(Task.prefetch_imagerequests())
+                matchingtasks.select_related("parent_task").prefetch_related(Task.prefetch_imagerequests())[
+                    :MAINTENANCE_BATCH_SIZE
+                ]
             )
+            if not tasks:
+                break
+
+            taskids = [task.id for task in tasks]
 
             for task in tasks:
                 task.delete_result_files()
 
             if harddeleterecord:
                 # the rows are about to go, so there is no point marking them archived first
-                Task.objects.filter(id__in=idbatch).delete()
+                Task.objects.filter(id__in=taskids).delete()
             else:
-                Task.objects.filter(id__in=idbatch).update(is_archived=True, task_modified_datetime=now)
+                Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
 
             for task in tasks:
                 task.forget_derived_cache()
+        else:
+            logfunc(f"  WARNING: stopped after {maxpasses} batches with tasks still matching")
 
         logfunc("  Done.")
 

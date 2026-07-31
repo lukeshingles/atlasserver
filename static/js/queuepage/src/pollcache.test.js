@@ -43,6 +43,17 @@ describe('PollCache', () => {
         assert.equal(cache.requestHeaders(URL_B, HEADERS)['If-None-Match'], '"etag-b"');
     });
 
+    test('a body held for one page does not enable conditional requests for another', () => {
+        // if the user navigates while a fetch is in flight, the response belongs to the URL it was
+        // requested from, not to whatever the address bar says when it lands. Storing it under the
+        // new page's key would offer that page an If-None-Match for content never fetched for it.
+        const cache = new PollCache();
+        cache.noteResponse(URL_B, 200, '"etag-b"');
+        cache.storeBody(URL_A, { results: [] });
+
+        assert.equal(cache.requestHeaders(URL_B, HEADERS)['If-None-Match'], undefined);
+    });
+
     test('classifies a 304 as not modified', () => {
         const cache = new PollCache();
         assert.equal(cache.noteResponse(URL_A, 304, '"etag-1"'), NOT_MODIFIED);

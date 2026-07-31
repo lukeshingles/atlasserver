@@ -1365,6 +1365,47 @@ class RemoveOldTasksTests(TestCase):
         # one batch: ids, load, prefetch, update. Well under one write per task either way.
         assert len(queries) <= 6, f"{len(queries)} queries:\n" + "\n".join(q["sql"] or "" for q in queries)
 
+    def test_archiving_spans_several_batches(self) -> None:
+        # the sweep takes one bounded batch at a time rather than reading every matching id into
+        # memory, and relies on a processed task dropping out of the queryset so that the next
+        # pass sees fresh rows. With the real batch size of 500 the loop only ever runs once.
+        tasks = [self.make_old_task(days=200) for _ in range(10)]
+
+        with mock.patch.object(taskrunner_main, "MAINTENANCE_BATCH_SIZE", 3):
+            taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
+
+        for task in tasks:
+            task.refresh_from_db()
+            assert task.is_archived, f"task {task.id} was left behind by the batching"
+
+    def test_hard_delete_spans_several_batches(self) -> None:
+        for _ in range(10):
+            self.make_old_task(days=200, is_archived=True, from_api=True)
+
+        with mock.patch.object(taskrunner_main, "MAINTENANCE_BATCH_SIZE", 3):
+            taskrunner_main.remove_old_tasks(
+                days_ago=7, harddeleterecord=True, is_archived=True, from_api=True, logfunc=lambda _msg: None
+            )
+
+        assert not Task.objects.exists()
+
+    def test_batching_does_not_loop_forever_if_a_task_stops_matching(self) -> None:
+        # the pass limit is a safety net: if a write ever failed to take a row out of the queryset
+        # the loop must give up and say so rather than spin
+        for _ in range(6):
+            self.make_old_task(days=200)
+        logged: list[str] = []
+
+        with (
+            mock.patch.object(taskrunner_main, "MAINTENANCE_BATCH_SIZE", 2),
+            # neutered, so no task ever leaves the queryset and every pass sees the same rows
+            mock.patch.object(models.QuerySet, "update", return_value=0),
+            mock.patch("atlasserver.forcephot.models.Task.delete_result_files"),
+        ):
+            taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=logged.append)
+
+        assert any("stopped after" in line for line in logged), logged
+
     def test_soft_delete_rejects_an_impossible_filter(self) -> None:
         try:
             taskrunner_main.remove_old_tasks(days_ago=1, harddeleterecord=False, is_archived=True)
