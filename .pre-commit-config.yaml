@@ -1,4 +1,11 @@
 ---
+ci:
+    # ty resolves and downloads the project's dependencies in order to type check against them,
+    # and pre-commit.ci runs hooks without network access, so it fails there with a DNS error
+    # rather than a type error. It runs locally and in the "Lint and type check" GitHub Actions
+    # job, where the environment is already installed.
+    skip: [ty]
+
 repos:
     - repo: https://github.com/pre-commit/pre-commit-hooks
       rev: v6.0.0

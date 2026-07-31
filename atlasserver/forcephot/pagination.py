@@ -32,11 +32,14 @@ class TaskPagination(CursorPagination):
 
     def paginate_queryset(self, queryset, request, view=None):
         queryset_full = queryset
-        self.querysetcount = queryset.count()
 
         self.page_size = self.get_page_size(request)
         if not self.page_size:
             return None
+
+        # after the page_size check, so that a request which is not paginated at all does not pay
+        # for a count it will never report
+        self.querysetcount = queryset.count()
 
         self.base_url = request.build_absolute_uri()
         self.ordering = self.get_ordering(request, queryset, view)
@@ -92,6 +95,8 @@ class TaskPagination(CursorPagination):
             strictlybefore = {f"{order_attr}__lt": current_position}
             beforeorat = {f"{order_attr}__lte": current_position}
 
+        # the extra count below is only needed once a cursor carries a position; the common case
+        # (the first page, which is what the queue page polls) needs no second count at all
         if reverse:
             # rows before the boundary, minus those skipped by the offset and the page itself
             totalbefore = (

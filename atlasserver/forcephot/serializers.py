@@ -1,5 +1,6 @@
 # from django.contrib.auth.models import User
 import math
+import typing as t
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.exceptions import ObjectDoesNotExist
@@ -8,6 +9,9 @@ from rest_framework.reverse import reverse
 
 from atlasserver.forcephot.models import get_mjd_min_default
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.models import UNSET
+from atlasserver.forcephot.webhooks import CallbackUrlError
+from atlasserver.forcephot.webhooks import validate_callback_url
 
 
 def is_finite_float(val):
@@ -22,7 +26,10 @@ def is_finite_float(val):
 
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer):
-    def get_result_url(self, obj):
+    # memoised queue offset. 0 is a normal value, so it cannot double as "not computed yet".
+    _min_queuepos_cache: t.Any = UNSET
+
+    def get_result_url(self, obj) -> str | None:
         localresultfile = obj.localresultfile()
         if localresultfile and not obj.error_msg and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(localresultfile))
@@ -30,50 +37,74 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return None
 
-    def get_parent_task_url(self, obj):
-        if obj.parent_task_id:
+    def get_parent_task_url(self, obj) -> str | None:
+        if obj.parent_task_id and (request := self.context.get("request")):
             try:
-                parent = Task.objects.get(id=obj.parent_task_id)
-                if parent.is_archived:
-                    return None
+                # select_related("parent_task") on the viewset queryset means this is already
+                # loaded; the attribute access only falls back to a query for unprefetched callers
+                parent = obj.parent_task
             except ObjectDoesNotExist:
                 return None
-            if request := self.context.get("request"):
-                return request.build_absolute_uri(reverse("task-detail", args=[obj.parent_task_id]))
+            if parent is None or parent.is_archived:
+                return None
+            return request.build_absolute_uri(reverse("task-detail", args=[obj.parent_task_id]))
 
         return None
 
-    def get_pdfplot_url(self, obj):
+    def get_pdfplot_url(self, obj) -> str | None:
         if obj.localresultfile() and not obj.error_msg and (request := self.context.get("request")):
             return request.build_absolute_uri(reverse("taskpdfplot", args=[obj.id]))
 
         return None
 
-    def get_previewimage_url(self, obj):
+    def get_previewimage_url(self, obj) -> str | None:
         if obj.localresultpreviewimagefile and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultpreviewimagefile))
             # return request.build_absolute_uri(reverse("taskpreviewimage", args=[obj.id]))
 
         return None
 
-    def get_imagerequest_url(self, obj):
+    def get_imagerequest_url(self, obj) -> str | None:
         if obj.imagerequest_task_id and (request := self.context.get("request")):
             return request.build_absolute_uri(reverse("task-detail", args=[obj.imagerequest_task_id]))
 
         return None
 
-    def get_result_imagezip_url(self, obj):
-        if obj.localresultimagezipfile and (request := self.context.get("request")):
+    # the finishtimestamp checks below are not redundant with the file existence checks: an
+    # unfinished task cannot have produced a result yet, so testing the timestamp first skips a
+    # filesystem stat for every queued task in the page
+    def get_result_imagezip_url(self, obj) -> str | None:
+        if obj.finishtimestamp and obj.localresultimagezipfile and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
 
         return None
 
-    def get_result_imagestack_url(self, obj):
-        if obj.localresultimagestackfile and (request := self.context.get("request")):
+    def get_result_imagestack_url(self, obj) -> str | None:
+        if obj.finishtimestamp and obj.localresultimagestackfile and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagestackfile))
 
         return None
 
+    @property
+    def min_queuepos_relative(self) -> int:
+        """Return the queue offset, computed once per serializer rather than once per task.
+
+        Task.min_queuepos_relative() is a global aggregate that does not depend on the task being
+        serialised. Under many=True this serializer instance is reused for every task in the page,
+        so memoising here turns N aggregate queries into one.
+        """
+        if self._min_queuepos_cache is UNSET:
+            self._min_queuepos_cache = Task.min_queuepos_relative()
+
+        return self._min_queuepos_cache
+
+    def get_queuepos(self, obj) -> int | None:
+        if obj.finishtimestamp or obj.queuepos_relative is None:
+            return None
+
+        return obj.queuepos_relative - self.min_queuepos_relative
+
+    queuepos = serializers.SerializerMethodField("get_queuepos")
     result_url = serializers.SerializerMethodField("get_result_url")
     parent_task_url = serializers.SerializerMethodField("get_parent_task_url")
     pdfplot_url = serializers.SerializerMethodField("get_pdfplot_url")
@@ -81,6 +112,16 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     imagerequest_url = serializers.SerializerMethodField("get_imagerequest_url")
     result_imagezip_url = serializers.SerializerMethodField("get_result_imagezip_url")
     result_imagestack_url = serializers.SerializerMethodField("get_result_imagestack_url")
+
+    @staticmethod
+    def validate_callback_url(value):
+        if value in (None, ""):
+            return None
+
+        try:
+            return validate_callback_url(value)
+        except CallbackUrlError as ex:
+            raise serializers.ValidationError({"callback_url": str(ex)}) from ex
 
     @staticmethod
     def validate_mpc_name(value, prefix="", field="mpc_name"):
@@ -240,6 +281,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
             "result_url",
             "comment",
             "send_email",
+            "callback_url",
             "starttimestamp",
             "finishtimestamp",
             "error_msg",

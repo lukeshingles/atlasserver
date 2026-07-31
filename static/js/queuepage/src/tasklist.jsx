@@ -3,6 +3,7 @@
 import React from "react"
 import ReactDOM from 'react-dom';
 import { NewRequest } from "newrequest";
+import { NOT_MODIFIED, PollCache } from "pollcache";
 
 function debug_log(...args) {
     // uncomment for debugging in development
@@ -310,6 +311,8 @@ export class Task extends React.Component {
 let tasklist_api_request_active = false;
 const tasklist_fetchcache = [];
 let tasklist_api_error = '';
+// remembers the ETag of each polled page so that an unchanged page can be answered with a 304
+const tasklist_pollcache = new PollCache();
 
 class Pager extends React.PureComponent {
     constructor(props) {
@@ -503,21 +506,28 @@ export class TaskPage extends React.Component {
         tasklist_api_request_active = true;
         const get_url = window.location.href;
         debug_log('Fetching task list from', get_url);
+        const request_headers = tasklist_pollcache.requestHeaders(get_url, {
+            "X-CSRFToken": getCookie("csrftoken"),
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+        });
         fetch(get_url,
             {
                 credentials: "same-origin",
                 method: "GET",
-                headers: {
-                    "X-CSRFToken": getCookie("csrftoken"),
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                },
+                headers: request_headers,
+                // the browser HTTP cache would answer from its own copy and hide the 304 handling
+                cache: "no-store",
                 redirect: "manual"
             })
             .then((response) => {
                 tasklist_api_error = '';
                 tasklist_api_request_active = false;
-                // etag = response.headers.get('ETag');
+                if (tasklist_pollcache.noteResponse(get_url, response.status, response.headers.get('ETag'))
+                    === NOT_MODIFIED) {
+                    debug_log('Task list unchanged (304)', get_url);
+                    return NOT_MODIFIED;
+                }
                 if (response.type === "opaqueredirect") {
                     // redirect to login page
                     window.location.href = response.url;
@@ -541,6 +551,12 @@ export class TaskPage extends React.Component {
                 tasklist_api_error = 'Connection error';
             }).then(data => {
                 let statechanges = null;
+                if (data === NOT_MODIFIED) {
+                    // nothing changed server-side, but the poll did succeed, so the "last updated"
+                    // line must still advance or the page looks stalled
+                    this.setState({ tasklist_last_fetch_time: new Date() });
+                    return;
+                }
                 if (data != null && data.hasOwnProperty('results')) {
                     if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
                         // page is empty. redirect to main page
@@ -561,7 +577,14 @@ export class TaskPage extends React.Component {
                 }
                 if (statechanges != null) {
                     statechanges['tasklist_last_fetch_time'] = new Date();
-                    tasklist_fetchcache[window.location.href] = statechanges;
+                    // keyed off get_url, not window.location.href: if the user navigated while
+                    // this request was in flight those differ, and storing the old page's body
+                    // under the new page's key would both show the wrong tasks on a later revisit
+                    // and let an If-None-Match be sent for a page we do not actually hold
+                    tasklist_fetchcache[get_url] = statechanges;
+                    // an If-None-Match is only worth sending once a rendered copy exists to fall
+                    // back on, since a 304 carries no body
+                    tasklist_pollcache.storeBody(get_url, statechanges);
                     if (get_url == window.location.href) {
                         debug_log('Applying results from', get_url);
                         if (usertriggered) {

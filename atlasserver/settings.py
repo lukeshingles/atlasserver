@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "django_filters",
     "rest_framework",
     "rest_framework.authtoken",
+    "drf_spectacular",
     "geoip2",
 ]
 
@@ -136,6 +137,14 @@ DATABASES = {
         "PASSWORD": os.environ.get("ATLASSERVER_DJANGO_MYSQL_PASSWORD"),
         "HOST": "localhost",  # Or an IP Address that your DB is hosted on
         "PORT": "3306",
+        # reuse connections instead of opening and closing one per request. The queue page polls
+        # every couple of seconds per open tab, so the connection setup was a large share of the
+        # work done for a typical request. Each mod_wsgi process holds one connection per worker
+        # thread, so keep this shorter than the server's wait_timeout.
+        "CONN_MAX_AGE": int(os.environ.get("ATLASSERVER_DB_CONN_MAX_AGE", "60")),
+        # a pooled connection can have been closed by the server since it was last used; without
+        # this the next request to pick it up fails instead of transparently reconnecting
+        "CONN_HEALTH_CHECKS": True,
     }
 }
 
@@ -243,6 +252,22 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.BrowsableAPIRenderer",
     ),
     "EXCEPTION_HANDLER": "atlasserver.forcephot.exception.custom_exception_handler",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# the API was documented only by a hand-written page, which had to be kept in step with the
+# serializer by hand. The generated schema is derived from the code, so it cannot drift.
+SPECTACULAR_SETTINGS = {
+    "TITLE": "ATLAS Forced Photometry API",
+    "DESCRIPTION": (
+        "Request forced photometry at any position on the sky over the full history of the ATLAS survey.\n\n"
+        "Authenticate with a token from /api-token-auth/ and send it as `Authorization: Token <token>`.\n"
+        "See the API guide at /apiguide/ for worked examples."
+    ),
+    "VERSION": "1.0.0",
+    # the schema endpoint itself is not part of the API being described
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SCHEMA_PATH_PREFIX": "/",
 }
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
