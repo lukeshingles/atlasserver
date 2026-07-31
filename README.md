@@ -51,12 +51,20 @@ For atlastaskrunner to process jobs, there much be an SSH host alias named named
 scp atlasserver/taskrunner/atlas_*.py atlas:~/
 ```
 
-To update the code to the latest commit on the main branch, pull from the GitHub remote and then restart the two processes.
+To update the code to the latest commit on the main branch, pull from the GitHub remote, apply any
+database changes, and then restart the two processes.
 ```sh
 git pull
+./manage.py makemigrations
+./manage.py migrate
 atlaswebserver restart
 atlastaskrunner restart
 ```
+
+The migration steps are not optional. Migration files are not tracked in this repository (see
+`atlasserver/forcephot/migrations/.gitignore`), so a commit that changes a model carries no
+migration with it, and a `git pull` alone leaves the database schema behind the code. Queries
+against the changed table then fail with an "Unknown column" error until `migrate` has been run.
 
 ## License
 Copyright (c) 2020-2024 Luke Shingles
