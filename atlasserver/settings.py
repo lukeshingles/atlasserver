@@ -204,6 +204,23 @@ if platform.system() != "Darwin":
     # protocol the request actually arrived over.
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+if not DEBUG:
+    # the four warnings that `manage.py check --deploy` raised. Guarded, because development runs
+    # over plain http on localhost and secure-only cookies would never be sent there.
+    #
+    # SECURE_SSL_REDIRECT never fires as things stand: httpconf.txt sets X-Forwarded-Proto to https
+    # unconditionally, so request.is_secure() is always true. It is here as a backstop for a
+    # deployment that stops setting that header, which would otherwise quietly serve plain http.
+    # annotated rather than left to inference: without a declared type these are literal types, and
+    # settings_test.py (which has to switch them off, see the note there) would not type check
+    SECURE_SSL_REDIRECT: bool = True
+    SESSION_COOKIE_SECURE: bool = True
+    CSRF_COOKIE_SECURE: bool = True
+    # one year, and only for this host: subdomains are not all served by this deployment
+    SECURE_HSTS_SECONDS: int = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS: bool = False
+    SECURE_HSTS_PRELOAD: bool = False
+
 CSRF_TRUSTED_ORIGINS = [
     "https://*.qub.ac.uk",
     "https://fallingstar-data.com",

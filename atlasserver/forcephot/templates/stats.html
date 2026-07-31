@@ -24,7 +24,12 @@
   <script src="https://cdn.pydata.org/bokeh/release/bokeh-3.9.2.min.js"></script>
   <script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-3.9.2.min.js"></script>
   <script language="javascript" type="text/javascript">
-    $('#lastfinishtime').text(new Date('{{ lastfinishtime }}'.replace(/-/g, "/")).toLocaleString());
+    // when no task has ever finished the view renders "N/A", which new Date() turns into an
+    // Invalid Date; leave whatever the server wrote in place unless it actually parses
+    const lastfinish = new Date('{{ lastfinishtime|escapejs }}'.replace(/-/g, "/"));
+    if (!isNaN(lastfinish)) {
+      $('#lastfinishtime').text(lastfinish.toLocaleString());
+    }
     $('#pagetime').text(new Date({% now "U" %} * 1000).toLocaleString());
 
     $.ajax({

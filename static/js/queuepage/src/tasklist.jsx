@@ -10,6 +10,29 @@ function debug_log(...args) {
     // console.log(...args);
 }
 
+// How often each thing is polled.
+//
+// The full task list used to be re-fetched every 2 seconds. Most of what a waiting user is watching
+// is their queue position, and queuepositions.json answers that with two indexed queries and a few
+// hundred bytes instead of a page of serialised tasks, so that is what runs on the short interval.
+// A task dropping out of the queue positions response means it has finished, which triggers an
+// immediate full fetch, so "my task is done" still appears within one short interval.
+const TASKLIST_POLL_MS = 6000;
+const QUEUEPOS_POLL_MS = 2000;
+const RUNNERSTATUS_POLL_MS = 60000;
+
+const SITE_TITLE = 'ATLAS Forced Photometry';
+
+function pageTitle(taskid) {
+    // matches the server-rendered <title>, so a client-side navigation does not leave the tab
+    // claiming to show something else
+    return (taskid != null ? 'Task ' + taskid : 'Task Queue') + ' – ' + SITE_TITLE;
+}
+
+function pollingPaused() {
+    return document[hidden] || !user_is_active;
+}
+
 class TaskPlot extends React.PureComponent {
     constructor(props) {
         super(props);
@@ -48,7 +71,16 @@ export class Task extends React.Component {
     }
 
     deleteTask() {
-        const li_id = '#task-' + this.props.taskdata.id
+        const task = this.props.taskdata;
+        // deleting a finished task also removes its data file, plot and any retrieved images, and
+        // none of that can be recovered. Cancelling a task that has not finished stays one click.
+        if (task.finishtimestamp != null && !window.confirm(
+            'Delete task ' + task.id + '? Its data file, plot and any retrieved images will be'
+            + ' removed and cannot be recovered.')) {
+            return;
+        }
+
+        const li_id = '#task-' + task.id
         // $(li_id).hide(300);
         $(li_id).slideUp(200);
         setTimeout(() => {
@@ -56,9 +88,20 @@ export class Task extends React.Component {
                 headers: {
                     "X-CSRFToken": getCookie("csrftoken")
                 },
-                url: this.props.taskdata.url, method: 'delete',
-                success: (result) => { console.log('Deleted task ', this.props.taskdata.id); this.props.fetchData() },
-                error: (err) => { console.log('Failed to delete task ', this.props.taskdata.id, err); $('#task-' + this.props.taskdata.id).slideDown(100); this.props.fetchData(); }
+                url: task.url, method: 'delete',
+                success: (result) => { console.log('Deleted task ', task.id); this.props.fetchData(true) },
+                error: (err) => {
+                    // the row slides back, so without a message the click looks like it simply did
+                    // nothing. A 403 here means the task belongs to somebody else.
+                    console.log('Failed to delete task ', task.id, err);
+                    $('#task-' + task.id).slideDown(100);
+                    this.setState({
+                        'httperror': err.status === 403
+                            ? 'ERROR: you are not allowed to delete this task.'
+                            : 'ERROR: could not delete this task (HTTP ' + err.status + ').'
+                    });
+                    this.props.fetchData(true);
+                }
             });
         }, 200);
     }
@@ -194,10 +237,17 @@ export class Task extends React.Component {
         if (task.user_id == user_id) {
             delbutton = <button className="btn btn-sm btn-danger" onClick={() => this.deleteTask()}>{buttontext}</button>;
         }
+        // rendered only when there is one: React drops a null src, which left an empty <img> box in
+        // every row that has no preview, and without alt text there was nothing to announce either
+        const previewimage = task.previewimage_url ? (
+            <img className="previewimage" src={task.previewimage_url} height="100" loading="lazy"
+                alt={'Preview image for task ' + task.id} />
+        ) : null;
+
         let taskbox = [
             <div key="rightside" className="rightside">
                 {delbutton}
-                <img src={task.previewimage_url} style={{ display: 'block', marginTop: '1em', marginLeft: '1em' }} height="100" />
+                {previewimage}
             </div>
         ];
 
@@ -255,17 +305,29 @@ export class Task extends React.Component {
         if (task.finishtimestamp != null) {
             taskbox.push(<div key="status">Finished at {new Date(task.finishtimestamp).toLocaleString()}</div>);
             if (task.error_msg != null) {
-                taskbox.push(<p key="error_msg" style={{ color: 'black', fontWeight: 'bold', marginTop: '1em' }}>Error: {task.error_msg}</p>);
+                taskbox.push(<p key="error_msg" className="taskerror">Error: {task.error_msg}</p>);
             } else {
+                // result_url and pdfplot_url are null once the data file is gone (the maintenance
+                // sweep reclaims them after a few months). React drops a null href, so these used
+                // to render as buttons that looked live but did nothing at all when clicked.
+                const resultsexpired = (
+                    <p key="expired">The download link has expired. Delete this task and request again if necessary.</p>);
+
                 if (task.request_type == 'FP') {
-                    taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank">Data</a>);
-                    taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank">PDF</a>);
-                } else if (task.request_type == 'SSOSTACK') {
-                    taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank">Data</a>);
-                    if (task.result_imagestack_url != null) {
-                        taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagestack_url} target="_blank">Stacked image (FITS)</a>);
+                    if (task.result_url != null) {
+                        taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
+                        taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank" rel="noopener">PDF</a>);
                     } else {
-                        taskbox.push(<p>The download link has expired. Delete this task and request again if necessary.</p>);
+                        taskbox.push(resultsexpired);
+                    }
+                } else if (task.request_type == 'SSOSTACK') {
+                    if (task.result_url != null) {
+                        taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
+                    }
+                    if (task.result_imagestack_url != null) {
+                        taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagestack_url} target="_blank" rel="noopener">Stacked image (FITS)</a>);
+                    } else {
+                        taskbox.push(resultsexpired);
                     }
                 }
 
@@ -273,7 +335,7 @@ export class Task extends React.Component {
                     if (task.result_imagezip_url != null) {
                         taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagezip_url}>Download images (ZIP)</a>);
                     } else {
-                        taskbox.push(<p>The download link has expired. Delete this task and request again if necessary.</p>);
+                        taskbox.push(resultsexpired);
                     }
                 } else if (task.imagerequest_task_id != null) {
                     if (task.imagerequest_finished) {
@@ -286,13 +348,18 @@ export class Task extends React.Component {
                 }
             }
         } else if (task.starttimestamp != null) {
-            taskbox.push(<div key="status" style={{ color: 'red', fontStyle: 'italic', marginTop: '1em' }}>Running (started {this.state.timeelapsed} seconds ago)</div>);
+            taskbox.push(<div key="status" className="taskstatus running">Running (started {this.state.timeelapsed} seconds ago)</div>);
+        } else if (task.queuepos != null) {
+            const tasksahead = task.queuepos == 1 ? '1 task' : task.queuepos + ' tasks';
+            taskbox.push(<div key="status" className="taskstatus waiting">Waiting ({tasksahead} ahead of this one)</div>);
         } else {
-            taskbox.push(<div key="status" style={{ fontStyle: 'italic', marginTop: '1em' }}>Waiting ({task.queuepos} tasks ahead of this one)</div>);
+            // queuepos is null until the queue has been renumbered, and the sentence used to be
+            // rendered with the number simply missing: "Waiting ( tasks ahead of this one)"
+            taskbox.push(<div key="status" className="taskstatus waiting">Waiting in queue</div>);
         }
 
         if (this.state.httperror != '') {
-            taskbox.push(<p key="httperror" style={{ 'color': 'red' }}>{this.state.httperror}</p>);
+            taskbox.push(<p key="httperror" className="errors" role="alert">{this.state.httperror}</p>);
         }
 
 
@@ -309,10 +376,75 @@ export class Task extends React.Component {
 }
 
 let tasklist_api_request_active = false;
-const tasklist_fetchcache = [];
-let tasklist_api_error = '';
+const tasklist_fetchcache = {};
 // remembers the ETag of each polled page so that an unchanged page can be answered with a 304
 const tasklist_pollcache = new PollCache();
+
+class RunnerStatus extends React.PureComponent {
+    constructor(props) {
+        super(props);
+        this.state = { status: null };
+        this.fetchStatus = this.fetchStatus.bind(this);
+    }
+
+    componentDidMount() {
+        this.fetchStatus();
+        this.interval = setInterval(this.fetchStatus, RUNNERSTATUS_POLL_MS);
+    }
+
+    componentWillUnmount() {
+        clearInterval(this.interval);
+    }
+
+    fetchStatus() {
+        if (pollingPaused()) {
+            return;
+        }
+        // a stale runner is reported with HTTP 503 and a body, so the status is read from the body
+        // rather than from the status code
+        fetch(taskrunnerstatus_url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+            .then(response => response.json())
+            .then(status => this.setState({ 'status': status }))
+            .catch(error => {
+                // not being able to reach this endpoint says nothing about the runner, and claiming
+                // an outage on the strength of our own failed request would be worse than silence
+                debug_log('Could not read the task runner status', error);
+                this.setState({ 'status': null });
+            });
+    }
+
+    render() {
+        const status = this.state.status;
+        if (status == null) {
+            return null;
+        }
+
+        if (status.stale) {
+            const age = status.status_age_seconds != null
+                ? ' It last reported ' + Math.round(status.status_age_seconds / 60) + ' minutes ago.'
+                : '';
+            return (
+                <p key="runnerstatus" id="runnerstatus" className="runnerstatus stale" role="status">
+                    The task runner is not currently processing jobs.{age} Queued tasks will start once it is
+                    back; there is no need to submit them again.
+                </p>
+            );
+        }
+
+        if (!status.queued_task_count) {
+            // an idle runner with an empty queue is the normal case and needs no commentary
+            return null;
+        }
+
+        return (
+            <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
+                Task runner: {status.slots_busy} of {status.numslots} slots busy,
+                {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
+                all users in the queue.
+            </p>
+        );
+    }
+}
 
 class Pager extends React.PureComponent {
     constructor(props) {
@@ -355,9 +487,11 @@ class Pager extends React.PureComponent {
             return (
                 <div id="paginator" key="paginator">
                     <p key="pagedescription">Showing tasks {this.props.pagefirsttaskposition + 1}-{this.props.pagefirsttaskposition + this.props.pagetaskcount} of {this.props.taskcount}</p>
+                    {/* buttons, not links: these run JavaScript rather than navigating, and an <a>
+                        with no href is not focusable, so the pager could not be reached by keyboard */}
                     <ul key="prevnext" className="pager">
-                        {this.props.previous != null ? <li key="previous" className="previous"><a onClick={() => { this.props.updateCursor(this.state.previous_cursor) }} style={{ cursor: 'pointer' }}>&laquo; Newer</a></li> : null}
-                        {this.props.next != null ? <li key="next" className="next"><a onClick={() => { this.props.updateCursor(this.state.next_cursor) }} style={{ cursor: 'pointer' }}>Older &raquo;</a></li> : null}
+                        {this.props.previous != null ? <li key="previous" className="previous"><button type="button" onClick={() => { this.props.updateCursor(this.state.previous_cursor) }}>&laquo; Newer</button></li> : null}
+                        {this.props.next != null ? <li key="next" className="next"><button type="button" onClick={() => { this.props.updateCursor(this.state.next_cursor) }}>Older &raquo;</button></li> : null}
                     </ul>
                 </div>
             )
@@ -375,6 +509,11 @@ export class TaskPage extends React.Component {
             scrollToTopAfterUpdate: false,
             dataurl: window.location.href,
             fetchtimeelapsed: null,
+            // component state, not a module variable: setting a module variable from the failure
+            // handler changed nothing on screen, because nothing re-rendered. By the time a later
+            // poll did render, the variable had already been cleared, so a connection problem was
+            // never actually shown to anyone.
+            tasklist_api_error: '',
         };
 
         this.newRequest = React.createRef();
@@ -382,25 +521,19 @@ export class TaskPage extends React.Component {
         this.setSingleTaskView = this.setSingleTaskView.bind(this);
         this.updateCursor = this.updateCursor.bind(this);
         this.fetchData = this.fetchData.bind(this);
+        this.fetchQueuePositions = this.fetchQueuePositions.bind(this);
+    }
+
+    filterIsActive(filtername, strurl) {
+        const started = new URL(strurl).searchParams.get('started');
+        if (filtername == null) {
+            return started == null && this.singleTaskViewTaskId(this.state.dataurl) == null;
+        }
+        return filtername == 'started' && started == 'true';
     }
 
     filterclass(filtername, strurl) {
-        // var page_url = new URL(window.location.href);
-        const page_url = new URL(strurl);
-        const started = page_url.searchParams.get('started');
-        if (filtername == null) {
-            if (started == null && this.singleTaskViewTaskId(this.state.dataurl) == null) {
-                return 'btn-primary'
-            } else {
-                return 'btn-link'
-            }
-        } else if (filtername == 'started') {
-            if (started == 'true') {
-                return 'btn-primary'
-            } else {
-                return 'btn-link'
-            }
-        }
+        return this.filterIsActive(filtername, strurl) ? 'btn-primary' : 'btn-link';
     }
 
     setFilter(filtername) {
@@ -479,8 +612,68 @@ export class TaskPage extends React.Component {
         this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
     }
 
+    /**
+     * Refresh just the queue positions of this user's unfinished tasks.
+     *
+     * Cheap enough to run on the short interval: two indexed queries and a few hundred bytes,
+     * against a page fetch, a prefetch and a full serialisation for the task list. A task that is
+     * no longer listed here has finished (or been deleted), which is the transition worth reacting
+     * to immediately, so that case falls back to a full fetch straight away.
+     */
+    fetchQueuePositions() {
+        if (pollingPaused() || this.state.results == null) {
+            return;
+        }
+
+        // only this user's own tasks appear in the response, so a staff member looking at somebody
+        // else's task must not be counted as "no longer queued"
+        const waiting = this.state.results.filter(
+            task => task.user_id == user_id && task.finishtimestamp == null);
+        if (waiting.length == 0) {
+            return;
+        }
+
+        fetch(queuepositions_url,
+            {
+                credentials: "same-origin",
+                headers: { 'Accept': 'application/json' },
+                cache: "no-store",
+            })
+            .then(response => response.status == 200 ? response.json() : null)
+            .then(data => {
+                if (data == null || data.queuepositions == null || this.state.results == null) {
+                    return;
+                }
+
+                if (waiting.some(task => !(String(task.id) in data.queuepositions))) {
+                    debug_log('a task left the queue: fetching the full task list');
+                    this.fetchData(false);
+                    return;
+                }
+
+                let changed = false;
+                const newresults = this.state.results.map(task => {
+                    const queuepos = data.queuepositions[String(task.id)];
+                    if (queuepos === undefined || queuepos === task.queuepos || task.finishtimestamp != null) {
+                        return task;
+                    }
+                    changed = true;
+                    return { ...task, queuepos: queuepos };
+                });
+
+                if (changed) {
+                    this.setState({ results: newresults, tasklist_last_fetch_time: new Date(), tasklist_api_error: '' });
+                }
+            })
+            .catch(error => {
+                // the full task list poll is what reports a connection problem; a failure here just
+                // means the positions are refreshed a few seconds later than they might have been
+                debug_log('Queue positions request failed', error);
+            });
+    }
+
     fetchData(usertriggered) {
-        if (document[hidden] || !user_is_active) {
+        if (pollingPaused()) {
             return;
         }
 
@@ -521,8 +714,8 @@ export class TaskPage extends React.Component {
                 redirect: "manual"
             })
             .then((response) => {
-                tasklist_api_error = '';
                 tasklist_api_request_active = false;
+                this.setState({ tasklist_api_error: '' });
                 if (tasklist_pollcache.noteResponse(get_url, response.status, response.headers.get('ETag'))
                     === NOT_MODIFIED) {
                     debug_log('Task list unchanged (304)', get_url);
@@ -548,7 +741,9 @@ export class TaskPage extends React.Component {
             }).catch(error => {
                 tasklist_api_request_active = false;
                 console.log('Get task list HTTP request failed', error);
-                tasklist_api_error = 'Connection error';
+                // in state, so that this actually reaches the screen. The "last updated" time is
+                // deliberately left where it was: it is what tells the user how stale the page is.
+                this.setState({ tasklist_api_error: 'Connection error' });
             }).then(data => {
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
@@ -600,6 +795,14 @@ export class TaskPage extends React.Component {
     }
 
     componentDidUpdate() {
+        // the tab title used to keep saying "Task Queue" after a client-side navigation, because
+        // every pushState passed the title it already had. Derived from dataurl here so that it is
+        // right no matter which navigation path got us here.
+        const title = pageTitle(this.singleTaskViewTaskId(this.state.dataurl));
+        if (document.title != title) {
+            document.title = title;
+        }
+
         if (this.state.scrollToTopAfterUpdate) {
             this.setState({ scrollToTopAfterUpdate: false });
             window.scrollTo(0, 0);
@@ -608,12 +811,14 @@ export class TaskPage extends React.Component {
     }
 
     componentDidMount() {
-        this.fetchinterval = setInterval(() => this.fetchData(false), 2000);
+        this.fetchinterval = setInterval(() => this.fetchData(false), TASKLIST_POLL_MS);
+        this.queueposinterval = setInterval(this.fetchQueuePositions, QUEUEPOS_POLL_MS);
         this.fetchData(true);
     }
 
     componentWillUnmount() {
         clearInterval(this.fetchinterval);
+        clearInterval(this.queueposinterval);
     }
 
     render() {
@@ -626,15 +831,19 @@ export class TaskPage extends React.Component {
         }
 
         if (!singletaskmode || (this.state.results != null && this.state.results.length > 0 && this.state.results[0].user_id == user_id)) {
+            // buttons rather than <a> without an href, which is not focusable and so could not be
+            // reached by keyboard at all. aria-pressed is what makes the selected one announceable.
             pagehtml.push(
                 <ul key="filters" id="taskfilters">
-                    <li key="all"><a onClick={() => this.setFilter(null)} className={'btn ' + this.filterclass(null, this.state.dataurl)}>All tasks</a></li>
-                    <li key="started"><a onClick={() => this.setFilter('started')} className={'btn ' + this.filterclass('started', this.state.dataurl)}>Running/Finished</a></li>
+                    <li key="all"><button type="button" onClick={() => this.setFilter(null)} aria-pressed={this.filterIsActive(null, this.state.dataurl)} className={'btn ' + this.filterclass(null, this.state.dataurl)}>All tasks</button></li>
+                    <li key="started"><button type="button" onClick={() => this.setFilter('started')} aria-pressed={this.filterIsActive('started', this.state.dataurl)} className={'btn ' + this.filterclass('started', this.state.dataurl)}>Running/Finished</button></li>
                 </ul>);
         }
 
+        pagehtml.push(<RunnerStatus key="runnerstatus" />);
+
         if (this.state.tasklist_last_fetch_time != null) {
-            pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{tasklist_api_error}</span></p>);
+            pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{this.state.tasklist_api_error}</span></p>);
         }
 
         if (!singletaskmode) {

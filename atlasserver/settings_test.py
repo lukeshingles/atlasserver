@@ -14,6 +14,15 @@ from atlasserver.settings import *  # noqa: F403
 
 DEBUG = True
 
+# settings.py applies its production hardening under `if not DEBUG`, and that runs at import time
+# against the platform-derived value, so on Linux (which is what CI runs) it is already switched on
+# by the time DEBUG is set to True here. The test client speaks plain http, so SECURE_SSL_REDIRECT
+# would answer every request with a 301 and the secure-only cookies would never be sent back.
+SECURE_SSL_REDIRECT = False
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+SECURE_HSTS_SECONDS = 0
+
 if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
     DATABASES = {
         "default": {

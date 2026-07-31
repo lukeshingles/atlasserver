@@ -23,6 +23,7 @@ from django.forms.models import model_to_dict
 
 from atlasserver import settings
 from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.taskrunner import status as runnerstatus
 
 REMOTE_SERVER = "atlas"
 
@@ -46,15 +47,13 @@ CANCEL_CHECK_SECONDS: float = 15.0
 POLL_INTERVAL_SECONDS: float = 0.5
 IDLE_POLL_INTERVAL_SECONDS: float = 5.0
 
-# how often the runner refreshes the status file read by the /taskrunnerstatus.json endpoint
-STATUS_WRITE_SECONDS: float = 15.0
-
 # how many tasks the maintenance sweep loads, cleans up and writes back at a time
 MAINTENANCE_BATCH_SIZE: int = 500
 
-LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
-
-STATUS_PATH: Path = LOG_DIR / "taskrunner_status.json"
+# where the status snapshot is written and how often. Defined in atlasserver.taskrunner.status so
+# that the web server can read the file without importing this module; referenced through that
+# module rather than imported by name so that a test patching it is seen by both sides.
+LOG_DIR: Path = runnerstatus.LOG_DIR
 
 
 def mjdnow() -> float:
@@ -450,6 +449,25 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     return localresultfile, None
 
 
+def mark_finished(task, error_msg: str | None) -> None:
+    """Record that a task has finished, in the database and on the in-memory instance.
+
+    The database write has to be a queryset update rather than a save(): `task` is a copy read when
+    the queue was scanned, and saving it would write back every other column as it was then.
+
+    The same values are then applied to the instance, because notify_finished() reports on it. Until
+    this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
+    had actually happened, because the instance still held the values it was loaded with.
+    """
+    finishtimestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+
+    Task.objects.filter(pk=task.id).update(finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg)
+
+    task.finishtimestamp = finishtimestamp
+    task.queuepos_relative = None
+    task.error_msg = error_msg
+
+
 def notify_finished(task, logfunc) -> None:
     """Tell the submitter that a task finished, by callback and/or email.
 
@@ -572,10 +590,11 @@ def write_status(procs_taskids: dict[int, int], numslots: int) -> None:
     }
 
     try:
-        STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmppath = STATUS_PATH.with_suffix(".tmp")
+        statuspath = runnerstatus.STATUS_PATH
+        statuspath.parent.mkdir(parents=True, exist_ok=True)
+        tmppath = statuspath.with_suffix(".tmp")
         tmppath.write_text(json.dumps(status))
-        tmppath.replace(STATUS_PATH)
+        tmppath.replace(statuspath)
     except OSError as ex:
         # the status file is diagnostic only; failing to write it must never stop the runner
         log_general(f"WARNING: could not write status file: {ex}")
@@ -630,22 +649,13 @@ def do_task(task, slotid: int) -> None:
             # minor planet center object name or no data returned)
             logfunc(f"Error_msg: {error_msg}")
 
-            Task.objects.all().filter(pk=task.id).update(
-                finishtimestamp=datetime.datetime.now(datetime.UTC)
-                .replace(tzinfo=datetime.UTC, microsecond=0)
-                .isoformat(),
-                queuepos_relative=None,
-                error_msg=error_msg,
-            )
+            mark_finished(task=task, error_msg=error_msg)
 
             notify_finished(task=task, logfunc=logfunc)
 
         elif localresultfile and localresultfile.exists():
             # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-            Task.objects.all().filter(pk=task.id).update(
-                finishtimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
-                queuepos_relative=None,
-            )
+            mark_finished(task=task, error_msg=None)
 
             notify_finished(task=task, logfunc=logfunc)
 
@@ -820,7 +830,7 @@ def main() -> None:
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
         )
 
-        if (time.perf_counter() - last_statustime) >= STATUS_WRITE_SECONDS:
+        if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             last_statustime = time.perf_counter()
             write_status(procs_taskids=procs_taskids, numslots=numslots)
 

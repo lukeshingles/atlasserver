@@ -84,7 +84,10 @@ form#newrequest li>*:nth-child(1) {
 
 form#newrequest li>*:nth-child(2) {
   text-align: left;
-  width: 15em;
+  /* max-width, not width: 15em is wider than the usable width of a phone screen once the 5em label
+     beside it is counted, and a fixed width there made the whole request form scroll sideways */
+  max-width: 15em;
+  width: 100%;
 }
 
 form#newrequest input,
@@ -143,6 +146,45 @@ ul.tasks div.rightside {
   text-align: right;
 }
 
+img.previewimage {
+  display: block;
+  margin-top: 1em;
+  margin-left: 1em;
+}
+
+/* the per-task status line and error text, which used to be written as inline styles in
+   tasklist.jsx and so could not be adjusted without rebuilding the bundle */
+.taskstatus {
+  font-style: italic;
+  margin-top: 1em;
+}
+
+.taskstatus.running {
+  color: red;
+}
+
+p.taskerror {
+  color: black;
+  font-weight: bold;
+  margin-top: 1em;
+}
+
+/* the task runner health line, from /taskrunnerstatus.json */
+p.runnerstatus {
+  color: #737373;
+  font-size: 0.85em;
+  margin-bottom: 0.5em;
+}
+
+p.runnerstatus.stale {
+  background-color: #fcf8e3;
+  border: 1px solid #faebcc;
+  border-radius: 0.3em;
+  color: #8a6d3b;
+  font-size: 1em;
+  padding: 0.7em 1em;
+}
+
 .results {
   background-color: #ef4e19;
   border-color: #e59400;
@@ -162,6 +204,46 @@ li.task .btn:not(.btn-sm) {
 ul {
   list-style: none;
   padding: 0;
+}
+
+/* Controls that run JavaScript are <button>, not <a> without an href: a hrefless link is not
+   focusable, so the filter tabs, the pager and the help toggle could not be reached by keyboard and
+   were invisible to assistive technology. These rules give the buttons the appearance the links
+   had; bootstrap's .btn classes already cover <button>, so only the pager and the inline text
+   toggle need anything here. */
+.pager li>button {
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-radius: 15px;
+  color: #337ab7;
+  display: inline-block;
+  padding: 5px 14px;
+}
+
+.pager li>button:hover,
+.pager li>button:focus {
+  background-color: #eee;
+  text-decoration: underline;
+}
+
+button.linkbutton {
+  background: none;
+  border: none;
+  color: #337ab7;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+button.linkbutton:hover,
+button.linkbutton:focus {
+  text-decoration: underline;
+}
+
+/* the emoji reset control next to the MJD min field. Sized to the emoji rather than inheriting the
+   15em field width from the form#newrequest nth-child rule below. */
+button.resetbutton {
+  padding: 0.2em 0.4em;
 }
 
 /* the active class is set in base.html: a CSS file is not rendered by the template engine, so
@@ -324,6 +406,82 @@ table.countrystats th[scope="row"] {
   }
 
   div.newrequest form {
-    width: 28em;
+    /* was a fixed 28em (~475px at this font size), which overflowed every phone screen */
+    max-width: 28em;
+    width: 100%;
+  }
+}
+
+/* Below this width there is no room for a 5em label beside its field, so they stack. The navbar
+   logo is also given a size that leaves the navigation on the first screen rather than pushing it
+   down past a 118px image. */
+@media (max-width: 640px) {
+
+  form#newrequest li>*:nth-child(1),
+  form#newrequest li>*:nth-child(2) {
+    display: block;
+    margin-right: 0;
+    max-width: none;
+    text-align: left;
+    width: 100%;
+  }
+
+  form#newrequest li>input[type=checkbox]:nth-child(1) {
+    display: inline-block;
+    width: auto;
+  }
+
+  form#newrequest li>label:nth-child(2) {
+    display: inline-block;
+    width: auto;
+  }
+
+  /* form#newrequest li>* makes every child inline-block, which once the field above is full width
+     leaves the date caption sharing a line with the reset button */
+  form#newrequest p.inputisodate {
+    display: block;
+    padding-left: 0;
+    width: 100%;
+  }
+
+  /* Bootstrap stacks navbar items one per line below its own breakpoint, and this navbar has no
+     collapse toggle, so the eight links plus a floated 118px logo filled an entire phone screen
+     before any content. Lay the brand out on its own line and let the links wrap inline. */
+  .navbar-brand {
+    display: block;
+    float: none;
+    height: auto;
+    padding: 5px 0;
+  }
+
+  .navbar-brand img {
+    height: 56px;
+  }
+
+  ul.nav {
+    margin: 0;
+    padding-top: 0;
+  }
+
+  .navbar-nav>li {
+    display: inline-block;
+    float: none;
+  }
+
+  .navbar-nav>li>a {
+    padding: 6px 8px;
+  }
+
+  .navbar-nav.pull-right {
+    float: none !important;
+  }
+
+  ul.logos img {
+    height: auto;
+    max-width: 45%;
+  }
+
+  table {
+    margin: 1em 0;
   }
 }

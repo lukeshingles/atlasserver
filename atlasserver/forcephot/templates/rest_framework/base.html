@@ -9,6 +9,9 @@
 
       {% block meta %}
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+        {# without this a phone lays the page out at 980px and then zooms out, so the text is #}
+        {# unreadable and none of the responsive rules in main.css ever apply #}
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="NONE,NOARCHIVE" />
       {% endblock %}
 
@@ -61,7 +64,7 @@
           <div class="container">
             <span>
               {% block branding %}
-                <a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'><img src="{% static "images/logos/atlas_logo.svg" %}" /></a>
+                <a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'><img src="{% static "images/logos/atlas_logo.svg" %}" alt="ATLAS Forced Photometry home" /></a>
               {% endblock %}
             </span>
 
