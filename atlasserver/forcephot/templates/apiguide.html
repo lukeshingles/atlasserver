@@ -98,6 +98,31 @@ print(dfresult)
 
 <p>A complete Python example script for the API can be downloaded from <a href="{% static "apiexample.py" %}">apiexample.py</a>.</p>
 
+<h3>Being notified instead of polling</h3>
+
+<p>Rather than polling the task URL until it finishes, a task can carry a <code>callback_url</code>. When the task completes, the server sends it a single POST with a JSON body. The URL must be <code>https</code> and must resolve to a public address. Redirects are not followed, and the callback is attempted once and not retried, so treat it as a hint to fetch the result rather than as the result itself.</p>
+<pre><code>resp = s.post(f"{BASEURL}/queue/", headers=headers, data={
+    'ra': 44, 'dec': 22, 'mjd_min': 59248.,
+    'callback_url': 'https://example.org/my-atlas-hook'})
+</code></pre>
+
+<p>The body posted to that URL looks like:</p>
+<pre><code>{
+    "task_id": 12345,
+    "task_url": "https://fallingstar-data.com/forcedphot/queue/12345/",
+    "request_type": "FP",
+    "finishtimestamp": "2026-07-31T12:00:00+00:00",
+    "error_msg": None,
+    "success": True,
+}
+</code></pre>
+
+<h3>Queue positions and machine-readable schema</h3>
+
+<p>To check where your queued tasks sit without fetching the whole task list, GET <code>{BASEURL}/queuepositions.json</code>. It returns a mapping of task id to queue position (0 is next to run).</p>
+
+<p>An OpenAPI 3 schema for this API is generated from the server code and served at <a href="{% url 'schema' %}">/api/schema/</a>, with a browsable version at <a href="{% url 'swagger-ui' %}">/api/docs/</a>.</p>
+
 <p>For plotting the output text files, David Young has provided a <a href="https://github.com/thespacedoctor/plot-results-from-atlas-force-photometry-service">Python plot script</a>.</p>
 
 <p>If you notice any issues with the data or this website, please <a href="https://github.com/lukeshingles/atlasserver/issues">report an issue on GitHub</a> or for urgent/security matters email <a href="mailto:luke.shingles@gmail.com">Luke Shingles</a>. This is an open-source volunteer project and feature requests may be considered as time allows.</p>

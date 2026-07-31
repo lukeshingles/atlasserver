@@ -21,7 +21,7 @@ dependencies = [
     "bokeh~=3.9.2",
     "django-filter>=25.2",
     "djangorestframework>=3.17.0",
-    "djangorestframework-stubs>=3.16.8",
+    "drf-spectacular>=0.28.0",
     "fundamentals>=2.6.4",
     "geoip2>=5.2.0",
     "julian>=0.14",
@@ -37,6 +37,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "coverage>=7.6.0",
+    "djangorestframework-stubs>=3.16.8",
     "django-stubs[compatible-mypy]>=6.0.5",
     "mypy>=2.0",
     "pip>=26.1.2",
@@ -56,6 +58,23 @@ Repository = "https://github.com/lukeshingles/atlasserver"
 [project.scripts]
 atlaswebserver = 'atlasserver.atlaswebserver:main'
 atlastaskrunner = 'atlasserver.atlastaskrunner:main'
+
+[tool.coverage.run]
+source = ["atlasserver"]
+branch = true
+omit = [
+    "*/migrations/*",
+    "*/tests.py",
+    "atlasserver/plot_atlas_fp.py",  # vendored third-party code
+    "atlasserver/settings*.py",
+    "atlasserver/wsgi.py",
+    "atlasserver/asgi.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if t.TYPE_CHECKING:", "if TYPE_CHECKING:", "raise NotImplementedError"]
 
 [tool.black]
 line-length = 120

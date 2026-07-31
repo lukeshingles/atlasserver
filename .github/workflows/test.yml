@@ -42,6 +42,34 @@ jobs:
             - name: Run prek pre-commit checks
               uses: j178/prek-action@v2
 
+    frontend:
+        name: Frontend tests
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: static/js/queuepage
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v6
+
+            - name: Set up Node
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 22
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run frontend tests
+              run: npm test
+
+            - name: Check the committed bundles are up to date
+              # the built .min.js files are committed and served directly, so a source change that
+              # was never rebuilt would ship stale JavaScript
+              run: |
+                  ./build.sh
+                  git diff --exit-code -- ../*.min.js
+
     test:
         name: Run tests
         environment: test
@@ -52,6 +80,10 @@ jobs:
             ATLASSERVER_DJANGO_MYSQL_PASSWORD: root
             ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
             ATLASSERVER_DJANGO_SECRET_KEY: ${{secrets.ATLASSERVER_DJANGO_SECRET_KEY}}
+            # settings_test defaults to SQLite so that the suite runs on a developer machine with
+            # no MySQL server; CI opts back in to the engine used in production
+            ATLASSERVER_TEST_DB: mysql
+            DJANGO_SETTINGS_MODULE: atlasserver.settings_test
 
         # services:
         #     mysql:
@@ -78,9 +110,7 @@ jobs:
                   activate-environment: true
 
             - name: Install atlasserver
-              run: |
-                  cat atlasserver/settings_test.txt >> atlasserver/settings.py
-                  uv pip install -e .
+              run: uv pip install -e .
 
             - name: Install geoip databases
               # the script now exits non-zero when a download fails (so cron notices a stale
@@ -96,12 +126,20 @@ jobs:
                   sudo /etc/init.d/mysql start
                   echo "mysql started"
                   mysql -e "CREATE DATABASE ${{env.ATLASSERVER_DJANGO_MYSQL_DBNAME}};" -u${{env.ATLASSERVER_DJANGO_MYSQL_USER}} -p${{env.ATLASSERVER_DJANGO_MYSQL_PASSWORD}}
+                  # migrations are not tracked in this repository (see migrations/.gitignore), so
+                  # they are generated from the models here and on deployment
                   ./manage.py makemigrations
                   ./manage.py migrate
 
             - name: Run Django Tests
               run: |
-                  ./manage.py test
+                  uv run -- coverage run ./manage.py test
+
+            - name: Coverage report
+              if: always()
+              run: |
+                  uv run -- coverage report
+                  uv run -- coverage xml
 
             - name: Start and stop server
               run: |

@@ -24,6 +24,8 @@ from django.urls import include
 from django.urls import path
 from django.urls import re_path
 from django.views.generic.base import TemplateView
+from drf_spectacular.views import SpectacularAPIView
+from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework import routers
 
 from atlasserver.forcephot import views
@@ -50,6 +52,8 @@ urlpatterns = [
         TemplateView.as_view(template_name="resultdesc.html", extra_context={"name": "Output Description"}),
         name="resultdesc",
     ),
+    path("queuepositions.json", views.queuepositions, name="queuepositions"),
+    path("taskrunnerstatus.json", views.taskrunnerstatus, name="taskrunnerstatus"),
     path("stats/", views.stats, name="stats"),
     path("stats/shortterm.html", views.statsshortterm, name="statsshortterm"),
     path("stats/longterm.html", views.statslongterm, name="statslongterm"),
@@ -65,6 +69,8 @@ urlpatterns = [
         TemplateView.as_view(template_name="apiguide.html", extra_context={"name": "API Guide"}),
         name="apiguide",
     ),
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api-token-auth/", rest_framework.authtoken.views.obtain_auth_token),
     path("robots.txt", TemplateView.as_view(template_name="robots.txt", content_type="text/plain")),
 ]

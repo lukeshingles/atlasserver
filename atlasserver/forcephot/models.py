@@ -17,6 +17,11 @@ def get_mjd_min_default():
     return round(datetime_to_mjd(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=30)), 5)
 
 
+# marks a memoised value that has not been computed yet. None is a meaningful result for every
+# value memoised below, so it cannot double as the "not computed" marker.
+UNSET: t.Final = object()
+
+
 class Task(models.Model):
     class RequestType(models.TextChoices):
         FP = "FP", "Forced Photometry Data"
@@ -54,6 +59,16 @@ class Task(models.Model):
         null=True, blank=True, default=None, max_length=512, verbose_name="Error messages during execution"
     )
     is_archived = models.BooleanField(default=False)
+    # optional completion callback for API clients, which are not sent result emails and would
+    # otherwise have to poll. Validated on submission and again before the request is sent, see
+    # atlasserver.forcephot.webhooks.
+    callback_url = models.URLField(
+        null=True,
+        blank=True,
+        default=None,
+        max_length=500,
+        verbose_name="Completion callback URL (API only)",
+    )
     radec_epoch_year = models.DecimalField(
         null=True, blank=True, max_digits=7, decimal_places=1, verbose_name="Epoch year"
     )
@@ -80,6 +95,26 @@ class Task(models.Model):
 
     id: int
     user_id: int
+
+    # per-instance memoisation slots, declared as class attributes so that no __init__ override is
+    # needed. Model instances do not outlive a request, so a stale entry is not a concern.
+    _localresultfile_cache: t.Any = UNSET
+    _imagerequest_cache: t.Any = UNSET
+
+    class Meta:
+        indexes = [
+            # the task list: filter on (is_archived, user), order by (-timestamp, -id)
+            models.Index(fields=["is_archived", "user", "-timestamp", "-id"], name="task_userlist_idx"),
+            # the task runner's queue scan and the queuepos aggregate: unfinished and not archived,
+            # ordered by queue position
+            models.Index(fields=["finishtimestamp", "is_archived", "queuepos_relative"], name="task_queue_idx"),
+            # Task._imagerequest_task(): the live image request belonging to a parent task
+            models.Index(fields=["parent_task", "is_archived", "id"], name="task_imagereq_idx"),
+            # the hourly maintenance sweeps, which select by type and finish time
+            models.Index(fields=["request_type", "finishtimestamp"], name="task_maint_idx"),
+            # the usage statistics views, which window on submission time
+            models.Index(fields=["timestamp"], name="task_timestamp_idx"),
+        ]
 
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
@@ -121,13 +156,20 @@ class Task(models.Model):
         return f"results/job{int_id:05d}"
 
     def localresultfile(self) -> str | None:
-        """Return the relative path to the FP data file if the job is finished, and the file exists."""
-        if self.finishtimestamp:
-            resultfile = f"{self.localresultfileprefix()}.txt"
-            if Path(settings.STATIC_ROOT, resultfile).exists():
-                return resultfile
+        """Return the relative path to the FP data file if the job is finished, and the file exists.
 
-        return None
+        The answer is memoised on the instance: serialising one task asks for it twice (once for
+        the result URL and once for the PDF plot URL), and each miss costs a filesystem stat.
+        """
+        if self._localresultfile_cache is UNSET:
+            resultfile = None
+            if self.finishtimestamp:
+                relpath = f"{self.localresultfileprefix()}.txt"
+                if Path(settings.STATIC_ROOT, relpath).exists():
+                    resultfile = relpath
+            self._localresultfile_cache = resultfile
+
+        return self._localresultfile_cache
 
     @property
     def localresultpreviewimagefile(self) -> str | None:
@@ -161,8 +203,22 @@ class Task(models.Model):
 
         A parent can end up with more than one live image request (e.g. a double-clicked
         button), so order the query to make sure that every caller agrees on which one it is.
+
+        Serialising one task asks for this three times (imagerequest_task_id, imagerequest_finished,
+        and the imagerequest URL), so the result is memoised. When the caller prefetched the
+        relation (see PREFETCH_IMAGEREQUESTS), the whole page costs one query instead of one per
+        task.
         """
-        return Task.objects.filter(parent_task_id=self.id, is_archived=False).order_by("id").first()
+        prefetched = getattr(self, "live_imagerequests", None)
+        if prefetched is not None:
+            return prefetched[0] if prefetched else None
+
+        if self._imagerequest_cache is UNSET:
+            self._imagerequest_cache = (
+                Task.objects.filter(parent_task_id=self.id, is_archived=False).order_by("id").first()
+            )
+
+        return self._imagerequest_cache
 
     @property
     def imagerequest_task_id(self) -> int | None:
@@ -176,21 +232,28 @@ class Task(models.Model):
         imagerequest = self._imagerequest_task()
         return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
 
+    @staticmethod
+    def min_queuepos_relative() -> int:
+        """Return the lowest queue position currently assigned, or 0 if the queue is empty.
+
+        After completing a job, the next job might not have queuepos_relative=0 until a queue order
+        refresh is done, so queuepos_relative=1 could have queuepos 0 (is next).
+
+        This does not depend on any particular task, so a caller serialising many tasks should call
+        it once rather than once per task (see ForcePhotTaskSerializer.min_queuepos_relative).
+        """
+        minqueuepos = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
+            Min("queuepos_relative")
+        )["queuepos_relative__min"]
+
+        return 0 if minqueuepos is None else int(minqueuepos)
+
     @property
     def queuepos(self) -> int | None:
         if self.finishtimestamp or self.queuepos_relative is None:
             return None
 
-        # after completing a job, the next job might not have queuepos_relative=0 until a queue order refresh is done
-        # so queuepos_relative=1 could have queuepos 0 (is next)
-        minqueuepos = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
-            Min("queuepos_relative")
-        )["queuepos_relative__min"]
-
-        if minqueuepos is None:
-            minqueuepos = 0
-
-        return self.queuepos_relative - int(minqueuepos)
+        return self.queuepos_relative - Task.min_queuepos_relative()
 
     def finished(self) -> bool:
         return bool(self.finishtimestamp)
@@ -213,8 +276,21 @@ class Task(models.Model):
     def username(self) -> str:
         return self.user.username
 
-    def delete(self, using: t.Any | None = None, keep_parents: bool = False):
-        # cleanup associated files when removing a task object from the database
+    @staticmethod
+    def prefetch_imagerequests() -> models.Prefetch:
+        """Return the prefetch that lets _imagerequest_task() answer without a query per task."""
+        return models.Prefetch(
+            "imagerequest",
+            queryset=Task.objects.filter(is_archived=False).order_by("id"),
+            to_attr="live_imagerequests",
+        )
+
+    def delete_result_files(self) -> None:
+        """Delete the result files belonging to this task.
+
+        Split out of delete() so that the maintenance sweep can reclaim the files of many tasks and
+        then update or remove their rows in one statement, instead of one write per task.
+        """
         if self.request_type == "IMGZIP":
             if zipfile := self.localresultimagezipfile:
                 Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
@@ -239,10 +315,19 @@ class Task(models.Model):
             for ext in delete_extlist:
                 Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
 
+    def forget_derived_cache(self) -> None:
+        """Drop the cached plot data generated from this task's result file."""
+        caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
+
+    def delete(self, using: t.Any | None = None, keep_parents: bool = False):
+        # cleanup associated files when removing a task object from the database
+        self.delete_result_files()
+
         # keep finished jobs in the database but mark them as archived and hide them from the website
         if self.finished():
             self.is_archived = True
-            self.save()
-            caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
+            # only the one column changed, so there is no reason to rewrite every other one
+            self.save(update_fields=["is_archived", "task_modified_datetime"])
+            self.forget_derived_cache()
         else:
             super().delete(using=using, keep_parents=keep_parents)

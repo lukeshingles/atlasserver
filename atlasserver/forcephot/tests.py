@@ -1,9 +1,14 @@
 import datetime
 import itertools
 import json
+import socket
+import subprocess
 import tempfile
+import threading
+import urllib.error
 from pathlib import Path
 from unittest import mock
+from unittest import skipUnless
 
 from django.conf import settings
 
@@ -11,8 +16,12 @@ from django.conf import settings
 from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
 from django.core import mail as django_mail
 from django.core.cache import caches
+from django.db import connection
+from django.db import models
 from django.test import override_settings
 from django.test import TestCase
+from django.test import TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.serializers import ValidationError
@@ -21,6 +30,10 @@ from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.views import calculate_queue_positions
+from atlasserver.forcephot.webhooks import CallbackUrlError
+from atlasserver.forcephot.webhooks import send_task_callback
+from atlasserver.forcephot.webhooks import validate_callback_url
+from atlasserver.taskrunner import main as taskrunner_main
 
 
 class TaskQueueTests(TestCase):
@@ -241,6 +254,212 @@ class PaginationTests(TestCase):
         page2 = self.get_json(page1["next"])
         assert page2["pagefirsttaskposition"] == 6
         assert len(page2["results"]) == 4
+
+
+class TaskListQueryCountTests(TestCase):
+    """Pin the number of database queries a task list response costs.
+
+    The queue page polls this endpoint every 2 seconds per open tab, so a per-task query added by
+    a new SerializerMethodField multiplies straight into the server's steady-state load. These
+    numbers are an upper bound, not a target: lowering them is fine, raising them needs a reason.
+    """
+
+    # one page holds settings.REST_FRAMEWORK["PAGE_SIZE"] tasks
+    QUERY_BUDGET = 12
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="counter", email="q@example.com", password=None)
+
+    def get_list(self):
+        return self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json")
+
+    def test_query_count_does_not_grow_with_page_size(self) -> None:
+        # the point of the prefetching is that a page of many tasks costs the same as a page of one
+        self.client.force_login(self.user)
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        with CaptureQueriesContext(connection) as onetask:
+            assert self.get_list().status_code == 200
+
+        for _ in range(20):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        with CaptureQueriesContext(connection) as manytasks:
+            assert self.get_list().status_code == 200
+
+        assert len(manytasks) == len(onetask), (
+            f"a full page cost {len(manytasks)} queries vs {len(onetask)} for a single task"
+            f" — something runs per task:\n" + "\n".join(q["sql"] or "" for q in manytasks)
+        )
+
+    def test_query_count_is_within_budget(self) -> None:
+        self.client.force_login(self.user)
+        for _ in range(20):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        with CaptureQueriesContext(connection) as queries:
+            assert self.get_list().status_code == 200
+
+        assert len(queries) <= self.QUERY_BUDGET, f"{len(queries)} queries:\n" + "\n".join(
+            q["sql"] or "" for q in queries
+        )
+
+    def test_finished_tasks_with_image_requests_do_not_add_queries(self) -> None:
+        # imagerequest_task_id, imagerequest_finished and the imagerequest URL all resolve the same
+        # relation, and each used to be a separate query
+        self.client.force_login(self.user)
+        for _ in range(6):
+            parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+            Task.objects.create(
+                user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent, finishtimestamp=None
+            )
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.get_list()
+
+        assert response.status_code == 200
+        assert len(queries) <= self.QUERY_BUDGET, f"{len(queries)} queries:\n" + "\n".join(
+            q["sql"] or "" for q in queries
+        )
+
+    def test_queue_positions_are_still_correct(self) -> None:
+        # the queue offset is now computed once per response instead of once per task, so check the
+        # values it produces still match the model property
+        self.client.force_login(self.user)
+        for _ in range(3):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        calculate_queue_positions()
+        # a non-zero offset: the lowest assigned position is not 0
+        Task.objects.all().update(queuepos_relative=models.F("queuepos_relative") + 5)
+
+        results = self.get_list().json()["results"]
+
+        assert results
+        for row in results:
+            assert row["queuepos"] == Task.objects.get(id=row["id"]).queuepos
+        assert min(row["queuepos"] for row in results) == 0
+
+
+class TaskListEtagTests(TestCase):
+    """The queue page polls every 2 seconds, so an unchanged page must be answerable with a 304.
+
+    The etag used to mix in a wall-clock timestamp and aggregate over every user's tasks, so it
+    changed at least once a minute and on any other user's activity. It also has to notice a
+    reordering, which calculate_queue_positions() performs with a queryset .update() that does not
+    touch the auto_now field.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="etagger", email="e@example.com", password=None)
+        self.other = User.objects.create_user(username="etagother", email="e2@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def get_list(self, etag=None):
+        headers = {"HTTP_IF_NONE_MATCH": etag} if etag else {}
+        return self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json", **headers)
+
+    def test_unchanged_list_returns_304(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        first = self.get_list()
+        assert first.status_code == 200
+        assert first["ETag"]
+
+        assert self.get_list(etag=first["ETag"]).status_code == 304
+
+    def test_etag_is_quoted(self) -> None:
+        # an unquoted ETag is not a valid entity-tag, and intermediaries may reject or rewrite it
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        etag = self.get_list()["ETag"]
+        assert etag.startswith('"'), etag
+        assert etag.endswith('"'), etag
+
+    def test_another_users_activity_does_not_invalidate_the_etag(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        etag = self.get_list()["ETag"]
+
+        Task.objects.create(user=self.other, ra=3.0, dec=4.0)
+
+        assert self.get_list(etag=etag).status_code == 304
+
+    def test_own_new_task_invalidates_the_etag(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        etag = self.get_list()["ETag"]
+
+        Task.objects.create(user=self.user, ra=3.0, dec=4.0)
+
+        assert self.get_list(etag=etag).status_code == 200
+
+    def test_own_task_finishing_invalidates_the_etag(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        etag = self.get_list()["ETag"]
+
+        task.finishtimestamp = timezone.now()
+        task.save()
+
+        assert self.get_list(etag=etag).status_code == 200
+
+    def test_a_child_image_request_finishing_invalidates_the_etag(self) -> None:
+        # imagerequest_finished is rendered on the parent's row, but the child may be on another
+        # page, so a per-page-rows etag would miss this
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        child = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
+        etag = self.get_list()["ETag"]
+
+        child.finishtimestamp = timezone.now()
+        child.save()
+
+        assert self.get_list(etag=etag).status_code == 200
+
+    def test_another_users_submission_that_reorders_this_user_invalidates_the_etag(self) -> None:
+        """A round-robin renumbering that moves this user's task must not be served from cache.
+
+        This user's two tasks start at positions 0 and 1. When the other user submits, the second
+        pass pushes this user's second task to position 2 while the front of the queue stays at 0 —
+        so neither the queue offset nor any of this user's own timestamps move on their own.
+        calculate_queue_positions() has to write task_modified_datetime for the change to be seen.
+        """
+        mine = [Task.objects.create(user=self.user, ra=1.0, dec=2.0) for _ in range(2)]
+        calculate_queue_positions()
+        etag = self.get_list()["ETag"]
+
+        before = Task.objects.get(id=mine[1].id).queuepos_relative
+        Task.objects.create(user=self.other, ra=3.0, dec=4.0)
+        calculate_queue_positions()
+
+        assert Task.objects.get(id=mine[1].id).queuepos_relative != before, "the test did not reorder anything"
+        assert Task.min_queuepos_relative() == 0, "the queue offset moved, so this tests the wrong mechanism"
+        assert self.get_list(etag=etag).status_code == 200
+
+    def test_a_direct_reordering_invalidates_the_etag(self) -> None:
+        # the queue offset covers a renumbering that moves the front of the queue
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        calculate_queue_positions()
+        etag = self.get_list()["ETag"]
+
+        Task.objects.filter(user_id=self.user.pk).update(queuepos_relative=models.F("queuepos_relative") + 3)
+
+        assert self.get_list(etag=etag).status_code == 200
+
+    def test_304_costs_fewer_queries_than_a_full_response(self) -> None:
+        for _ in range(6):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        etag = self.get_list()["ETag"]
+
+        with CaptureQueriesContext(connection) as notmodified:
+            assert self.get_list(etag=etag).status_code == 304
+        with CaptureQueriesContext(connection) as full:
+            assert self.get_list().status_code == 200
+
+        assert len(notmodified) < len(full), (len(notmodified), len(full))
+
+    def test_detail_view_also_supports_conditional_requests(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        response = self.client.get(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+        assert response.status_code == 200
+        etag = response["ETag"]
+
+        conditional = self.client.get(
+            reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json", HTTP_IF_NONE_MATCH=etag
+        )
+        assert conditional.status_code == 304
 
 
 class TaskStrTests(TestCase):
@@ -671,6 +890,534 @@ class AllowedHostsTests(TestCase):
         assert response.status_code == 302, response.status_code
         assert len(django_mail.outbox) == 1
         assert "fallingstar-data.com" in django_mail.outbox[0].body
+
+
+@override_settings(DEBUG=False)
+class CallbackUrlValidationTests(TestCase):
+    """The callback URL is user-supplied and the server fetches it, so this is an SSRF boundary.
+
+    DEBUG is forced off because the validator deliberately relaxes both the scheme and the address
+    checks in development, where the callback target is usually on the developer's own machine.
+    """
+
+    def assert_rejected(self, url: str) -> None:
+        try:
+            validate_callback_url(url)
+        except CallbackUrlError:
+            return
+        msg = f"callback_url should have been rejected: {url!r}"
+        raise AssertionError(msg)
+
+    def test_public_https_url_is_accepted(self) -> None:
+        with mock.patch("socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]):
+            assert validate_callback_url("https://example.com/hook") == "https://example.com/hook"
+
+    def test_plain_http_is_rejected(self) -> None:
+        self.assert_rejected("http://example.com/hook")
+
+    def test_non_http_schemes_are_rejected(self) -> None:
+        for url in ("file:///etc/passwd", "ftp://example.com/x", "gopher://example.com/", "javascript:alert(1)"):
+            self.assert_rejected(url)
+
+    def test_embedded_credentials_are_rejected(self) -> None:
+        self.assert_rejected("https://user:password@example.com/hook")
+
+    def test_loopback_is_rejected(self) -> None:
+        for host in ("localhost", "127.0.0.1", "[::1]"):
+            self.assert_rejected(f"https://{host}/hook")
+
+    def test_private_addresses_are_rejected(self) -> None:
+        # the classic SSRF targets: internal services and the cloud instance metadata endpoint
+        for address in ("10.0.0.5", "192.168.1.1", "172.16.0.1", "169.254.169.254"):
+            self.assert_rejected(f"https://{address}/hook")
+
+    def test_a_public_name_resolving_to_a_private_address_is_rejected(self) -> None:
+        # the check is on the resolved address, not on the name
+        with mock.patch(
+            "socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("169.254.169.254", 443))]
+        ):
+            self.assert_rejected("https://sneaky.example.com/hook")
+
+    def test_unresolvable_host_is_rejected(self) -> None:
+        with mock.patch("socket.getaddrinfo", side_effect=socket.gaierror("nope")):
+            self.assert_rejected("https://does-not-exist.example/hook")
+
+    def test_overlong_url_is_rejected(self) -> None:
+        self.assert_rejected("https://example.com/" + "a" * 600)
+
+    def test_empty_url_is_rejected(self) -> None:
+        self.assert_rejected("")
+
+    def test_the_api_rejects_a_bad_callback_url(self) -> None:
+        user = User.objects.create_user(username="cb", email="cb@example.com", password=None)
+        self.client.force_login(user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 1.0, "dec": 2.0, "callback_url": "http://169.254.169.254/latest/meta-data/"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        assert "callback_url" in response.json(), response.content
+        assert not Task.objects.filter(user_id=user.pk).exists()
+
+
+class CallbackSendingTests(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="cbsend", email="cbs@example.com", password=None)
+
+    def make_task(self, **kwargs):
+        return Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), from_api=True, **kwargs
+        )
+
+    def test_no_callback_url_sends_nothing(self) -> None:
+        with mock.patch("urllib.request.OpenerDirector.open") as opener:
+            assert send_task_callback(task=self.make_task(), logfunc=lambda _msg: None) is False
+        opener.assert_not_called()
+
+    def test_successful_callback_posts_the_task_result(self) -> None:
+        task = self.make_task(callback_url="https://example.com/hook")
+        response = mock.MagicMock()
+        response.status = 200
+        response.__enter__.return_value = response
+
+        with (
+            mock.patch("socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]),
+            mock.patch("urllib.request.OpenerDirector.open", return_value=response) as opener,
+        ):
+            assert send_task_callback(task=task, logfunc=lambda _msg: None) is True
+
+        request = opener.call_args.args[0]
+        assert request.method == "POST"
+        assert request.full_url == "https://example.com/hook"
+        payload = json.loads(request.data)
+        assert payload["task_id"] == task.id
+        assert payload["success"] is True
+
+    def test_a_failing_endpoint_does_not_raise(self) -> None:
+        # the task is already finished and recorded by the time this runs, so a callback failure
+        # must never propagate and take the worker down with it
+        task = self.make_task(callback_url="https://example.com/hook")
+        logged: list[str] = []
+
+        with (
+            mock.patch("socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]),
+            mock.patch("urllib.request.OpenerDirector.open", side_effect=urllib.error.URLError("refused")),
+        ):
+            assert send_task_callback(task=task, logfunc=logged.append) is False
+
+        assert any("failed" in line for line in logged), logged
+
+    def test_a_url_that_became_private_is_not_fetched(self) -> None:
+        # the URL passed validation at submission time, but DNS can change afterwards
+        task = self.make_task(callback_url="https://example.com/hook")
+        logged: list[str] = []
+
+        with (
+            mock.patch("socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("127.0.0.1", 443))]),
+            mock.patch("urllib.request.OpenerDirector.open") as opener,
+        ):
+            assert send_task_callback(task=task, logfunc=logged.append) is False
+
+        opener.assert_not_called()
+        assert any("public address" in line for line in logged), logged
+
+    def test_notify_finished_still_emails_when_the_callback_fails(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        task = Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            finishtimestamp=timezone.now(),
+            from_api=False,
+            send_email=True,
+            callback_url="https://example.com/hook",
+        )
+        django_mail.outbox.clear()
+
+        with mock.patch("atlasserver.taskrunner.main.send_task_callback", side_effect=RuntimeError("boom")):
+            taskrunner_main.notify_finished(task=task, logfunc=lambda _msg: None)
+
+        assert len(django_mail.outbox) == 1, "an exploding callback must not suppress the result email"
+
+
+class QueuePositionsEndpointTests(TestCase):
+    """The cheap endpoint the queue page can poll instead of re-fetching the whole task list."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="qp", email="qp@example.com", password=None)
+        self.other = User.objects.create_user(username="qpother", email="qp2@example.com", password=None)
+
+    def test_requires_login(self) -> None:
+        response = self.client.get(reverse("queuepositions"))
+        assert response.status_code == 302
+        assert reverse("login") in response["Location"]
+
+    def test_reports_positions_matching_the_task_list(self) -> None:
+        # the other user's tasks are interleaved by the round robin, so this user's positions are
+        # not simply 0..n and must agree with what the task list itself would report
+        other_task = Task.objects.create(user=self.other, ra=1.0, dec=2.0)
+        mine = [Task.objects.create(user=self.user, ra=1.0, dec=2.0) for _ in range(2)]
+        calculate_queue_positions()
+        self.client.force_login(self.user)
+
+        data = self.client.get(reverse("queuepositions")).json()
+
+        assert set(data["queuepositions"]) == {str(task.id) for task in mine}, data
+        assert str(other_task.id) not in data["queuepositions"], "another user's task must not be reported"
+        for task in mine:
+            task.refresh_from_db()  # the positions were assigned after these instances were built
+            assert data["queuepositions"][str(task.id)] == task.queuepos
+
+    def test_finished_tasks_are_omitted(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        calculate_queue_positions()
+        self.client.force_login(self.user)
+
+        data = self.client.get(reverse("queuepositions")).json()
+
+        assert list(data["queuepositions"]) == [str(queued.id)]
+
+    def test_is_cheaper_than_the_task_list(self) -> None:
+        for _ in range(6):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        calculate_queue_positions()
+        self.client.force_login(self.user)
+
+        with CaptureQueriesContext(connection) as positions:
+            assert self.client.get(reverse("queuepositions")).status_code == 200
+        with CaptureQueriesContext(connection) as tasklist:
+            assert self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code == 200
+
+        assert len(positions) < len(tasklist), (len(positions), len(tasklist))
+
+
+class TaskRunnerStatusTests(TestCase):
+    def test_missing_status_file_reports_not_running(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+        ):
+            response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert response.json()["running"] is False
+
+    def test_fresh_status_file_reports_running(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
+        Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(taskrunner_main, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16)
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 200, response.content
+        body = response.json()
+        assert body["running"] is True
+        assert body["stale"] is False
+        assert body["slots_busy"] == 1
+        assert body["running_taskids"] == [42]
+        assert body["numslots"] == 16
+        assert body["queued_task_count"] == 1
+        assert body["oldest_queued_task_time"] is not None
+
+    def test_old_status_file_reports_stale(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            stale_written = timezone.now() - datetime.timedelta(hours=1)
+            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
+
+            with mock.patch.object(taskrunner_main, "STATUS_PATH", statuspath):
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert response.json()["stale"] is True
+
+
+class OpenApiSchemaTests(TestCase):
+    def test_schema_generates_without_errors(self) -> None:
+        # the schema is derived from the serializer, so this is what stops the published API
+        # documentation from drifting away from the code
+        response = self.client.get(reverse("schema"))
+
+        assert response.status_code == 200, response.content
+
+    def test_schema_describes_the_queue_endpoint(self) -> None:
+        import yaml
+
+        schema = yaml.safe_load(self.client.get(reverse("schema")).content)
+
+        assert "/queue/" in schema["paths"], sorted(schema["paths"])
+        properties = schema["components"]["schemas"]["ForcePhotTask"]["properties"]
+        for field in ("ra", "dec", "mjd_min", "mjd_max", "callback_url"):
+            assert field in properties, sorted(properties)
+
+
+class AtlasCommandTests(TestCase):
+    """The remote shell command is assembled by string concatenation and run over ssh.
+
+    Nothing else checks it, and a mistake here is only visible in production, so the pieces that
+    have needed a comment to get right are pinned: the 0-valued MJD bound that truthiness used to
+    drop, and the SSOSTACK site list whose quoting decides whether the remote shell sees one
+    argument or five.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="cmd", email="cmd@example.com", password=None)
+
+    def make_task(self, **kwargs) -> Task:
+        kwargs.setdefault("ra", 100.0)
+        kwargs.setdefault("dec", -20.0)
+        return Task.objects.create(user=self.user, **kwargs)
+
+    def fp_command(self, task) -> str:
+        return taskrunner_main.build_fp_command(task, remoteresultfile=Path("~/atlasserver/results/job00001.txt"))
+
+    def test_coordinates_are_passed_as_floats(self) -> None:
+        command = self.fp_command(self.make_task(mjd_min=None))
+        assert "/atlas/bin/force.sh 100.0 -20.0" in command
+        assert "dodb=1 parallel=4" in command
+
+    def test_mpc_name_uses_the_solar_system_script(self) -> None:
+        command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=None))
+        assert "/atlas/bin/ssforce.sh 'Makemake'" in command
+        assert "force.sh" not in command.replace("ssforce.sh", "")
+
+    def test_zero_mjd_min_is_still_passed(self) -> None:
+        # a falsy-but-present bound used to be dropped, silently widening the request
+        assert " m0=0.0" in self.fp_command(self.make_task(mjd_min=0))
+
+    def test_absent_mjd_bounds_are_omitted(self) -> None:
+        command = self.fp_command(self.make_task(mjd_min=None, mjd_max=None))
+        assert " m0=" not in command
+        assert " m1=" not in command
+
+    def test_reduced_images_set_both_the_flag_and_the_image_mode(self) -> None:
+        command = self.fp_command(self.make_task(use_reduced=True, mjd_min=None))
+        assert " red=1" in command
+        assert command.endswith(" red")
+
+    def test_difference_images_are_the_default(self) -> None:
+        command = self.fp_command(self.make_task(mjd_min=None))
+        assert " red=1" not in command
+        assert command.endswith(" diff")
+
+    def test_proper_motion_is_only_sent_when_set(self) -> None:
+        plain = self.fp_command(self.make_task(mjd_min=None))
+        assert "pmra=" not in plain
+        assert "epoch=" not in plain
+
+        moving = self.fp_command(
+            self.make_task(mjd_min=None, radec_epoch_year=2015.5, propermotion_ra=12.5, propermotion_dec=-3.25)
+        )
+        assert " epoch=2015.5" in moving
+        assert " pmra=12.5" in moving
+        assert " pmdec=-3.25" in moving
+
+    def test_tdo_is_only_added_for_test_users(self) -> None:
+        task = self.make_task(mjd_min=None)
+        assert " tdo=1" not in self.fp_command(task)
+
+        # the task runner imports the settings module directly rather than django.conf.settings,
+        # so override_settings does not reach it (as in TaskRunnerResultFileTests)
+        with mock.patch.object(taskrunner_main.settings, "TEST_USERS", [self.user.pk]):
+            assert " tdo=1" in self.fp_command(task)
+
+    def ssostack_command(self, task) -> str:
+        return taskrunner_main.build_ssostack_command(
+            task,
+            remoteresultfile=Path("~/atlasserver/results/job00001.fits"),
+            remotedatafile=Path("~/atlasserver/results/job00001.txt"),
+            remotetaskdir=Path("~/atlasserver/results/task00001"),
+        )
+
+    def test_ssostack_mjds_are_integers(self) -> None:
+        # stack_rock.sh does not accept floating point MJDs
+        task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.4, mjd_max=59100.6)
+        command = self.ssostack_command(task)
+        assert "stack_rock.sh 'Makemake' 59000 59101" in command, command
+
+    def test_ssostack_site_list_is_a_single_shell_word(self) -> None:
+        # the whole command is handed to one remote shell, so escaped quotes would leave literal
+        # characters behind and split the site list into five separate arguments
+        task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.0, mjd_max=59100.0)
+        with mock.patch.object(taskrunner_main.settings, "TEST_USERS", [self.user.pk]):
+            command = self.ssostack_command(task)
+
+        assert " sites='hko mlo chl sth tdo'" in command, command
+        assert "\\'" not in command, command
+
+    def test_ssostack_cleans_up_the_remote_directory(self) -> None:
+        task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.0, mjd_max=59100.0)
+        command = self.ssostack_command(task)
+        assert command.endswith(" rm -rf ~/atlasserver/results/task00001"), command
+
+    def test_result_filename_depends_on_the_request_type(self) -> None:
+        fptask = self.make_task()
+        imgzip = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=fptask)
+        ssostack = self.make_task(ra=None, dec=None, mpc_name="Makemake", request_type="SSOSTACK")
+
+        assert taskrunner_main.remote_result_filename(fptask) == f"job{fptask.id:05d}.txt"
+        # the zip belongs to the parent, because that is the task whose images these are
+        assert taskrunner_main.remote_result_filename(imgzip) == f"job{fptask.id:05d}.zip"
+        assert taskrunner_main.remote_result_filename(ssostack) == f"job{ssostack.id:05d}.fits"
+
+    def test_unknown_request_type_has_no_result_file(self) -> None:
+        task = self.make_task()
+        task.request_type = "NONSENSE"
+        assert taskrunner_main.remote_result_filename(task) is None
+
+
+class RunRsyncTests(TestCase):
+    def test_timeout_kills_the_process_and_reports_no_exit_code(self) -> None:
+        # without a timeout an rsync against a wedged host holds the worker slot forever
+        proc = mock.MagicMock()
+        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="rsync", timeout=1)
+        logged: list[str] = []
+
+        with mock.patch("subprocess.Popen", return_value=proc):
+            result = taskrunner_main.run_rsync(["rsync", "a", "b"], logged.append)
+
+        assert result is None
+        proc.kill.assert_called_once()
+        proc.wait.assert_called_once()  # reaped, so no zombie is left behind
+        assert any("timed out" in line for line in logged), logged
+
+    def test_nonzero_exit_is_reported(self) -> None:
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "rsync: connection unexpectedly closed")
+        proc.returncode = 12
+        logged: list[str] = []
+
+        with mock.patch("subprocess.Popen", return_value=proc):
+            result = taskrunner_main.run_rsync(["rsync", "a", "b"], logged.append)
+
+        assert result == 12
+        assert any("exited with code 12" in line for line in logged), logged
+
+
+class RemoveOldTasksTests(TestCase):
+    """The hourly maintenance sweep, which now writes once per batch rather than once per task."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="sweeper", email="sw@example.com", password=None)
+
+    def make_old_task(self, days: int, **kwargs) -> Task:
+        return Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            finishtimestamp=timezone.now() - datetime.timedelta(days=days),
+            **kwargs,
+        )
+
+    def test_old_tasks_are_archived_and_recent_ones_are_left_alone(self) -> None:
+        old = self.make_old_task(days=200)
+        recent = self.make_old_task(days=1)
+
+        taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
+
+        old.refresh_from_db()
+        recent.refresh_from_db()
+        assert old.is_archived
+        assert not recent.is_archived
+
+    def test_hard_delete_removes_the_rows(self) -> None:
+        self.make_old_task(days=200, is_archived=True, from_api=True)
+        keep = self.make_old_task(days=1, from_api=True)
+
+        taskrunner_main.remove_old_tasks(
+            days_ago=7, harddeleterecord=True, is_archived=True, from_api=True, logfunc=lambda _msg: None
+        )
+
+        assert list(Task.objects.values_list("id", flat=True)) == [keep.id]
+
+    def test_unfinished_tasks_are_never_touched(self) -> None:
+        queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        taskrunner_main.remove_old_tasks(days_ago=0, logfunc=lambda _msg: None)
+
+        queued.refresh_from_db()
+        assert not queued.is_archived
+
+    def test_archiving_is_a_bounded_number_of_queries(self) -> None:
+        # the old loop cost a query for the image request plus a full-row save() per task
+        for _ in range(12):
+            self.make_old_task(days=200)
+
+        with CaptureQueriesContext(connection) as queries:
+            taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
+
+        assert Task.objects.filter(is_archived=True).count() == 12
+        # one batch: ids, load, prefetch, update. Well under one write per task either way.
+        assert len(queries) <= 6, f"{len(queries)} queries:\n" + "\n".join(q["sql"] or "" for q in queries)
+
+    def test_soft_delete_rejects_an_impossible_filter(self) -> None:
+        try:
+            taskrunner_main.remove_old_tasks(days_ago=1, harddeleterecord=False, is_archived=True)
+        except ValueError:
+            return
+        msg = "archiving already-archived tasks is a no-op and must be rejected"
+        raise AssertionError(msg)
+
+
+class QueuePositionConcurrencyTests(TransactionTestCase):
+    """calculate_queue_positions() holds a lock precisely to stop this from producing duplicates.
+
+    TransactionTestCase rather than TestCase: the threads need to see each other's committed work,
+    which the single shared transaction of a TestCase would prevent.
+    """
+
+    @skipUnless(connection.features.has_select_for_update, "select_for_update is not supported on this database")
+    def test_concurrent_recalculations_do_not_produce_duplicate_positions(self) -> None:
+        users = [
+            User.objects.create_user(username=f"conc{i}", email=f"conc{i}@example.com", password=None) for i in range(4)
+        ]
+        for user in users:
+            for _ in range(3):
+                Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        errors: list[BaseException] = []
+
+        def recalculate() -> None:
+            try:
+                calculate_queue_positions()
+            except BaseException as ex:
+                errors.append(ex)
+            finally:
+                connection.close()  # each thread holds its own connection
+
+        threads = [threading.Thread(target=recalculate) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert not errors, errors
+
+        rawpositions = list(
+            Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).values_list(
+                "queuepos_relative", flat=True
+            )
+        )
+        assert None not in rawpositions, rawpositions
+
+        positions = [pos for pos in rawpositions if pos is not None]
+        assert len(set(positions)) == len(positions), f"duplicate queue positions: {sorted(positions)}"
+        assert sorted(positions) == list(range(len(positions))), sorted(positions)
 
 
 class TaskRunnerResultFileTests(TestCase):

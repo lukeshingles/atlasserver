@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+import json
 import operator
 import typing as t
 from pathlib import Path
@@ -36,6 +37,8 @@ from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiResponse
 from geoip2.errors import AddressNotFoundError
 from rest_framework import filters
 from rest_framework import permissions
@@ -95,24 +98,21 @@ def calculate_queue_positions() -> None:
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos: int = 0
         passnum: int = 0
-        # queuepos_updates = []  # for bulk_update()
+        # collected and written in one statement at the end: issuing an UPDATE per task meant a
+        # round trip per task while holding a lock on every queued row, so a deep queue made every
+        # submission slow and serialised concurrent submitters behind it
+        queuepos_updates: dict[int, int] = {}
         while unassigned_taskids:
             useridsassigned_currentpass = set()
 
             if passnum == 0 and runningtaskid is not None:
                 # currently running task will be assigned position 0
-
-                # method 1
-                Task.objects.filter(id=runningtaskid).update(queuepos_relative=0)
-
-                # method 2
-                # queuepos_updates.append((currentlyrunningtaskid, 0))
-
                 try:
                     index = unassigned_taskids.index(runningtaskid)
                     unassigned_taskids.pop(index)
                     unassigned_task_userids.pop(index)
                     useridsassigned_currentpass.add(runningtask_userid)
+                    queuepos_updates[runningtaskid] = 0
                     queuepos = 1
                 except ValueError:  # the task disappeared between the two queries?
                     runningtaskid = None
@@ -125,12 +125,7 @@ def calculate_queue_positions() -> None:
                 if task_userid not in useridsassigned_currentpass and (
                     passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
                 ):
-                    # method 1
-                    Task.objects.filter(id=taskid).update(queuepos_relative=queuepos)
-
-                    # method 2
-                    # queuepos_updates.append((task.id, queuepos))
-
+                    queuepos_updates[taskid] = queuepos
                     useridsassigned_currentpass.add(task_userid)
                     queuepos += 1
                 else:
@@ -144,28 +139,53 @@ def calculate_queue_positions() -> None:
 
             passnum += 1
 
-        # method 2
-        # Task.objects.bulk_update([Task(id=k, queuepos_relative=v) for k, v in queuepos_updates], ["queuepos_relative"])
+        if queuepos_updates:
+            # task_modified_datetime is written explicitly: it is an auto_now field, and auto_now
+            # is applied by Model.save(), not by a bulk write. Without it a reordering would be
+            # invisible to get_tasklist_etag() and a user could be served a stale queue position.
+            now = datetime.datetime.now(datetime.UTC)
+            Task.objects.bulk_update(
+                [
+                    Task(id=taskid, queuepos_relative=newpos, task_modified_datetime=now)
+                    for taskid, newpos in queuepos_updates.items()
+                ],
+                ["queuepos_relative", "task_modified_datetime"],
+            )
 
 
-def get_tasklist_etag(request, queryset) -> str:
-    """Return an etag that will change when the task list changes."""
-    if settings.DEBUG:
-        todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M:%S")
-    else:
-        todaydate = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d %H:%M")
+def get_tasklist_etag(request, user_id: int) -> str:
+    """Return an etag that changes whenever anything the given user's task pages show changes.
 
-    # one aggregate query instead of several. task_modified_datetime (auto_now) is included so
-    # that edits which don't change any of the other timestamps still invalidate the etag
-    lasttimes = Task.objects.aggregate(
-        Max("timestamp"), Max("starttimestamp"), Max("finishtimestamp"), Max("task_modified_datetime")
+    Scoped to one user's tasks rather than the whole table. A global aggregate was invalidated by
+    every other user's activity, so a busy server would almost never produce a 304, and it cost a
+    scan of every row rather than of one user's.
+
+    Aggregating over the user (rather than over the rows of the page being returned) is what makes
+    this cheap: it needs no knowledge of the page, so the caller can answer a conditional request
+    before fetching or serialising anything. It also covers state that a page's own rows do not,
+    such as an IMGZIP child finishing when it is reported on its parent's row but paginated
+    elsewhere.
+    """
+    # one aggregate query for all of it. task_modified_datetime (auto_now) covers edits that change
+    # none of the other timestamps, and the count covers deletions, which move no timestamp at all.
+    # calculate_queue_positions() writes task_modified_datetime explicitly for the same reason: it
+    # renumbers with a queryset .update(), which does not trigger auto_now.
+    usertasks = Task.objects.filter(user_id=user_id).aggregate(
+        Count("id"),
+        Max("timestamp"),
+        Max("starttimestamp"),
+        Max("finishtimestamp"),
+        Max("task_modified_datetime"),
     )
-    last_queued = lasttimes["timestamp__max"]
-    last_started = lasttimes["starttimestamp__max"]
-    last_finished = lasttimes["finishtimestamp__max"]
-    last_modified = lasttimes["task_modified_datetime__max"]
-    taskids = "-".join([str(row.id) for row in queryset])
-    return f"{todaydate}.{request.accepted_renderer.format}.user{request.user.id}.lastqueue{last_queued}.laststart{last_started}.lastfinish{last_finished}.lastmod{last_modified}.tasks{taskids}"
+
+    return (
+        f'"{request.accepted_renderer.format}.user{user_id}.path{request.get_full_path()}'
+        f".count{usertasks['id__count']}.lastqueue{usertasks['timestamp__max']}"
+        f".laststart{usertasks['starttimestamp__max']}.lastfinish{usertasks['finishtimestamp__max']}"
+        f".lastmod{usertasks['task_modified_datetime__max']}"
+        # the queue position rendered for a task is relative to the front of the global queue
+        f'.queueoffset{Task.min_queuepos_relative()}"'
+    )
 
 
 class ForcePhotPermission(permissions.BasePermission):
@@ -199,7 +219,14 @@ class ForcePhotPermission(permissions.BasePermission):
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     """API endpoint that allows force.sh tasks to be created and deleted."""
 
-    queryset = Task.objects.all().order_by("-timestamp", "-id").select_related("user")
+    # the prefetch feeds Task._imagerequest_task(), so serialising a page of tasks costs one query
+    # for the whole page rather than one (in practice three) per task
+    queryset = (
+        Task.objects.all()
+        .order_by("-timestamp", "-id")
+        .select_related("user", "parent_task")
+        .prefetch_related(Task.prefetch_imagerequests())
+    )
     serializer_class = ForcePhotTaskSerializer
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
@@ -328,19 +355,18 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 },
             )
 
+        # answer a conditional request before paginating: an unchanged page then costs one
+        # aggregate instead of a count, a page fetch, a prefetch and a full serialisation.
+        # request.user.pk is not None here: the anonymous case raised PermissionDenied above
+        etag = get_tasklist_etag(request, request.user.pk)
+        if etag == request.META.get("HTTP_IF_NONE_MATCH"):
+            return HttpResponseNotModified()
+
         page = self.paginate_queryset(listqueryset)
+
         if page is not None:
             # if request.GET.get('cursor') and page[0].id == listqueryset[0].id:
             #     return redirect(remove_query_param(request.get_full_path(), 'cursor'))
-            serializer = self.get_serializer(page, many=True)
-        else:
-            serializer = self.get_serializer(listqueryset, many=True)
-
-        if page is not None:
-            etag = get_tasklist_etag(request, page)
-            if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
-                return HttpResponseNotModified()
-
             serializer = self.get_serializer(page, many=True)
             # return self.get_paginated_response(serializer.data)
             paginator = self.paginator
@@ -349,13 +375,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 raise TypeError(msg)
             return paginator.get_paginated_response(serializer.data, headers={"ETag": etag})
 
-        return Response(serializer.data)
+        return Response(self.get_serializer(listqueryset, many=True).data)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance.is_archived:
             return HttpResponseNotFound("Page not found")
-        serializer = self.get_serializer(instance)
 
         if request.accepted_renderer.format == "html":
             # return redirect('/')
@@ -368,24 +393,38 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                 template_name=self.template_name,
                 data={
                     # 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
-                    "name": f"Task {self.get_object().id}",
+                    # self.get_object() again here would repeat the lookup query
+                    "name": f"Task {instance.id}",
                     "singletaskdetail": True,
                     "debug": settings.DEBUG,
                     "api_url_base": request.build_absolute_uri(reverse("task-list")),
                 },
             )
 
-        etag = get_tasklist_etag(request, [instance])
-        if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
+        # scoped to the task's owner, not to request.user: a staff member may be viewing someone
+        # else's task, and their own tasks say nothing about whether this one has changed
+        etag = get_tasklist_etag(request, instance.user_id)
+        if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
-        return Response(serializer.data, headers={"ETag": etag})
+        return Response(self.get_serializer(instance).data, headers={"ETag": etag})
 
 
 class RequestImages(APIView):
     # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
 
+    # this view takes no request body and redirects on success, so the schema generator cannot
+    # infer a serializer for it
+    @extend_schema(
+        request=None,
+        responses={
+            302: OpenApiResponse(description="Image request created; redirects to the task list"),
+            404: OpenApiResponse(description="No such finished forced photometry task"),
+            429: OpenApiResponse(description="Too many image requests already queued"),
+        },
+        summary="Request the images behind a finished forced photometry task",
+    )
     def post(self, request, pk):
         """Create an image request task for a finished forced photometry task.
 
@@ -704,6 +743,56 @@ def statsshortterm(request):
     return render(request, "statsshortterm.html", dictparams)
 
 
+@login_required
+def queuepositions(request):
+    """Return just the queue position of each of the current user's unfinished tasks.
+
+    The queue page polls the full task list every couple of seconds, and most of the time the only
+    thing that has changed is how far up the queue the user's tasks have moved. This endpoint
+    answers that question with two indexed queries and a few hundred bytes, rather than a page of
+    fully serialised tasks and the filesystem stats that go with them.
+    """
+    queueoffset = Task.min_queuepos_relative()
+    positions = Task.objects.filter(
+        user_id=request.user.pk, finishtimestamp__isnull=True, is_archived=False, queuepos_relative__isnull=False
+    ).values_list("id", "queuepos_relative")
+
+    return JsonResponse(
+        {
+            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos in positions},
+            "queueoffset": queueoffset,
+        }
+    )
+
+
+def taskrunnerstatus(request):
+    """Report whether the task runner is alive and what it is doing.
+
+    Reads the snapshot the runner writes every few seconds. `stale` is the field to alert on: it
+    means the runner has not refreshed the file recently, which is what a crashed or wedged runner
+    looks like from outside. The runner writes into its own log directory, which the web server
+    process can read but does not serve, so the file is not reachable as a static asset.
+    """
+    from atlasserver.taskrunner.main import STATUS_PATH
+    from atlasserver.taskrunner.main import STATUS_WRITE_SECONDS
+
+    try:
+        status = json.loads(STATUS_PATH.read_text())
+    except (OSError, ValueError):
+        # never written, unreadable, or half-written despite the atomic rename
+        return JsonResponse({"running": False, "stale": True, "detail": "no status file"}, status=503)
+
+    written = datetime.datetime.fromisoformat(status["written"])
+    age_seconds = (datetime.datetime.now(datetime.UTC) - written).total_seconds()
+    # several missed writes rather than one, so that a slow write does not raise a false alarm
+    stale = age_seconds > (STATUS_WRITE_SECONDS * 4)
+
+    return JsonResponse(
+        {**status, "running": not stale, "stale": stale, "status_age_seconds": round(age_seconds, 1)},
+        status=503 if stale else 200,
+    )
+
+
 def stats(request):
     dictparams = {
         "name": "Usage Statistics",
@@ -748,6 +837,27 @@ def change_email(request):
         form = EmailChangeForm(request.user)
 
     return render(request, "registration/email_change_form.html", {"form": form, "success": success})
+
+
+_plotscript_cache: dict[Path, tuple[float, int, str]] = {}
+
+
+def read_plotscript(path: Path) -> str:
+    """Return the contents of the light curve plotting script, re-reading it only when it changes.
+
+    This is appended to every result plot response and deliberately kept outside the generated-data
+    cache, so that a redeployed script takes effect immediately instead of after the cache timeout.
+    Keying on the file's mtime and size preserves that while turning a disk read per request into a
+    stat per request.
+    """
+    stat = path.stat()
+    cached = _plotscript_cache.get(path)
+    if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+
+    contents = path.read_text()
+    _plotscript_cache[path] = (stat.st_mtime, stat.st_size, contents)
+    return contents
 
 
 def resultplotdatajs(request, taskid):
@@ -868,7 +978,7 @@ def resultplotdatajs(request, taskid):
         # the plotting code is appended outside of the cache, so that a redeployed
         # lightcurveplotly script takes effect immediately rather than after the cache timeout
         plotscript = "js/queuepage/src/lightcurveplotly.js" if settings.DEBUG else "js/lightcurveplotly.min.js"
-        strjs += Path(settings.STATIC_ROOT, plotscript).read_text()
+        strjs += read_plotscript(Path(settings.STATIC_ROOT, plotscript))
 
     return HttpResponse(strjs, content_type="text/javascript", headers={"ETag": etag})
 

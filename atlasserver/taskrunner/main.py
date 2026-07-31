@@ -3,6 +3,8 @@
 
 import contextlib
 import datetime
+import itertools
+import json
 import multiprocessing as mp
 import os
 import smtplib
@@ -33,10 +35,27 @@ django.setup()
 import sys
 
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.webhooks import send_task_callback
 
 TASK_MAXTIME_SECONDS: int = 4 * 3600
 
+# how often a running task asks the database whether it has been cancelled
+CANCEL_CHECK_SECONDS: float = 15.0
+
+# how long the main loop waits between polls of the queue. The longer interval applies once the
+# queue has been seen to be empty, so that an idle server is not querying twice a second all night.
+POLL_INTERVAL_SECONDS: float = 0.5
+IDLE_POLL_INTERVAL_SECONDS: float = 5.0
+
+# how often the runner refreshes the status file read by the /taskrunnerstatus.json endpoint
+STATUS_WRITE_SECONDS: float = 15.0
+
+# how many tasks the maintenance sweep loads, cleans up and writes back at a time
+MAINTENANCE_BATCH_SIZE: int = 500
+
 LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
+
+STATUS_PATH: Path = LOG_DIR / "taskrunner_status.json"
 
 
 def mjdnow() -> float:
@@ -153,6 +172,85 @@ def remove_task_resultfiles(
                 logfunc(f"Deleted {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
 
 
+def remote_result_filename(task) -> str | None:
+    """Return the name of the one file whose absence means the task failed, or None for unknown types.
+
+    A task can produce several files, but this is the one that has to exist.
+    """
+    if task.request_type == "FP":
+        return f"job{task.id:05d}.txt"
+    if task.request_type == "IMGZIP":
+        return f"job{task.parent_task_id:05d}.zip"
+    if task.request_type == "SSOSTACK":
+        return f"job{task.id:05d}.fits"
+
+    return None
+
+
+def build_fp_command(task, remoteresultfile: Path) -> str:
+    """Return the remote shell command for a forced photometry task."""
+    if task.mpc_name:
+        atlascommand = f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
+    else:
+        atlascommand = f"/atlas/bin/force.sh {float(task.ra)} {float(task.dec)}"
+
+    if task.use_reduced:
+        atlascommand += " red=1"
+
+    if task.radec_epoch_year:
+        atlascommand += f" epoch={task.radec_epoch_year}"
+
+    if task.propermotion_ra:
+        atlascommand += f" pmra={task.propermotion_ra}"
+
+    if task.propermotion_dec:
+        atlascommand += f" pmdec={task.propermotion_dec}"
+
+    # "is not None" rather than truthiness, so that an explicit bound of 0 is passed through
+    # instead of being silently dropped
+    if task.mjd_min is not None:
+        atlascommand += f" m0={float(task.mjd_min)}"
+    if task.mjd_max is not None:
+        atlascommand += f" m1={float(task.mjd_max)}"
+
+    atlascommand += " dodb=1 parallel=4"
+
+    # 2026-06-03 KWS Temporary hack. Only specified users can request TDO data.
+    if task.user_id in settings.TEST_USERS:
+        atlascommand += " tdo=1"
+
+    # for debugging because force.sh takes a long time to run
+    # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
+
+    atlascommand += " | sort -n"
+    atlascommand += f" | tee {remoteresultfile}; "
+    atlascommand += f"~/atlas_gettaskimage.py {remoteresultfile}"
+    atlascommand += " red" if task.use_reduced else " diff"
+
+    return atlascommand
+
+
+def build_ssostack_command(task, remoteresultfile: Path, remotedatafile: Path, remotetaskdir: Path) -> str:
+    """Return the remote shell command for a solar system object image stack task."""
+    atlascommand = f"/atlas/bin/stack_rock.sh '{task.mpc_name}'"
+    atlascommand += (  # stack_rock.sh doesn't support float mjds
+        f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
+    )
+    atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
+    atlascommand += f" outdir={remotetaskdir}"
+    # 2026-06-03 KWS Need to add tdo to sites. The whole command is passed to ssh as a single
+    # argument and evaluated by one remote shell, so plain quotes are what's needed here:
+    # escaped quotes end up as literal characters and the site list is split into five arguments.
+    if task.user_id in settings.TEST_USERS:
+        atlascommand += " sites='hko mlo chl sth tdo'"
+    atlascommand += f" | tee {remotedatafile}; "
+    atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
+    atlascommand += f"~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
+    atlascommand += f" rm -rf {remotetaskdir}"
+
+    return atlascommand
+
+
 def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
 
@@ -160,14 +258,8 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
      - resultfilename will be None if it could not be created due to an error
      - error_msg is None unless there was an error that would make retries pointless (e.g. invalid object name)
     """
-    # the task can create multiple files, but if this main one wasn't created, then the task failed
-    if task.request_type == "FP":
-        filename = f"job{task.id:05d}.txt"
-    elif task.request_type == "IMGZIP":
-        filename = f"job{task.parent_task_id:05d}.zip"
-    elif task.request_type == "SSOSTACK":
-        filename = f"job{task.id:05d}.fits"
-    else:
+    filename = remote_result_filename(task)
+    if filename is None:
         return None, None
 
     remoteresultdir = Path("~/atlasserver/results/")
@@ -179,43 +271,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     atlascommand = f"nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
     if task.request_type == "FP":
-        if task.mpc_name:
-            atlascommand += f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
-        else:
-            atlascommand += f"/atlas/bin/force.sh {float(task.ra)} {float(task.dec)}"
-
-        if task.use_reduced:
-            atlascommand += " red=1"
-
-        if task.radec_epoch_year:
-            atlascommand += f" epoch={task.radec_epoch_year}"
-
-        if task.propermotion_ra:
-            atlascommand += f" pmra={task.propermotion_ra}"
-
-        if task.propermotion_dec:
-            atlascommand += f" pmdec={task.propermotion_dec}"
-
-        # "is not None" rather than truthiness, so that an explicit bound of 0 is passed through
-        # instead of being silently dropped
-        if task.mjd_min is not None:
-            atlascommand += f" m0={float(task.mjd_min)}"
-        if task.mjd_max is not None:
-            atlascommand += f" m1={float(task.mjd_max)}"
-
-        atlascommand += " dodb=1 parallel=4"
-
-        # 2026-06-03 KWS Temporary hack. Only specified users can request TDO data.
-        if task.user_id in settings.TEST_USERS:
-            atlascommand += " tdo=1"
-
-        # for debugging because force.sh takes a long time to run
-        # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
-
-        atlascommand += " | sort -n"
-        atlascommand += f" | tee {remoteresultfile}; "
-        atlascommand += f"~/atlas_gettaskimage.py {remoteresultfile}"
-        atlascommand += " red" if task.use_reduced else " diff"
+        atlascommand += build_fp_command(task, remoteresultfile=remoteresultfile)
 
     elif task.request_type == "IMGZIP":
         localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
@@ -237,21 +293,12 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     elif task.request_type == "SSOSTACK":
         remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
-        atlascommand += f"/atlas/bin/stack_rock.sh '{task.mpc_name}'"
-        atlascommand += (  # stack_rock.sh doesn't support float mjds
-            f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
+        atlascommand += build_ssostack_command(
+            task,
+            remoteresultfile=remoteresultfile,
+            remotedatafile=remotedatafile,
+            remotetaskdir=remotetaskdir,
         )
-        atlascommand += f" {float(task.mjd_max) if task.mjd_max else mjdnow():.0f}"
-        atlascommand += f" outdir={remotetaskdir}"
-        # 2026-06-03 KWS Need to add tdo to sites. The whole command is passed to ssh as a single
-        # argument and evaluated by one remote shell, so plain quotes are what's needed here:
-        # escaped quotes end up as literal characters and the site list is split into five arguments.
-        if task.user_id in settings.TEST_USERS:
-            atlascommand += " sites='hko mlo chl sth tdo'"
-        atlascommand += f" | tee {remotedatafile}; "
-        atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
-        atlascommand += f"~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
-        atlascommand += f" rm -rf {remotetaskdir}"
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
@@ -267,6 +314,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     starttime = time.perf_counter()
     lastlogtime = 0.0
+    lastcancelcheck = 0.0
     cancelled = False
     timed_out = False
     while not cancelled and not timed_out:
@@ -274,13 +322,20 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             proc.communicate(timeout=1)
 
         except subprocess.TimeoutExpired:
-            cancelled = not task_exists(taskid=task.id)
-            timed_out = (time.perf_counter() - starttime) >= (
+            now = time.perf_counter()
+            # the cancellation check is a database query, and the 1s communicate() timeout used to
+            # run one per second per slot. Across 16 slots that was ~16 queries/sec forever, and a
+            # single job at the 4 hour limit issued over ten thousand of them. Cancelling a job
+            # that has already been running for minutes is not more urgent than this.
+            if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
+                lastcancelcheck = now
+                cancelled = not task_exists(taskid=task.id)
+            timed_out = (now - starttime) >= (
                 TASK_MAXTIME_SECONDS + 30
             )  # give a little extra time for cleanup after timeout
-            if (time.perf_counter() - lastlogtime) >= 10:
-                logfunc(f"ssh has been running for {time.perf_counter() - starttime:.0f} seconds        ")
-                lastlogtime = time.perf_counter()
+            if (now - lastlogtime) >= 10:
+                logfunc(f"ssh has been running for {now - starttime:.0f} seconds        ")
+                lastlogtime = now
         else:
             break
 
@@ -396,6 +451,21 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     return localresultfile, None
 
 
+def notify_finished(task, logfunc) -> None:
+    """Tell the submitter that a task finished, by callback and/or email.
+
+    Both are best-effort and neither may raise: the task is already marked finished by the time
+    this runs, and an exception here would kill the worker before it could move on.
+    """
+    if task.callback_url:
+        try:
+            send_task_callback(task=task, logfunc=logfunc)
+        except Exception as ex:
+            logfunc(f"ERROR: unexpected failure sending callback for task {task.id}: {ex}")
+
+    send_email_if_needed(task=task, logfunc=logfunc)
+
+
 def send_email_if_needed(task, logfunc) -> None:
     """Send an email to the user if requested and all tasks in the batch are finished."""
     if not task.send_email:
@@ -478,6 +548,40 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
+def write_status(procs_taskids: dict[int, int], numslots: int) -> None:
+    """Write a snapshot of the runner's state for the status endpoint to read.
+
+    Nothing outside the runner could previously tell whether it was alive, how many slots were
+    busy, or whether the queue had stalled — the only signal was the log files. The file is written
+    atomically (write to a temporary name, then rename) so that a reader never sees a partial one.
+    """
+    oldest_queued = (
+        Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
+        .order_by("timestamp")
+        .values_list("timestamp", flat=True)
+        .first()
+    )
+
+    status = {
+        "written": datetime.datetime.now(datetime.UTC).isoformat(),
+        "pid": os.getpid(),
+        "numslots": numslots,
+        "slots_busy": len(procs_taskids),
+        "running_taskids": sorted(procs_taskids.values()),
+        "queued_task_count": Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).count(),
+        "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
+    }
+
+    try:
+        STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmppath = STATUS_PATH.with_suffix(".tmp")
+        tmppath.write_text(json.dumps(status))
+        tmppath.replace(STATUS_PATH)
+    except OSError as ex:
+        # the status file is diagnostic only; failing to write it must never stop the runner
+        log_general(f"WARNING: could not write status file: {ex}")
+
+
 def handler(signal_received, frame):
     """Handle any cleanup here."""
     log_general("SIGINT or CTRL-C detected. Exiting")
@@ -535,7 +639,7 @@ def do_task(task, slotid: int) -> None:
                 error_msg=error_msg,
             )
 
-            send_email_if_needed(task=task, logfunc=logfunc)
+            notify_finished(task=task, logfunc=logfunc)
 
         elif localresultfile and localresultfile.exists():
             # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
@@ -544,7 +648,7 @@ def do_task(task, slotid: int) -> None:
                 queuepos_relative=None,
             )
 
-            send_email_if_needed(task=task, logfunc=logfunc)
+            notify_finished(task=task, logfunc=logfunc)
 
         else:
             waittime = 5
@@ -590,9 +694,10 @@ def remove_old_tasks(
 
     matchingtasks = Task.objects.all().filter(**filteropts)
 
-    taskcount = matchingtasks.count()
-
-    taskid_examples = list(matchingtasks.values_list("id", flat=True)[:10])
+    # read the ids up front rather than iterating the queryset while modifying the rows it selects
+    # on, and so that the count below needs no separate query
+    taskids = list(matchingtasks.values_list("id", flat=True))
+    taskcount = len(taskids)
 
     strrequesttype = f"{request_type} " if request_type else ""
     strdeletetype = "hard deleted" if harddeleterecord else "archived"
@@ -605,15 +710,31 @@ def remove_old_tasks(
         strdeleteaction = (
             "Deleting files and database rows" if harddeleterecord else "Deleting files and marking archived"
         )
-        logfunc(f"  {strdeleteaction}... (first few task ids: {taskid_examples})")
+        logfunc(f"  {strdeleteaction}... (first few task ids: {taskids[:10]})")
 
-        for task in matchingtasks:
-            task.delete()
+        # The sweeps reach back up to 183 days, so the widest of them can match a lot of rows.
+        # Work in batches, and do the database write once per batch rather than once per task: the
+        # old loop issued a full-row save() for every archived task and an UPDATE-then-DELETE for
+        # every hard-deleted one. select_related and the prefetch cover the lookups that
+        # delete_result_files() makes, so those cost one query per batch instead of one per task.
+        for idbatch in itertools.batched(taskids, MAINTENANCE_BATCH_SIZE, strict=False):
+            tasks = list(
+                Task.objects.filter(id__in=idbatch)
+                .select_related("parent_task")
+                .prefetch_related(Task.prefetch_imagerequests())
+            )
 
-        # the previous call only deleted data files and kept the database record
-        # marked as archived. The following also deletes the database records.
-        if harddeleterecord:
-            matchingtasks.delete()
+            for task in tasks:
+                task.delete_result_files()
+
+            if harddeleterecord:
+                # the rows are about to go, so there is no point marking them archived first
+                Task.objects.filter(id__in=idbatch).delete()
+            else:
+                Task.objects.filter(id__in=idbatch).update(is_archived=True, task_modified_datetime=now)
+
+            for task in tasks:
+                task.forget_derived_cache()
 
         logfunc("  Done.")
 
@@ -661,9 +782,13 @@ def main() -> None:
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
 
     last_maintenancetime: float = float("-inf")
+    last_statustime: float = float("-inf")
     printedwaiting = False
     while True:
-        time.sleep(0.5)
+        # an idle server polled twice a second all night for nothing. Once the queue has been seen
+        # to be empty, wait longer between polls; the interval drops back as soon as work appears,
+        # so the latency to pick up a new task is unchanged whenever the server is actually busy.
+        time.sleep(IDLE_POLL_INTERVAL_SECONDS if printedwaiting else POLL_INTERVAL_SECONDS)
 
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
@@ -684,34 +809,38 @@ def main() -> None:
         queuedtasks = (
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
         )
-        queuedtaskcount = queuedtasks.count()
 
-        if queuedtaskcount == 0:
-            if not printedwaiting:
+        if (time.perf_counter() - last_statustime) >= STATUS_WRITE_SECONDS:
+            last_statustime = time.perf_counter()
+            write_status(procs_taskids=procs_taskids, numslots=numslots)
+
+        slotid = procs.index(None) if None in procs else -1
+
+        if slotid < 0:
+            # every slot is busy, so there is nothing to dispatch and no reason to look at the queue
+            continue
+
+        # one query rather than a count() followed by a first(): the count was only used for a log
+        # line, and is fetched below only when a task is actually dispatched
+        task = queuedtasks.exclude(user_id__in=list(procs_userids.values())).first()
+
+        if task is None:
+            # nothing runnable. That is either an empty queue or a queue holding only tasks from
+            # users who already have a job running, and only the former should slow the polling
+            if not printedwaiting and not queuedtasks.exists():
                 logfunc("Waiting for tasks...")
                 printedwaiting = True
+            continue
 
-        else:
-            slotid = -1
-            try:
-                slotid = procs.index(None)  # lowest available slot
+        printedwaiting = False
+        logfunc(f"Unfinished tasks in queue: {queuedtasks.count()}")
+        logfunc(f"Running task {task.id} in slot {slotid}")
+        procs_userids[slotid] = task.user_id
+        procs_taskids[slotid] = task.id
 
-            except ValueError:
-                slotid = -1
-
-            if slotid >= 0:
-                task = queuedtasks.exclude(user_id__in=list(procs_userids.values())).first()
-
-                if task is not None:
-                    printedwaiting = False
-                    logfunc(f"Unfinished tasks in queue: {queuedtaskcount}")
-                    logfunc(f"Running task {task.id} in slot {slotid}")
-                    procs_userids[slotid] = task.user_id
-                    procs_taskids[slotid] = task.id
-
-                    proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid})
-                    proc.start()
-                    procs[slotid] = proc
+        proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid})
+        proc.start()
+        procs[slotid] = proc
 
 
 if __name__ == "__main__":
