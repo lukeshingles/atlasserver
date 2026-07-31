@@ -89,7 +89,10 @@ export class Task extends React.Component {
                     "X-CSRFToken": getCookie("csrftoken")
                 },
                 url: task.url, method: 'delete',
-                success: (result) => { console.log('Deleted task ', task.id); this.props.fetchData(true) },
+                // not fetchData(true): "user triggered" re-applies the cached pre-delete body and
+                // scrolls the window to the top, which after deleting the last row on a page means
+                // the viewport jumps away from what the user was looking at
+                success: (result) => { console.log('Deleted task ', task.id); this.setState({ 'httperror': '' }); this.props.fetchData() },
                 error: (err) => {
                     // the row slides back, so without a message the click looks like it simply did
                     // nothing. A 403 here means the task belongs to somebody else.
@@ -100,7 +103,7 @@ export class Task extends React.Component {
                             ? 'ERROR: you are not allowed to delete this task.'
                             : 'ERROR: could not delete this task (HTTP ' + err.status + ').'
                     });
-                    this.props.fetchData(true);
+                    this.props.fetchData();
                 }
             });
         }, 200);
@@ -394,10 +397,16 @@ class RunnerStatus extends React.PureComponent {
 
     componentWillUnmount() {
         clearInterval(this.interval);
+        clearTimeout(this.retry);
     }
 
     fetchStatus() {
         if (pollingPaused()) {
+            // a tab opened in the background (cmd-click, session restore) is paused at mount, and
+            // without a retry the banner could not appear until the slow interval next fired —
+            // which is exactly the wait the banner exists to prevent. Poll for the tab waking up.
+            clearTimeout(this.retry);
+            this.retry = setTimeout(this.fetchStatus, 2000);
             return;
         }
         // a stale runner is reported with HTTP 503 and a body, so the status is read from the body
@@ -406,10 +415,10 @@ class RunnerStatus extends React.PureComponent {
             .then(response => response.json())
             .then(status => this.setState({ 'status': status }))
             .catch(error => {
-                // not being able to reach this endpoint says nothing about the runner, and claiming
-                // an outage on the strength of our own failed request would be worse than silence
+                // not being able to reach this endpoint says nothing about the runner, so do not
+                // claim an outage on the strength of our own failed request — but do not retract
+                // one we have already been told about either: keep the last status we were given.
                 debug_log('Could not read the task runner status', error);
-                this.setState({ 'status': null });
             });
     }
 
@@ -626,10 +635,12 @@ export class TaskPage extends React.Component {
         }
 
         // only this user's own tasks appear in the response, so a staff member looking at somebody
-        // else's task must not be counted as "no longer queued"
-        const waiting = this.state.results.filter(
-            task => task.user_id == user_id && task.finishtimestamp == null);
-        if (waiting.length == 0) {
+        // else's task must not be counted as "no longer queued". A task whose position has not been
+        // assigned yet is not in the response either, and counting it would fire a full fetch on
+        // every tick, which is worse than not having this endpoint at all.
+        const trackable = task => (
+            task.user_id == user_id && task.finishtimestamp == null && task.queuepos != null);
+        if (!this.state.results.some(trackable)) {
             return;
         }
 
@@ -645,25 +656,53 @@ export class TaskPage extends React.Component {
                     return;
                 }
 
-                if (waiting.some(task => !(String(task.id) in data.queuepositions))) {
+                // tested against state as it stands rather than the committed state: a false
+                // positive costs one extra full fetch and a false negative is caught on the next
+                // tick, so it does not need to be exact
+                if (this.state.results.some(
+                    task => trackable(task) && !(String(task.id) in data.queuepositions))) {
                     debug_log('a task left the queue: fetching the full task list');
                     this.fetchData(false);
                     return;
                 }
 
-                let changed = false;
-                const newresults = this.state.results.map(task => {
-                    const queuepos = data.queuepositions[String(task.id)];
-                    if (queuepos === undefined || queuepos === task.queuepos || task.finishtimestamp != null) {
-                        return task;
-                    }
-                    changed = true;
-                    return { ...task, queuepos: queuepos };
-                });
+                const geturl = window.location.href;
 
-                if (changed) {
-                    this.setState({ results: newresults, tasklist_last_fetch_time: new Date(), tasklist_api_error: '' });
-                }
+                // functional, because the two polls are phase-locked (6000 is a multiple of 2000):
+                // a task list response landing in the same batch would otherwise be overwritten
+                // with the rows this request was started with, and its ETag has already been
+                // recorded, so the next poll would 304 and never resend them.
+                //
+                // tasklist_last_fetch_time and tasklist_api_error are deliberately NOT touched
+                // here: this endpoint says nothing about whether the task list is reachable, and
+                // stamping them would report a stale page as current.
+                this.setState(prevstate => {
+                    if (prevstate.results == null) {
+                        return null;
+                    }
+
+                    let changed = false;
+                    const newresults = prevstate.results.map(task => {
+                        const queuepos = data.queuepositions[String(task.id)];
+                        if (queuepos === undefined || queuepos === task.queuepos || task.finishtimestamp != null) {
+                            return task;
+                        }
+                        changed = true;
+                        return { ...task, queuepos: queuepos };
+                    });
+
+                    return changed ? { results: newresults } : null;
+                }, () => {
+                    // the caches have to move with the state, or a user-triggered fetch (a filter,
+                    // the pager, a delete) re-applies the body held here and visibly rewinds the
+                    // positions that were just corrected
+                    const cached = tasklist_fetchcache[geturl];
+                    if (cached != null && cached.results != null && geturl == window.location.href) {
+                        const patched = { ...cached, results: this.state.results };
+                        tasklist_fetchcache[geturl] = patched;
+                        tasklist_pollcache.storeBody(geturl, patched);
+                    }
+                });
             })
             .catch(error => {
                 // the full task list poll is what reports a connection problem; a failure here just
@@ -715,10 +754,10 @@ export class TaskPage extends React.Component {
             })
             .then((response) => {
                 tasklist_api_request_active = false;
-                this.setState({ tasklist_api_error: '' });
                 if (tasklist_pollcache.noteResponse(get_url, response.status, response.headers.get('ETag'))
                     === NOT_MODIFIED) {
                     debug_log('Task list unchanged (304)', get_url);
+                    this.setState({ tasklist_api_error: '' });
                     return NOT_MODIFIED;
                 }
                 if (response.type === "opaqueredirect") {
@@ -729,13 +768,26 @@ export class TaskPage extends React.Component {
                     if (response.status != 200) {
                         console.log("Fetch received HTTP status ", response.status);
                     }
+                    if (response.status == 401 || response.status == 403) {
+                        // the session has gone (expired, or logged out in another tab). The server
+                        // answers a JSON request with a real status rather than a redirect, so
+                        // nothing navigates on our behalf; without this the page would sit here
+                        // showing the pre-logout task list forever, with no error and no way back.
+                        this.setState({ tasklist_api_error: 'Your session has ended. Reloading to sign in again…' });
+                        window.location.reload();
+                        return null;
+                    }
                     if (response.status == 404) {
                         window.history.pushState({}, document.title, api_url_base);
                         this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
                     }
                     if (response.status == 200) {
+                        this.setState({ tasklist_api_error: '' });
                         return response.json();
                     }
+                    // cleared only for a response we could actually use: clearing it up front meant
+                    // a 500 on every poll left the page looking healthy and merely frozen
+                    this.setState({ tasklist_api_error: 'Server error (HTTP ' + response.status + ')' });
                 }
                 return null;
             }).catch(error => {

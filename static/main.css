@@ -220,6 +220,16 @@ ul {
   padding: 5px 14px;
 }
 
+/* bootstrap puts these floats on `.pager .previous>a`, so a <button> gets neither and the two
+   opposite directions end up side by side in the middle of a centred pager */
+.pager .previous>button {
+  float: left;
+}
+
+.pager .next>button {
+  float: right;
+}
+
 .pager li>button:hover,
 .pager li>button:focus {
   background-color: #eee;
@@ -344,6 +354,12 @@ ul.errorlist {
   color: red;
 }
 
+/* the per-task error line. Was an inline style; the only other .errors rule is scoped to
+   #tasklistfetchstatus, so without this the message rendered in ordinary black body text. */
+.errors {
+  color: red;
+}
+
 ul#taskfilters>* {
   display: inline;
 }
@@ -444,9 +460,22 @@ table.countrystats th[scope="row"] {
     width: 100%;
   }
 
-  /* Bootstrap stacks navbar items one per line below its own breakpoint, and this navbar has no
-     collapse toggle, so the eight links plus a floated 118px logo filled an entire phone screen
-     before any content. Lay the brand out on its own line and let the links wrap inline. */
+  ul.logos img {
+    height: auto;
+    max-width: 45%;
+  }
+
+  table {
+    margin: 1em 0;
+  }
+}
+
+/* 767px, not 640px: the layout being corrected here is bootstrap's, and bootstrap only floats
+   navbar items from min-width 768px. Below that it stacks them one per line, and this navbar has no
+   collapse toggle, so the eight links plus a floated 118px logo filled an entire screen before any
+   content. At 640px the 641-767px band — a narrowed desktop window, a tablet in split view — kept
+   the broken layout. Lay the brand out on its own line and let the links wrap inline. */
+@media (max-width: 767px) {
   .navbar-brand {
     display: block;
     float: none;
@@ -474,14 +503,5 @@ table.countrystats th[scope="row"] {
 
   .navbar-nav.pull-right {
     float: none !important;
-  }
-
-  ul.logos img {
-    height: auto;
-    max-width: 45%;
-  }
-
-  table {
-    margin: 1em 0;
   }
 }

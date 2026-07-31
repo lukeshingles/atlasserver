@@ -520,7 +520,10 @@ class RequestImages(APIView):
                         data["country_code"] = location["country_code"]
                         data["region"] = location["region_code"]
 
-            data["from_api"] = request_is_from_api(request)
+            # deliberately not request_is_from_api(): from_api decides which maintenance sweep
+            # collects the row (31 days for API tasks, 183 otherwise), so classifying a
+            # token-authenticated image request as API would delete it five months early
+            data["from_api"] = False
             data["send_email"] = False
 
             newtask = Task(**data)

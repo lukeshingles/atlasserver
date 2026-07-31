@@ -10,18 +10,16 @@ sets ATLASSERVER_TEST_DB=mysql so that the suite still runs against the engine u
 
 import os
 
+# Set before the star import, because settings.py applies its production hardening under a plain
+# `if not DEBUG:` at import time: assigning DEBUG afterwards would be too late, and the suite would
+# then run with SECURE_SSL_REDIRECT (a 301 on every test-client request) and secure-only cookies
+# that the plain-http test client never sends back. Undoing each of those by hand here instead is a
+# list that has to be kept in step with settings.py by memory alone.
+os.environ.setdefault("ATLASSERVER_DEBUG", "1")
+
 from atlasserver.settings import *  # noqa: F403
 
 DEBUG = True
-
-# settings.py applies its production hardening under `if not DEBUG`, and that runs at import time
-# against the platform-derived value, so on Linux (which is what CI runs) it is already switched on
-# by the time DEBUG is set to True here. The test client speaks plain http, so SECURE_SSL_REDIRECT
-# would answer every request with a 301 and the secure-only cookies would never be sent back.
-SECURE_SSL_REDIRECT = False
-SESSION_COOKIE_SECURE = False
-CSRF_COOKIE_SECURE = False
-SECURE_HSTS_SECONDS = 0
 
 if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
     DATABASES = {

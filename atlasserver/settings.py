@@ -27,7 +27,12 @@ TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = platform.system() == "Darwin"
+# macOS means a development machine, but that is not the only kind: set ATLASSERVER_DEBUG=1 to say
+# so explicitly. Without it, a developer on Linux picks up the production hardening below, where
+# SECURE_SSL_REDIRECT makes runserver answer every request with a 301 to a port serving no TLS.
+DEBUG = os.environ.get("ATLASSERVER_DEBUG", "").strip().lower() in {"1", "true", "yes"} or (
+    platform.system() == "Darwin"
+)
 
 # Not "*": django.contrib.sites is not installed, so the password reset email builds its link from
 # the Host header. Accepting any host lets an attacker send a victim a reset link pointing at a

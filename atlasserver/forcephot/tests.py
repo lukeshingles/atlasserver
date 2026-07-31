@@ -646,6 +646,18 @@ class PermissionResponseTests(TestCase):
 
         assert response.status_code == 403, response.status_code
 
+    def test_the_queue_page_reloads_itself_when_its_session_has_gone(self) -> None:
+        # the poll asks for JSON, so it now gets a real 403 instead of the redirect it used to
+        # follow. Nothing navigates on the page's behalf any more, so the polling code has to
+        # recognise the status itself or the page sits showing pre-logout tasks forever.
+        frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text()
+        pollbody = frontendpath.split("fetchData(usertriggered)")[1]
+
+        assert "response.status == 401 || response.status == 403" in pollbody, (
+            "fetchData must handle an expired session; a 401/403 is no longer a redirect"
+        )
+        assert "window.location.reload()" in pollbody
+
 
 class FromApiDetectionTests(TestCase):
     """from_api decides whether a result email is sent, so it must not depend on the Referer header.
@@ -717,6 +729,9 @@ class RequestImagesTests(TestCase):
         assert response.status_code == 302, response.status_code
         imagerequest = Task.objects.get(parent_task_id=task.id)
         assert imagerequest.request_type == "IMGZIP"
+        # from_api selects the retention sweep (31 days for API tasks against 183), so an image
+        # request must stay a web request however its parent was submitted
+        assert imagerequest.from_api is False
         assert imagerequest.user_id == self.user.pk
         assert imagerequest.finishtimestamp is None
 
