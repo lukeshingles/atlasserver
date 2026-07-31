@@ -1,7 +1,7 @@
 {
   "type": "module",
   "dependencies": {
-    "@babel/cli": "7.28.6",
+    "@babel/cli": "8.0.4",
     "@babel/preset-react": "^7.28.5",
     "react": "19.2.4",
     "react-dom": "19.2.4"
