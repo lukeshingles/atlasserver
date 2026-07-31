@@ -43,7 +43,7 @@ jobs:
               # skipped on pre-commit.ci (see .pre-commit-config.yaml), which has no network access
               # to resolve the dependencies ty type checks against, so it runs here instead
               if: always()
-              run: uvx ty check
+              run: uv run -- ty check
 
             - name: Run prek pre-commit checks
               uses: j178/prek-action@v2

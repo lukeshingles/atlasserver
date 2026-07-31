@@ -45,6 +45,7 @@ dev = [
     "pylint>=4.0.6",
     "pylint-django>=2.5.5",
     "ruff>=0.16.0",
+    "ty>=0.0.63",
     "types-pyyaml>=6.0.12.20240311",
     "types-requests>=2.31.0.20240406",
     "types-Markdown",
