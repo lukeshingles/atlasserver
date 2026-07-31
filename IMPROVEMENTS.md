@@ -48,9 +48,9 @@ different faces of that one fact, which is why P1–P4 are worth doing together.
 
 ### P1. `Task` has no database indexes at all
 
-`Task` has no `Meta` class and no `db_index=True` on any field; a grep across all 59 migrations
-finds no `AddIndex`, `indexes`, or `db_index`. Only the implicit primary key and the two FK indexes
-(`user_id`, `parent_task_id`) exist.
+`Task` has no `Meta` class and no `db_index=True` on any field, and no migration contains an
+`AddIndex`. Only the implicit primary key and the two FK indexes (`user_id`, `parent_task_id`)
+exist.
 
 Every hot query filters or sorts on unindexed columns:
 

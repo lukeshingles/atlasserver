@@ -132,9 +132,10 @@ jobs:
                   sudo /etc/init.d/mysql start
                   echo "mysql started"
                   mysql -e "CREATE DATABASE ${{env.ATLASSERVER_DJANGO_MYSQL_DBNAME}};" -u${{env.ATLASSERVER_DJANGO_MYSQL_USER}} -p${{env.ATLASSERVER_DJANGO_MYSQL_PASSWORD}}
-                  # migrations are not tracked in this repository (see migrations/.gitignore), so
-                  # they are generated from the models here and on deployment
-                  ./manage.py makemigrations
+                  # fail if a model change was committed without its migration, rather than
+                  # generating one here that would never reach the repository
+                  ./manage.py makemigrations --check --dry-run
+                  # apply the committed migrations, which is the same path a deployment takes
                   ./manage.py migrate
 
             - name: Run Django Tests

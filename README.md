@@ -34,9 +34,8 @@ A MySQL or MariaDB server and tmux are required. These can be installed with hom
 brew install mariadb tmux
 ```
 
-To initialise a new database, run:
+To initialise a new database, apply the migrations:
 ```sh
-./manage.py makemigrations
 ./manage.py migrate
 ```
 
@@ -55,16 +54,30 @@ To update the code to the latest commit on the main branch, pull from the GitHub
 database changes, and then restart the two processes.
 ```sh
 git pull
-./manage.py makemigrations
 ./manage.py migrate
 atlaswebserver restart
 atlastaskrunner restart
 ```
 
-The migration steps are not optional. Migration files are not tracked in this repository (see
-`atlasserver/forcephot/migrations/.gitignore`), so a commit that changes a model carries no
-migration with it, and a `git pull` alone leaves the database schema behind the code. Queries
-against the changed table then fail with an "Unknown column" error until `migrate` has been run.
+`migrate` is not optional: a pulled commit may change a model, and until its migration is applied
+every query against that table fails with an "Unknown column" error. It is safe to run when there
+is nothing to do.
+
+Do not run `makemigrations` on the server. Migrations are committed to this repository, so the
+files that arrive with `git pull` are the ones to apply. Generating them on the server instead
+would produce files that differ from the ones under review, and — because a field rename is only
+detected by an interactive prompt that a non-interactive run answers "no" — a renamed field would
+be dropped and recreated empty rather than renamed.
+
+### Changing a model
+
+Generate the migration on your own machine and commit it alongside the model change:
+```sh
+./manage.py makemigrations
+```
+Commit the generated file along with the model change. Django writes migrations in its own style,
+so `ruff format` will reformat them on commit; that is cosmetic and does not affect what the
+migration does. CI fails if a model change arrives without its migration.
 
 ## License
 Copyright (c) 2020-2024 Luke Shingles
