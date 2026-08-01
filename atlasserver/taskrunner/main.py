@@ -23,6 +23,7 @@ from django.forms.models import model_to_dict
 
 from atlasserver import settings
 from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.taskrunner import status as runnerstatus
 
 REMOTE_SERVER = "atlas"
 
@@ -46,15 +47,13 @@ CANCEL_CHECK_SECONDS: float = 15.0
 POLL_INTERVAL_SECONDS: float = 0.5
 IDLE_POLL_INTERVAL_SECONDS: float = 5.0
 
-# how often the runner refreshes the status file read by the /taskrunnerstatus.json endpoint
-STATUS_WRITE_SECONDS: float = 15.0
-
 # how many tasks the maintenance sweep loads, cleans up and writes back at a time
 MAINTENANCE_BATCH_SIZE: int = 500
 
-LOG_DIR: Path = Path(__file__).resolve().parent / "logs"
-
-STATUS_PATH: Path = LOG_DIR / "taskrunner_status.json"
+# LOG_DIR, STATUS_PATH and STATUS_WRITE_SECONDS live in atlasserver.taskrunner.status so that the
+# web server can read the status file without importing this module. All three are referenced
+# through that module at each use rather than bound by name here, so that one
+# mock.patch.object(runnerstatus, ...) is seen by the runner and the web view alike.
 
 
 def mjdnow() -> float:
@@ -75,7 +74,7 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
     if not suffix:
         print(line, *args, **kwargs)
 
-    logfile_latest = Path(LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
+    logfile_latest = Path(runnerstatus.LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
 
     # archive the latest log when its last write was on an earlier UTC day. The check is
     # mtime-based so that the short-lived worker processes also rotate their slot logs
@@ -86,7 +85,8 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
             import shutil
 
             logfile_archive = Path(
-                LOG_DIR, f"fprunnerlog_{lastwrite.year:4d}-{lastwrite.month:02d}-{lastwrite.day:02d}{suffix}.txt"
+                runnerstatus.LOG_DIR,
+                f"fprunnerlog_{lastwrite.year:4d}-{lastwrite.month:02d}-{lastwrite.day:02d}{suffix}.txt",
             )
             shutil.copyfile(logfile_latest, logfile_archive)
             openmode = "w"
@@ -450,6 +450,25 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     return localresultfile, None
 
 
+def mark_finished(task, error_msg: str | None) -> None:
+    """Record that a task has finished, in the database and on the in-memory instance.
+
+    The database write has to be a queryset update rather than a save(): `task` is a copy read when
+    the queue was scanned, and saving it would write back every other column as it was then.
+
+    The same values are then applied to the instance, because notify_finished() reports on it. Until
+    this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
+    had actually happened, because the instance still held the values it was loaded with.
+    """
+    finishtimestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+
+    Task.objects.filter(pk=task.id).update(finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg)
+
+    task.finishtimestamp = finishtimestamp
+    task.queuepos_relative = None
+    task.error_msg = error_msg
+
+
 def notify_finished(task, logfunc) -> None:
     """Tell the submitter that a task finished, by callback and/or email.
 
@@ -547,12 +566,16 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
-def write_status(procs_taskids: dict[int, int], numslots: int) -> None:
+def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool = False) -> None:
     """Write a snapshot of the runner's state for the status endpoint to read.
 
     Nothing outside the runner could previously tell whether it was alive, how many slots were
     busy, or whether the queue had stalled — the only signal was the log files. The file is written
     atomically (write to a temporary name, then rename) so that a reader never sees a partial one.
+
+    `maintenance` marks a snapshot written while the hourly sweep is blocking the main loop. The
+    slot fields are frozen for that whole window (nothing is reaped or dispatched), so without the
+    flag the file would confidently describe workers that may have already exited.
     """
     oldest_queued = (
         Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
@@ -567,15 +590,17 @@ def write_status(procs_taskids: dict[int, int], numslots: int) -> None:
         "numslots": numslots,
         "slots_busy": len(procs_taskids),
         "running_taskids": sorted(procs_taskids.values()),
+        "maintenance": maintenance,
         "queued_task_count": Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).count(),
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
     try:
-        STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmppath = STATUS_PATH.with_suffix(".tmp")
+        statuspath = runnerstatus.STATUS_PATH
+        statuspath.parent.mkdir(parents=True, exist_ok=True)
+        tmppath = statuspath.with_suffix(".tmp")
         tmppath.write_text(json.dumps(status))
-        tmppath.replace(STATUS_PATH)
+        tmppath.replace(statuspath)
     except OSError as ex:
         # the status file is diagnostic only; failing to write it must never stop the runner
         log_general(f"WARNING: could not write status file: {ex}")
@@ -630,22 +655,13 @@ def do_task(task, slotid: int) -> None:
             # minor planet center object name or no data returned)
             logfunc(f"Error_msg: {error_msg}")
 
-            Task.objects.all().filter(pk=task.id).update(
-                finishtimestamp=datetime.datetime.now(datetime.UTC)
-                .replace(tzinfo=datetime.UTC, microsecond=0)
-                .isoformat(),
-                queuepos_relative=None,
-                error_msg=error_msg,
-            )
+            mark_finished(task=task, error_msg=error_msg)
 
             notify_finished(task=task, logfunc=logfunc)
 
         elif localresultfile and localresultfile.exists():
             # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
-            Task.objects.all().filter(pk=task.id).update(
-                finishtimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
-                queuepos_relative=None,
-            )
+            mark_finished(task=task, error_msg=None)
 
             notify_finished(task=task, logfunc=logfunc)
 
@@ -662,8 +678,13 @@ def remove_old_tasks(
     is_archived: bool | None = None,
     from_api: bool | None = None,
     logfunc=log_general,
+    heartbeat: t.Callable[[], None] | None = None,
 ) -> None:
-    """Remove old tasks matching given criteria from the database and optionally delete their result files (if harddeleterecord)."""
+    """Remove old tasks matching given criteria from the database and optionally delete their result files (if harddeleterecord).
+
+    `heartbeat` is called after every batch so that a long sweep does not look like a dead runner
+    to whatever is watching the status file.
+    """
     now = datetime.datetime.now(datetime.UTC)
     filteropts: dict[str, t.Any] = {
         "finishtimestamp__isnull": False,
@@ -732,8 +753,13 @@ def remove_old_tasks(
 
             taskids = [task.id for task in tasks]
 
-            for task in tasks:
+            for taskindex, task in enumerate(tasks):
                 task.delete_result_files()
+                # inside the batch as well as after it: 500 tasks times several filesystem operations
+                # each can alone outlast the staleness window on a slow results mount. The
+                # heartbeat rate-limits itself, so calling it often costs almost nothing.
+                if heartbeat is not None and taskindex % 50 == 49:
+                    heartbeat()
 
             if harddeleterecord:
                 # the rows are about to go, so there is no point marking them archived first
@@ -743,43 +769,52 @@ def remove_old_tasks(
 
             for task in tasks:
                 task.forget_derived_cache()
+
+            if heartbeat is not None:
+                heartbeat()
         else:
             logfunc(f"  WARNING: stopped after {maxpasses} batches with tasks still matching")
 
         logfunc("  Done.")
 
 
-def do_maintenance(maxtime=None):
-    """Remove old tasks and associated files according to their type and age."""
-    # start_maintenancetime = time.perf_counter()
+def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
+    """Remove old tasks and associated files according to their type and age.
+
+    `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
+    and blocks it, and a long sweep would otherwise leave the status file untouched for minutes,
+    which from outside is indistinguishable from a dead runner: the queue page would tell every
+    user that their tasks are not being processed while all sixteen slots were in fact busy.
+    """
+    # no maxtime parameter: one used to be accepted and silently ignored (its only reference was a
+    # commented-out call), which read as a five-minute bound on the sweep that did not exist
 
     def logfunc(x):
         log_general(f"Maintenance: {x}")
 
-    remove_old_tasks(days_ago=14, harddeleterecord=False, request_type="IMGZIP", logfunc=logfunc)
+    sweeps: list[dict[str, t.Any]] = [
+        {"days_ago": 14, "harddeleterecord": False, "request_type": "IMGZIP"},
+        {"days_ago": 14, "harddeleterecord": False, "request_type": "SSOSTACK"},
+        {"days_ago": 183, "harddeleterecord": False, "request_type": "FP"},
+        # archived (user-deleted) API tasks: remove the database records and files
+        {"days_ago": 7, "harddeleterecord": True, "is_archived": True, "from_api": True},
+        # other API tasks
+        {"days_ago": 31, "harddeleterecord": True, "from_api": True},
+        # Any old tasks
+        {"days_ago": 183, "harddeleterecord": True},
+    ]
 
-    remove_old_tasks(days_ago=14, harddeleterecord=False, request_type="SSOSTACK", logfunc=logfunc)
-
-    remove_old_tasks(days_ago=183, harddeleterecord=False, request_type="FP", logfunc=logfunc)
-
-    # archived (user-deleted) API tasks: remove the database records and files
-    remove_old_tasks(days_ago=7, harddeleterecord=True, is_archived=True, from_api=True, logfunc=logfunc)
-
-    # other API tasks
-    remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=logfunc)
-
-    # Any old tasks
-    remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=logfunc)
-
-    # # this can get very slow
-    # rm_unassociated_files(logprefix, start_maintenancetime, maxtime)
+    for sweep in sweeps:
+        if heartbeat is not None:
+            heartbeat()
+        remove_old_tasks(**sweep, logfunc=logfunc, heartbeat=heartbeat)
 
 
 def main() -> None:
     """Run queued tasks and clean up on old tasks."""
     signal(SIGINT, handler)
 
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    runnerstatus.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     def logfunc(x):
         log_general(x)
@@ -794,6 +829,23 @@ def main() -> None:
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
     printedwaiting = False
+
+    def refresh_status(maintenance: bool = False) -> None:
+        """Write the status snapshot now, and reset the interval that would have written it."""
+        nonlocal last_statustime
+        write_status(procs_taskids=procs_taskids, numslots=numslots, maintenance=maintenance)
+        last_statustime = time.perf_counter()
+
+    def maintenance_heartbeat() -> None:
+        """Keep the status file fresh during the sweep, at the normal cadence.
+
+        Rate-limited so that callers can invoke it as often as they like; marked as maintenance
+        because the slot fields are frozen while the sweep blocks the loop, and an unqualified
+        snapshot would describe workers that may have already exited.
+        """
+        if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
+            refresh_status(maintenance=True)
+
     while True:
         # an idle server polled twice a second all night for nothing. Once the queue has been seen
         # to be empty, wait longer between polls; the interval drops back as soon as work appears,
@@ -802,7 +854,11 @@ def main() -> None:
 
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
-            do_maintenance(maxtime=300)
+            # the sweep blocks this loop, so it refreshes the status file itself; without that a
+            # sweep lasting longer than STATUS_WRITE_SECONDS * 4 makes the queue page tell every
+            # user that their tasks are not being processed while all the slots are still busy
+            do_maintenance(heartbeat=maintenance_heartbeat)
+            refresh_status()
             printedwaiting = False
 
         for slotid, proc in enumerate(procs):
@@ -820,9 +876,8 @@ def main() -> None:
             Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
         )
 
-        if (time.perf_counter() - last_statustime) >= STATUS_WRITE_SECONDS:
-            last_statustime = time.perf_counter()
-            write_status(procs_taskids=procs_taskids, numslots=numslots)
+        if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
+            refresh_status()
 
         slotid = procs.index(None) if None in procs else -1
 

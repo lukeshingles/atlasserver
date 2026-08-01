@@ -6,24 +6,25 @@
 {% block head %}
     {{ block.super }}
 
-    <!-- force refresh every 2 hours in case the javascript code needs an update -->
-    <meta http-equiv="refresh" content="7200" />
+    {# No <meta http-equiv="refresh">: it reloaded the page every two hours, throwing away the #}
+    {# user's scroll position and whatever they were part-way through. The bundles below are #}
+    {# already cache-busted with a ?ver= query string, so a deployed change is picked up on the #}
+    {# next ordinary page load without one. #}
 
     <script language="javascript" type="text/javascript">
         "use strict";
-        var api_url_obj = new URL(window.location.href);
-        api_url_obj.searchParams.set('format', 'json');
-        const api_url = api_url_obj.toString();
-        const api_url_base = '{{api_url_base|escapejs}}';
-
-        // prefetch the api request at start of page load
-        var xmlhttp = new XMLHttpRequest();
-        xmlhttp.open("GET", api_url, true);
-        xmlhttp.setRequestHeader('Accept', 'application/json')
-        xmlhttp.setRequestHeader('Content-Type', 'application/json')
-        xmlhttp.setRequestHeader('Cache-Control', '')
-        xmlhttp.setRequestHeader('Pragma', '')
-        xmlhttp.send();
+        // There is deliberately no prefetch here. One used to fire an XMLHttpRequest for
+        // "?format=json" while React fetched this same page *without* that parameter and with
+        // cache: "no-store", so the two never met: every queue page load paid for two full task
+        // list serialisations and used one of them.
+        {# built here rather than passed in by the view: every action of the viewset renders this #}
+        {# template (a plain browser-form POST gets it via the 201 response), and an action that #}
+        {# forgot to supply the URLs produced a page that polled fetch('') against itself. #}
+        {# {% url %} carries the /forcedphot script prefix, and request.scheme/get_host respect #}
+        {# SECURE_PROXY_SSL_HEADER and the proxy-fixed Host header. #}
+        const api_url_base = '{{ request.scheme }}://{{ request.get_host }}{% url 'task-list' %}';
+        const queuepositions_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'queuepositions' %}';
+        const taskrunnerstatus_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'taskrunnerstatus' %}';
 
         const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
         var user_is_active = true;
@@ -118,10 +119,10 @@
       }
     };
 
-    var newids = [];
+    {# only newtaskids: a "newids" global also used to be declared here, but it was never read #}
+    {# or written anywhere — easily confused with the ?newids= query parameter, which is real #}
     var newtaskids = [];
 
-    // TODO: remove?
     $(document).ready(inactivityTimer);
     </script>
 
@@ -141,10 +142,10 @@
                 "react": "https://esm.sh/react@19",
                 "react-dom": "https://esm.sh/react-dom@19/client",
     {% endif %}
-                "newrequest": "{% static 'js/newrequest.min.js' %}?ver=20260729",
-                "pollcache": "{% static 'js/pollcache.min.js' %}?ver=20260729"
+                "newrequest": "{% static 'js/newrequest.min.js' %}?ver=20260731",
+                "pollcache": "{% static 'js/pollcache.min.js' %}?ver=20260731"
             }
         }
     </script>
-    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver=20260729"></script>
+    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver=20260731"></script>
 {% endblock %}

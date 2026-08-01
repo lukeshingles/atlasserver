@@ -19,7 +19,9 @@ def is_finite_float(val):
         return False
     try:
         f_val = float(val)
-    except ValueError:
+    except (TypeError, ValueError):
+        # TypeError as well as ValueError: a JSON body can put a list or an object where a number
+        # belongs, and float() raises TypeError for those, which would surface as a 500
         return False
 
     return bool(math.isfinite(f_val))

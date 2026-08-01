@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 from unittest import skipUnless
@@ -29,11 +30,13 @@ from rest_framework.serializers import ValidationError
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+from atlasserver.forcephot.serializers import is_finite_float
 from atlasserver.forcephot.views import calculate_queue_positions
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import send_task_callback
 from atlasserver.forcephot.webhooks import validate_callback_url
 from atlasserver.taskrunner import main as taskrunner_main
+from atlasserver.taskrunner import status as runnerstatus
 
 
 class TaskQueueTests(TestCase):
@@ -137,6 +140,21 @@ class TaskCoordValidationTests(TestCase):
         # an explicit mjd_min of None means "no lower bound", so an archival upper bound is valid
         serializer = ForcePhotTaskSerializer(data={"ra": 1.0, "dec": 2.0, "mjd_min": None, "mjd_max": 57000.0})
         assert serializer.is_valid(), serializer.errors
+
+    def test_structured_values_are_rejected_rather_than_crashing(self) -> None:
+        # a JSON body can put a list or an object where a number belongs. float() raises TypeError
+        # for those, not ValueError, and is_finite_float() used to let it escape as a 500.
+        for badvalue in ([1, 2], {"deg": 1}):
+            serializer = ForcePhotTaskSerializer(data={"ra": badvalue, "dec": 2.0})
+            assert not serializer.is_valid(), badvalue
+            assert "ra" in serializer.errors, (badvalue, serializer.errors)
+
+    def test_is_finite_float_rejects_values_it_cannot_convert(self) -> None:
+        for badvalue in (None, "", "abc", [1.0], {"a": 1}, float("nan"), float("inf")):
+            assert is_finite_float(badvalue) is False, badvalue
+
+        for goodvalue in (0, 0.0, "1.5", -90):
+            assert is_finite_float(goodvalue) is True, goodvalue
 
 
 def splitradeclist_rejects(data: dict) -> bool:
@@ -570,6 +588,120 @@ class TaskUpdateTests(TestCase):
         assert task.ra == 1.0
 
 
+class PermissionResponseTests(TestCase):
+    """A refused API request must say so, rather than being redirected to the login page.
+
+    Every 401/403 used to become a 302. jQuery follows redirects, so the queue page received the
+    login page with HTTP 200 and ran its *success* handler: a delete that the server had refused was
+    reported to the user as having worked.
+    """
+
+    def setUp(self) -> None:
+        self.owner = User.objects.create_user(username="permowner", email="po@example.com", password=None)
+        self.other = User.objects.create_user(username="permother", email="pt@example.com", password=None)
+        self.task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, comment="not yours")
+
+    def test_cross_user_delete_is_refused_with_403(self) -> None:
+        self.client.force_login(self.other)
+
+        response = self.client.delete(reverse("task-detail", args=[self.task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 403, response.status_code
+        assert Task.objects.filter(id=self.task.id).exists()
+
+    def test_cross_user_patch_is_refused_with_403(self) -> None:
+        self.client.force_login(self.other)
+
+        response = self.client.patch(
+            reverse("task-detail", args=[self.task.id]),
+            data=json.dumps({"comment": "hijacked"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 403, response.status_code
+        self.task.refresh_from_db()
+        assert self.task.comment == "not yours"
+
+    def test_an_unauthenticated_browser_is_still_sent_to_the_login_page(self) -> None:
+        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
+
+        assert response.status_code == 302, response.status_code
+        assert reverse("rest_framework:login") in response["Location"]
+
+    def test_the_next_url_is_url_quoted_not_html_escaped(self) -> None:
+        # escape() turns an "&" in the query string into "&amp;", which would send the user
+        # somewhere other than where they asked to go
+        response = self.client.get(f"{reverse('task-list')}?started=true&pagesize=5", HTTP_ACCEPT="text/html")
+
+        assert response.status_code == 302, response.status_code
+        assert "&amp;" not in response["Location"], response["Location"]
+        nexturl = urllib.parse.unquote(
+            urllib.parse.parse_qs(urllib.parse.urlparse(response["Location"]).query)["next"][0]
+        )
+        assert nexturl == f"{reverse('task-list')}?started=true&pagesize=5", nexturl
+
+    def test_an_anonymous_api_request_is_not_redirected(self) -> None:
+        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 403, response.status_code
+
+    def test_the_queue_page_reloads_itself_when_its_session_has_gone(self) -> None:
+        # the poll asks for JSON, so it now gets a real 403 instead of the redirect it used to
+        # follow. Nothing navigates on the page's behalf any more, so the polling code has to
+        # recognise the status itself or the page sits showing pre-logout tasks forever.
+        frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text()
+        pollbody = frontendpath.split("fetchData(usertriggered)")[1]
+
+        assert "response.status == 401 || response.status == 403" in pollbody, (
+            "fetchData must handle an expired session; a 401/403 is no longer a redirect"
+        )
+        assert "window.location.reload()" in pollbody
+
+
+class FromApiDetectionTests(TestCase):
+    """from_api decides whether a result email is sent, so it must not depend on the Referer header.
+
+    A browser is free not to send one (a no-referrer policy, a privacy extension), and such a
+    submission used to be filed as an API request: the user ticked "Email me when completed" and
+    never heard anything back.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="apidetect", email="ad@example.com", password="testpassword123")
+
+    def test_a_session_submission_without_a_referer_is_not_from_api(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 1.0, "dec": 2.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        assert Task.objects.get(id=response.json()["id"]).from_api is False
+
+    def test_a_token_submission_is_from_api(self) -> None:
+        from rest_framework.authtoken.models import Token
+
+        token = Token.objects.create(user=self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 1.0, "dec": 2.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+            # a script can send a Referer too, so its presence must not be what decides this
+            HTTP_REFERER="https://fallingstar-data.com/forcedphot/queue/",
+        )
+
+        assert response.status_code == 201, response.content
+        assert Task.objects.get(id=response.json()["id"]).from_api is True
+
+
 class RequestImagesTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
@@ -597,6 +729,9 @@ class RequestImagesTests(TestCase):
         assert response.status_code == 302, response.status_code
         imagerequest = Task.objects.get(parent_task_id=task.id)
         assert imagerequest.request_type == "IMGZIP"
+        # from_api selects the retention sweep (31 days for API tasks against 183), so an image
+        # request must stay a web request however its parent was submitted
+        assert imagerequest.from_api is False
         assert imagerequest.user_id == self.user.pk
         assert imagerequest.finishtimestamp is None
 
@@ -678,6 +813,25 @@ class TaskCreateResponseTests(TestCase):
             task = Task.objects.get(id=row["id"])
             assert task.userqueuedtasks_on_submit == row["userqueuedtasks_on_submit"]
             assert task.queuepos == row["queuepos"]
+
+    def test_a_browser_form_post_renders_a_working_queue_page(self) -> None:
+        # a plain (non-JS) form POST receives the queue page via the 201 response, a render path
+        # that supplies none of the view context. The URL globals are built inside the template
+        # from {% url %} for exactly this reason: when they came from view context, this page
+        # polled fetch('') against itself and setFilter threw on new URL('').
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data={"ra": "1.0", "dec": "2.0"},
+            HTTP_ACCEPT="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+
+        assert response.status_code == 201, response.status_code
+        content = response.content.decode()
+        assert "const api_url_base = 'http://testserver/queue/'" in content, content[:500]
+        assert "const queuepositions_url = 'http://testserver/queuepositions.json'" in content
+        assert "const taskrunnerstatus_url = 'http://testserver/taskrunnerstatus.json'" in content
 
     def test_single_task_creation(self) -> None:
         # RA 0 / Dec 0 doubles as the end-to-end check that zero coordinates survive the API
@@ -1025,9 +1179,57 @@ class CallbackSendingTests(TestCase):
         opener.assert_not_called()
         assert any("public address" in line for line in logged), logged
 
-    def test_notify_finished_still_emails_when_the_callback_fails(self) -> None:
-        from atlasserver.taskrunner import main as taskrunner_main
+    def capture_callback_payload(self, task) -> dict:
+        """Run notify_finished() against a stubbed endpoint and return the JSON it posted."""
+        captured: dict = {}
 
+        def fake_open(request, timeout=None):
+            captured["payload"] = json.loads(request.data)
+            response = mock.MagicMock()
+            response.status = 200
+            response.__enter__.return_value = response
+            return response
+
+        with (
+            mock.patch("socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]),
+            mock.patch("urllib.request.OpenerDirector.open", side_effect=fake_open),
+        ):
+            taskrunner_main.notify_finished(task=task, logfunc=lambda _msg: None)
+
+        return captured["payload"]
+
+    def test_a_finished_task_reports_success_and_a_finish_time(self) -> None:
+        # do_task() records the result with a queryset update, which leaves the in-memory instance
+        # untouched. The callback is built from that instance, so until mark_finished() applied the
+        # same values to it, every callback said finishtimestamp: null and success: true.
+        task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, from_api=True, callback_url="https://example.com/hook"
+        )
+
+        taskrunner_main.mark_finished(task=task, error_msg=None)
+        payload = self.capture_callback_payload(task)
+
+        assert payload["success"] is True
+        assert payload["error_msg"] is None
+        assert payload["finishtimestamp"] is not None
+        task.refresh_from_db()
+        assert task.finishtimestamp is not None
+        assert task.queuepos_relative is None
+
+    def test_a_failed_task_reports_the_failure(self) -> None:
+        task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, from_api=True, callback_url="https://example.com/hook"
+        )
+
+        taskrunner_main.mark_finished(task=task, error_msg="No data returned")
+        payload = self.capture_callback_payload(task)
+
+        assert payload["success"] is False, payload
+        assert payload["error_msg"] == "No data returned"
+        assert payload["finishtimestamp"] is not None
+        assert Task.objects.get(id=task.id).error_msg == "No data returned"
+
+    def test_notify_finished_still_emails_when_the_callback_fails(self) -> None:
         task = Task.objects.create(
             user=self.user,
             ra=1.0,
@@ -1098,12 +1300,16 @@ class QueuePositionsEndpointTests(TestCase):
 
 
 class TaskRunnerStatusTests(TestCase):
-    def test_missing_status_file_reports_not_running(self) -> None:
-        from atlasserver.taskrunner import main as taskrunner_main
+    """Both the runner and the view read STATUS_PATH through atlasserver.taskrunner.status.
 
+    The view must not import atlasserver.taskrunner.main (which runs django.setup() and pulls in
+    pandas), so patching the shared module is what makes one patch cover both sides.
+    """
+
+    def test_missing_status_file_reports_not_running(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
-            mock.patch.object(taskrunner_main, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
         ):
             response = self.client.get(reverse("taskrunnerstatus"))
 
@@ -1111,14 +1317,12 @@ class TaskRunnerStatusTests(TestCase):
         assert response.json()["running"] is False
 
     def test_fresh_status_file_reports_running(self) -> None:
-        from atlasserver.taskrunner import main as taskrunner_main
-
         user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
         Task.objects.create(user=user, ra=1.0, dec=2.0)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
-            with mock.patch.object(taskrunner_main, "STATUS_PATH", statuspath):
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16)
                 response = self.client.get(reverse("taskrunnerstatus"))
 
@@ -1129,22 +1333,58 @@ class TaskRunnerStatusTests(TestCase):
         assert body["slots_busy"] == 1
         assert body["running_taskids"] == [42]
         assert body["numslots"] == 16
+        assert body["maintenance"] is False
         assert body["queued_task_count"] == 1
         assert body["oldest_queued_task_time"] is not None
 
-    def test_old_status_file_reports_stale(self) -> None:
-        from atlasserver.taskrunner import main as taskrunner_main
+    def test_a_maintenance_snapshot_is_reported_as_such(self) -> None:
+        # written by the sweep's heartbeat: the slot fields are frozen while the sweep blocks the
+        # runner's loop, so the flag is what tells a reader not to trust them
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16, maintenance=True)
+                response = self.client.get(reverse("taskrunnerstatus"))
 
+        assert response.status_code == 200, response.content
+        body = response.json()
+        assert body["running"] is True
+        assert body["maintenance"] is True
+
+    def test_old_status_file_reports_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
             stale_written = timezone.now() - datetime.timedelta(hours=1)
             statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
 
-            with mock.patch.object(taskrunner_main, "STATUS_PATH", statuspath):
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
 
         assert response.status_code == 503
         assert response.json()["stale"] is True
+
+    def test_unusable_status_files_report_stale_rather_than_raising(self) -> None:
+        # this endpoint exists to say that the runner is in trouble, so it must not be the thing
+        # that raises. Every one of these used to be a 500 (and an email to the admins).
+        unusable = {
+            "no written key": json.dumps({"pid": 1, "slots_busy": 0}),
+            "naive written": json.dumps({"written": "2026-07-31T10:00:00"}),
+            "unparseable written": json.dumps({"written": "the other day"}),
+            "not an object": json.dumps([1, 2, 3]),
+            "not json at all": "half a fi",
+        }
+
+        for description, contents in unusable.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                statuspath = Path(tmpdir, "taskrunner_status.json")
+                statuspath.write_text(contents)
+
+                with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                    response = self.client.get(reverse("taskrunnerstatus"))
+
+            assert response.status_code == 503, f"{description}: {response.content!r}"
+            assert response.json()["stale"] is True, description
+            assert response.json()["running"] is False, description
 
 
 class OpenApiSchemaTests(TestCase):

@@ -13,6 +13,7 @@ import os
 import platform
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -27,7 +28,18 @@ TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = platform.system() == "Darwin"
+# macOS means a development machine, but that is not the only kind, and sometimes a Mac needs to
+# simulate production: an explicit ATLASSERVER_DEBUG wins in both directions, and only when it is
+# unset does the platform decide. Without the override, a developer on Linux picks up the
+# production hardening below, where SECURE_SSL_REDIRECT makes runserver answer every request with
+# a 301 to a port serving no TLS.
+_debug_env = os.environ.get("ATLASSERVER_DEBUG", "").strip().lower()
+if _debug_env and _debug_env not in {"1", "true", "yes", "0", "false", "no"}:
+    # fail loudly rather than guess: a value like "on" silently selecting production mode would
+    # give a developer the SSL-redirect 301 loop with nothing pointing at the typo that caused it
+    _msg = f"ATLASSERVER_DEBUG must be one of 1/true/yes or 0/false/no, not {_debug_env!r}"
+    raise ImproperlyConfigured(_msg)
+DEBUG = _debug_env in {"1", "true", "yes"} if _debug_env else platform.system() == "Darwin"
 
 # Not "*": django.contrib.sites is not installed, so the password reset email builds its link from
 # the Host header. Accepting any host lets an attacker send a victim a reset link pointing at a
@@ -180,7 +192,10 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
-PATHPREFIX = "/forcedphot" if platform.system() != "Darwin" else ""
+# keyed on DEBUG, not on the platform: a Linux development machine with ATLASSERVER_DEBUG=1 would
+# otherwise get /forcedphot/static/ URLs that runserver does not serve — no CSS and no bundles —
+# and a Mac simulating production (ATLASSERVER_DEBUG=0) needs the prefix the real deployment has
+PATHPREFIX = "" if DEBUG else "/forcedphot"
 STATIC_URL = f"{PATHPREFIX}/static/"
 
 STATIC_ROOT = Path(BASE_DIR, "static")
@@ -197,12 +212,29 @@ USE_X_FORWARDED_PORT = False
 # WARNING! Only set this if you fully understand what you're doing. Otherwise,
 # you may be opening yourself up to a security risk.
 # SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
-if platform.system() != "Darwin":
+if not DEBUG:
     # httpconf.txt sets this header unconditionally (so a client cannot spoof it). The previous
     # value keyed off SERVER_SOFTWARE, which Apache always populates with its own banner, so
     # request.scheme was a constant that depended on the ServerTokens setting rather than on the
     # protocol the request actually arrived over.
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+if not DEBUG:
+    # the four warnings that `manage.py check --deploy` raised. Guarded, because development runs
+    # over plain http on localhost and secure-only cookies would never be sent there.
+    #
+    # SECURE_SSL_REDIRECT never fires as things stand: httpconf.txt sets X-Forwarded-Proto to https
+    # unconditionally, so request.is_secure() is always true. It is here as a backstop for a
+    # deployment that stops setting that header, which would otherwise quietly serve plain http.
+    # annotated rather than left to inference: without a declared type these are literal types, and
+    # settings_test.py (which switches them back off, see the note there) would not type check
+    SECURE_SSL_REDIRECT: bool = True
+    SESSION_COOKIE_SECURE: bool = True
+    CSRF_COOKIE_SECURE: bool = True
+    # one year, and only for this host: subdomains are not all served by this deployment
+    SECURE_HSTS_SECONDS: int = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS: bool = False
+    SECURE_HSTS_PRELOAD: bool = False
 
 CSRF_TRUSTED_ORIGINS = [
     "https://*.qub.ac.uk",

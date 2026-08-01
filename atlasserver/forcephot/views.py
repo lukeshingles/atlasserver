@@ -45,6 +45,7 @@ from rest_framework import permissions
 from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.utils.urls import replace_query_param
@@ -62,6 +63,10 @@ from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+
+# not atlasserver.taskrunner.main: importing that module runs django.setup() and pulls pandas and
+# multiprocessing into every web worker, permanently, to read two constants
+from atlasserver.taskrunner import status as runnerstatus
 
 MAX_USER_IMGZIP_TASKS = 5
 MAX_USER_TASKS = 500
@@ -135,7 +140,12 @@ def calculate_queue_positions() -> None:
             unassigned_taskids = remaining_taskids
             unassigned_task_userids = remaining_task_userids
 
-            assert passnum < (2 * queuedtaskcount + 1)  # prevent infinite loop if we're failing to assign anything
+            # bail out rather than spin forever if a pass somehow assigns nothing. Not an assert:
+            # those are stripped under python -O, which is exactly when a hung request would be
+            # hardest to explain
+            if passnum >= (2 * queuedtaskcount + 1):
+                msg = f"queue position assignment made no progress after {passnum} passes over {queuedtaskcount} tasks"
+                raise RuntimeError(msg)
 
             passnum += 1
 
@@ -186,6 +196,53 @@ def get_tasklist_etag(request, user_id: int) -> str:
         # the queue position rendered for a task is relative to the front of the global queue
         f'.queueoffset{Task.min_queuepos_relative()}"'
     )
+
+
+# the URLs the queue page polls (api_url_base and friends) are built inside tasklist-react.html
+# from {% url %} and the request, not passed in as view context: every action of the viewset can
+# render that template (a plain browser-form POST receives it via the 201 response), and an action
+# that forgot to supply them produced a page that polled fetch('') against itself
+
+
+def client_location_fields(request) -> dict[str, str | None]:
+    """Return the country_code/region fields for the request's client IP, when it can be located.
+
+    One implementation rather than one per task-creating view: the private-range list and the
+    header handling drifted apart once before, and a divergence here quietly feeds wrong countries
+    into the usage statistics.
+    """
+    if x_forwarded_for := request.META.get("HTTP_X_FORWARDED_FOR"):
+        ip = x_forwarded_for.split(",")[0]
+    else:
+        ip = request.META.get("REMOTE_ADDR")
+
+    # str | None values: the GeoIP database does not know a region for every address, and the
+    # model fields are nullable, so a None is stored as-is rather than dropped
+    fields: dict[str, str | None] = {}
+    # private-range addresses (local submissions) have no meaningful GeoIP location
+    if ip is not None and not ip.startswith(("192.168.", "127.0.", "10.")):
+        geoip = GeoIP2()
+        with contextlib.suppress(AddressNotFoundError):
+            location = geoip.city(ip)
+            fields["country_code"] = location["country_code"]
+            fields["region"] = location["region_code"]
+
+    return fields
+
+
+def request_is_from_api(request) -> bool:
+    """Return whether a request came from a script rather than from the queue page.
+
+    This decides more than a statistic: a task marked from_api is never sent a result email (API
+    clients are expected to use the completion callback or to poll), so getting it wrong silently
+    costs a web user the email they asked for. The test used to be whether a Referer header was
+    present, which a browser is free not to send — a user behind a no-referrer policy submitted from
+    the web form, ticked "Email me when completed", and never heard anything back.
+
+    Which authenticator succeeded is not a guess: the queue page submits with a session cookie,
+    while the documented API examples authenticate with a token (or Basic).
+    """
+    return not isinstance(getattr(request, "successful_authenticator", None), SessionAuthentication)
 
 
 class ForcePhotPermission(permissions.BasePermission):
@@ -287,22 +344,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
         }
 
-        if x_forwarded_for := self.request.META.get("HTTP_X_FORWARDED_FOR"):
-            ip = x_forwarded_for.split(",")[0]
-        else:
-            ip = self.request.META.get("REMOTE_ADDR")
-
-        if ip is not None:
-            if ip.startswith(("192.168.", "127.0.", "10.")):
-                ip = "qub.ac.uk"
-            else:
-                geoip = GeoIP2()
-                with contextlib.suppress(AddressNotFoundError):
-                    location = geoip.city(ip)
-                    extra_fields["country_code"] = location["country_code"]
-                    extra_fields["region"] = location["region_code"]
-
-        extra_fields["from_api"] = "HTTP_REFERER" not in self.request.META
+        extra_fields.update(client_location_fields(self.request))
+        extra_fields["from_api"] = request_is_from_api(self.request)
 
         serializer.save(**extra_fields)
 
@@ -310,8 +353,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         # would cache the response body before the updates below have been applied
         newtasks = serializer.instance if isinstance(serializer.instance, list) else [serializer.instance]
 
-        for i, task in enumerate(newtasks):
-            Task.objects.filter(id=task.id).update(userqueuedtasks_on_submit=usertaskcount_before + i)
+        # one statement rather than an UPDATE per task: a radeclist can hold 100 targets, and that
+        # was 100 round trips inside the request that the user is waiting on
+        Task.objects.bulk_update(
+            [Task(id=task.id, userqueuedtasks_on_submit=usertaskcount_before + i) for i, task in enumerate(newtasks)],
+            ["userqueuedtasks_on_submit"],
+        )
 
         calculate_queue_positions()
 
@@ -351,7 +398,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     "paginator": self.paginator,
                     "usertaskcount": listqueryset.count(),
                     "debug": settings.DEBUG,
-                    "api_url_base": request.build_absolute_uri(reverse("task-list")),
                 },
             )
 
@@ -397,7 +443,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     "name": f"Task {instance.id}",
                     "singletaskdetail": True,
                     "debug": settings.DEBUG,
-                    "api_url_base": request.build_absolute_uri(reverse("task-list")),
                 },
             )
 
@@ -462,21 +507,11 @@ class RequestImages(APIView):
             data["starttimestamp"] = None
             data["finishtimestamp"] = None
 
-            if x_forwarded_for := self.request.META.get("HTTP_X_FORWARDED_FOR"):
-                ip = x_forwarded_for.split(",")[0]
-            else:
-                ip = self.request.META.get("REMOTE_ADDR")
+            data.update(client_location_fields(self.request))
 
-            if ip is not None:
-                if ip.startswith(("192.168.", "127.0.", "10.")):
-                    ip = "qub.ac.uk"
-                else:
-                    geoip = GeoIP2()
-                    with contextlib.suppress(AddressNotFoundError):
-                        location = geoip.city(ip)
-                        data["country_code"] = location["country_code"]
-                        data["region"] = location["region_code"]
-
+            # deliberately not request_is_from_api(): from_api decides which maintenance sweep
+            # collects the row (31 days for API tasks, 183 otherwise), so classifying a
+            # token-authenticated image request as API would delete it five months early
             data["from_api"] = False
             data["send_email"] = False
 
@@ -537,7 +572,10 @@ def statscoordchart(request):
     return JsonResponse({"script": script, "div": strhtml})
 
 
-@cache_page(30, cache="usagestats")
+# the same 15 minutes as statsshortterm, which windows over the same data. This was 30 seconds,
+# which had the most expensive chart on the stats page being rebuilt from a 14-day scan of the task
+# table for practically every visitor.
+@cache_page(60 * 15, cache="usagestats")
 def statsusagechart(request):
     days_back = 14
 
@@ -772,20 +810,26 @@ def taskrunnerstatus(request):
     means the runner has not refreshed the file recently, which is what a crashed or wedged runner
     looks like from outside. The runner writes into its own log directory, which the web server
     process can read but does not serve, so the file is not reachable as a static asset.
+
+    A status file that cannot be interpreted is reported the same way as a missing one. This
+    endpoint exists to say that something is wrong with the runner, so it must not be the thing that
+    raises: a 500 here tells the caller nothing and mails the admins as well.
     """
-    from atlasserver.taskrunner.main import STATUS_PATH
-    from atlasserver.taskrunner.main import STATUS_WRITE_SECONDS
-
     try:
-        status = json.loads(STATUS_PATH.read_text())
-    except (OSError, ValueError):
-        # never written, unreadable, or half-written despite the atomic rename
-        return JsonResponse({"running": False, "stale": True, "detail": "no status file"}, status=503)
+        status = json.loads(runnerstatus.STATUS_PATH.read_text())
+        # this doubles as the check that the payload is an object at all: subscripting a JSON list,
+        # string or number raises TypeError, which is caught below along with everything else
+        written = datetime.datetime.fromisoformat(status["written"])
+        age_seconds = (datetime.datetime.now(datetime.UTC) - written).total_seconds()
+    except (OSError, KeyError, TypeError, ValueError) as ex:
+        # never written, unreadable, half-written despite the atomic rename, or written by a
+        # version that recorded something else. A naive `written` lands here as a TypeError.
+        return JsonResponse(
+            {"running": False, "stale": True, "detail": f"no usable status file ({type(ex).__name__})"}, status=503
+        )
 
-    written = datetime.datetime.fromisoformat(status["written"])
-    age_seconds = (datetime.datetime.now(datetime.UTC) - written).total_seconds()
     # several missed writes rather than one, so that a slow write does not raise a false alarm
-    stale = age_seconds > (STATUS_WRITE_SECONDS * 4)
+    stale = age_seconds > (runnerstatus.STATUS_WRITE_SECONDS * 4)
 
     return JsonResponse(
         {**status, "running": not stale, "stale": stale, "status_age_seconds": round(age_seconds, 1)},
@@ -980,7 +1024,11 @@ def resultplotdatajs(request, taskid):
         plotscript = "js/queuepage/src/lightcurveplotly.js" if settings.DEBUG else "js/lightcurveplotly.min.js"
         strjs += read_plotscript(Path(settings.STATIC_ROOT, plotscript))
 
-    return HttpResponse(strjs, content_type="text/javascript", headers={"ETag": etag})
+    # only set the header when there is one: Django stringifies whatever it is given, so passing the
+    # DEBUG-mode None sent the literal header "ETag: None"
+    headers = {"ETag": etag} if etag is not None else {}
+
+    return HttpResponse(strjs, content_type="text/javascript", headers=headers)
 
     # if jsplotfile.exists():
     #     return FileResponse(open(jsplotfile, "rb"), headers={"ETag": etag})

@@ -215,7 +215,10 @@ export class NewRequest extends React.Component {
             <ul key="ulradec">
                 <li><label htmlFor="id_radeclist">RA Dec / MPC names:</label>
                     <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={this.state.radeclist} onChange={e => { this.setState({ 'radeclist': e.target.value }); localStorage.setItem("radeclist", e.target.value); }}></textarea>
-                    &nbsp;<a onClick={() => { this.setState({ 'showradechelp': !this.state.showradechelp }) }}>Help</a>
+                    {/* a button, not an <a> without an href: this toggles a panel rather than
+                        navigating, and a hrefless link is not focusable, so it could not be reached
+                        by keyboard. type="button" matters here — inside a form, a button submits. */}
+                    &nbsp;<button type="button" className="linkbutton" aria-expanded={this.state.showradechelp} aria-controls="radec_help" onClick={() => { this.setState({ 'showradechelp': !this.state.showradechelp }) }}>Help</button>
                     {this.state.showradechelp ? <div id="radec_help" style={{ display: 'block', clear: 'right', fontSize: 'small' }} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
                 </li>
                 {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['radeclist'])}</li></ul> : ''}
@@ -262,7 +265,9 @@ export class NewRequest extends React.Component {
             <ul key="ulmjdoptions">
                 <li key="mjd_min">
                     <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={this.state.mjd_min} onChange={this.handlechange_mjd_min} />
-                    <a className="btn" onClick={() => { this.setState({ 'mjd_min': getDefaultMjdMin() }); this.update_mjd_min(getDefaultMjdMin()); localStorage.removeItem('mjd_min'); }}>↩️</a>
+                    {/* the emoji is the whole of this control, so without a label there is nothing
+                        for a screen reader (or a hover) to say about it */}
+                    <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { this.setState({ 'mjd_min': getDefaultMjdMin() }); this.update_mjd_min(getDefaultMjdMin()); localStorage.removeItem('mjd_min'); }}>↩️</button>
                     <p className="inputisodate" id='id_mjd_min_isoformat'>{this.state.mjd_min_isoformat}</p>
                 </li>
                 <li key="mjd_max">

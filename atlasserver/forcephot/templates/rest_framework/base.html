@@ -9,6 +9,9 @@
 
       {% block meta %}
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+        {# without this a phone lays the page out at 980px and then zooms out, so the text is #}
+        {# unreadable and none of the responsive rules in main.css ever apply #}
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="NONE,NOARCHIVE" />
       {% endblock %}
 
@@ -37,7 +40,9 @@
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/>
         <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/>
 
-        <link rel="stylesheet" type="text/css" href="{% static "main.css" %}"/>
+        {# versioned like the JS bundles: the queue page's styling lives here, so a browser holding #}
+        {# a cached copy alongside a freshly deployed bundle renders the new class names unstyled #}
+        <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver=20260731"/>
 
         {% if not user.is_authenticated %}
         <style>
@@ -61,7 +66,7 @@
           <div class="container">
             <span>
               {% block branding %}
-                <a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'><img src="{% static "images/logos/atlas_logo.svg" %}" /></a>
+                <a class='navbar-brand' rel="nofollow" href='{% url 'index' %}'><img src="{% static "images/logos/atlas_logo.svg" %}" alt="ATLAS Forced Photometry home" /></a>
               {% endblock %}
             </span>
 
