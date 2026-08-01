@@ -17,9 +17,14 @@
         // "?format=json" while React fetched this same page *without* that parameter and with
         // cache: "no-store", so the two never met: every queue page load paid for two full task
         // list serialisations and used one of them.
-        const api_url_base = '{{api_url_base|escapejs}}';
-        const queuepositions_url = '{{queuepositions_url|escapejs}}';
-        const taskrunnerstatus_url = '{{taskrunnerstatus_url|escapejs}}';
+        {# built here rather than passed in by the view: every action of the viewset renders this #}
+        {# template (a plain browser-form POST gets it via the 201 response), and an action that #}
+        {# forgot to supply the URLs produced a page that polled fetch('') against itself. #}
+        {# {% url %} carries the /forcedphot script prefix, and request.scheme/get_host respect #}
+        {# SECURE_PROXY_SSL_HEADER and the proxy-fixed Host header. #}
+        const api_url_base = '{{ request.scheme }}://{{ request.get_host }}{% url 'task-list' %}';
+        const queuepositions_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'queuepositions' %}';
+        const taskrunnerstatus_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'taskrunnerstatus' %}';
 
         const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
         var user_is_active = true;

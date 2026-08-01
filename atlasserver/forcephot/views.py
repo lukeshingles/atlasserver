@@ -198,18 +198,10 @@ def get_tasklist_etag(request, user_id: int) -> str:
     )
 
 
-def queuepage_urls(request) -> dict[str, str]:
-    """Return the endpoints the queue page polls, for the template to hand to the JavaScript.
-
-    Reversed here rather than derived in the browser from api_url_base: the deployment is served
-    under a path prefix (/forcedphot) that only Django knows about, and building sibling URLs by
-    string surgery in the frontend is how that prefix gets lost.
-    """
-    return {
-        "api_url_base": request.build_absolute_uri(reverse("task-list")),
-        "queuepositions_url": request.build_absolute_uri(reverse("queuepositions")),
-        "taskrunnerstatus_url": request.build_absolute_uri(reverse("taskrunnerstatus")),
-    }
+# the URLs the queue page polls (api_url_base and friends) are built inside tasklist-react.html
+# from {% url %} and the request, not passed in as view context: every action of the viewset can
+# render that template (a plain browser-form POST receives it via the 201 response), and an action
+# that forgot to supply them produced a page that polled fetch('') against itself
 
 
 def client_location_fields(request) -> dict[str, str | None]:
@@ -406,7 +398,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     "paginator": self.paginator,
                     "usertaskcount": listqueryset.count(),
                     "debug": settings.DEBUG,
-                    **queuepage_urls(request),
                 },
             )
 
@@ -452,7 +443,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
                     "name": f"Task {instance.id}",
                     "singletaskdetail": True,
                     "debug": settings.DEBUG,
-                    **queuepage_urls(request),
                 },
             )
 

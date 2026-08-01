@@ -814,6 +814,25 @@ class TaskCreateResponseTests(TestCase):
             assert task.userqueuedtasks_on_submit == row["userqueuedtasks_on_submit"]
             assert task.queuepos == row["queuepos"]
 
+    def test_a_browser_form_post_renders_a_working_queue_page(self) -> None:
+        # a plain (non-JS) form POST receives the queue page via the 201 response, a render path
+        # that supplies none of the view context. The URL globals are built inside the template
+        # from {% url %} for exactly this reason: when they came from view context, this page
+        # polled fetch('') against itself and setFilter threw on new URL('').
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data={"ra": "1.0", "dec": "2.0"},
+            HTTP_ACCEPT="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+
+        assert response.status_code == 201, response.status_code
+        content = response.content.decode()
+        assert "const api_url_base = 'http://testserver/queue/'" in content, content[:500]
+        assert "const queuepositions_url = 'http://testserver/queuepositions.json'" in content
+        assert "const taskrunnerstatus_url = 'http://testserver/taskrunnerstatus.json'" in content
+
     def test_single_task_creation(self) -> None:
         # RA 0 / Dec 0 doubles as the end-to-end check that zero coordinates survive the API
         result = self.post_tasks({"ra": 0.0, "dec": 0.0})
