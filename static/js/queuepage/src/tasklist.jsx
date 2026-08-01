@@ -95,8 +95,13 @@ export class Task extends React.Component {
                 success: (result) => { console.log('Deleted task ', task.id); this.setState({ 'httperror': '' }); this.props.fetchData() },
                 error: (err) => {
                     // the row slides back, so without a message the click looks like it simply did
-                    // nothing. A 403 here means the task belongs to somebody else.
+                    // nothing. A 403 here means the task belongs to somebody else; a 401 means the
+                    // session has ended, so reload the page, which lands on the login form.
                     console.log('Failed to delete task ', task.id, err);
+                    if (err.status === 401) {
+                        window.location.reload();
+                        return;
+                    }
                     $('#task-' + task.id).slideDown(100);
                     this.setState({
                         'httperror': err.status === 403
@@ -379,6 +384,9 @@ export class Task extends React.Component {
 }
 
 let tasklist_api_request_active = false;
+// set when a refresh was requested while a request was already in flight; the settled request
+// re-fetches so the refresh is delayed rather than lost
+let tasklist_refresh_queued = false;
 const tasklist_fetchcache = {};
 // remembers the ETag of each polled page so that an unchanged page can be answered with a 304
 const tasklist_pollcache = new PollCache();
@@ -404,21 +412,33 @@ class RunnerStatus extends React.PureComponent {
         if (pollingPaused()) {
             // a tab opened in the background (cmd-click, session restore) is paused at mount, and
             // without a retry the banner could not appear until the slow interval next fired —
-            // which is exactly the wait the banner exists to prevent. Poll for the tab waking up.
-            clearTimeout(this.retry);
-            this.retry = setTimeout(this.fetchStatus, 2000);
+            // which is exactly the wait the banner exists to prevent. Only while nothing has been
+            // fetched yet: once any status is held, the slow interval is enough, and a visible tab
+            // whose user merely stopped moving the mouse must not be woken every two seconds.
+            if (this.state.status == null) {
+                clearTimeout(this.retry);
+                this.retry = setTimeout(this.fetchStatus, 2000);
+            }
             return;
         }
         // a stale runner is reported with HTTP 503 and a body, so the status is read from the body
         // rather than from the status code
         fetch(taskrunnerstatus_url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
             .then(response => response.json())
-            .then(status => this.setState({ 'status': status }))
+            .then(status => {
+                this.lastgoodfetch = Date.now();
+                this.setState({ 'status': status });
+            })
             .catch(error => {
                 // not being able to reach this endpoint says nothing about the runner, so do not
-                // claim an outage on the strength of our own failed request — but do not retract
-                // one we have already been told about either: keep the last status we were given.
+                // claim an outage on the strength of our own failed request — but a status we have
+                // not been able to re-confirm for several polls is no longer worth asserting
+                // either, in either direction: a frozen "3 slots busy" line outlives a dead
+                // runner, and a frozen outage banner outlives a recovered one.
                 debug_log('Could not read the task runner status', error);
+                if (this.lastgoodfetch != null && (Date.now() - this.lastgoodfetch) > RUNNERSTATUS_POLL_MS * 5) {
+                    this.setState({ 'status': null });
+                }
             });
     }
 
@@ -443,6 +463,19 @@ class RunnerStatus extends React.PureComponent {
         if (!status.queued_task_count) {
             // an idle runner with an empty queue is the normal case and needs no commentary
             return null;
+        }
+
+        // during the hourly maintenance sweep the slot counts are frozen (nothing is dispatched or
+        // reaped while it runs), so say what is happening rather than reporting numbers that are
+        // temporarily meaningless
+        if (status.maintenance) {
+            return (
+                <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
+                    Task runner: maintenance sweep in progress;
+                    {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
+                    all users in the queue.
+                </p>
+            );
         }
 
         return (
@@ -731,7 +764,11 @@ export class TaskPage extends React.Component {
         }
 
         if (tasklist_api_request_active && !usertriggered) {
-            debug_log('prevent overlapping GET requests');
+            // queued rather than dropped: a refresh requested here (e.g. by deleteTask, whose
+            // response raced the poll) would otherwise be swallowed, and the in-flight response
+            // was serialised before whatever prompted it, so its data is already stale
+            debug_log('queueing refresh behind the in-flight GET request');
+            tasklist_refresh_queued = true;
             return;
         }
 
@@ -778,8 +815,12 @@ export class TaskPage extends React.Component {
                         return null;
                     }
                     if (response.status == 404) {
+                        // a handled case (the viewed task was deleted), not a server error: without
+                        // this return it fell through to the message below and flashed
+                        // "Server error (HTTP 404)" during a perfectly normal navigation
                         window.history.pushState({}, document.title, api_url_base);
                         this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
+                        return null;
                     }
                     if (response.status == 200) {
                         this.setState({ tasklist_api_error: '' });
@@ -797,6 +838,12 @@ export class TaskPage extends React.Component {
                 // deliberately left where it was: it is what tells the user how stale the page is.
                 this.setState({ tasklist_api_error: 'Connection error' });
             }).then(data => {
+                if (tasklist_refresh_queued && !tasklist_api_request_active) {
+                    // something asked for a refresh while this request was in flight; this
+                    // response predates whatever prompted that, so fetch again right away
+                    tasklist_refresh_queued = false;
+                    setTimeout(() => this.fetchData(false), 0);
+                }
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
                     // nothing changed server-side, but the poll did succeed, so the "last updated"

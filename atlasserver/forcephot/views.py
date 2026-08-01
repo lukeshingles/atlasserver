@@ -212,6 +212,32 @@ def queuepage_urls(request) -> dict[str, str]:
     }
 
 
+def client_location_fields(request) -> dict[str, str | None]:
+    """Return the country_code/region fields for the request's client IP, when it can be located.
+
+    One implementation rather than one per task-creating view: the private-range list and the
+    header handling drifted apart once before, and a divergence here quietly feeds wrong countries
+    into the usage statistics.
+    """
+    if x_forwarded_for := request.META.get("HTTP_X_FORWARDED_FOR"):
+        ip = x_forwarded_for.split(",")[0]
+    else:
+        ip = request.META.get("REMOTE_ADDR")
+
+    # str | None values: the GeoIP database does not know a region for every address, and the
+    # model fields are nullable, so a None is stored as-is rather than dropped
+    fields: dict[str, str | None] = {}
+    # private-range addresses (local submissions) have no meaningful GeoIP location
+    if ip is not None and not ip.startswith(("192.168.", "127.0.", "10.")):
+        geoip = GeoIP2()
+        with contextlib.suppress(AddressNotFoundError):
+            location = geoip.city(ip)
+            fields["country_code"] = location["country_code"]
+            fields["region"] = location["region_code"]
+
+    return fields
+
+
 def request_is_from_api(request) -> bool:
     """Return whether a request came from a script rather than from the queue page.
 
@@ -326,21 +352,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
         }
 
-        if x_forwarded_for := self.request.META.get("HTTP_X_FORWARDED_FOR"):
-            ip = x_forwarded_for.split(",")[0]
-        else:
-            ip = self.request.META.get("REMOTE_ADDR")
-
-        if ip is not None:
-            if ip.startswith(("192.168.", "127.0.", "10.")):
-                ip = "qub.ac.uk"
-            else:
-                geoip = GeoIP2()
-                with contextlib.suppress(AddressNotFoundError):
-                    location = geoip.city(ip)
-                    extra_fields["country_code"] = location["country_code"]
-                    extra_fields["region"] = location["region_code"]
-
+        extra_fields.update(client_location_fields(self.request))
         extra_fields["from_api"] = request_is_from_api(self.request)
 
         serializer.save(**extra_fields)
@@ -505,20 +517,7 @@ class RequestImages(APIView):
             data["starttimestamp"] = None
             data["finishtimestamp"] = None
 
-            if x_forwarded_for := self.request.META.get("HTTP_X_FORWARDED_FOR"):
-                ip = x_forwarded_for.split(",")[0]
-            else:
-                ip = self.request.META.get("REMOTE_ADDR")
-
-            if ip is not None:
-                if ip.startswith(("192.168.", "127.0.", "10.")):
-                    ip = "qub.ac.uk"
-                else:
-                    geoip = GeoIP2()
-                    with contextlib.suppress(AddressNotFoundError):
-                        location = geoip.city(ip)
-                        data["country_code"] = location["country_code"]
-                        data["region"] = location["region_code"]
+            data.update(client_location_fields(self.request))
 
             # deliberately not request_is_from_api(): from_api decides which maintenance sweep
             # collects the row (31 days for API tasks, 183 otherwise), so classifying a

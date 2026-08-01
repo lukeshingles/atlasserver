@@ -114,10 +114,10 @@
       }
     };
 
-    var newids = [];
+    {# only newtaskids: a "newids" global also used to be declared here, but it was never read #}
+    {# or written anywhere — easily confused with the ?newids= query parameter, which is real #}
     var newtaskids = [];
 
-    // TODO: remove?
     $(document).ready(inactivityTimer);
     </script>
 

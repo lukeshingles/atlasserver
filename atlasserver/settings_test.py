@@ -11,15 +11,24 @@ sets ATLASSERVER_TEST_DB=mysql so that the suite still runs against the engine u
 import os
 
 # Set before the star import, because settings.py applies its production hardening under a plain
-# `if not DEBUG:` at import time: assigning DEBUG afterwards would be too late, and the suite would
-# then run with SECURE_SSL_REDIRECT (a 301 on every test-client request) and secure-only cookies
-# that the plain-http test client never sends back. Undoing each of those by hand here instead is a
-# list that has to be kept in step with settings.py by memory alone.
-os.environ.setdefault("ATLASSERVER_DEBUG", "1")
+# `if not DEBUG:` at import time — assigning DEBUG afterwards would be too late. A plain
+# assignment, not setdefault: an operator's exported ATLASSERVER_DEBUG=0 (or one in .env, which
+# load_dotenv applies with override=True during the import below) must not put the test suite
+# into hardened mode.
+os.environ["ATLASSERVER_DEBUG"] = "1"
 
 from atlasserver.settings import *  # noqa: F403
 
 DEBUG = True
+
+# Belt and braces for the same settings: the env var above can still lose to BASE_DIR/.env
+# (load_dotenv overrides the environment), and these four break the suite outright when they leak
+# in — SECURE_SSL_REDIRECT answers every test-client request with a 301, and the plain-http test
+# client never sends secure-only cookies back.
+SECURE_SSL_REDIRECT = False
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+SECURE_HSTS_SECONDS = 0
 
 if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
     DATABASES = {

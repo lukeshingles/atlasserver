@@ -566,12 +566,16 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
-def write_status(procs_taskids: dict[int, int], numslots: int) -> None:
+def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool = False) -> None:
     """Write a snapshot of the runner's state for the status endpoint to read.
 
     Nothing outside the runner could previously tell whether it was alive, how many slots were
     busy, or whether the queue had stalled — the only signal was the log files. The file is written
     atomically (write to a temporary name, then rename) so that a reader never sees a partial one.
+
+    `maintenance` marks a snapshot written while the hourly sweep is blocking the main loop. The
+    slot fields are frozen for that whole window (nothing is reaped or dispatched), so without the
+    flag the file would confidently describe workers that may have already exited.
     """
     oldest_queued = (
         Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
@@ -586,6 +590,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int) -> None:
         "numslots": numslots,
         "slots_busy": len(procs_taskids),
         "running_taskids": sorted(procs_taskids.values()),
+        "maintenance": maintenance,
         "queued_task_count": Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).count(),
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
@@ -748,8 +753,13 @@ def remove_old_tasks(
 
             taskids = [task.id for task in tasks]
 
-            for task in tasks:
+            for taskindex, task in enumerate(tasks):
                 task.delete_result_files()
+                # inside the batch as well as after it: 500 tasks times several filesystem operations
+                # each can alone outlast the staleness window on a slow results mount. The
+                # heartbeat rate-limits itself, so calling it often costs almost nothing.
+                if heartbeat is not None and taskindex % 50 == 49:
+                    heartbeat()
 
             if harddeleterecord:
                 # the rows are about to go, so there is no point marking them archived first
@@ -768,15 +778,16 @@ def remove_old_tasks(
         logfunc("  Done.")
 
 
-def do_maintenance(maxtime=None, heartbeat: t.Callable[[], None] | None = None):
+def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     """Remove old tasks and associated files according to their type and age.
 
-    `heartbeat` is called between sweeps and after every batch. This runs in the main loop and
-    blocks it, and a long sweep would otherwise leave the status file untouched for minutes, which
-    from outside is indistinguishable from a dead runner: the queue page would tell every user that
-    their tasks are not being processed while all sixteen slots were in fact busy.
+    `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
+    and blocks it, and a long sweep would otherwise leave the status file untouched for minutes,
+    which from outside is indistinguishable from a dead runner: the queue page would tell every
+    user that their tasks are not being processed while all sixteen slots were in fact busy.
     """
-    # start_maintenancetime = time.perf_counter()
+    # no maxtime parameter: one used to be accepted and silently ignored (its only reference was a
+    # commented-out call), which read as a five-minute bound on the sweep that did not exist
 
     def logfunc(x):
         log_general(f"Maintenance: {x}")
@@ -797,9 +808,6 @@ def do_maintenance(maxtime=None, heartbeat: t.Callable[[], None] | None = None):
         if heartbeat is not None:
             heartbeat()
         remove_old_tasks(**sweep, logfunc=logfunc, heartbeat=heartbeat)
-
-    # # this can get very slow
-    # rm_unassociated_files(logprefix, start_maintenancetime, maxtime)
 
 
 def main() -> None:
@@ -822,11 +830,21 @@ def main() -> None:
     last_statustime: float = float("-inf")
     printedwaiting = False
 
-    def refresh_status() -> None:
+    def refresh_status(maintenance: bool = False) -> None:
         """Write the status snapshot now, and reset the interval that would have written it."""
         nonlocal last_statustime
-        write_status(procs_taskids=procs_taskids, numslots=numslots)
+        write_status(procs_taskids=procs_taskids, numslots=numslots, maintenance=maintenance)
         last_statustime = time.perf_counter()
+
+    def maintenance_heartbeat() -> None:
+        """Keep the status file fresh during the sweep, at the normal cadence.
+
+        Rate-limited so that callers can invoke it as often as they like; marked as maintenance
+        because the slot fields are frozen while the sweep blocks the loop, and an unqualified
+        snapshot would describe workers that may have already exited.
+        """
+        if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
+            refresh_status(maintenance=True)
 
     while True:
         # an idle server polled twice a second all night for nothing. Once the queue has been seen
@@ -839,7 +857,7 @@ def main() -> None:
             # the sweep blocks this loop, so it refreshes the status file itself; without that a
             # sweep lasting longer than STATUS_WRITE_SECONDS * 4 makes the queue page tell every
             # user that their tasks are not being processed while all the slots are still busy
-            do_maintenance(maxtime=300, heartbeat=refresh_status)
+            do_maintenance(heartbeat=maintenance_heartbeat)
             refresh_status()
             printedwaiting = False
 
