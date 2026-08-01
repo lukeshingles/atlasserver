@@ -103,11 +103,15 @@ export class Task extends React.Component {
                         return;
                     }
                     $('#task-' + task.id).slideDown(100);
-                    this.setState({
-                        'httperror': err.status === 403
-                            ? 'ERROR: you are not allowed to delete this task.'
-                            : 'ERROR: could not delete this task (HTTP ' + err.status + ').'
-                    });
+                    // jQuery reports a network-level failure as status 0, which is not an HTTP
+                    // status and reads as gibberish in a message
+                    let message = 'ERROR: could not delete this task (HTTP ' + err.status + ').';
+                    if (err.status === 403) {
+                        message = 'ERROR: you are not allowed to delete this task.';
+                    } else if (err.status === 0) {
+                        message = 'ERROR: could not reach the server to delete this task.';
+                    }
+                    this.setState({ 'httperror': message });
                     this.props.fetchData();
                 }
             });
@@ -468,19 +472,13 @@ class RunnerStatus extends React.PureComponent {
         // during the hourly maintenance sweep the slot counts are frozen (nothing is dispatched or
         // reaped while it runs), so say what is happening rather than reporting numbers that are
         // temporarily meaningless
-        if (status.maintenance) {
-            return (
-                <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
-                    Task runner: maintenance sweep in progress;
-                    {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
-                    all users in the queue.
-                </p>
-            );
-        }
+        const activity = status.maintenance
+            ? 'maintenance sweep in progress;'
+            : status.slots_busy + ' of ' + status.numslots + ' slots busy,';
 
         return (
             <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
-                Task runner: {status.slots_busy} of {status.numslots} slots busy,
+                Task runner: {activity}
                 {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
                 all users in the queue.
             </p>

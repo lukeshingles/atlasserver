@@ -13,6 +13,7 @@ import os
 import platform
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -33,6 +34,11 @@ TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split
 # production hardening below, where SECURE_SSL_REDIRECT makes runserver answer every request with
 # a 301 to a port serving no TLS.
 _debug_env = os.environ.get("ATLASSERVER_DEBUG", "").strip().lower()
+if _debug_env and _debug_env not in {"1", "true", "yes", "0", "false", "no"}:
+    # fail loudly rather than guess: a value like "on" silently selecting production mode would
+    # give a developer the SSL-redirect 301 loop with nothing pointing at the typo that caused it
+    _msg = f"ATLASSERVER_DEBUG must be one of 1/true/yes or 0/false/no, not {_debug_env!r}"
+    raise ImproperlyConfigured(_msg)
 DEBUG = _debug_env in {"1", "true", "yes"} if _debug_env else platform.system() == "Darwin"
 
 # Not "*": django.contrib.sites is not installed, so the password reset email builds its link from

@@ -1314,8 +1314,23 @@ class TaskRunnerStatusTests(TestCase):
         assert body["slots_busy"] == 1
         assert body["running_taskids"] == [42]
         assert body["numslots"] == 16
+        assert body["maintenance"] is False
         assert body["queued_task_count"] == 1
         assert body["oldest_queued_task_time"] is not None
+
+    def test_a_maintenance_snapshot_is_reported_as_such(self) -> None:
+        # written by the sweep's heartbeat: the slot fields are frozen while the sweep blocks the
+        # runner's loop, so the flag is what tells a reader not to trust them
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16, maintenance=True)
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 200, response.content
+        body = response.json()
+        assert body["running"] is True
+        assert body["maintenance"] is True
 
     def test_old_status_file_reports_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -79,14 +79,21 @@ def start() -> None:
     # Create a setup script and immediately start the apache instance.  Our URL prefix
     # is specified by the --mount-point setting.  We need to specify a PYTHONPATH before
     # starting the apache instance. Run this script from THIS directory.
+    #
+    # The mount point comes from Django's PATHPREFIX rather than being derived here a second
+    # time: PATHPREFIX follows DEBUG (which ATLASSERVER_DEBUG can override on any platform), and
+    # a mount point chosen by a different rule would serve the app at one prefix while every URL
+    # Django generates used another.
+    from atlasserver import settings as django_settings
+
+    mountpoint = django_settings.PATHPREFIX or "/"
+
     if platform.system() == "Darwin":
         print("Detected macOS, so using testing configuration for http://localhost/")
         port = 80
-        mountpoint = "/"
         includefile = []
     else:
         port = 8086
-        mountpoint = "/forcedphot"
         includefile = ["--include-file", str(ATLASSERVERPATH / "httpconf.txt")]
 
     command = [
