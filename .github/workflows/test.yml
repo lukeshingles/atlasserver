@@ -80,6 +80,9 @@ jobs:
         name: Run tests
         environment: test
         runs-on: ubuntu-latest
+        # the job now waits on a task running on another machine, and atlaswebserver retries
+        # starting Apache forever if the port cannot be bound, so bound the whole thing
+        timeout-minutes: 45
         env:
             ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
             ATLASSERVER_DJANGO_MYSQL_USER: root
@@ -90,6 +93,8 @@ jobs:
             # no MySQL server; CI opts back in to the engine used in production
             ATLASSERVER_TEST_DB: mysql
             DJANGO_SETTINGS_MODULE: atlasserver.settings_test
+            # the account that the end-to-end steps below create and submit a task with
+            ATLAS_SMOKETEST_USER: citest
 
         # services:
         #     mysql:
@@ -137,6 +142,12 @@ jobs:
                   ./manage.py makemigrations --check --dry-run
                   # apply the committed migrations, which is the same path a deployment takes
                   ./manage.py migrate
+                  # task ids in this throwaway database would start at 1, but the results directory
+                  # on sc01 is shared with the production server and the remote file names are
+                  # derived from the task id. Start above any id the real server has reached, at a
+                  # different place for every run, so that no two runs (and no run and a real task)
+                  # can write the same remote file.
+                  mysql -e "ALTER TABLE forcephot_task AUTO_INCREMENT = $((2000000000 + GITHUB_RUN_ID % 100000000));" -u${{env.ATLASSERVER_DJANGO_MYSQL_USER}} -p${{env.ATLASSERVER_DJANGO_MYSQL_PASSWORD}} ${{env.ATLASSERVER_DJANGO_MYSQL_DBNAME}}
 
             - name: Run Django Tests
               run: |
@@ -148,9 +159,87 @@ jobs:
                   uv run -- coverage report
                   uv run -- coverage xml
 
-            - name: Start and stop server
+            - name: Configure ssh access to ATLAS sc01
+              # the key is a secret of this repository's test environment, so a fork cannot run the
+              # end-to-end steps. They are skipped there rather than failing every push with a key
+              # error; everything above this point still runs.
+              if: github.repository == 'lukeshingles/atlasserver'
+              env:
+                  SC01_ID_RSA: ${{ secrets.SC01_ID_RSA }}
               run: |
+                  mkdir -p ~/.ssh
+                  chmod 700 ~/.ssh
+                  # printf, so that a secret stored without a trailing newline still becomes a
+                  # valid key file, and tr, because a stray carriage return makes ssh reject it
+                  printf '%s\n' "$SC01_ID_RSA" | tr -d '\r' > ~/.ssh/sc01_id_rsa
+                  chmod 600 ~/.ssh/sc01_id_rsa
+                  cat >> ~/.ssh/config <<'EOF'
+                  Host atlas
+                      Hostname atlas-base-sc01.ifa.hawaii.edu
+                      User yoda
+                      IdentityFile ~/.ssh/sc01_id_rsa
+                      IdentitiesOnly yes
+                      BatchMode yes
+                      StrictHostKeyChecking yes
+                      ConnectTimeout 30
+                  EOF
+                  chmod 600 ~/.ssh/config
+                  # the published sc01 host key. It is listed under the name the config dials as
+                  # well as the short name, because ssh looks it up by the name it connected to.
+                  cat >> ~/.ssh/known_hosts <<'EOF'
+                  atlas-base-sc01.ifa.hawaii.edu,atlas-base-sc01 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL/VrtcyXOnossuU/WlELPu/ND+IVFDryDVYlLb0KZJX
+                  EOF
+                  chmod 600 ~/.ssh/known_hosts
+
+            - name: Check the ssh connection
+              if: github.repository == 'lukeshingles/atlasserver'
+              run: |
+                  # fails with something readable if the secret is not a usable private key,
+                  # instead of a permission denied from the far end
+                  ssh-keygen -y -f ~/.ssh/sc01_id_rsa > /dev/null
+                  ssh atlas 'hostname; mkdir -p ~/atlasserver/results'
+
+            - name: Create the account that submits the task
+              if: github.repository == 'lukeshingles/atlasserver'
+              run: |
+                  password=$(openssl rand -hex 16)
+                  echo "ATLAS_SMOKETEST_PASSWORD=$password" >> "$GITHUB_ENV"
+                  ATLAS_SMOKETEST_PASSWORD="$password" ./manage.py shell -c '
+                  import os
+
+                  from django.contrib.auth.models import User
+
+                  User.objects.create_user(
+                      os.environ["ATLAS_SMOKETEST_USER"], "citest@example.com", os.environ["ATLAS_SMOKETEST_PASSWORD"]
+                  )'
+
+            - name: Start the server and the task runner
+              run: |
+                  # the supervisor script starts appending to the log before the runner it starts
+                  # creates the directory, so make it here: a failing tee there closes the pipe
+                  # that carries the runner's stderr, which is where a crash would be reported
+                  mkdir -p atlasserver/taskrunner/logs
                   atlaswebserver start
                   atlastaskrunner start
+
+            - name: Submit a task through the API and wait for sc01 to answer it
+              if: github.repository == 'lukeshingles/atlasserver'
+              run: ./.github/scripts/api_task_smoketest.py
+
+            - name: Stop the task runner and the server
+              if: always()
+              run: |
                   atlastaskrunner stop
                   atlaswebserver stop
+
+            - name: Show the task runner log
+              # the slot log holds the remote command and everything sc01 said about it, which is
+              # the only place a failure of the step above is explained
+              if: always()
+              run: tail -n 200 atlasserver/taskrunner/logs/*.txt || echo "the task runner wrote no logs"
+
+            - name: Remove anything this run left on sc01
+              # rsync deletes the remote files as it retrieves them, so there is normally nothing
+              # here to do. The id belongs to this run alone, so no other task can be caught by it.
+              if: always() && env.ATLAS_SMOKETEST_TASK_ID != ''
+              run: ssh atlas "rm -f ~/atlasserver/results/job${ATLAS_SMOKETEST_TASK_ID}.*"
