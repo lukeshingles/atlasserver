@@ -176,7 +176,7 @@ jobs:
                   cat >> ~/.ssh/config <<'EOF'
                   Host atlas
                       Hostname atlas-base-sc01.ifa.hawaii.edu
-                      User yoda
+                      User shingles
                       IdentityFile ~/.ssh/sc01_id_rsa
                       IdentitiesOnly yes
                       BatchMode yes
