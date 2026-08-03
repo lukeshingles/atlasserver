@@ -9,8 +9,17 @@ build-backend = "setuptools.build_meta"
 name = "atlasserver"
 authors = [{ name = "Luke Shingles", email = "luke.shingles@gmail.com" }]
 description = "ATLAS Forced Photometry server"
-classifiers = ["License :: OSI Approved :: MIT License"]
-license = { text = "MIT" }
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
 dynamic = ["version"]
 requires-python = ">=3.13"
 readme = { file = "README.md", content-type = 'text/markdown' }
@@ -235,7 +244,6 @@ order-by-type = false
 
 [tool.setuptools]
 include-package-data = true
-license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 namespaces = false
