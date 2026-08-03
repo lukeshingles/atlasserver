@@ -1047,6 +1047,28 @@ class AllowedHostsTests(TestCase):
 
 
 @override_settings(DEBUG=False)
+class BrokenLinkEmailTests(TestCase):
+    """A 404 must never mail the managers, whatever the referrer.
+
+    DEBUG is forced off because that is the only mode in which BrokenLinkEmailsMiddleware would
+    send anything, so with DEBUG on these would pass even if it were installed again.
+    """
+
+    def test_internal_referer_is_not_reported(self) -> None:
+        # a link to a result the retention sweep has since deleted, which is not an admin's problem
+        response = self.client.get("/queue/999999/data.txt", HTTP_REFERER="http://testserver/queue/")
+
+        assert response.status_code == 404, response.status_code
+        assert not django_mail.outbox, django_mail.outbox[0].subject
+
+    def test_external_referer_is_not_reported(self) -> None:
+        response = self.client.get("/no-such-page/", HTTP_REFERER="http://example.com/links")
+
+        assert response.status_code == 404, response.status_code
+        assert not django_mail.outbox, django_mail.outbox[0].subject
+
+
+@override_settings(DEBUG=False)
 class CallbackUrlValidationTests(TestCase):
     """The callback URL is user-supplied and the server fetches it, so this is an SSRF boundary.
 

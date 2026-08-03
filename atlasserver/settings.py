@@ -75,8 +75,11 @@ INSTALLED_APPS = [
     "geoip2",
 ]
 
+# django.middleware.common.BrokenLinkEmailsMiddleware is deliberately absent: its "Broken link on"
+# reports are dominated by links to results that the retention sweep has since deleted, and by bots
+# probing for URLs this site never had. Note that it mails MANAGERS from the middleware itself
+# rather than through LOGGING below, so leaving it installed and filtering the log is not an option.
 MIDDLEWARE = [
-    "django.middleware.common.BrokenLinkEmailsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
