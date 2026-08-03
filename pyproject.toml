@@ -66,7 +66,7 @@ branch = true
 omit = [
     "*/migrations/*",
     "*/tests.py",
-    "atlasserver/plot_atlas_fp.py",  # vendored third-party code
+    "atlasserver/plot_atlas_fp.py", # vendored third-party code
     "atlasserver/settings*.py",
     "atlasserver/wsgi.py",
     "atlasserver/asgi.py",
@@ -75,7 +75,11 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-exclude_also = ["if t.TYPE_CHECKING:", "if TYPE_CHECKING:", "raise NotImplementedError"]
+exclude_also = [
+    "if t.TYPE_CHECKING:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
 
 [tool.black]
 line-length = 120
