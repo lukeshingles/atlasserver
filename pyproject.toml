@@ -1,7 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=82.0.1",
-    "setuptools_scm>=10.0.5",
+    "setuptools>=83.0.0",
+    "setuptools_scm>=10.2.1",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -25,7 +25,7 @@ dependencies = [
     "fundamentals>=2.6.4",
     "geoip2>=5.2.0",
     "julian>=0.14",
-    "markdown>=3.6",
+    "markdown>=3.10.3",
     "matplotlib>=3.11.0",
     "mod-wsgi-standalone>=6.0.4",
     "mysqlclient>=2.2.4",
@@ -38,13 +38,13 @@ dependencies = [
 [dependency-groups]
 dev = [
     "coverage>=7.6.0",
-    "djangorestframework-stubs>=3.16.8",
-    "django-stubs[compatible-mypy]>=6.0.5",
+    "djangorestframework-stubs>=3.17.1",
+    "django-stubs[compatible-mypy]>=6.0.7",
     "mypy>=2.0",
-    "pip>=26.1.2",
+    "pip>=26.2",
     "pylint>=4.0.6",
     "pylint-django>=2.5.5",
-    "ruff>=0.16.0",
+    "ruff>=0.16.1",
     "ty>=0.0.63",
     "types-pyyaml>=6.0.12.20240311",
     "types-requests>=2.31.0.20240406",
