@@ -85,3 +85,4 @@ _version.py
 .tmp
 .DS_Store
 node_modules
+.parcel-cache

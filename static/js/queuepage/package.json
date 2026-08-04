@@ -9,5 +9,8 @@
   "scripts": {
     "build": "./build.sh",
     "test": "node --test 'src/*.test.js'"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true
   }
 }
