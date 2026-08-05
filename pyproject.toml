@@ -26,10 +26,10 @@ readme = { file = "README.md", content-type = 'text/markdown' }
 dependencies = [
     "astrocalc>=0.4.2",
     "astropy>=6.1.0",
-    "django>=6.0.6",
+    "django>=6.0.8",
     "bokeh~=3.9.2",
     "django-filter>=25.2",
-    "djangorestframework>=3.17.0",
+    "djangorestframework>=3.17.2",
     "drf-spectacular>=0.28.0",
     "fundamentals>=2.6.4",
     "geoip2>=5.2.0",
@@ -47,8 +47,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "coverage>=7.6.0",
-    "djangorestframework-stubs>=3.16.8",
-    "django-stubs[compatible-mypy]>=6.0.5",
+    "djangorestframework-stubs>=3.17.1",
+    "django-stubs[compatible-mypy]>=6.0.7",
     "mypy>=2.0",
     "pip>=26.1.2",
     "pylint>=4.0.6",
