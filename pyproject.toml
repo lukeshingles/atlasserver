@@ -26,7 +26,7 @@ readme = { file = "README.md", content-type = 'text/markdown' }
 dependencies = [
     "astrocalc>=0.4.2",
     "astropy>=6.1.0",
-    "django>=6.0.8",
+    "django>=6.1",
     "bokeh~=3.9.2",
     "django-filter>=25.2",
     "djangorestframework>=3.17.2",
@@ -61,6 +61,12 @@ dev = [
     "types-pycurl",
     "types-python-dateutil",
 ]
+
+[tool.uv.sources]
+# Django 6.1 removed django.utils.cache.cc_delim_re, which every released DRF version still
+# imports at startup; the fix is only on DRF main. Drop this pin once a DRF release
+# (> 3.17.2) supports Django 6.1.
+djangorestframework = { url = "https://github.com/encode/django-rest-framework/archive/f78043440a7884936232fdffffb68adcdbb3b272.tar.gz" }
 
 [project.urls]
 Repository = "https://github.com/lukeshingles/atlasserver"
@@ -114,14 +120,18 @@ disallow_any_generics = false
 disallow_subclassing_any = false
 
 [tool.django-stubs]
-django_settings_module = "atlasserver.settings"
+# settings_test star-imports the production settings after presetting the env vars needed to
+# import them, so type checking works on machines with no .env or secrets (e.g. the CI lint job)
+django_settings_module = "atlasserver.settings_test"
 ignore_missing_model_attributes = true
 
 [tool.pylint]
 max-line-length = 120
 errors-only = true
 load-plugins = "pylint_django"
-django-settings-module = "atlasserver.settings"
+# settings_test, for the same reason as tool.django-stubs below: it presets the env vars that
+# settings.py refuses to import without, so pylint works on machines with no .env or secrets
+django-settings-module = "atlasserver.settings_test"
 
 [tool.pylint.typecheck]
 ignored-modules = ["astropy", "extinction"]

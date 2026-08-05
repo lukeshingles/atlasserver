@@ -268,9 +268,9 @@ requires-dist = [
     { name = "astrocalc", specifier = ">=0.4.2" },
     { name = "astropy", specifier = ">=6.1.0" },
     { name = "bokeh", specifier = "~=3.9.2" },
-    { name = "django", specifier = ">=6.0.8" },
+    { name = "django", specifier = ">=6.1" },
     { name = "django-filter", specifier = ">=25.2" },
-    { name = "djangorestframework", specifier = ">=3.17.2" },
+    { name = "djangorestframework", url = "https://github.com/encode/django-rest-framework/archive/f78043440a7884936232fdffffb68adcdbb3b272.tar.gz" },
     { name = "drf-spectacular", specifier = ">=0.28.0" },
     { name = "fundamentals", specifier = ">=2.6.4" },
     { name = "geoip2", specifier = ">=5.2.0" },
@@ -527,16 +527,16 @@ wheels = [
 
 [[package]]
 name = "django"
-version = "6.0.8"
+version = "6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "sqlparse" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3c/28/5fee292e588dbdb782582436d1eb62ac8809ec55b98ef27f5b9676a00e9a/django-6.0.8.tar.gz", hash = "sha256:cb0bd962d27fc866f3c514b20aae6a7df56ec80b488f9899da46d675cd051526", size = 10924565, upload-time = "2026-08-04T15:03:39.469Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/42/6cb20996733984c1f6661daeda3877990836c76c633c6c8879d39f7120eb/django-6.1.tar.gz", hash = "sha256:86a2aacd59b817e4d6ac2ebfe22356c58f66f7b24e503f71b7c2fead677ee48b", size = 11223034, upload-time = "2026-08-05T19:21:53.789Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/b4/23e74d261eebfa9c8baed5e8810f09858b9afd613d1037f42ff7aa95c87f/django-6.0.8-py3-none-any.whl", hash = "sha256:9b98b7e1902e0e575ea4f42c175fc9512784f7f2580898286aee3388b322219d", size = 8376956, upload-time = "2026-08-04T15:03:35.138Z" },
+    { url = "https://files.pythonhosted.org/packages/91/9c/ce847620134cfab903e75690c498af73b46abbede2912ea89bd76d5c1e76/django-6.1-py3-none-any.whl", hash = "sha256:6c132cd980c9392b06807d4ca52d72530d631dc65a85d9dacede00a780cefbbe", size = 8417399, upload-time = "2026-08-05T19:21:47.285Z" },
 ]
 
 [[package]]
@@ -587,14 +587,14 @@ wheels = [
 [[package]]
 name = "djangorestframework"
 version = "3.17.2"
-source = { registry = "https://pypi.org/simple" }
+source = { url = "https://github.com/encode/django-rest-framework/archive/f78043440a7884936232fdffffb68adcdbb3b272.tar.gz" }
 dependencies = [
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/35/c96055e700fdff25da3a7b7756cfd1d4dc54f38b9bc6d6c5e19e3a0fdc20/djangorestframework-3.17.2.tar.gz", hash = "sha256:89ed713b6dc83e1539f214b7d10808ae19bb8511004beba886225da6d5c9dafa", size = 906683, upload-time = "2026-08-05T07:47:22.5Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/46/c14108e400b208c394325eb63fbae06c81341b6447fa1a6f9da718b17fe7/djangorestframework-3.17.2-py3-none-any.whl", hash = "sha256:cb0546a7415d5b46c04e0f4fe0a54b2109f4fdd5e83ca773c8c6183a6493d042", size = 899109, upload-time = "2026-08-05T07:47:20.853Z" },
-]
+sdist = { hash = "sha256:3aa62ae1a456e71efcd62c299af77dd55b68ddf62e726c2088c85d297cd1063a" }
+
+[package.metadata]
+requires-dist = [{ name = "django", specifier = ">=5.2" }]
 
 [[package]]
 name = "djangorestframework-stubs"
