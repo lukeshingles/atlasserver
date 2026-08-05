@@ -81,8 +81,9 @@
             <ul class="nav navbar-nav">
                 <li{% if request.path == index_url %} class="active"{% endif %}><a href="{{ index_url }}">Home</a></li>
                 <li{% if request.path == resultdesc_url %} class="active"{% endif %}><a href="{{ resultdesc_url }}">Output</a></li>
-                <li{% if request.path == tasklist_url %} class="active"{% endif %}><a href="{{ tasklist_url }}" rel="nofollow" class="loginrequired">Queue</a></li>
-                <li><a href="{{ tasklist_url }}?format=api" rel="nofollow" class="loginrequired">API</a></li>
+                {# Queue and API share a path and differ only by the format parameter #}
+                <li{% if request.path == tasklist_url and request.GET.format != 'api' %} class="active"{% endif %}><a href="{{ tasklist_url }}" rel="nofollow" class="loginrequired">Queue</a></li>
+                <li{% if request.path == tasklist_url and request.GET.format == 'api' %} class="active"{% endif %}><a href="{{ tasklist_url }}?format=api" rel="nofollow" class="loginrequired">API</a></li>
                 <li{% if request.path == apiguide_url %} class="active"{% endif %}><a href="{{ apiguide_url }}">API Guide</a></li>
                 <li{% if request.path == faq_url %} class="active"{% endif %}><a href="{{ faq_url }}">FAQ</a></li>
                 <li{% if request.path == stats_url %} class="active"{% endif %}><a href="{{ stats_url }}">Stats &amp; Issues</a></li>
