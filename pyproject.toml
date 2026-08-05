@@ -129,7 +129,9 @@ ignore_missing_model_attributes = true
 max-line-length = 120
 errors-only = true
 load-plugins = "pylint_django"
-django-settings-module = "atlasserver.settings"
+# settings_test, for the same reason as tool.django-stubs below: it presets the env vars that
+# settings.py refuses to import without, so pylint works on machines with no .env or secrets
+django-settings-module = "atlasserver.settings_test"
 
 [tool.pylint.typecheck]
 ignored-modules = ["astropy", "extinction"]
