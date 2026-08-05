@@ -1,4 +1,5 @@
-recursive-include * *.sh
-recursive-include * *.txt
-recursive-include * *.py
-recursive-exclude * .venv
+graft atlasserver/forcephot/templates
+exclude atlasserver/forcephot/static
+prune atlasserver/taskrunner/logs
+prune static/results
+prune static/js/queuepage/node_modules

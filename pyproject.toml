@@ -247,9 +247,15 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 namespaces = false
-where = ["."]
-include = ["*", "**/matplotlibrc", "**/data"]
-exclude = ["tests", "**/dist", "**/lib", "**/build", "*.egg-info", "**/.*"]
+include = ["atlasserver*"]
+
+[tool.setuptools.package-data]
+"atlasserver.forcephot" = ["templates/**/*"]
+
+# forcephot/static is a symlink into the repo's top-level static/ directory;
+# static assets are a deployment concern (collectstatic from a checkout), not package data
+[tool.setuptools.exclude-package-data]
+"atlasserver.forcephot" = ["static"]
 
 [tool.setuptools_scm]
 write_to = "_version.py"
