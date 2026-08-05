@@ -5,6 +5,7 @@ import datetime
 import json
 import operator
 import typing as t
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1064,15 +1065,15 @@ def taskpdfplot(request, taskid):
     return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps a lack of data points?)")
 
 
-def taskresultdata(request, taskid):
-    item = None
-    if taskid:
-        try:
-            item = Task.objects.get(id=taskid)
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
-
-    if item and (resultfile := item.localresultfile()):
+# no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
+# decorating a view that returns a FileResponse only adds a lookup that can never hit
+def _taskresultfile_response(
+    taskid: int, getfile: Callable[[Task], str | Path | None]
+) -> FileResponse | HttpResponseNotFound:
+    """Serve one of a task's result files, or 404 when the task or the file does not exist."""
+    task = Task.objects.filter(id=taskid).first() if taskid else None
+    resultfile = getfile(task) if task is not None else None
+    if resultfile:
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
         if resultfilepath.is_file():
@@ -1081,37 +1082,13 @@ def taskresultdata(request, taskid):
     return HttpResponseNotFound("Page not found")
 
 
-# no @cache_page here: Django's cache middleware skips streaming responses, so decorating a view
-# that returns a FileResponse only adds a lookup that can never hit
-def taskpreviewimage(request, taskid: int):
-    item = None
-    if taskid:
-        try:
-            item = Task.objects.get(id=taskid)
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
-
-    if item and (previewimagefile := item.localresultpreviewimagefile):
-        previewimagefilepath = Path(settings.STATIC_ROOT, previewimagefile)
-
-        if previewimagefilepath.is_file():
-            return FileResponse(previewimagefilepath.open("rb"))
-
-    return HttpResponseNotFound("Page not found")
+def taskresultdata(request, taskid: int) -> FileResponse | HttpResponseNotFound:
+    return _taskresultfile_response(taskid, lambda task: task.localresultfile())
 
 
-def taskimagezip(request, taskid: int):
-    item = None
-    if taskid:
-        try:
-            item = Task.objects.get(id=taskid)
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
+def taskpreviewimage(request, taskid: int) -> FileResponse | HttpResponseNotFound:
+    return _taskresultfile_response(taskid, lambda task: task.localresultpreviewimagefile)
 
-    if item and (resultfile := item.localresultimagezipfile):
-        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
 
-        if resultfilepath.is_file():
-            return FileResponse(resultfilepath.open("rb"))
-
-    return HttpResponseNotFound("Page not found")
+def taskimagezip(request, taskid: int) -> FileResponse | HttpResponseNotFound:
+    return _taskresultfile_response(taskid, lambda task: task.localresultimagezipfile)

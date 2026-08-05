@@ -17,6 +17,12 @@ import os
 # into hardened mode.
 os.environ["ATLASSERVER_DEBUG"] = "1"
 
+# a real key is not needed to run the tests, but settings.py refuses to import without one, and
+# this module must import everywhere: mypy's django-stubs plugin loads it, including on machines
+# and CI jobs that have no .env or secrets. setdefault, not assignment, so a real key from the
+# environment (or from .env, which load_dotenv applies with override=True) still wins.
+os.environ.setdefault("ATLASSERVER_DJANGO_SECRET_KEY", "test-secret-key-not-for-production")
+
 from atlasserver.settings import *  # noqa: F403
 
 DEBUG = True
@@ -38,9 +44,6 @@ if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
         }
     }
 
-# a real key is not needed to run the tests, but Django refuses to start without one
-SECRET_KEY = os.environ.get("ATLASSERVER_DJANGO_SECRET_KEY") or "test-secret-key-not-for-production"
-
 # the file-based caches are shared between runs (and with the dev server), so a stale entry from an
 # earlier run whose task happened to receive the same id would leak into a test. Use locmem, which
 # starts empty in every process.
@@ -49,8 +52,8 @@ CACHES = {
     for name in ("default", "taskderived", "usagestats")
 }
 
-# EMAIL_BACKEND is deliberately not overridden here: Django's test runner already swaps in the
-# locmem backend, so result emails land in django.core.mail.outbox rather than being sent.
+# MAILERS is deliberately not overridden here: Django's test runner already swaps every mailer's
+# backend for locmem, so result emails land in django.core.mail.outbox rather than being sent.
 
 # password hashing dominates the runtime of tests that create users
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]

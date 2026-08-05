@@ -89,20 +89,22 @@ jobs:
             # settings_test defaults to SQLite so that the suite runs on a developer machine with
             # no MySQL server; CI opts back in to the engine used in production
             ATLASSERVER_TEST_DB: mysql
+            # "localhost" would make libmysqlclient look for a unix socket, but the MySQL service
+            # below is only reachable over TCP on the mapped port
+            ATLASSERVER_DJANGO_MYSQL_HOST: 127.0.0.1
             DJANGO_SETTINGS_MODULE: atlasserver.settings_test
 
-        # services:
-        #     mysql:
-        #         image: mysql:5.7
-        #         env:
-        #             MYSQL_ALLOW_EMPTY_PASSWORD: yes
-        #             MYSQL_DATABASE: atlasserver
-        #             MYSQL_USER: root
-        #             MYSQL_PASSWORD: password
-        #             MYSQL_ROOT_PASSWORD: password
-        #         ports:
-        #             - 3306
-        #         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+        services:
+            mysql:
+                # Django 6.1 dropped support for MySQL < 8.4, which rules out the MySQL bundled
+                # with the runner image
+                image: mysql:8.4
+                env:
+                    MYSQL_ROOT_PASSWORD: root
+                    MYSQL_DATABASE: atlasserver
+                ports:
+                    - 3306:3306
+                options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
 
         steps:
             - name: Checkout Code
@@ -127,11 +129,10 @@ jobs:
                   MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
               run: ./update_geoipdatabase.sh
 
-            - name: Set up MySQL
+            - name: Set up database
+              # the mysql service container has already created the database and passed its
+              # health check by the time steps run
               run: |
-                  sudo /etc/init.d/mysql start
-                  echo "mysql started"
-                  mysql -e "CREATE DATABASE ${{env.ATLASSERVER_DJANGO_MYSQL_DBNAME}};" -u${{env.ATLASSERVER_DJANGO_MYSQL_USER}} -p${{env.ATLASSERVER_DJANGO_MYSQL_PASSWORD}}
                   # fail if a model change was committed without its migration, rather than
                   # generating one here that would never reach the repository
                   ./manage.py makemigrations --check --dry-run

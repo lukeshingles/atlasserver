@@ -532,7 +532,7 @@ def send_email_if_needed(task, logfunc) -> None:
         message = EmailMessage(
             subject="ATLAS forced photometry results",
             body=("Your forced photometry results are available for:\n\n" + "\n".join(taskdesclist) + "\n\n"),
-            from_email=settings.EMAIL_HOST_USER,
+            from_email=settings.DEFAULT_FROM_EMAIL,
             to=[task.user.email],
         )
 
