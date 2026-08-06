@@ -2,6 +2,7 @@
 
 import React from "react"
 import ReactDOM from 'react-dom';
+import { describeAge } from "agetext";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
 
@@ -31,6 +32,20 @@ function pageTitle(taskid) {
 
 function pollingPaused() {
     return document[hidden] || !user_is_active;
+}
+
+/**
+ * Run fn every ms milliseconds, skipping the ticks where polling is paused.
+ *
+ * The pause belongs to the repeating polls and to nothing else, so it is applied here, at the
+ * only place that repeats. It used to sit inside the functions being polled, where it also
+ * caught the many callers that are not polls at all — a click on a task, a filter, a page, a
+ * delete, a history navigation — and silently dropped them, leaving the URL and the heading on
+ * the new page while the tasks on screen stayed those of the old one, with nothing to correct it
+ * until the mouse moved again (two minutes without a mousemove counts as "away").
+ */
+function pollInterval(fn, ms) {
+    return setInterval(() => { if (!pollingPaused()) { fn(); } }, ms);
 }
 
 class TaskPlot extends React.PureComponent {
@@ -232,6 +247,11 @@ export class Task extends React.Component {
 
     render() {
         const task = this.props.taskdata;
+        // whether the data file this task produced is still on disk. The maintenance sweep
+        // reclaims it after a few months, and the serializer answers with a null result_url from
+        // then on; everything derived from that file — the download links, the plot, and the
+        // image request that reads it to know which observations to fetch — turns on this.
+        const hasresultfile = task.result_url != null;
         let statusclass = 'none';
         let buttontext = 'none';
         if (task.finishtimestamp != null) {
@@ -319,21 +339,20 @@ export class Task extends React.Component {
             if (task.error_msg != null) {
                 taskbox.push(<p key="error_msg" className="taskerror">Error: {task.error_msg}</p>);
             } else {
-                // result_url and pdfplot_url are null once the data file is gone (the maintenance
-                // sweep reclaims them after a few months). React drops a null href, so these used
-                // to render as buttons that looked live but did nothing at all when clicked.
+                // React drops a null href, so before hasresultfile was checked here these rendered
+                // as buttons that looked live but did nothing at all when clicked.
                 const resultsexpired = (
                     <p key="expired">The download link has expired. Delete this task and request again if necessary.</p>);
 
                 if (task.request_type == 'FP') {
-                    if (task.result_url != null) {
+                    if (hasresultfile) {
                         taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
                         taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank" rel="noopener">PDF</a>);
                     } else {
                         taskbox.push(resultsexpired);
                     }
                 } else if (task.request_type == 'SSOSTACK') {
-                    if (task.result_url != null) {
+                    if (hasresultfile) {
                         taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
                     }
                     if (task.result_imagestack_url != null) {
@@ -355,7 +374,8 @@ export class Task extends React.Component {
                     } else {
                         taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => { this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images requested</a>);
                     }
-                } else if (task.request_type == 'FP' && user_id == task.user_id) {
+                } else if (task.request_type == 'FP' && user_id == task.user_id && hasresultfile) {
+                    // hasresultfile: without that file this could only queue a job certain to fail
                     taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
                 }
             }
@@ -375,7 +395,11 @@ export class Task extends React.Component {
         }
 
 
-        if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP' && !this.props.hidePlot) {
+        // hasresultfile because there is nothing to plot once the data file has been reclaimed.
+        // Without it, every expired task reserved a 300px-tall empty box in its row and fetched
+        // a resultplotdata.js that the server answers with an empty body.
+        if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP'
+            && hasresultfile && !this.props.hidePlot) {
             taskbox.push(<TaskPlot key='plot' taskid={task.id} taskurl={task.url} />);
         }
 
@@ -394,6 +418,11 @@ let tasklist_refresh_queued = false;
 const tasklist_fetchcache = {};
 // remembers the ETag of each polled page so that an unchanged page can be answered with a 304
 const tasklist_pollcache = new PollCache();
+// counts history navigations, so that a response can tell whether one happened while it was in
+// flight. Only the scroll depends on this: a forward navigation asks to be taken to the top of
+// the new page, but if the user pressed Back or Forward in the meantime the browser has since
+// restored a scroll position of its own, and jumping to the top would throw it away.
+let historynavigations = 0;
 
 class RunnerStatus extends React.PureComponent {
     constructor(props) {
@@ -403,28 +432,20 @@ class RunnerStatus extends React.PureComponent {
     }
 
     componentDidMount() {
+        // the mount fetch runs whether or not polling is paused, for the same reason fetchData's
+        // does: it is the one that fills the page, not a repeat of it. That also retires the
+        // 2-second retry timer this used to need — the retry existed only because a tab opened in
+        // the background (cmd-click, session restore) had its mount fetch dropped and would
+        // otherwise have shown no outage banner until the 60-second interval first fired.
         this.fetchStatus();
-        this.interval = setInterval(this.fetchStatus, RUNNERSTATUS_POLL_MS);
+        this.interval = pollInterval(this.fetchStatus, RUNNERSTATUS_POLL_MS);
     }
 
     componentWillUnmount() {
         clearInterval(this.interval);
-        clearTimeout(this.retry);
     }
 
     fetchStatus() {
-        if (pollingPaused()) {
-            // a tab opened in the background (cmd-click, session restore) is paused at mount, and
-            // without a retry the banner could not appear until the slow interval next fired —
-            // which is exactly the wait the banner exists to prevent. Only while nothing has been
-            // fetched yet: once any status is held, the slow interval is enough, and a visible tab
-            // whose user merely stopped moving the mouse must not be woken every two seconds.
-            if (this.state.status == null) {
-                clearTimeout(this.retry);
-                this.retry = setTimeout(this.fetchStatus, 2000);
-            }
-            return;
-        }
         // a stale runner is reported with HTTP 503 and a body, so the status is read from the body
         // rather than from the status code
         fetch(taskrunnerstatus_url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
@@ -454,7 +475,7 @@ class RunnerStatus extends React.PureComponent {
 
         if (status.stale) {
             const age = status.status_age_seconds != null
-                ? ' It last reported ' + Math.round(status.status_age_seconds / 60) + ' minutes ago.'
+                ? ' It last reported ' + describeAge(status.status_age_seconds) + '.'
                 : '';
             return (
                 <p key="runnerstatus" id="runnerstatus" className="runnerstatus stale" role="status">
@@ -562,6 +583,47 @@ export class TaskPage extends React.Component {
         this.updateCursor = this.updateCursor.bind(this);
         this.fetchData = this.fetchData.bind(this);
         this.fetchQueuePositions = this.fetchQueuePositions.bind(this);
+        this.handlePopState = this.handlePopState.bind(this);
+    }
+
+    /**
+     * Re-read the URL after the browser moved through history.
+     *
+     * Every client-side navigation here (a task, a filter, a page) is a pushState, so Back and
+     * Forward change the URL without React hearing about it. dataurl decides the heading, the
+     * active filter and whether the new request form is shown, so leaving it behind showed the
+     * wrong page entirely.
+     */
+    handlePopState() {
+        debug_log('History navigation to', window.location.href);
+        // No guard comparing state.dataurl against the new URL: dataurl is written by
+        // fetchData's asynchronous setState, so a quick Back could find it still equal to the
+        // destination and be dropped entirely. A redundant fetch on a spurious popstate is
+        // harmless by comparison.
+        //
+        // The pagination fields are nulled the way setSingleTaskView() nulls them (the Pager
+        // only hides itself when taskcount is null): a Forward onto a task detail page that is
+        // not held in the cache would otherwise keep the list's "Showing tasks 1-6 of N"
+        // paginator, with live page buttons, above a single task until the response lands.
+        //
+        // fetchData(true, false): user-triggered, so the held copy of the destination page
+        // (when there is one) goes up straight away — but no scroll to top, because for a
+        // history navigation the browser restores the previous scroll position itself, and
+        // Back from a task should land on the list row the user came from.
+        //
+        // Suppressing the scroll takes all three of these, because it can be asked for from
+        // three different points in time: scrollToTopAfterUpdate clears a request already
+        // waiting to be consumed by componentDidUpdate, the counter stops one arriving later
+        // from a fetch that was already in flight (see the apply site in fetchData), and the
+        // false argument covers this navigation's own fetch.
+        historynavigations += 1;
+        this.setState({
+            next: null,
+            previous: null,
+            pagefirsttaskposition: null,
+            taskcount: null,
+            scrollToTopAfterUpdate: false,
+        }, () => { this.fetchData(true, false) });
     }
 
     filterIsActive(filtername, strurl) {
@@ -661,7 +723,8 @@ export class TaskPage extends React.Component {
      * to immediately, so that case falls back to a full fetch straight away.
      */
     fetchQueuePositions() {
-        if (pollingPaused() || this.state.results == null) {
+        // no pollingPaused() check: see pollInterval()
+        if (this.state.results == null) {
             return;
         }
 
@@ -693,7 +756,12 @@ export class TaskPage extends React.Component {
                 if (this.state.results.some(
                     task => trackable(task) && !(String(task.id) in data.queuepositions))) {
                     debug_log('a task left the queue: fetching the full task list');
-                    this.fetchData(false);
+                    // the pause is re-checked because it can have begun during this request's
+                    // round-trip, and the full fetch is exactly the work it exists to skip.
+                    // Nothing is lost: the next unpaused tick repeats this comparison.
+                    if (!pollingPaused()) {
+                        this.fetchData(false);
+                    }
                     return;
                 }
 
@@ -742,10 +810,14 @@ export class TaskPage extends React.Component {
             });
     }
 
-    fetchData(usertriggered) {
-        if (pollingPaused()) {
-            return;
-        }
+    fetchData(usertriggered, scrolltotop = usertriggered) {
+        // no pollingPaused() check here either, for the reason given on pollInterval().
+        // scrolltotop is separate from usertriggered because of history navigations: they are
+        // user-triggered (the held copy of the destination page must apply immediately), but
+        // the browser restores the old scroll position itself and a scroll to top would fight it.
+        // read now, compared at the apply site below: a response is only allowed to scroll to the
+        // top if no Back or Forward happened while it was in flight
+        const navigationsatstart = historynavigations;
 
         this.setState({ dataurl: window.location.href });
 
@@ -838,15 +910,32 @@ export class TaskPage extends React.Component {
             }).then(data => {
                 if (tasklist_refresh_queued && !tasklist_api_request_active) {
                     // something asked for a refresh while this request was in flight; this
-                    // response predates whatever prompted that, so fetch again right away
+                    // response predates whatever prompted that, so fetch again right away.
+                    // The pause is re-checked at execution time (the tab can have been hidden
+                    // since the refresh was queued); a dropped refresh is covered by the first
+                    // unpaused poll.
                     tasklist_refresh_queued = false;
-                    setTimeout(() => this.fetchData(false), 0);
+                    setTimeout(() => { if (!pollingPaused()) { this.fetchData(false); } }, 0);
                 }
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
                     // nothing changed server-side, but the poll did succeed, so the "last updated"
-                    // line must still advance or the page looks stalled
-                    this.setState({ tasklist_last_fetch_time: new Date() });
+                    // line must still advance or the page looks stalled.
+                    //
+                    // The held copy is re-applied rather than assumed to be what is on screen:
+                    // "unchanged" is a statement about the server's page, not about this
+                    // component's results, and the two come apart whenever a navigation replaced
+                    // results locally (setSingleTaskView filters the list down to one task). Going
+                    // Back from a single task then left the queue page showing that one task with
+                    // no paginator, and no poll could ever repair it, because every one of them
+                    // answered 304 for a URL whose ETag really had not changed.
+                    //
+                    // Guarded like the 200 path below: if the user navigated while this request
+                    // was in flight, this body belongs to the page they have already left.
+                    const held = tasklist_pollcache.getBody(get_url);
+                    const restore = (held != null && get_url == window.location.href
+                        && this.state.results !== held.results) ? held : null;
+                    this.setState({ ...restore, tasklist_last_fetch_time: new Date() });
                     return;
                 }
                 if (data != null && data.hasOwnProperty('results')) {
@@ -879,10 +968,16 @@ export class TaskPage extends React.Component {
                     tasklist_pollcache.storeBody(get_url, statechanges);
                     if (get_url == window.location.href) {
                         debug_log('Applying results from', get_url);
-                        if (usertriggered) {
-                            statechanges['scrollToTopAfterUpdate'] = true
-                        }
-                        this.setState(statechanges);
+                        // the flag goes on a copy: statechanges was just stored in both caches,
+                        // and setting it on the shared object polluted every later re-application
+                        // of the cached body — the eager pre-request restore and the 304 fallback
+                        // would scroll an untouched page to the top on a routine poll.
+                        //
+                        // The counter check is what stops a click's response, resolving after the
+                        // user has pressed Back and Forward again onto the same URL, from
+                        // discarding the scroll position the browser has just restored.
+                        this.setState(scrolltotop && navigationsatstart == historynavigations
+                            ? { ...statechanges, scrollToTopAfterUpdate: true } : statechanges);
                     } else {
                         debug_log('Not applying results from', get_url, 'location.href', window.location.href);
                         return;
@@ -908,14 +1003,16 @@ export class TaskPage extends React.Component {
     }
 
     componentDidMount() {
-        this.fetchinterval = setInterval(() => this.fetchData(false), TASKLIST_POLL_MS);
-        this.queueposinterval = setInterval(this.fetchQueuePositions, QUEUEPOS_POLL_MS);
+        this.fetchinterval = pollInterval(() => this.fetchData(false), TASKLIST_POLL_MS);
+        this.queueposinterval = pollInterval(this.fetchQueuePositions, QUEUEPOS_POLL_MS);
+        window.addEventListener('popstate', this.handlePopState);
         this.fetchData(true);
     }
 
     componentWillUnmount() {
         clearInterval(this.fetchinterval);
         clearInterval(this.queueposinterval);
+        window.removeEventListener('popstate', this.handlePopState);
     }
 
     render() {

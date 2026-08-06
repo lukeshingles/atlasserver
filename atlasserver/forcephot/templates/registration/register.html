@@ -1,4 +1,5 @@
 {% extends "rest_framework/base.html" %}
+{% load i18n %}
 
 {% block content %}
 
@@ -6,10 +7,45 @@
   <div class="page-header">
   <h1>Register</h1>
   </div>
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit" class="btn btn-primary">Sign up</button>
+
+  {# form.as_p put each input inline after its own label, so the four fields started at four #}
+  {# different offsets and the help text ran into them. The same markup as the other account #}
+  {# forms (change email, change/reset password) is what main.css .form-row is written for. #}
+  <form method="post">{% csrf_token %}
+  <div>
+  {% if form.errors %}
+      <p class="errornote">
+      {% if form.errors.items|length == 1 %}{% translate "Please correct the error below." %}{% else %}{% translate "Please correct the errors below." %}{% endif %}
+      </p>
+  {% endif %}
+
+  {# inside a form-row, because main.css only colours .errorlist there: a bare errorlist #}
+  {# rendered as an unstyled bullet list under a bold red "correct the errors" heading #}
+  {% if form.non_field_errors %}
+  <div class="form-row">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <fieldset class="module aligned wide">
+  {# visible_fields, not the whole form: iterating a form yields hidden fields too, and this #}
+  {# markup would give each one a label and an empty row. form.as_p, which this replaced, #}
+  {# appended them outside the rows instead. #}
+  {% for field in form.visible_fields %}
+    <div class="form-row">
+        {{ field.errors }}
+        {{ field.label_tag }} {{ field }}
+        {% if field.help_text %}
+        <div class="help">{{ field.help_text|safe }}</div>
+        {% endif %}
+    </div>
+  {% endfor %}
+  {% for field in form.hidden_fields %}{{ field }}{% endfor %}
+  </fieldset>
+
+  <div class="submit-row">
+      <button type="submit" class="btn btn-primary">Sign up</button>
+  </div>
+
+  </div>
   </form>
 </div>
 {% endblock %}

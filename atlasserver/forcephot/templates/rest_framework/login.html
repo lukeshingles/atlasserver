@@ -1,5 +1,12 @@
 {% extends "rest_framework/base.html" %}
 
+{# Without a title these pages are all just "ATLAS Forced Photometry" in the tab and in the #}
+{# history. The pages this project routes itself pass `name` instead (see urls.py and the #}
+{# register/change_email views), but the login and password_* views arrive through #}
+{# include("django.contrib.auth.urls"), where there is no extra_context to hang it on without #}
+{# re-declaring Django's own URLconf. block.super is the site name the parent block builds. #}
+{% block title %}Login – {{ block.super }}{% endblock %}
+
 {% block content %}
 <div class="container">
   <div class="container-fluid" style="margin-top: 30px">

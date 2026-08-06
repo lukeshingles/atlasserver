@@ -866,7 +866,9 @@ def register(request):
     else:
         form = RegistrationForm()
 
-    return render(request, "registration/register.html", {"form": form})
+    # "name" is what the base template builds the page <title> from, the same way the pages
+    # declared with extra_context in urls.py do
+    return render(request, "registration/register.html", {"form": form, "name": "Register"})
 
 
 @login_required
@@ -881,7 +883,11 @@ def change_email(request):
     else:
         form = EmailChangeForm(request.user)
 
-    return render(request, "registration/email_change_form.html", {"form": form, "success": success})
+    return render(
+        request,
+        "registration/email_change_form.html",
+        {"form": form, "success": success, "name": "Email address change"},
+    )
 
 
 _plotscript_cache: dict[Path, tuple[float, int, str]] = {}

@@ -1,6 +1,8 @@
 {% extends "rest_framework/base.html" %}
 {% load i18n %}
 
+{% block title %}{% translate 'Logged out' %} – {{ block.super }}{% endblock %}
+
 {% block content %}
 
 <p>{% translate "Thanks for spending some quality time with the Web site today." %}</p>
