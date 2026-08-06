@@ -418,6 +418,11 @@ let tasklist_refresh_queued = false;
 const tasklist_fetchcache = {};
 // remembers the ETag of each polled page so that an unchanged page can be answered with a 304
 const tasklist_pollcache = new PollCache();
+// counts history navigations, so that a response can tell whether one happened while it was in
+// flight. Only the scroll depends on this: a forward navigation asks to be taken to the top of
+// the new page, but if the user pressed Back or Forward in the meantime the browser has since
+// restored a scroll position of its own, and jumping to the top would throw it away.
+let historynavigations = 0;
 
 class RunnerStatus extends React.PureComponent {
     constructor(props) {
@@ -605,11 +610,19 @@ export class TaskPage extends React.Component {
         // (when there is one) goes up straight away — but no scroll to top, because for a
         // history navigation the browser restores the previous scroll position itself, and
         // Back from a task should land on the list row the user came from.
+        //
+        // Suppressing the scroll takes all three of these, because it can be asked for from
+        // three different points in time: scrollToTopAfterUpdate clears a request already
+        // waiting to be consumed by componentDidUpdate, the counter stops one arriving later
+        // from a fetch that was already in flight (see the apply site in fetchData), and the
+        // false argument covers this navigation's own fetch.
+        historynavigations += 1;
         this.setState({
             next: null,
             previous: null,
             pagefirsttaskposition: null,
             taskcount: null,
+            scrollToTopAfterUpdate: false,
         }, () => { this.fetchData(true, false) });
     }
 
@@ -802,6 +815,10 @@ export class TaskPage extends React.Component {
         // scrolltotop is separate from usertriggered because of history navigations: they are
         // user-triggered (the held copy of the destination page must apply immediately), but
         // the browser restores the old scroll position itself and a scroll to top would fight it.
+        // read now, compared at the apply site below: a response is only allowed to scroll to the
+        // top if no Back or Forward happened while it was in flight
+        const navigationsatstart = historynavigations;
+
         this.setState({ dataurl: window.location.href });
 
         // start by applying a cached version if we have it
@@ -954,8 +971,12 @@ export class TaskPage extends React.Component {
                         // the flag goes on a copy: statechanges was just stored in both caches,
                         // and setting it on the shared object polluted every later re-application
                         // of the cached body — the eager pre-request restore and the 304 fallback
-                        // would scroll an untouched page to the top on a routine poll
-                        this.setState(scrolltotop
+                        // would scroll an untouched page to the top on a routine poll.
+                        //
+                        // The counter check is what stops a click's response, resolving after the
+                        // user has pressed Back and Forward again onto the same URL, from
+                        // discarding the scroll position the browser has just restored.
+                        this.setState(scrolltotop && navigationsatstart == historynavigations
                             ? { ...statechanges, scrollToTopAfterUpdate: true } : statechanges);
                     } else {
                         debug_log('Not applying results from', get_url, 'location.href', window.location.href);
