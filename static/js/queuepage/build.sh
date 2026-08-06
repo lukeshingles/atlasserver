@@ -6,8 +6,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-npx babel --minified --presets @babel/preset-react src/newrequest.jsx -o ../newrequest.min.js
-npx babel --minified --presets @babel/preset-react src/tasklist.jsx -o ../tasklist.min.js
-npx babel --minified --presets @babel/preset-react src/pollcache.js -o ../pollcache.min.js
-npx babel --minified --presets @babel/preset-react src/agetext.js -o ../agetext.min.js
-npx babel --minified --presets @babel/preset-react src/lightcurveplotly.js -o ../lightcurveplotly.min.js
+# --minified only takes out the whitespace: babel writes comments through by default, so every
+# bundle was shipping the source's explanatory comments to every visitor (--no-comments cuts
+# tasklist.min.js from 42kB to 26kB). Shared, so that a flag added here cannot reach some of the
+# bundles and not others.
+babelopts=(--minified --no-comments --presets @babel/preset-react)
+
+for module in newrequest.jsx tasklist.jsx pollcache.js agetext.js lightcurveplotly.js; do
+    npx babel "${babelopts[@]}" "src/${module}" -o "../${module%.js*}.min.js"
+done
