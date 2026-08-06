@@ -1,6 +1,7 @@
 import datetime
 import itertools
 import json
+import re
 import socket
 import subprocess
 import tempfile
@@ -651,7 +652,12 @@ class PermissionResponseTests(TestCase):
         # follow. Nothing navigates on the page's behalf any more, so the polling code has to
         # recognise the status itself or the page sits showing pre-logout tasks forever.
         frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text()
-        pollbody = frontendpath.split("fetchData(usertriggered)")[1]
+        # matched on the method declaration rather than on its exact parameter list, which this
+        # used to pin: adding a second parameter to fetchData broke the split and failed the test
+        # with an IndexError that said nothing about session handling
+        methoddecl = re.search(r"^    fetchData\(", frontendpath, re.MULTILINE)
+        assert methoddecl is not None, "could not find the fetchData method declaration"
+        pollbody = frontendpath[methoddecl.end() :]
 
         assert "response.status == 401 || response.status == 403" in pollbody, (
             "fetchData must handle an expired session; a 401/403 is no longer a redirect"
