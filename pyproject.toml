@@ -29,7 +29,7 @@ dependencies = [
     "django>=6.1",
     "bokeh~=3.9.2",
     "django-filter>=25.2",
-    "djangorestframework>=3.17.2",
+    "djangorestframework>=3.18.0",
     "drf-spectacular>=0.28.0",
     "fundamentals>=2.6.4",
     "geoip2>=5.2.0",
@@ -61,12 +61,6 @@ dev = [
     "types-pycurl",
     "types-python-dateutil",
 ]
-
-[tool.uv.sources]
-# Django 6.1 removed django.utils.cache.cc_delim_re, which every released DRF version still
-# imports at startup; the fix is only on DRF main. Drop this pin once a DRF release
-# (> 3.17.2) supports Django 6.1.
-djangorestframework = { url = "https://github.com/encode/django-rest-framework/archive/f78043440a7884936232fdffffb68adcdbb3b272.tar.gz" }
 
 [project.urls]
 Repository = "https://github.com/lukeshingles/atlasserver"
