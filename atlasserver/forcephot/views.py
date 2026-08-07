@@ -906,7 +906,11 @@ def read_plotscript(path: Path) -> str:
     if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
         return cached[2]
 
-    contents = path.read_text()
+    # explicit encoding, because read_text() would otherwise decode with the locale encoding, and
+    # under mod_wsgi that is often the C locale's ASCII. The script carries non-ASCII characters
+    # (the "Flux / µJy" axis label) now that babel emits them literally instead of as \xNN escapes,
+    # so a locale-dependent read is the difference between a working plot and a 500 on every one.
+    contents = path.read_text(encoding="utf-8")
     _plotscript_cache[path] = (stat.st_mtime, stat.st_size, contents)
     return contents
 
