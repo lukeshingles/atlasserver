@@ -51,6 +51,7 @@ dev = [
     "django-stubs[compatible-mypy]>=6.0.7",
     "mypy>=2.0",
     "pip>=26.1.2",
+    "prek>=0.4.12",
     "pylint>=4.0.6",
     "pylint-django>=2.5.5",
     "ruff>=0.16.0",
