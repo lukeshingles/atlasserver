@@ -1,8 +1,9 @@
 """Django views for the forcephot app."""
 
-import contextlib
 import datetime
+import ipaddress
 import json
+import logging
 import operator
 import typing as t
 from collections.abc import Callable
@@ -19,6 +20,7 @@ from django.contrib.auth import authenticate
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geoip2 import GeoIP2
+from django.contrib.gis.geoip2 import GeoIP2Exception
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
@@ -28,7 +30,6 @@ from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
 from django.db.models.functions import Trunc
-from django.forms import model_to_dict
 from django.http import FileResponse
 from django.http import HttpResponse
 from django.http import HttpResponseNotFound
@@ -41,6 +42,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import OpenApiResponse
 from geoip2.errors import AddressNotFoundError
+from geoip2.errors import GeoIP2Error
+from maxminddb import InvalidDatabaseError
 from rest_framework import filters
 from rest_framework import permissions
 from rest_framework import serializers
@@ -62,6 +65,8 @@ from atlasserver.forcephot.misc import make_pdf_plot
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.netaddr import address_is_public
+from atlasserver.forcephot.netaddr import client_address
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
@@ -71,6 +76,8 @@ from atlasserver.taskrunner import status as runnerstatus
 
 MAX_USER_IMGZIP_TASKS = 5
 MAX_USER_TASKS = 500
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_queue_positions() -> None:
@@ -205,28 +212,107 @@ def get_tasklist_etag(request, user_id: int) -> str:
 # that forgot to supply them produced a page that polled fetch('') against itself
 
 
+def cached_by_file_stat[T](cache: dict[Path, tuple[float, int, T]], path: Path, build: Callable[[Path], T]) -> T:
+    """Return build(path), reusing the last result until the file's mtime or size changes.
+
+    Turns a repeated read (or a repeated open, for the GeoIP database) into a stat, without the
+    staleness that keeping the value forever would bring: both callers here read a file that is
+    replaced underneath a long-lived worker process, one by a deployment and one by cron.
+
+    No lock. Two threads racing build the value twice and one wins the dict, which costs the extra
+    work rather than a wrong answer.
+    """
+    stat = path.stat()
+
+    cached = cache.get(path)
+    if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+
+    value = build(path)
+    cache[path] = (stat.st_mtime, stat.st_size, value)
+    return value
+
+
+_geoip_reader_cache: dict[Path, tuple[float, int, GeoIP2]] = {}
+
+
+def geoip_reader() -> GeoIP2:
+    """Return a reader for the city database, rebuilding it only when the file changes.
+
+    Constructing one opens and memory-maps the database, which was being paid again on every
+    request that created a task. Not held forever, because update_geoipdatabase.sh replaces the
+    database from cron and a reader kept across the replacement answers from the mapping it opened
+    for the rest of the worker process's life.
+
+    The path is resolved here rather than left to GeoIP2's own directory search, because there is
+    nothing to stat until it has been. GEOIP_CITY is Django's own setting for the file name.
+    """
+    path = Path(settings.GEOIP_PATH, getattr(settings, "GEOIP_CITY", "GeoLite2-City.mmdb"))
+
+    return cached_by_file_stat(_geoip_reader_cache, path, lambda dbpath: GeoIP2(path=dbpath))
+
+
+def geoip_reader_forget() -> None:
+    """Drop any held reader, so the next lookup reopens the database.
+
+    The seam tests reset the module state through, rather than reaching into the private dict.
+    """
+    _geoip_reader_cache.clear()
+
+
+def client_ip(request) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the address the request came from, or None if it cannot be established.
+
+    The policy (and the reasoning behind it) lives in netaddr.client_address; this only supplies
+    the request pieces. NUM_PROXIES in REST_FRAMEWORK is set from the same TRUSTED_PROXY_COUNT so
+    that the throttle's idea of the client cannot drift from this one.
+    """
+    return client_address(
+        remote_addr=request.META.get("REMOTE_ADDR"),
+        forwarded_for=request.META.get("HTTP_X_FORWARDED_FOR"),
+        trusted_proxy_count=settings.TRUSTED_PROXY_COUNT,
+    )
+
+
 def client_location_fields(request) -> dict[str, str | None]:
     """Return the country_code/region fields for the request's client IP, when it can be located.
 
     One implementation rather than one per task-creating view: the private-range list and the
     header handling drifted apart once before, and a divergence here quietly feeds wrong countries
     into the usage statistics.
-    """
-    if x_forwarded_for := request.META.get("HTTP_X_FORWARDED_FOR"):
-        ip = x_forwarded_for.split(",")[0]
-    else:
-        ip = request.META.get("REMOTE_ADDR")
 
+    Never raises. This decorates a task with a statistic, so no failure of it is worth failing a
+    submission for — an unresolvable lookup used to escape as a 500 (and an admin email) from the
+    middle of task creation.
+    """
     # str | None values: the GeoIP database does not know a region for every address, and the
     # model fields are nullable, so a None is stored as-is rather than dropped
     fields: dict[str, str | None] = {}
-    # private-range addresses (local submissions) have no meaningful GeoIP location
-    if ip is not None and not ip.startswith(("192.168.", "127.0.", "10.")):
-        geoip = GeoIP2()
-        with contextlib.suppress(AddressNotFoundError):
-            location = geoip.city(ip)
-            fields["country_code"] = location["country_code"]
-            fields["region"] = location["region_code"]
+
+    ip = client_ip(request)
+    # the shared definition, not a second copy of it: the database cannot place any address that
+    # webhooks refuses to send to, and the two used to disagree because this end carried a
+    # hand-written prefix list that missed 172.16/12 and every IPv6 form
+    if ip is None or not address_is_public(ip):
+        return fields
+
+    try:
+        location = geoip_reader().city(ip)
+    except AddressNotFoundError:
+        # a public address the database simply does not list (an unallocated or anonymised range,
+        # or most IPv6). Routine, and silent for that reason: logging it would put a line in the
+        # log for a share of perfectly ordinary submissions and bury the failures below in them
+        return fields
+    except (GeoIP2Exception, GeoIP2Error, InvalidDatabaseError, OSError):
+        # the database is missing, unreadable or corrupt (OSError covers the stat in geoip_reader,
+        # which is where a deleted file surfaces). Unlike the case above this is a real fault, so
+        # it is reported at error level, where the "atlasserver" logger writes it to the log file.
+        # Deliberately not mail_admins: a database that has gone bad would mail on every request.
+        logger.exception("GeoIP lookup failed for %s", ip)
+        return fields
+
+    fields["country_code"] = location["country_code"]
+    fields["region"] = location["region_code"]
 
     return fields
 
@@ -247,23 +333,22 @@ def request_is_from_api(request) -> bool:
 
 
 class ForcePhotPermission(permissions.BasePermission):
-    """Custom permission to only allow owners of an object to edit it."""
+    """Object-level permission to only allow owners of an object to change it.
+
+    Assumes the model instance has a `user` attribute.
+    """
 
     message = "You must be the owner of this object."
 
     def has_permission(self, request, view) -> bool:
         return bool(request.method in permissions.SAFE_METHODS or request.user.is_authenticated)
 
-    #     return request.user and request.user.is_authenticated
-
-    """
-    Object-level permission to only allow owners of an object to edit it.
-    Assumes the model instance has an `user` attribute.
-    """
-
     def has_object_permission(self, request, view, obj) -> bool:
-        # Read permissions are allowed to any request,
-        # so we'll always allow GET, HEAD or OPTIONS requests.
+        # Reading a task is public, including to anonymous callers, and is meant to be: a task and
+        # the results it produced describe measurements from a public survey, so a link to one can
+        # be shared with somebody who has no account here. Only changing it is restricted.
+        # (The task *list* is a different question and stays scoped to the requesting user: it is
+        # a person's own queue, not a public index.)
         if request.method in permissions.SAFE_METHODS:
             return True
 
@@ -271,7 +356,7 @@ class ForcePhotPermission(permissions.BasePermission):
             return False
 
         # staff and instance owner have all permissions
-        return True if request.user.is_staff else obj.user.id == request.user.id
+        return request.user.is_staff or obj.user_id == request.user.id
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet):
@@ -500,23 +585,10 @@ class RequestImages(APIView):
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
-            data = model_to_dict(parent_task, exclude=["id"])
-            data["parent_task_id"] = parent_task.id
-            data["request_type"] = Task.RequestType.IMGZIP
-            data["user"] = request.user
-            data["timestamp"] = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
-            data["starttimestamp"] = None
-            data["finishtimestamp"] = None
-
-            data.update(client_location_fields(self.request))
-
-            # deliberately not request_is_from_api(): from_api decides which maintenance sweep
-            # collects the row (31 days for API tasks, 183 otherwise), so classifying a
-            # token-authenticated image request as API would delete it five months early
-            data["from_api"] = False
-            data["send_email"] = False
-
-            newtask = Task(**data)
+            # which fields the child inherits is the model's decision; see Task.new_imagerequest
+            newtask = parent_task.new_imagerequest(user=request.user)
+            for field, value in client_location_fields(self.request).items():
+                setattr(newtask, field, value)
             newtask.save()
             calculate_queue_positions()
 
@@ -901,18 +973,11 @@ def read_plotscript(path: Path) -> str:
     Keying on the file's mtime and size preserves that while turning a disk read per request into a
     stat per request.
     """
-    stat = path.stat()
-    cached = _plotscript_cache.get(path)
-    if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
-        return cached[2]
-
     # explicit encoding, because read_text() would otherwise decode with the locale encoding, and
     # under mod_wsgi that is often the C locale's ASCII. The script carries non-ASCII characters
     # (the "Flux / µJy" axis label) now that babel emits them literally instead of as \xNN escapes,
     # so a locale-dependent read is the difference between a working plot and a 500 on every one.
-    contents = path.read_text(encoding="utf-8")
-    _plotscript_cache[path] = (stat.st_mtime, stat.st_size, contents)
-    return contents
+    return cached_by_file_stat(_plotscript_cache, path, lambda scriptpath: scriptpath.read_text(encoding="utf-8"))
 
 
 def resultplotdatajs(request, taskid):
@@ -1075,6 +1140,11 @@ def taskpdfplot(request, taskid):
     return HttpResponseNotFound("ERROR: Could not generate PDF plot (perhaps a lack of data points?)")
 
 
+# Results are public on purpose, like the task detail itself — the reasoning lives on
+# ForcePhotPermission.has_object_permission. The file views below (and taskpdfplot and
+# resultplotdatajs above) therefore take a task id and no credentials; note the serializer also
+# links results at their STATIC_URL path, which Apache serves without consulting Django at all.
+#
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit
 def _taskresultfile_response(

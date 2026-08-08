@@ -13,3 +13,9 @@ export ATLASSERVER_DJANGO_MYSQL_USER='djangouser'
 export ATLASSERVER_DJANGO_MYSQL_PASSWORD='PASSWORD'
 
 export MAXMIND_LICENSE_KEY=''
+
+# Number of reverse proxies in front of this server that maintain X-Forwarded-For. Leave at 0
+# unless one really is in front: with 0 the header is ignored and the client address is taken from
+# the connection, which is what stops a caller choosing the country their submissions are filed
+# under. Count the proxies exactly — one hop too many reads a value the client wrote.
+export ATLASSERVER_TRUSTED_PROXY_COUNT='0'

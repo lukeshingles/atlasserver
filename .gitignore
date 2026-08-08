@@ -81,6 +81,8 @@ dmypy.json
 logs
 logs/*.txt
 *.mmdb
+# update_geoipdatabase.sh stages the download next to the target before renaming it into place
+*.mmdb.new
 _version.py
 .tmp
 .DS_Store

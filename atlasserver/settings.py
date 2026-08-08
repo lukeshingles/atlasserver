@@ -29,6 +29,23 @@ if not SECRET_KEY:
 
 TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split(",") if x]
 
+# How many reverse proxies in front of this server append to X-Forwarded-For. Zero means the
+# header is ignored entirely, which is right for the current deployment: httpconf.txt sets
+# X-Forwarded-Proto but nothing sets X-Forwarded-For, so every value of it is client-supplied and
+# says only what the client chose to claim. Set this only if a proxy that *overwrites* the header
+# (or appends to a chain it controls) is actually in front, and count the proxies exactly: reading
+# one hop too far left takes the attacker's value again.
+#
+# Validated rather than passed straight to int(), for the same reason as ATLASSERVER_DEBUG below:
+# a typo here is a bare ValueError at import that names no variable, and the site does not start.
+_proxycount_env = os.environ.get("ATLASSERVER_TRUSTED_PROXY_COUNT", "0").strip() or "0"
+# isdecimal, not isdigit: isdigit also accepts superscripts, and "²" would pass the check and
+# then fail int() with the bare ValueError this exists to replace
+if not _proxycount_env.isdecimal():
+    _msg = f"ATLASSERVER_TRUSTED_PROXY_COUNT must be a non-negative integer, not {_proxycount_env!r}"
+    raise ImproperlyConfigured(_msg)
+TRUSTED_PROXY_COUNT = int(_proxycount_env)
+
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -284,6 +301,11 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "forcephottasks": "60/min",
     },
+    # the same knob as TRUSTED_PROXY_COUNT above, so the throttle's idea of the client address
+    # cannot drift from the GeoIP lookup's. Left unset, DRF's get_ident() trusts the whole
+    # client-written X-Forwarded-For header for anonymous callers — the exact forgery
+    # netaddr.client_address exists to stop. With 0, it uses REMOTE_ADDR.
+    "NUM_PROXIES": TRUSTED_PROXY_COUNT,
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
     # JSON first: DRF picks the first renderer for an "Accept: */*" request (what a script sends
     # when it sets no Accept header), and TemplateHTMLRenderer answers those with an HTML page,
@@ -385,6 +407,15 @@ LOGGING = {
     "loggers": {
         "django": {
             "handlers": ["console", "mail_admins", "file"],
+            "level": "INFO",
+        },
+        # this project's own modules. Without an entry here they inherit a root logger that has no
+        # handler either, so logging.lastResort writes them unformatted to stderr — which under
+        # mod_wsgi means Apache's error log rather than the file below, and nothing at all under
+        # runserver. No mail_admins: what these report is degraded service (e.g. an unusable GeoIP
+        # database), which would otherwise mail on every affected request.
+        "atlasserver": {
+            "handlers": ["console", "file"],
             "level": "INFO",
         },
         # every bot probing with a forged Host header raises DisallowedHost, which would otherwise
