@@ -1,0 +1,23 @@
+{% extends "rest_framework/base.html" %}
+
+{# Both Django's permission_denied handler and DRF's TemplateHTMLRenderer look for 403.html. #}
+{# Without it, a browser refused an action (e.g. deleting a task belonging to someone else) was #}
+{# answered by DRF's last-resort Template('403 Forbidden') — a bare line of text with no #}
+{# navigation and no way back to the queue. #}
+
+{% block title %}Not allowed – ATLAS Forced Photometry{% endblock %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>You are not allowed to do that</h1>
+    </div>
+
+    <p>Tasks can be viewed by anyone, but only the account that submitted a task can change or
+    delete it.</p>
+
+    <p>If you expected this to work, you may be signed in as a different user.</p>
+
+    <p><a class="btn btn-info" href="{% url 'task-list' %}">Go to my task queue</a></p>
+</div>
+{% endblock %}

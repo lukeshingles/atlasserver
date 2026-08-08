@@ -1,4 +1,5 @@
 import datetime
+import ipaddress
 import itertools
 import json
 import re
@@ -33,6 +34,8 @@ from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import is_finite_float
 from atlasserver.forcephot.views import calculate_queue_positions
+from atlasserver.forcephot.views import geoip_reader
+from atlasserver.forcephot.views import geoip_reader_forget
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import send_task_callback
 from atlasserver.forcephot.webhooks import validate_callback_url
@@ -624,6 +627,18 @@ class PermissionResponseTests(TestCase):
         self.task.refresh_from_db()
         assert self.task.comment == "not yours"
 
+    def test_a_refused_browser_action_gets_a_real_page_not_a_bare_403_string(self) -> None:
+        # without a 403.html template, DRF's TemplateHTMLRenderer falls back to
+        # Template('403 Forbidden'): one line of text, no navigation, no way back to the queue
+        self.client.force_login(self.other)
+
+        response = self.client.delete(reverse("task-detail", args=[self.task.id]), HTTP_ACCEPT="text/html")
+
+        assert response.status_code == 403, response.status_code
+        content = response.content.decode()
+        assert "<html" in content.lower(), content[:500]
+        assert reverse("task-list") in content, content[:500]
+
     def test_an_unauthenticated_browser_is_still_sent_to_the_login_page(self) -> None:
         response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
 
@@ -708,6 +723,306 @@ class FromApiDetectionTests(TestCase):
         assert Task.objects.get(id=response.json()["id"]).from_api is True
 
 
+# the header line of a forced photometry result file. Module level because two unrelated test
+# classes build result files from it, and reaching across for another class's attribute made the
+# coupling invisible to a reader of either one.
+RESULTFILE_HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
+
+
+class ClientLocationTests(TestCase):
+    """X-Forwarded-For is written by whoever sends the request unless a proxy in front maintains it.
+
+    Nothing in this deployment does (httpconf.txt sets X-Forwarded-Proto and not this), so reading
+    the leftmost entry of it meant the client chose its own country_code — and, because the string
+    was handed to GeoIP2 unparsed, a *name* there was passed to socket.gethostbyname(): an
+    arbitrary DNS lookup made by the server, with no timeout, on a name the caller picked. A value
+    that resolved to nothing raised socket.gaierror out of task creation as a 500 and an admin
+    email.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="located", email="l@example.com", password=None)
+        self.client.force_login(self.user)
+
+    @staticmethod
+    def fake_reader():
+        reader = mock.Mock()
+        reader.city.return_value = {"country_code": "ZZ", "region_code": "QQ"}
+        return reader
+
+    def submit(self, **extra):
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 1.0, "dec": 2.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+            **extra,
+        )
+
+    def created_task(self, response) -> Task:
+        assert response.status_code == 201, response.content
+        return Task.objects.get(id=response.json()["id"])
+
+    def test_x_forwarded_for_is_ignored_without_a_trusted_proxy(self) -> None:
+        # pinned rather than left to the environment: TRUSTED_PROXY_COUNT follows
+        # ATLASSERVER_TRUSTED_PROXY_COUNT, which load_dotenv applies from a developer's .env, and
+        # this is the test of the secure default
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=0),
+            mock.patch("atlasserver.forcephot.views.geoip_reader") as reader,
+        ):
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="8.8.8.8"))
+
+        # REMOTE_ADDR is 127.0.0.1 for the test client, so there is nothing to look up
+        assert reader.call_count == 0
+        assert task.country_code is None, task.country_code
+
+    def test_a_hostname_in_x_forwarded_for_is_never_resolved(self) -> None:
+        # asserted with the header trusted, which is the configuration that would reach a lookup
+        # at all: the name must be rejected by parsing, not merely by being ignored
+        with override_settings(TRUSTED_PROXY_COUNT=1), mock.patch("socket.gethostbyname") as resolve:
+            response = self.submit(HTTP_X_FORWARDED_FOR="attacker-controlled.example.com")
+
+        assert response.status_code == 201, response.content
+        assert resolve.call_count == 0, resolve.call_args_list
+
+    def test_an_unparseable_address_does_not_fail_the_submission(self) -> None:
+        # this used to escape as socket.gaierror, i.e. an HTTP 500 for a valid task request
+        with override_settings(TRUSTED_PROXY_COUNT=1), mock.patch("socket.gethostbyname") as resolve:
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="not an ip"))
+
+        assert resolve.call_count == 0, resolve.call_args_list
+        assert task.country_code is None, task.country_code
+
+    def test_a_trusted_proxy_hop_is_used_when_one_is_configured(self) -> None:
+        reader = self.fake_reader()
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=1),
+            mock.patch("atlasserver.forcephot.views.geoip_reader", return_value=reader),
+        ):
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="8.8.8.8"))
+
+        # the parsed address, not a string: GeoIP2.city() accepts one, and passing it keeps the
+        # gethostbyname fallback inside GeoIP2._query structurally unreachable
+        assert reader.city.call_args.args == (ipaddress.ip_address("8.8.8.8"),), reader.city.call_args
+        assert task.country_code == "ZZ"
+        assert task.region == "QQ"
+
+    def test_only_the_hop_the_trusted_proxy_saw_is_read(self) -> None:
+        # the client prepended its own entry; with one trusted proxy, only the last one counts
+        reader = self.fake_reader()
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=1),
+            mock.patch("atlasserver.forcephot.views.geoip_reader", return_value=reader),
+        ):
+            self.created_task(self.submit(HTTP_X_FORWARDED_FOR="1.1.1.1, 8.8.8.8"))
+
+        assert reader.city.call_args.args == (ipaddress.ip_address("8.8.8.8"),), reader.city.call_args
+
+    def test_a_bracketed_ipv6_hop_is_understood(self) -> None:
+        # nginx and several load balancers write an IPv6 address with a port this way, and
+        # ipaddress.ip_address() rejects the brackets
+        reader = self.fake_reader()
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=1),
+            mock.patch("atlasserver.forcephot.views.geoip_reader", return_value=reader),
+        ):
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="[2001:4860:4860::8888]:443"))
+
+        assert reader.city.call_args.args == (ipaddress.ip_address("2001:4860:4860::8888"),), reader.city.call_args
+        assert task.country_code == "ZZ"
+
+    def test_a_chain_shorter_than_the_proxy_count_is_not_trusted(self) -> None:
+        # two proxies are supposed to have appended, so a single entry is a forged header
+        with override_settings(TRUSTED_PROXY_COUNT=2), mock.patch("atlasserver.forcephot.views.geoip_reader") as reader:
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="8.8.8.8"))
+
+        assert reader.call_count == 0
+        assert task.country_code is None, task.country_code
+
+    def test_private_and_loopback_addresses_are_not_looked_up(self) -> None:
+        for address in ("127.0.0.1", "10.1.2.3", "192.168.0.7", "172.16.0.1", "::1", "fd00::1"):
+            with (
+                self.subTest(address=address),
+                override_settings(TRUSTED_PROXY_COUNT=1),
+                mock.patch("atlasserver.forcephot.views.geoip_reader") as reader,
+            ):
+                self.created_task(self.submit(HTTP_X_FORWARDED_FOR=address))
+                assert reader.call_count == 0, address
+
+    def test_an_address_the_database_does_not_list_is_handled_quietly(self) -> None:
+        # a routine outcome, not a fault: logging it would put a line in the log for a share of
+        # perfectly ordinary submissions
+        from geoip2.errors import AddressNotFoundError
+
+        reader = mock.Mock()
+        reader.city.side_effect = AddressNotFoundError("no such address")
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=1),
+            mock.patch("atlasserver.forcephot.views.geoip_reader", return_value=reader),
+            self.assertNoLogs("atlasserver.forcephot.views"),
+        ):
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="8.8.8.8"))
+
+        assert task.country_code is None, task.country_code
+
+    def test_an_unusable_database_is_reported_rather_than_swallowed(self) -> None:
+        from maxminddb import InvalidDatabaseError
+
+        reader = mock.Mock()
+        reader.city.side_effect = InvalidDatabaseError("corrupt")
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=1),
+            mock.patch("atlasserver.forcephot.views.geoip_reader", return_value=reader),
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="8.8.8.8"))
+
+        assert task.country_code is None, task.country_code
+
+    def test_a_missing_database_does_not_fail_the_submission(self) -> None:
+        # geoip_reader() stats the file, so a deleted database surfaces as FileNotFoundError
+        geoip_reader_forget()
+        self.addCleanup(geoip_reader_forget)
+        with (
+            override_settings(TRUSTED_PROXY_COUNT=1, GEOIP_PATH=tempfile.gettempdir()),
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
+            task = self.created_task(self.submit(HTTP_X_FORWARDED_FOR="8.8.8.8"))
+
+        assert task.country_code is None, task.country_code
+
+    def test_the_reader_is_kept_but_rebuilt_when_the_database_changes(self) -> None:
+        # constructing one opens and memory-maps the database, which was being paid again on every
+        # request that created a task — but keeping it unconditionally means the monthly
+        # update_geoipdatabase.sh replacement is never picked up by a running worker
+        geoip_reader_forget()
+        self.addCleanup(geoip_reader_forget)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dbpath = Path(tmpdir, "GeoLite2-City.mmdb")
+            dbpath.write_bytes(b"first database")
+            with (
+                override_settings(GEOIP_PATH=tmpdir),
+                mock.patch("atlasserver.forcephot.views.GeoIP2") as geoip2class,
+            ):
+                geoip_reader()
+                geoip_reader()
+                assert geoip2class.call_count == 1, geoip2class.call_count
+
+                dbpath.write_bytes(b"a replacement database of a different size")
+                geoip_reader()
+                assert geoip2class.call_count == 2, geoip2class.call_count
+
+
+class TaskDetailIsPublicTests(TestCase):
+    """A single task is readable by anyone, including anonymously, and is meant to be.
+
+    Why is explained on ForcePhotPermission.has_object_permission. Pinned by a test because the
+    task *list* is scoped to the requesting user and cross-user writes are refused, which together
+    make the public detail view look like an oversight when it is not.
+    """
+
+    def setUp(self) -> None:
+        self.owner = User.objects.create_user(username="detailowner", email="do@example.com", password=None)
+        self.other = User.objects.create_user(username="detailother", email="dt@example.com", password=None)
+        self.staff = User.objects.create_user(
+            username="detailstaff", email="ds@example.com", password=None, is_staff=True
+        )
+        self.task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, comment="shared")
+
+    def get_detail(self, accept="application/json"):
+        return self.client.get(reverse("task-detail", args=[self.task.id]), HTTP_ACCEPT=accept)
+
+    def test_the_owner_can_read_it(self) -> None:
+        self.client.force_login(self.owner)
+        response = self.get_detail()
+        assert response.status_code == 200, response.status_code
+        assert response.json()["comment"] == "shared"
+
+    def test_staff_can_read_it(self) -> None:
+        self.client.force_login(self.staff)
+        assert self.get_detail().status_code == 200
+
+    def test_another_user_can_read_it(self) -> None:
+        self.client.force_login(self.other)
+        response = self.get_detail()
+        assert response.status_code == 200, response.status_code
+        assert response.json()["comment"] == "shared"
+
+    def test_an_anonymous_caller_can_read_it(self) -> None:
+        response = self.get_detail()
+        assert response.status_code == 200, response.status_code
+        assert response.json()["comment"] == "shared"
+
+    def test_an_anonymous_browser_gets_the_task_page(self) -> None:
+        response = self.get_detail(accept="text/html")
+        assert response.status_code == 200, response.status_code
+
+    def test_the_same_caller_may_read_but_not_change(self) -> None:
+        # the boundary this class exists to describe, asserted on one caller in one test: the
+        # refusal on its own is PermissionResponseTests' subject, the contrast is this one's
+        self.client.force_login(self.other)
+
+        assert self.get_detail().status_code == 200
+
+        response = self.client.patch(
+            reverse("task-detail", args=[self.task.id]),
+            data=json.dumps({"comment": "hijacked"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+        assert response.status_code == 403, response.status_code
+
+
+class TaskResultsArePublicTests(TestCase):
+    """The result files a task produced are public, like the task detail itself.
+
+    Why is explained on ForcePhotPermission.has_object_permission; these views take a task id and
+    no credentials, and this pins that a hardening pass does not quietly lock the data.
+    """
+
+    def setUp(self) -> None:
+        self.owner = User.objects.create_user(username="fileowner", email="fo@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="IMGZIP"
+        )
+        caches["taskderived"].clear()
+
+    def urls(self) -> list[str]:
+        return [
+            reverse("taskresultdata", args=[self.task.id]),
+            reverse("taskpreviewimage", args=[self.task.id]),
+            reverse("taskimagezip", args=[self.task.id]),
+            reverse("taskpdfplot", args=[self.task.id]),
+            reverse("resultplotdatajs", args=[self.task.id]),
+        ]
+
+    def write_result_files(self, tmpdir: str) -> None:
+        prefix = Path(tmpdir, self.task.localresultfileprefix())
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        # a header with no data rows: enough for the plot view to parse and answer, without
+        # needing the plotting script it appends only when there is something to plot
+        prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n")
+        for suffix in (".jpg", ".zip", ".pdf"):
+            prefix.with_suffix(suffix).write_text("results")
+
+    def test_an_anonymous_caller_can_read_every_result_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+            for url in self.urls():
+                with self.subTest(url=url):
+                    assert self.client.get(url).status_code == 200, url
+
+    def test_another_user_can_read_them_too(self) -> None:
+        other = User.objects.create_user(username="fileother", email="ft@example.com", password=None)
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+            self.client.force_login(other)
+            for url in self.urls():
+                with self.subTest(url=url):
+                    assert self.client.get(url).status_code == 200, url
+
+
 class RequestImagesTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
@@ -740,6 +1055,34 @@ class RequestImagesTests(TestCase):
         assert imagerequest.from_api is False
         assert imagerequest.user_id == self.user.pk
         assert imagerequest.finishtimestamp is None
+
+    def test_the_parents_completion_callback_is_not_inherited(self) -> None:
+        # model_to_dict copies every editable field of the parent, so the image request used to
+        # come out carrying the parent's callback_url: the API client that submitted the parent
+        # was then POSTed a completion notification for a task it never created and had no way to
+        # know about
+        task = Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            finishtimestamp=timezone.now(),
+            from_api=True,
+            callback_url="https://example.com/hook",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.touch()
+
+            self.client.force_login(self.user)
+            response = self.client.post(reverse("requestimages", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 302, response.status_code
+        imagerequest = Task.objects.get(parent_task_id=task.id)
+        assert imagerequest.callback_url is None, imagerequest.callback_url
+        # the parent keeps its own
+        task.refresh_from_db()
+        assert task.callback_url == "https://example.com/hook"
 
     def test_url_used_by_the_frontend_has_a_trailing_slash(self) -> None:
         # APPEND_SLASH answers a slashless POST with a 301, and a browser retries a redirected
@@ -851,10 +1194,10 @@ class TaskCreateResponseTests(TestCase):
 
 
 class ResultPlotDataTests(TestCase):
-    HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
-
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="plotter", email="pl@example.com", password=None)
+        # deliberately not logged in: the plot data, like every other result view, is public
+
         # the taskderived cache is file-based and outlives the test database, so an entry from a
         # previous run (whose task received the same id) would poison the ragged-file assertion
         caches["taskderived"].clear()
@@ -872,7 +1215,7 @@ class ResultPlotDataTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
             resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
             resultfile.parent.mkdir(parents=True, exist_ok=True)
-            resultfile.write_text(self.HEADER + "\nWARNING: bad line\n" + self.datarow(0) + "\n")
+            resultfile.write_text(RESULTFILE_HEADER + "\nWARNING: bad line\n" + self.datarow(0) + "\n")
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200
@@ -883,7 +1226,7 @@ class ResultPlotDataTests(TestCase):
             Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True)
             Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n")
             Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text("// plot script\n")
-            resultfile.write_text(self.HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200

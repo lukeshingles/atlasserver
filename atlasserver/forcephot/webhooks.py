@@ -10,7 +10,6 @@ oracle. validate_callback_url() is applied when the task is submitted and again 
 the request is sent.
 """
 
-import ipaddress
 import json
 import socket
 import typing as t
@@ -19,6 +18,8 @@ import urllib.request
 from urllib.parse import urlparse
 
 from django.conf import settings
+
+from atlasserver.forcephot.netaddr import address_is_public
 
 # a callback is a courtesy, not part of finishing the task: keep it short so that a slow or
 # blackholed endpoint cannot hold a worker slot open
@@ -29,14 +30,6 @@ MAX_CALLBACK_URL_LENGTH = 500
 
 class CallbackUrlError(ValueError):
     """Raised when a callback URL is missing, malformed or points somewhere it must not."""
-
-
-def _address_is_forbidden(address: str) -> bool:
-    """Return whether an IP address is one the server must not be pointed at."""
-    ip = ipaddress.ip_address(address)
-    # is_global is False for loopback, link-local (including the cloud metadata range),
-    # private, reserved, multicast and unspecified addresses
-    return not ip.is_global
 
 
 def validate_callback_url(url: str) -> str:
@@ -87,7 +80,9 @@ def validate_callback_url(url: str) -> str:
         # sockaddr is (host, port) for IPv4 and (host, port, flowinfo, scopeid) for IPv6; the
         # stubs type the first element as str | int because of AF_UNIX
         host = sockaddr[0]
-        if isinstance(host, str) and _address_is_forbidden(host):
+        # the same definition of "public" as the GeoIP lookup in views.client_location_fields,
+        # which must skip exactly the addresses this refuses; see the note on drift in netaddr
+        if isinstance(host, str) and not address_is_public(host):
             msg = "callback_url must resolve to a public address"
             raise CallbackUrlError(msg)
 

@@ -285,6 +285,45 @@ class Task(models.Model):
             to_attr="live_imagerequests",
         )
 
+    def new_imagerequest(self, user) -> "Task":
+        """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
+
+        Here rather than in the view, so that the decision of which fields a child inherits sits
+        next to the field declarations it reads. This used to be model_to_dict(exclude=["id"]) in
+        the view, which took every editable field and then corrected the ones that must not carry
+        over one at a time — so each field added to Task was inherited by default, and
+        callback_url (the parent submitter's completion webhook, fired for a task they never
+        created) was one of them. Anything not named here is left at the model default on purpose.
+        """
+        return Task(
+            user=user,
+            parent_task_id=self.id,
+            request_type=Task.RequestType.IMGZIP,
+            timestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0),
+            # the images to fetch are the observations the parent reported, so the image request
+            # describes the same target over the same window
+            mpc_name=self.mpc_name,
+            ra=self.ra,
+            dec=self.dec,
+            mjd_min=self.mjd_min,
+            mjd_max=self.mjd_max,
+            radec_epoch_year=self.radec_epoch_year,
+            propermotion_ra=self.propermotion_ra,
+            propermotion_dec=self.propermotion_dec,
+            # decides which image directory the remote script reads, so it has to match
+            use_reduced=self.use_reduced,
+            comment=self.comment,
+            # deliberately False regardless of how the parent was submitted: from_api decides
+            # which maintenance sweep collects the row (31 days for API tasks, 183 otherwise), so
+            # classifying a token-authenticated image request as API would delete it five months
+            # early
+            from_api=False,
+            send_email=False,
+            # the parent's location, kept when the caller cannot place the new request itself
+            country_code=self.country_code,
+            region=self.region,
+        )
+
     def delete_result_files(self) -> None:
         """Delete the result files belonging to this task.
 
