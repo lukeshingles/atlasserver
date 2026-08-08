@@ -14,6 +14,9 @@ export ATLASSERVER_DJANGO_MYSQL_PASSWORD='PASSWORD'
 
 export MAXMIND_LICENSE_KEY=''
 
+export ATLASSERVER_NPROCESSES='4'
+export ATLASSERVER_NTHREADPERPROC='1'
+
 # Number of reverse proxies in front of this server that maintain X-Forwarded-For. Leave at 0
 # unless one really is in front: with 0 the header is ignored and the client address is taken from
 # the connection, which is what stops a caller choosing the country their submissions are filed
