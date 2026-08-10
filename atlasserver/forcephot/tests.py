@@ -737,12 +737,13 @@ class PermissionResponseTests(TestCase):
         # follow. Nothing navigates on the page's behalf any more, so the polling code has to
         # recognise the status itself or the page sits showing pre-logout tasks forever.
         frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text()
-        # matched on the method declaration rather than on its exact parameter list, which this
-        # used to pin: adding a second parameter to fetchData broke the split and failed the test
-        # with an IndexError that said nothing about session handling
-        methoddecl = re.search(r"^    fetchData\(", frontendpath, re.MULTILINE)
-        assert methoddecl is not None, "could not find the fetchData method declaration"
-        pollbody = frontendpath[methoddecl.end() :]
+        # matched on the name rather than on the exact declaration, which this has now pinned twice:
+        # once on the parameter list (a second parameter broke it) and once on it being a class
+        # method (converting the component to hooks broke it). Both failed with a message about the
+        # match rather than about session handling.
+        decl = re.search(r"^\s*(?:const\s+)?fetchData\b", frontendpath, re.MULTILINE)
+        assert decl is not None, "could not find the fetchData declaration"
+        pollbody = frontendpath[decl.end() :]
 
         assert "response.status == 401 || response.status == 403" in pollbody, (
             "fetchData must handle an expired session; a 401/403 is no longer a redirect"

@@ -539,107 +539,51 @@ const Pager = React.memo(function Pager({ previous, next, taskcount, pagefirstta
     );
 });
 
-export class TaskPage extends React.Component {
-    constructor(props) {
-        super(props);
+export function TaskPage() {
+    // One object rather than a useState per field: several updates below set three or four of
+    // these together, and as separate states each would be its own render.
+    const [state, setStateRaw] = React.useState({
+        taskcount: null,
+        results: null,
+        next: null,
+        previous: null,
+        pagefirsttaskposition: null,
+        scrollToTopAfterUpdate: false,
+        dataurl: window.location.href,
+        tasklist_last_fetch_time: null,
+        // component state, not a module variable: setting a module variable from the failure
+        // handler changed nothing on screen, because nothing re-rendered. By the time a later
+        // poll did render, the variable had already been cleared, so a connection problem was
+        // never actually shown to anyone.
+        tasklist_api_error: '',
+    });
 
-        this.state = {
-            taskcount: null,
-            results: null,
-            scrollToTopAfterUpdate: false,
-            dataurl: window.location.href,
-            fetchtimeelapsed: null,
-            // component state, not a module variable: setting a module variable from the failure
-            // handler changed nothing on screen, because nothing re-rendered. By the time a later
-            // poll did render, the variable had already been cleared, so a connection problem was
-            // never actually shown to anyone.
-            tasklist_api_error: '',
-        };
-
-        this.newRequest = React.createRef();
-
-        this.setSingleTaskView = this.setSingleTaskView.bind(this);
-        this.updateCursor = this.updateCursor.bind(this);
-        this.fetchData = this.fetchData.bind(this);
-        this.fetchQueuePositions = this.fetchQueuePositions.bind(this);
-        this.handlePopState = this.handlePopState.bind(this);
-    }
-
-    /**
-     * Re-read the URL after the browser moved through history.
+    /*
+     * The current state, readable from asynchronous code.
      *
-     * Every client-side navigation here (a task, a filter, a page) is a pushState, so Back and
-     * Forward change the URL without React hearing about it. dataurl decides the heading, the
-     * active filter and whether the new request form is shown, so leaving it behind showed the
-     * wrong page entirely.
+     * In the class this was `this.state`, which always reads the latest values. A function
+     * component's closures capture the values from the render that created them, so a fetch
+     * callback, or a poll started once on mount, would otherwise compare against whatever the
+     * state was when it was set up -- the class's behaviour has to be reproduced deliberately.
+     *
+     * Writes go through setState() below, which keeps the two in step. Nothing renders from the
+     * ref; it exists only for the asynchronous readers.
      */
-    handlePopState() {
-        debug_log('History navigation to', window.location.href);
-        // No guard comparing state.dataurl against the new URL: dataurl is written by
-        // fetchData's asynchronous setState, so a quick Back could find it still equal to the
-        // destination and be dropped entirely. A redundant fetch on a spurious popstate is
-        // harmless by comparison.
-        //
-        // The pagination fields are nulled the way setSingleTaskView() nulls them (the Pager
-        // only hides itself when taskcount is null): a Forward onto a task detail page that is
-        // not held in the cache would otherwise keep the list's "Showing tasks 1-6 of N"
-        // paginator, with live page buttons, above a single task until the response lands.
-        //
-        // fetchData(true, false): user-triggered, so the held copy of the destination page
-        // (when there is one) goes up straight away — but no scroll to top, because for a
-        // history navigation the browser restores the previous scroll position itself, and
-        // Back from a task should land on the list row the user came from.
-        //
-        // Suppressing the scroll takes all three of these, because it can be asked for from
-        // three different points in time: scrollToTopAfterUpdate clears a request already
-        // waiting to be consumed by componentDidUpdate, the counter stops one arriving later
-        // from a fetch that was already in flight (see the apply site in fetchData), and the
-        // false argument covers this navigation's own fetch.
-        historynavigations += 1;
-        this.setState({
-            next: null,
-            previous: null,
-            pagefirsttaskposition: null,
-            taskcount: null,
-            scrollToTopAfterUpdate: false,
-        }, () => { this.fetchData(true, false) });
-    }
+    const stateRef = React.useRef(state);
 
-    filterIsActive(filtername, strurl) {
-        const started = new URL(strurl).searchParams.get('started');
-        if (filtername == null) {
-            return started == null && this.singleTaskViewTaskId(this.state.dataurl) == null;
-        }
-        return filtername == 'started' && started == 'true';
-    }
-
-    filterclass(filtername, strurl) {
-        return this.filterIsActive(filtername, strurl) ? 'btn-primary' : 'btn-link';
-    }
-
-    setFilter(filtername) {
-        debug_log('changed filter to', filtername);
-        const new_page_url = new URL(api_url_base);
-        new_page_url.search = '';
-        if (filtername != null) {
-            new_page_url.searchParams.set(filtername, true);
-        }
-
-        if (new_page_url != window.location.href) {
-            window.history.pushState({}, document.title, new_page_url);
-            const statechanges = { 'scrollToTopAfterUpdate': true, dataurl: new_page_url };
-            if (filtername == 'started' && this.state.results != null) {
-                statechanges['results'] = this.state.results.filter(task => { return task.starttimestamp != null });
-                if (statechanges['results'].length == 0) {
-                    // prevent flash of "there are no results" for empty ([] non-null) results list
-                    statechanges['results'] = null;
-                }
+    const setState = React.useCallback((changes) => {
+        setStateRaw((previous) => {
+            const resolved = typeof changes === 'function' ? changes(previous) : changes;
+            if (resolved == null) {
+                return previous;
             }
-            this.setState(statechanges, () => { this.fetchData(true) });
-        }
-    }
+            const next = { ...previous, ...resolved };
+            stateRef.current = next;
+            return next;
+        });
+    }, []);
 
-    singleTaskViewTaskId(strurl) {
+    function singleTaskViewTaskId(strurl) {
         const pathext = strurl.toString().replace(
             api_url_base.toString(), '').split('/').filter(el => { return el.length != 0 });
 
@@ -650,47 +594,16 @@ export class TaskPage extends React.Component {
         }
     }
 
-    setSingleTaskView(event, task_id, task_url) {
-        if (event.ctrlKey || event.metaKey || event.shiftKey) {
-            return; // let the browser deal with the click natively
+    function filterIsActive(filtername, strurl) {
+        const started = new URL(strurl).searchParams.get('started');
+        if (filtername == null) {
+            return started == null && singleTaskViewTaskId(stateRef.current.dataurl) == null;
         }
-        event.preventDefault();
-        const new_page_url = api_url_base + task_id + '/';
-        window.history.pushState({}, document.title, new_page_url);
-
-        debug_log('Task list changed to single task view for ', new_page_url.toString());
-
-        let newresults = this.state.results.filter(task => { return task.id == task_id });
-        if (newresults.length == 0) {
-            newresults = null;  // prevent flash of "there are no results" for empty (non-null) results list
-        }
-        this.setState({
-            results: newresults,
-            scrollToTopAfterUpdate: true,
-            next: null,
-            previous: null,
-            pagefirsttaskposition: null,
-            taskcount: null,
-        }, () => { this.fetchData(true) });
+        return filtername == 'started' && started == 'true';
     }
 
-    updateCursor(new_cursor) {
-        if (new_cursor == new URL(window.location.href).searchParams.get('cursor')) {
-            return;
-        }
-        debug_log('Task list cursor changed to ', new_cursor);
-
-        const new_page_url = new URL(window.location.href);
-        if (new_cursor != null) {
-            new_page_url.searchParams.set('cursor', new_cursor);
-        } else {
-            new_page_url.searchParams.delete('cursor');
-        }
-        new_page_url.searchParams.delete('format');
-
-        window.history.pushState({}, document.title, new_page_url);
-
-        this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
+    function filterclass(filtername, strurl) {
+        return filterIsActive(filtername, strurl) ? 'btn-primary' : 'btn-link';
     }
 
     /**
@@ -701,9 +614,9 @@ export class TaskPage extends React.Component {
      * no longer listed here has finished (or been deleted), which is the transition worth reacting
      * to immediately, so that case falls back to a full fetch straight away.
      */
-    fetchQueuePositions() {
+    const fetchQueuePositions = React.useCallback(() => {
         // no pollingPaused() check: see pollInterval()
-        if (this.state.results == null) {
+        if (stateRef.current.results == null) {
             return;
         }
 
@@ -713,7 +626,7 @@ export class TaskPage extends React.Component {
         // every tick, which is worse than not having this endpoint at all.
         const trackable = task => (
             task.user_id == user_id && task.finishtimestamp == null && task.queuepos != null);
-        if (!this.state.results.some(trackable)) {
+        if (!stateRef.current.results.some(trackable)) {
             return;
         }
 
@@ -725,21 +638,21 @@ export class TaskPage extends React.Component {
             })
             .then(response => response.status == 200 ? response.json() : null)
             .then(data => {
-                if (data == null || data.queuepositions == null || this.state.results == null) {
+                if (data == null || data.queuepositions == null || stateRef.current.results == null) {
                     return;
                 }
 
                 // tested against state as it stands rather than the committed state: a false
                 // positive costs one extra full fetch and a false negative is caught on the next
                 // tick, so it does not need to be exact
-                if (this.state.results.some(
+                if (stateRef.current.results.some(
                     task => trackable(task) && !(String(task.id) in data.queuepositions))) {
                     debug_log('a task left the queue: fetching the full task list');
                     // the pause is re-checked because it can have begun during this request's
                     // round-trip, and the full fetch is exactly the work it exists to skip.
                     // Nothing is lost: the next unpaused tick repeats this comparison.
                     if (!pollingPaused()) {
-                        this.fetchData(false);
+                        fetchDataRef.current(false);
                     }
                     return;
                 }
@@ -754,7 +667,7 @@ export class TaskPage extends React.Component {
                 // tasklist_last_fetch_time and tasklist_api_error are deliberately NOT touched
                 // here: this endpoint says nothing about whether the task list is reachable, and
                 // stamping them would report a stale page as current.
-                this.setState(prevstate => {
+                setState(prevstate => {
                     if (prevstate.results == null) {
                         return null;
                     }
@@ -770,26 +683,27 @@ export class TaskPage extends React.Component {
                     });
 
                     return changed ? { results: newresults } : null;
-                }, () => {
-                    // the caches have to move with the state, or a user-triggered fetch (a filter,
-                    // the pager, a delete) re-applies the body held here and visibly rewinds the
-                    // positions that were just corrected
-                    const cached = tasklist_fetchcache[geturl];
-                    if (cached != null && cached.results != null && geturl == window.location.href) {
-                        const patched = { ...cached, results: this.state.results };
-                        tasklist_fetchcache[geturl] = patched;
-                        tasklist_pollcache.storeBody(geturl, patched);
-                    }
                 });
+
+                // was the setState callback: the caches have to move with the state, or a
+                // user-triggered fetch (a filter, the pager, a delete) re-applies the body held
+                // here and visibly rewinds the positions that were just corrected. setState above
+                // has already updated stateRef, so the new results are readable here.
+                const cached = tasklist_fetchcache[geturl];
+                if (cached != null && cached.results != null && geturl == window.location.href) {
+                    const patched = { ...cached, results: stateRef.current.results };
+                    tasklist_fetchcache[geturl] = patched;
+                    tasklist_pollcache.storeBody(geturl, patched);
+                }
             })
             .catch(error => {
                 // the full task list poll is what reports a connection problem; a failure here just
                 // means the positions are refreshed a few seconds later than they might have been
                 debug_log('Queue positions request failed', error);
             });
-    }
+    }, [setState]);
 
-    fetchData(usertriggered, scrolltotop = usertriggered) {
+    const fetchData = React.useCallback((usertriggered, scrolltotop = usertriggered) => {
         // no pollingPaused() check here either, for the reason given on pollInterval().
         // scrolltotop is separate from usertriggered because of history navigations: they are
         // user-triggered (the held copy of the destination page must apply immediately), but
@@ -798,7 +712,7 @@ export class TaskPage extends React.Component {
         // top if no Back or Forward happened while it was in flight
         const navigationsatstart = historynavigations;
 
-        this.setState({ dataurl: window.location.href });
+        setState({ dataurl: window.location.href });
 
         // start by applying a cached version if we have it
         // then send out an HTTP request and update when available
@@ -806,7 +720,7 @@ export class TaskPage extends React.Component {
             const tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
             if (tasklist_fetchcachematch) {
                 debug_log('using tasklist_fetchcache before GET response', window.location.href);
-                this.setState(tasklist_fetchcache[window.location.href]);
+                setState(tasklist_fetchcache[window.location.href]);
             } else {
                 debug_log('no tasklist_fetchcache for', window.location.href);
             }
@@ -825,7 +739,7 @@ export class TaskPage extends React.Component {
         const get_url = window.location.href;
         debug_log('Fetching task list from', get_url);
         const request_headers = tasklist_pollcache.requestHeaders(get_url, {
-            "X-CSRFToken": getCookie("csrftoken"),
+            ...csrfHeader(),
             'Accept': 'application/json',
             'Content-Type': 'application/json',
         });
@@ -843,7 +757,7 @@ export class TaskPage extends React.Component {
                 if (tasklist_pollcache.noteResponse(get_url, response.status, response.headers.get('ETag'))
                     === NOT_MODIFIED) {
                     debug_log('Task list unchanged (304)', get_url);
-                    this.setState({ tasklist_api_error: '' });
+                    setState({ tasklist_api_error: '' });
                     return NOT_MODIFIED;
                 }
                 if (response.type === "opaqueredirect") {
@@ -859,7 +773,7 @@ export class TaskPage extends React.Component {
                         // answers a JSON request with a real status rather than a redirect, so
                         // nothing navigates on our behalf; without this the page would sit here
                         // showing the pre-logout task list forever, with no error and no way back.
-                        this.setState({ tasklist_api_error: 'Your session has ended. Reloading to sign in again…' });
+                        setState({ tasklist_api_error: 'Your session has ended. Reloading to sign in again…' });
                         window.location.reload();
                         return null;
                     }
@@ -868,16 +782,17 @@ export class TaskPage extends React.Component {
                         // this return it fell through to the message below and flashed
                         // "Server error (HTTP 404)" during a perfectly normal navigation
                         window.history.pushState({}, document.title, api_url_base);
-                        this.setState({ scrollToTopAfterUpdate: true }, () => { this.fetchData(true) });
+                        setState({ scrollToTopAfterUpdate: true });
+                        fetchDataRef.current(true);
                         return null;
                     }
                     if (response.status == 200) {
-                        this.setState({ tasklist_api_error: '' });
+                        setState({ tasklist_api_error: '' });
                         return response.json();
                     }
                     // cleared only for a response we could actually use: clearing it up front meant
                     // a 500 on every poll left the page looking healthy and merely frozen
-                    this.setState({ tasklist_api_error: 'Server error (HTTP ' + response.status + ')' });
+                    setState({ tasklist_api_error: 'Server error (HTTP ' + response.status + ')' });
                 }
                 return null;
             }).catch(error => {
@@ -885,7 +800,7 @@ export class TaskPage extends React.Component {
                 console.log('Get task list HTTP request failed', error);
                 // in state, so that this actually reaches the screen. The "last updated" time is
                 // deliberately left where it was: it is what tells the user how stale the page is.
-                this.setState({ tasklist_api_error: 'Connection error' });
+                setState({ tasklist_api_error: 'Connection error' });
             }).then(data => {
                 if (tasklist_refresh_queued && !tasklist_api_request_active) {
                     // something asked for a refresh while this request was in flight; this
@@ -894,7 +809,7 @@ export class TaskPage extends React.Component {
                     // since the refresh was queued); a dropped refresh is covered by the first
                     // unpaused poll.
                     tasklist_refresh_queued = false;
-                    setTimeout(() => { if (!pollingPaused()) { this.fetchData(false); } }, 0);
+                    setTimeout(() => { if (!pollingPaused()) { fetchDataRef.current(false); } }, 0);
                 }
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
@@ -913,14 +828,14 @@ export class TaskPage extends React.Component {
                     // was in flight, this body belongs to the page they have already left.
                     const held = tasklist_pollcache.getBody(get_url);
                     const restore = (held != null && get_url == window.location.href
-                        && this.state.results !== held.results) ? held : null;
-                    this.setState({ ...restore, tasklist_last_fetch_time: new Date() });
+                        && stateRef.current.results !== held.results) ? held : null;
+                    setState({ ...restore, tasklist_last_fetch_time: new Date() });
                     return;
                 }
                 if (data != null && data.hasOwnProperty('results')) {
                     if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
                         // page is empty. redirect to main page
-                        this.updateCursor(null);
+                        updateCursorRef.current(null);
                     } else {
                         statechanges = data;
                     }
@@ -955,7 +870,7 @@ export class TaskPage extends React.Component {
                         // The counter check is what stops a click's response, resolving after the
                         // user has pressed Back and Forward again onto the same URL, from
                         // discarding the scroll position the browser has just restored.
-                        this.setState(scrolltotop && navigationsatstart == historynavigations
+                        setState(scrolltotop && navigationsatstart == historynavigations
                             ? { ...statechanges, scrollToTopAfterUpdate: true } : statechanges);
                     } else {
                         debug_log('Not applying results from', get_url, 'location.href', window.location.href);
@@ -963,87 +878,211 @@ export class TaskPage extends React.Component {
                     }
                 }
             });
+    }, [setState]);
+
+    /*
+     * fetchData and updateCursor call each other, and both are reached from callbacks that were
+     * created in an earlier render. Held in refs so that every caller reaches the current one:
+     * a direct call would capture whichever copy existed when the caller was created.
+     */
+    const fetchDataRef = React.useRef(fetchData);
+    fetchDataRef.current = fetchData;
+
+    const updateCursor = React.useCallback((new_cursor) => {
+        if (new_cursor == new URL(window.location.href).searchParams.get('cursor')) {
+            return;
+        }
+        debug_log('Task list cursor changed to ', new_cursor);
+
+        const new_page_url = new URL(window.location.href);
+        if (new_cursor != null) {
+            new_page_url.searchParams.set('cursor', new_cursor);
+        } else {
+            new_page_url.searchParams.delete('cursor');
+        }
+        new_page_url.searchParams.delete('format');
+
+        window.history.pushState({}, document.title, new_page_url);
+
+        // was a setState callback. The order does not matter: fetchData reads the URL from
+        // window.location, which pushState has already changed, not from state.
+        setState({ scrollToTopAfterUpdate: true });
+        fetchDataRef.current(true);
+    }, [setState]);
+
+    const updateCursorRef = React.useRef(updateCursor);
+    updateCursorRef.current = updateCursor;
+
+    function setFilter(filtername) {
+        debug_log('changed filter to', filtername);
+        const new_page_url = new URL(api_url_base);
+        new_page_url.search = '';
+        if (filtername != null) {
+            new_page_url.searchParams.set(filtername, true);
+        }
+
+        if (new_page_url != window.location.href) {
+            window.history.pushState({}, document.title, new_page_url);
+            const statechanges = { 'scrollToTopAfterUpdate': true, dataurl: new_page_url };
+            if (filtername == 'started' && stateRef.current.results != null) {
+                statechanges['results'] = stateRef.current.results.filter(task => { return task.starttimestamp != null });
+                if (statechanges['results'].length == 0) {
+                    // prevent flash of "there are no results" for empty ([] non-null) results list
+                    statechanges['results'] = null;
+                }
+            }
+            setState(statechanges);
+            fetchDataRef.current(true);
+        }
     }
 
-    componentDidUpdate() {
+    const setSingleTaskView = React.useCallback((event, task_id, task_url) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+            return; // let the browser deal with the click natively
+        }
+        event.preventDefault();
+        const new_page_url = api_url_base + task_id + '/';
+        window.history.pushState({}, document.title, new_page_url);
+
+        debug_log('Task list changed to single task view for ', new_page_url.toString());
+
+        let newresults = stateRef.current.results.filter(task => { return task.id == task_id });
+        if (newresults.length == 0) {
+            newresults = null;  // prevent flash of "there are no results" for empty (non-null) results list
+        }
+        setState({
+            results: newresults,
+            scrollToTopAfterUpdate: true,
+            next: null,
+            previous: null,
+            pagefirsttaskposition: null,
+            taskcount: null,
+        });
+        fetchDataRef.current(true);
+    }, [setState]);
+
+    /**
+     * Re-read the URL after the browser moved through history.
+     *
+     * Every client-side navigation here (a task, a filter, a page) is a pushState, so Back and
+     * Forward change the URL without React hearing about it. dataurl decides the heading, the
+     * active filter and whether the new request form is shown, so leaving it behind showed the
+     * wrong page entirely.
+     */
+    React.useEffect(() => {
+        function handlePopState() {
+            debug_log('History navigation to', window.location.href);
+            // No guard comparing state.dataurl against the new URL: dataurl is written by
+            // fetchData's asynchronous setState, so a quick Back could find it still equal to the
+            // destination and be dropped entirely. A redundant fetch on a spurious popstate is
+            // harmless by comparison.
+            //
+            // The pagination fields are nulled the way setSingleTaskView() nulls them (the Pager
+            // only hides itself when taskcount is null): a Forward onto a task detail page that is
+            // not held in the cache would otherwise keep the list's "Showing tasks 1-6 of N"
+            // paginator, with live page buttons, above a single task until the response lands.
+            //
+            // fetchData(true, false): user-triggered, so the held copy of the destination page
+            // (when there is one) goes up straight away — but no scroll to top, because for a
+            // history navigation the browser restores the previous scroll position itself, and
+            // Back from a task should land on the list row the user came from.
+            //
+            // Suppressing the scroll takes all three of these, because it can be asked for from
+            // three different points in time: scrollToTopAfterUpdate clears a request already
+            // waiting to be consumed by the update effect, the counter stops one arriving later
+            // from a fetch that was already in flight (see the apply site in fetchData), and the
+            // false argument covers this navigation's own fetch.
+            historynavigations += 1;
+            setState({
+                next: null,
+                previous: null,
+                pagefirsttaskposition: null,
+                taskcount: null,
+                scrollToTopAfterUpdate: false,
+            });
+            fetchDataRef.current(true, false);
+        }
+
+        const fetchinterval = pollInterval(() => fetchDataRef.current(false), TASKLIST_POLL_MS);
+        const queueposinterval = pollInterval(fetchQueuePositions, QUEUEPOS_POLL_MS);
+        window.addEventListener('popstate', handlePopState);
+        fetchDataRef.current(true);
+
+        return () => {
+            clearInterval(fetchinterval);
+            clearInterval(queueposinterval);
+            window.removeEventListener('popstate', handlePopState);
+        };
+        // mount only, like the componentDidMount this replaces: the callbacks are reached through
+        // refs, so this does not need to re-run when they change
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // was componentDidUpdate
+    React.useEffect(() => {
         // the tab title used to keep saying "Task Queue" after a client-side navigation, because
         // every pushState passed the title it already had. Derived from dataurl here so that it is
         // right no matter which navigation path got us here.
-        const title = pageTitle(this.singleTaskViewTaskId(this.state.dataurl));
+        const title = pageTitle(singleTaskViewTaskId(state.dataurl));
         if (document.title != title) {
             document.title = title;
         }
 
-        if (this.state.scrollToTopAfterUpdate) {
-            this.setState({ scrollToTopAfterUpdate: false });
+        if (state.scrollToTopAfterUpdate) {
+            setState({ scrollToTopAfterUpdate: false });
             window.scrollTo(0, 0);
             window.dispatchEvent(new Event('resize'));
         }
+    });
+
+    const singletaskmode = singleTaskViewTaskId(state.dataurl) != null;
+    let pagehtml = [];
+    if (!singletaskmode) {
+        pagehtml.push(<div key="header" className="page-header"><h1>Task Queue</h1></div>);
+    } else {
+        pagehtml.push(<div key="header" className="page-header"><h1>Task {singleTaskViewTaskId(state.dataurl)}</h1></div>);
     }
 
-    componentDidMount() {
-        this.fetchinterval = pollInterval(() => this.fetchData(false), TASKLIST_POLL_MS);
-        this.queueposinterval = pollInterval(this.fetchQueuePositions, QUEUEPOS_POLL_MS);
-        window.addEventListener('popstate', this.handlePopState);
-        this.fetchData(true);
+    if (!singletaskmode || (state.results != null && state.results.length > 0 && state.results[0].user_id == user_id)) {
+        // buttons rather than <a> without an href, which is not focusable and so could not be
+        // reached by keyboard at all. aria-pressed is what makes the selected one announceable.
+        pagehtml.push(
+            <ul key="filters" id="taskfilters">
+                <li key="all"><button type="button" onClick={() => setFilter(null)} aria-pressed={filterIsActive(null, state.dataurl)} className={'btn ' + filterclass(null, state.dataurl)}>All tasks</button></li>
+                <li key="started"><button type="button" onClick={() => setFilter('started')} aria-pressed={filterIsActive('started', state.dataurl)} className={'btn ' + filterclass('started', state.dataurl)}>Running/Finished</button></li>
+            </ul>);
     }
 
-    componentWillUnmount() {
-        clearInterval(this.fetchinterval);
-        clearInterval(this.queueposinterval);
-        window.removeEventListener('popstate', this.handlePopState);
+    pagehtml.push(<RunnerStatus key="runnerstatus" />);
+
+    if (state.tasklist_last_fetch_time != null) {
+        pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{state.tasklist_api_error}</span></p>);
     }
 
-    render() {
-        const singletaskmode = this.singleTaskViewTaskId(this.state.dataurl) != null;
-        let pagehtml = [];
-        if (!singletaskmode) {
-            pagehtml.push(<div key="header" className="page-header"><h1>Task Queue</h1></div>);
-        } else {
-            pagehtml.push(<div key="header" className="page-header"><h1>Task {this.singleTaskViewTaskId(this.state.dataurl)}</h1></div>);
-        }
+    if (!singletaskmode) {
+        const allow_stack_rock = new URL(state.dataurl).searchParams.get('allow_stack_rock') == 'true';
 
-        if (!singletaskmode || (this.state.results != null && this.state.results.length > 0 && this.state.results[0].user_id == user_id)) {
-            // buttons rather than <a> without an href, which is not focusable and so could not be
-            // reached by keyboard at all. aria-pressed is what makes the selected one announceable.
-            pagehtml.push(
-                <ul key="filters" id="taskfilters">
-                    <li key="all"><button type="button" onClick={() => this.setFilter(null)} aria-pressed={this.filterIsActive(null, this.state.dataurl)} className={'btn ' + this.filterclass(null, this.state.dataurl)}>All tasks</button></li>
-                    <li key="started"><button type="button" onClick={() => this.setFilter('started')} aria-pressed={this.filterIsActive('started', this.state.dataurl)} className={'btn ' + this.filterclass('started', this.state.dataurl)}>Running/Finished</button></li>
-                </ul>);
-        }
-
-        pagehtml.push(<RunnerStatus key="runnerstatus" />);
-
-        if (this.state.tasklist_last_fetch_time != null) {
-            pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {this.state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{this.state.tasklist_api_error}</span></p>);
-        }
-
-        if (!singletaskmode) {
-            const allow_stack_rock = new URL(this.state.dataurl).searchParams.get('allow_stack_rock') == 'true';
-
-            pagehtml.push(<NewRequest key="newrequest" fetchData={this.fetchData} allow_stack_rock={allow_stack_rock} />);
-        }
-
-        let tasklist;
-        if (this.state.results == null) {
-            tasklist = <p key="message">Loading tasks...</p>;
-        } else if (this.state.results.length == 0) {
-            tasklist = <p key="message">There are no tasks.</p>;
-        } else {
-            const pagetaskcount = (this.state.results != null) ? this.state.results.length : null;
-            tasklist = [
-                <ul key="ultasklist" className="tasks">
-                    {this.state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={this.fetchData} setSingleTaskView={this.setSingleTaskView} hidePlot={pagetaskcount > 10} />))}
-                </ul>,
-                <Pager key='pager' previous={this.state.previous} next={this.state.next} pagefirsttaskposition={this.state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={this.state.taskcount} updateCursor={this.updateCursor} />
-            ];
-        }
-
-        pagehtml.push(<div key="tasklist" id="tasklist" className={singletaskmode ? 'singletaskdetail' : null}>{tasklist}</div>);
-
-        return pagehtml;
+        pagehtml.push(<NewRequest key="newrequest" fetchData={fetchData} allow_stack_rock={allow_stack_rock} />);
     }
+
+    let tasklist;
+    if (state.results == null) {
+        tasklist = <p key="message">Loading tasks...</p>;
+    } else if (state.results.length == 0) {
+        tasklist = <p key="message">There are no tasks.</p>;
+    } else {
+        const pagetaskcount = (state.results != null) ? state.results.length : null;
+        tasklist = [
+            <ul key="ultasklist" className="tasks">
+                {state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView} hidePlot={pagetaskcount > 10} />))}
+            </ul>,
+            <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
+        ];
+    }
+
+    pagehtml.push(<div key="tasklist" id="tasklist" className={singletaskmode ? 'singletaskdetail' : null}>{tasklist}</div>);
+
+    return pagehtml;
 }
 
 
