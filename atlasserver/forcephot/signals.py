@@ -9,6 +9,16 @@ That matters later rather than immediately: awaiting_verification() reads the ma
 account were disabled afterwards it would be classified as unverified again -- and the resend path
 would hand out a link that undoes the administrative disable. The marker has to mean "registered
 and still unproved", so it is cleared wherever activation actually happens.
+
+Known gap: QuerySet.update() emits no signals, so `User.objects.filter(...).update(is_active=True)`
+leaves the marker behind and reopens exactly that hole. This is not an oversight in the handler --
+it is what update() is: a deliberate bypass of save(), which skips signals, auto_now and
+full_clean alike. The same caveat already applies elsewhere in this project (see the comment in
+forcephot.queue about bulk_update not firing auto_now). Closing it properly would mean a database
+trigger, which is a large amount of machinery for a shell idiom; activating an account through
+Model.save() -- what the admin, any form, and `user.is_active = True; user.save()` all do -- is
+covered. If you do reach for update() to activate accounts, delete their PendingEmailVerification
+rows in the same breath.
 """
 
 import typing as t

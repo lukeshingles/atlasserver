@@ -2692,6 +2692,32 @@ class RegistrationVerificationTests(TestCase):
 
         assert not django_mail.outbox
 
+    def test_no_analytics_on_pages_whose_url_carries_a_token(self) -> None:
+        """gtag('config') reports a page view at the current location.
+
+        On these pages that location is the link itself, so the bearer token would be handed to
+        Google Analytics -- and anyone able to read that data could fetch the same URL, pick up a
+        CSRF cookie and post the confirmation. Django's own password reset sidesteps this by moving
+        its token out of the URL; these pages keep it there and opt out of analytics instead.
+        """
+        self.register()
+        link = self.verification_link()
+
+        for response, description in (
+            (self.client.get(link), "the confirmation page"),
+            (self.client.get(link[:-4] + "beef/"), "the invalid-link page"),
+        ):
+            body = response.content.decode()
+            assert "gtag(" not in body, f"{description} reports the token to analytics"
+            assert "googletagmanager" not in body, f"{description} loads the analytics script"
+
+    def test_ordinary_pages_still_report_analytics(self) -> None:
+        # the opt-out has to be confined to the token pages, or it silently disables analytics
+        body = self.client.get(reverse("index")).content.decode()
+
+        assert "gtag(" in body
+        assert "googletagmanager" in body
+
     def test_a_get_on_the_verification_link_activates_nothing(self) -> None:
         """Link scanners fetch every URL in an incoming message.
 

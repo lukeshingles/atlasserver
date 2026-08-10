@@ -3,6 +3,10 @@
 {# Posts rather than applying the change on GET, for the reason given in verify_email_confirm.html: #}
 {# a link scanner fetching the URL out of the recipient's mailbox would otherwise make the change #}
 {# on their behalf, before they had seen it. #}
+{# no analytics: this page's own URL carries the token, and gtag would report it. See the #}
+{# analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
     <div class="page-header">

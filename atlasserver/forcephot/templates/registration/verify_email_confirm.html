@@ -4,6 +4,10 @@
 {# gateways and link scanners fetch every URL in an incoming message, and an activation that #}
 {# happened on GET would be performed by the scanner rather than by the recipient -- which is #}
 {# exactly the ownership proof the link exists to obtain. The button below posts. #}
+{# no analytics: this page's own URL carries the token, and gtag would report it. See the #}
+{# analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
     <div class="page-header">

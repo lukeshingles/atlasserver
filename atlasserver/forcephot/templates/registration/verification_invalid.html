@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 
+{# no analytics: this page's own URL carries the token, and gtag would report it. See the #}
+{# analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
     <div class="page-header">
