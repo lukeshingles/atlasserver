@@ -56,6 +56,20 @@ class EmailChangeForm(forms.Form):
         return self.user
 
 
+class ResendVerificationForm(forms.Form):
+    """Asks only for the address, so that someone locked out of an unverified account can recover.
+
+    No password field: the point is to reach a user who cannot log in, and the link goes to the
+    address itself, so knowing the address is not enough to take anything over.
+    """
+
+    email = forms.EmailField(
+        label=_("Email address"),
+        max_length=254,
+        help_text=_("The address you registered with. We'll send a fresh verification link."),
+    )
+
+
 class RegistrationForm(UserCreationForm):
     """A form that creates a user, with no privileges, from the given username and password."""
 

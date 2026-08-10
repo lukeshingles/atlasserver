@@ -46,6 +46,10 @@ urlpatterns = [
     path("queue/<int:pk>/requestimages/", views.RequestImages.as_view(), name="requestimages"),
     re_path(r"^register/$", views.register, name="register"),
     path("emailchange/", views.change_email, name="email_change"),
+    path("apitoken/", views.api_token, name="apitoken"),
+    path("verify/<uidb64>/<token>/", views.verify_email, name="verify_email"),
+    path("resendverification/", views.resend_verification, name="resend_verification"),
+    path("emailchange/confirm/<token>/", views.confirm_email_change, name="email_change_confirm"),
     path("faq/", TemplateView.as_view(template_name="faq.html", extra_context={"name": "FAQ"}), name="faq"),
     path(
         "resultdesc/",

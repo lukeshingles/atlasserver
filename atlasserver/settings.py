@@ -300,6 +300,11 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "forcephottasks": "60/min",
+        # Reads. Deliberately loose: the queue page polls the task list every 6 seconds, so a user
+        # with several tabs open is legitimately in the tens per minute, and this only has to stop
+        # someone hammering it. Applied to GET/HEAD/OPTIONS, which used to bypass the throttle
+        # entirely -- see forcephot.throttles.
+        "forcephotread": "600/min",
     },
     # the same knob as TRUSTED_PROXY_COUNT above, so the throttle's idea of the client address
     # cannot drift from the GeoIP lookup's. Left unset, DRF's get_ident() trusts the whole

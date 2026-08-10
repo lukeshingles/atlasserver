@@ -1,0 +1,17 @@
+{% extends "rest_framework/base.html" %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p class="alert alert-danger">This verification link is not valid. It may have expired, or it
+    may already have been used.</p>
+
+    <p>A link can only be used once. If your account is already active, just
+    <a href="{% url 'login' %}">log in</a>.</p>
+
+    <p>Otherwise, <a href="{% url 'resend_verification' %}">request a new verification link</a>.</p>
+</div>
+{% endblock %}

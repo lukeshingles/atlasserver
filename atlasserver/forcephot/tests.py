@@ -23,6 +23,7 @@ from django.contrib.auth.models import User  # pylint: disable=imported-auth-use
 from django.core import mail as django_mail
 from django.core.cache import caches
 from django.db import connection
+from django.db import IntegrityError
 from django.db import models
 from django.test import override_settings
 from django.test import TestCase
@@ -30,16 +31,19 @@ from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.queue import calculate_queue_positions
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import is_finite_float
+from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.views import geoip_reader
 from atlasserver.forcephot.views import geoip_reader_forget
 from atlasserver.forcephot.webhooks import CallbackUrlError
@@ -88,14 +92,57 @@ class EmailChangeTests(TestCase):
         assert response.status_code == 302
         assert reverse("login") in response["Location"]
 
-    def test_change_email(self) -> None:
+    def request_email_change(self, new_email: str = "new@example.com"):
+        return self.client.post(reverse("email_change"), {"password": "testpassword123", "new_email": new_email})
+
+    def test_change_email_requires_confirmation_at_the_new_address(self) -> None:
+        # verifying at registration would be pointless if the address could then be changed to an
+        # unproved one, so nothing is written until the emailed link is followed
         self.client.force_login(self.user)
-        response = self.client.post(
-            reverse("email_change"), {"password": "testpassword123", "new_email": "new@example.com"}
-        )
+
+        response = self.request_email_change()
+
         assert response.status_code == 200
         self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", "the address changed before it was confirmed"
+        assert len(django_mail.outbox) == 1
+        assert django_mail.outbox[0].to == ["new@example.com"], "the link must go to the new address"
+
+    def test_following_the_confirmation_link_applies_the_change(self) -> None:
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[0].body))
+        assert link is not None, django_mail.outbox[0].body
+
+        response = self.client.get(link.group(0))
+
+        assert response.status_code == 200, response.status_code
+        self.user.refresh_from_db()
         assert self.user.email == "new@example.com"
+
+    def test_a_tampered_confirmation_token_is_rejected(self) -> None:
+        self.client.force_login(self.user)
+        self.request_email_change()
+
+        response = self.client.get(reverse("email_change_confirm", kwargs={"token": "not-a-real-token"}))
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
+
+    def test_an_address_taken_between_request_and_confirmation_is_refused(self) -> None:
+        # the database index would otherwise turn this into a 500 rather than something actionable
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[0].body))
+        assert link is not None
+        User.objects.create_user(username="sniper", email="new@example.com", password=None)
+
+        response = self.client.get(link.group(0))
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
 
     def test_wrong_password_rejected(self) -> None:
         self.client.force_login(self.user)
@@ -492,10 +539,26 @@ class TaskListEtagTests(TestCase):
 
 class TaskStrTests(TestCase):
     def test_str_without_a_target(self) -> None:
-        # a task with no mpc_name, ra or dec can be created in the admin panel, and formatting
-        # None with a float format spec used to raise TypeError
+        # formatting None with a float format spec used to raise TypeError. Such a row can no
+        # longer be saved -- task_target_is_mpcname_or_radec rejects it -- so this builds the
+        # instance in memory, with an id because __str__ formats that too. The branch is kept
+        # rather than deleted along with the possibility: it costs nothing, and it is what stops a
+        # targetless row from being unprintable (and so unfixable in the admin) if the constraint
+        # is ever dropped, or if one predates it.
         user = User.objects.create_user(username="nocoords", email="n@example.com", password=None)
-        assert "RA Dec" in str(Task.objects.create(user=user))
+        assert "RA Dec" in str(Task(id=1, user=user))
+
+    def test_a_targetless_task_cannot_be_saved(self) -> None:
+        # the serializer rejected these, but it was the only thing that did, so the admin and the
+        # shell could both create a task the runner would dispatch a job for with nothing to point at
+        user = User.objects.create_user(username="notarget", email="nt@example.com", password=None)
+
+        try:
+            Task.objects.create(user=user)
+        except IntegrityError:
+            return
+        msg = "a task with neither an mpc_name nor coordinates was accepted"
+        raise AssertionError(msg)
 
 
 class TaskDeleteFileTests(TestCase):
@@ -2158,6 +2221,285 @@ class PdfPlotViewTests(TestCase):
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
 
         assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None
+
+
+class RegistrationVerificationTests(TestCase):
+    """Registration used to log the new account straight in without proving the address."""
+
+    credentials = {"username": "newcomer", "password1": "a-long-test-password", "password2": "a-long-test-password"}
+
+    def register(self, email: str = "newcomer@example.com"):
+        return self.client.post(reverse("register"), {**self.credentials, "email": email})
+
+    def verification_link(self) -> str:
+        assert len(django_mail.outbox) == 1, django_mail.outbox
+        match = re.search(r"https?://\S+/verify/\S+", str(django_mail.outbox[0].body))
+        assert match is not None, django_mail.outbox[0].body
+        return match.group(0)
+
+    def test_registering_creates_an_inactive_account_and_sends_a_link(self) -> None:
+        response = self.register()
+
+        assert response.status_code == 200, response.status_code
+        user = User.objects.get(username="newcomer")
+        assert user.is_active is False
+        assert django_mail.outbox[0].to == ["newcomer@example.com"]
+
+    def test_registering_no_longer_logs_you_straight_in(self) -> None:
+        self.register()
+        assert "_auth_user_id" not in self.client.session
+
+    def test_an_unverified_account_cannot_log_in(self) -> None:
+        self.register()
+
+        loggedin = self.client.login(username="newcomer", password=self.credentials["password1"])
+
+        assert loggedin is False
+
+    def test_following_the_link_activates_and_logs_in(self) -> None:
+        self.register()
+
+        response = self.client.get(self.verification_link())
+
+        assert response.status_code == 302, response.status_code
+        assert User.objects.get(username="newcomer").is_active is True
+        assert "_auth_user_id" in self.client.session
+
+    def test_a_link_cannot_be_used_twice(self) -> None:
+        # is_active is part of the token hash, so activation invalidates the link with no state kept
+        self.register()
+        link = self.verification_link()
+        self.client.get(link)
+        self.client.logout()
+
+        response = self.client.get(link)
+
+        assert response.status_code == 400, response.status_code
+
+    def test_a_tampered_token_is_rejected(self) -> None:
+        self.register()
+        link = self.verification_link()
+
+        response = self.client.get(link[:-4] + "beef/")
+
+        assert response.status_code == 400, response.status_code
+        assert User.objects.get(username="newcomer").is_active is False
+
+    def test_a_verification_link_is_not_a_password_reset_link(self) -> None:
+        # separate key salts, so a token issued for one purpose cannot be replayed for the other
+        from django.contrib.auth.tokens import default_token_generator
+
+        self.register()
+        user = User.objects.get(username="newcomer")
+        token = verification.token_generator.make_token(user)
+
+        assert not default_token_generator.check_token(user, token)
+
+    def test_resend_issues_a_fresh_link(self) -> None:
+        self.register()
+        django_mail.outbox.clear()
+
+        response = self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert response.status_code == 200
+        assert len(django_mail.outbox) == 1
+        assert self.client.get(self.verification_link()).status_code == 302
+
+    def test_resend_says_the_same_thing_whether_or_not_the_account_exists(self) -> None:
+        # whether an address has an account here is not something a stranger should be able to probe
+        self.register()
+        django_mail.outbox.clear()
+
+        withaccount = self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+        sentforknown = len(django_mail.outbox)
+        django_mail.outbox.clear()
+
+        noaccount = self.client.post(reverse("resend_verification"), {"email": "nobody@example.com"})
+
+        assert withaccount.status_code == noaccount.status_code == 200
+        assert "on its way" in withaccount.content.decode()
+        assert "on its way" in noaccount.content.decode(), "the two responses must be indistinguishable"
+        assert sentforknown == 1, "no link was sent to the address that does have an unverified account"
+        assert not django_mail.outbox, "mail was sent for an address with no unverified account"
+
+    def test_resend_does_nothing_for_an_already_active_account(self) -> None:
+        User.objects.create_user(username="active", email="active@example.com", password=None)
+        django_mail.outbox.clear()
+
+        self.client.post(reverse("resend_verification"), {"email": "active@example.com"})
+
+        assert not django_mail.outbox
+
+
+class EmailUniquenessConstraintTests(TransactionTestCase):
+    """The form check is not enough on its own: it is bypassed by the admin, the shell and a race.
+
+    TransactionTestCase because an IntegrityError aborts the surrounding transaction, which a
+    TestCase would not be able to roll back cleanly.
+    """
+
+    def test_the_database_rejects_a_duplicate_created_outside_the_form(self) -> None:
+        User.objects.create_user(username="first", email="dupe@example.com", password=None)
+
+        try:
+            User.objects.create_user(username="second", email="dupe@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "a second account with the same email address was accepted"
+        raise AssertionError(msg)
+
+    def test_the_check_ignores_case(self) -> None:
+        # email_is_taken() has always compared case-insensitively; the index has to agree, or the
+        # form and the database disagree about what counts as a duplicate
+        User.objects.create_user(username="lower", email="Mixed@Example.com", password=None)
+
+        try:
+            User.objects.create_user(username="upper", email="mixed@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "an address differing only in case was accepted"
+        raise AssertionError(msg)
+
+    def test_blank_addresses_are_still_allowed_to_repeat(self) -> None:
+        # User.email is blank=True, and accounts without one are not ambiguous for password reset
+        User.objects.create_user(username="blank1", email="", password=None)
+        User.objects.create_user(username="blank2", email="", password=None)
+
+        assert User.objects.filter(email="").count() == 2
+
+    def test_a_user_can_still_be_updated_without_changing_their_email(self) -> None:
+        # a unique index on an expression can trip on an UPDATE that rewrites the same value
+        user = User.objects.create_user(username="stable", email="stable@example.com", password=None)
+        user.first_name = "Changed"
+        user.save()
+
+        assert User.objects.get(pk=user.pk).first_name == "Changed"
+
+
+class ApiTokenPageTests(TestCase):
+    """Tokens never expire, and before this page there was no way for a user to rotate one."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="tokenuser", email="token@example.com", password=None)
+        self.other = User.objects.create_user(username="tokenother", email="other@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_requires_login(self) -> None:
+        self.client.logout()
+        response = self.client.get(reverse("apitoken"))
+        assert response.status_code == 302, response.status_code
+        assert "/login" in response["Location"], response["Location"]
+
+    def test_a_user_with_no_token_is_offered_one(self) -> None:
+        content = self.client.get(reverse("apitoken")).content.decode()
+        assert "do not currently have an API token" in content
+
+    def test_create_then_view(self) -> None:
+        response = self.client.post(reverse("apitoken"), data={"action": "create"})
+
+        token = Token.objects.get(user=self.user)
+        # the key is only recoverable from this response, so the create must render rather than
+        # redirect, and it must show the key in full
+        assert response.status_code == 200, response.status_code
+        assert token.key in response.content.decode()
+
+    def test_regenerate_replaces_the_key_and_invalidates_the_old_one(self) -> None:
+        oldkey = Token.objects.create(user=self.user).key
+
+        response = self.client.post(reverse("apitoken"), data={"action": "regenerate"})
+
+        newkey = Token.objects.get(user=self.user).key
+        assert newkey != oldkey
+        assert newkey in response.content.decode()
+        assert not Token.objects.filter(key=oldkey).exists(), "the old key still authenticates"
+
+    def test_the_old_key_stops_authenticating_after_a_regenerate(self) -> None:
+        oldkey = Token.objects.create(user=self.user).key
+        self.client.post(reverse("apitoken"), data={"action": "regenerate"})
+
+        self.client.logout()
+        response = self.client.get(
+            reverse("task-list"), HTTP_AUTHORIZATION=f"Token {oldkey}", HTTP_ACCEPT="application/json"
+        )
+
+        assert response.status_code == 401, response.status_code
+
+    def test_delete_removes_the_token(self) -> None:
+        Token.objects.create(user=self.user)
+
+        response = self.client.post(reverse("apitoken"), data={"action": "delete"})
+
+        # post/redirect/get, so that a reload does not repeat a destructive action
+        assert response.status_code == 302, response.status_code
+        assert not Token.objects.filter(user=self.user).exists()
+
+    def test_an_unknown_action_is_rejected(self) -> None:
+        response = self.client.post(reverse("apitoken"), data={"action": "elevate"})
+        assert response.status_code == 400, response.status_code
+
+    def test_a_user_only_ever_sees_and_touches_their_own_token(self) -> None:
+        otherkey = Token.objects.create(user=self.other).key
+
+        content = self.client.get(reverse("apitoken")).content.decode()
+        assert otherkey not in content
+
+        self.client.post(reverse("apitoken"), data={"action": "regenerate"})
+        assert Token.objects.get(user=self.other).key == otherkey, "another user's token was replaced"
+
+
+class ReadThrottleTests(TestCase):
+    """GET used to return True unconditionally, so reads were entirely unlimited.
+
+    That is the traffic most likely to be hammered: the queue page polls, and task detail reads are
+    public, so an anonymous caller could poll as fast as the server would answer.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="throttled", email="throttled@example.com", password=None)
+        caches["default"].clear()
+
+    def tearDown(self) -> None:
+        caches["default"].clear()
+
+    # SimpleRateThrottle binds THROTTLE_RATES to the settings dict at class-definition time, so
+    # override_settings(REST_FRAMEWORK=...) does not reach it and the tests silently see the real
+    # rates. Patch the class attribute the throttle actually reads.
+    @staticmethod
+    def rates(**overrides: str):
+        return mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephottasks": "60/min", **overrides})
+
+    def test_the_read_scope_is_configured(self) -> None:
+        # a scope with no rate is not throttled at all, so a typo here would silently restore the
+        # old "GET is exempt" behaviour
+        assert "forcephotread" in ForcedPhotRateThrottle.THROTTLE_RATES
+
+    def test_reads_are_throttled(self) -> None:
+        self.client.force_login(self.user)
+
+        with self.rates(forcephotread="3/min"):
+            statuses = [
+                self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code for _ in range(5)
+            ]
+
+        assert statuses[:3] == [200, 200, 200], statuses
+        assert 429 in statuses, statuses
+
+    def test_reads_and_writes_are_counted_separately(self) -> None:
+        # a burst of polling must not use up the user's ability to submit
+        self.client.force_login(self.user)
+
+        with self.rates(forcephotread="1/min"):
+            assert self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code == 200
+            assert self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code == 429
+
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"ra": 1.0, "dec": 2.0}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
 
 
 class ThirdPartyScriptTests(TestCase):

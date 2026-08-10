@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from django.conf import settings
-from django.contrib.auth import authenticate
+from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geoip2 import GeoIP2
@@ -22,11 +22,13 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
 
 # from django.contrib.auth.models import User
+from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
 from django.db.models.functions import Trunc
 from django.http import FileResponse
 from django.http import HttpResponse
+from django.http import HttpResponseBadRequest
 from django.http import HttpResponseNotFound
 from django.http import HttpResponseNotModified
 from django.http import JsonResponse
@@ -45,14 +47,17 @@ from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
+from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.utils.urls import replace_query_param
 from rest_framework.views import APIView
 
 from atlasserver.forcephot.filters import TaskFilter
+from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
+from atlasserver.forcephot.forms import ResendVerificationForm
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
@@ -67,6 +72,11 @@ from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+from atlasserver.forcephot.verification import load_email_change_token
+from atlasserver.forcephot.verification import send_email_change_confirmation
+from atlasserver.forcephot.verification import send_verification_email
+from atlasserver.forcephot.verification import token_generator as verification_token_generator
+from atlasserver.forcephot.verification import user_from_uidb64
 
 # not atlasserver.taskrunner.main: importing that module runs django.setup() and pulls pandas and
 # multiprocessing into every web worker, permanently, to read two constants
@@ -895,12 +905,20 @@ def register(request):
     if request.method == "POST":
         form = RegistrationForm(request.POST)
         if form.is_valid():
-            form.save()
-            username = form.cleaned_data.get("username")
-            raw_password = form.cleaned_data.get("password1")
-            user = authenticate(username=username, password=raw_password)
-            login(request, user)
-            return redirect(reverse("task-list"))
+            # inactive until the address is confirmed. Registration used to log the account
+            # straight in, so the address that receives result mail and password resets was never
+            # proved to belong to whoever typed it.
+            user = form.save(commit=False)
+            user.is_active = False
+            user.save()
+
+            send_verification_email(request, user)
+
+            return render(
+                request,
+                "registration/verification_sent.html",
+                {"name": "Check your email", "email": user.email},
+            )
     else:
         form = RegistrationForm()
 
@@ -909,22 +927,160 @@ def register(request):
     return render(request, "registration/register.html", {"form": form, "name": "Register"})
 
 
+def verify_email(request, uidb64: str, token: str):
+    """Activate an account from the link in its verification email."""
+    user = user_from_uidb64(uidb64)
+
+    if user is None or not verification_token_generator.check_token(user, token):
+        # deliberately the same page for an unknown id, a bad token and an expired one: which of
+        # those it was is not something the person following the link can act on differently, and
+        # distinguishing them tells an attacker which user ids exist
+        return render(
+            request,
+            "registration/verification_invalid.html",
+            {"name": "Verification link is not valid"},
+            status=400,
+        )
+
+    if not user.is_active:
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+
+    # the token hashes is_active, so following the link a second time lands on the invalid page
+    # rather than here. Log in anyway on the first pass: the user has just proved they hold the
+    # address, and making them type the password again immediately serves nothing.
+    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+
+    return redirect(reverse("task-list"))
+
+
+def resend_verification(request):
+    """Send a fresh verification link to an address that has an unverified account.
+
+    Without this, an account whose link expired is stranded: it cannot log in, and it cannot use
+    password reset either, because PasswordResetForm only considers active users. The address is
+    also taken as far as registration is concerned, so the person cannot simply sign up again.
+    """
+    sent = False
+    form = ResendVerificationForm(request.POST or None)
+
+    if request.method == "POST" and form.is_valid():
+        user = (
+            get_user_model()
+            .objects.filter(email__iexact=form.cleaned_data["email"], is_active=False)
+            .order_by("pk")
+            .first()
+        )
+        if user is not None:
+            send_verification_email(request, user)
+
+        # reported as sent either way: whether an address has an unverified account here is not
+        # something a stranger should be able to probe for
+        sent = True
+
+    return render(
+        request,
+        "registration/resend_verification.html",
+        {"form": form if not sent else ResendVerificationForm(), "sent": sent, "name": "Resend verification email"},
+    )
+
+
 @login_required
 def change_email(request):
-    success = False
     if request.method == "POST":
         form = EmailChangeForm(request.user, request.POST)
         if form.is_valid():
-            form.save()
-            success = True
-            form = EmailChangeForm(request.user)
+            # not saved here. The new address has to be confirmed at the new address, or the
+            # verification done at registration could be undone just by changing the address
+            # afterwards.
+            new_email = form.cleaned_data["new_email"]
+            send_email_change_confirmation(request, request.user, new_email)
+
+            return render(
+                request,
+                "registration/verification_sent.html",
+                {"name": "Check your email", "email": new_email, "emailchange": True},
+            )
     else:
         form = EmailChangeForm(request.user)
 
     return render(
         request,
         "registration/email_change_form.html",
-        {"form": form, "success": success, "name": "Email address change"},
+        {"form": form, "success": False, "name": "Email address change"},
+    )
+
+
+def confirm_email_change(request, token: str):
+    """Apply an email change once the link sent to the new address has been followed."""
+    loaded = load_email_change_token(token, max_age=settings.PASSWORD_RESET_TIMEOUT)
+
+    if loaded is not None:
+        user, new_email = loaded
+        # re-checked at use, not only when the link was sent: somebody else may have taken the
+        # address in between, and the database index would turn that into a 500 rather than a
+        # message the user can act on
+        if not email_is_taken(new_email, exclude_user=user):
+            user.email = new_email
+            user.save(update_fields=["email"])
+
+            return render(
+                request,
+                "registration/email_change_done.html",
+                {"name": "Email address changed", "email": new_email},
+            )
+
+    return render(
+        request,
+        "registration/verification_invalid.html",
+        {"name": "Confirmation link is not valid"},
+        status=400,
+    )
+
+
+@login_required
+def api_token(request):
+    """Let a user see, create, replace and delete their own API token.
+
+    Tokens never expire, and until this page existed there was no way to rotate one: a user whose
+    token had leaked (into a shell history, a notebook, a pasted traceback) could only ask an
+    administrator to intervene. /api-token-auth/ hands one out but will not replace one.
+
+    A plain Django view rather than a DRF endpoint. It is reached from a browser with a session, it
+    is a destructive action guarded by CSRF, and routing it through DRF would mean a token-holder
+    could authenticate with the very token they are replacing.
+    """
+    token = Token.objects.filter(user=request.user).first()
+    justcreated = False
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action in {"create", "regenerate"}:
+            # delete and recreate in one transaction: the key is the primary key, so there is no
+            # rotating it in place, and a failure between the two would leave the user with none
+            with transaction.atomic():
+                Token.objects.filter(user=request.user).delete()
+                token = Token.objects.create(user=request.user)
+            justcreated = True
+
+        elif action == "delete":
+            Token.objects.filter(user=request.user).delete()
+            token = None
+
+        else:
+            return HttpResponseBadRequest("Unknown action")
+
+        if not justcreated:
+            # PRG, so that a reload does not repeat a destructive action. Not for a new token:
+            # the key is only recoverable from this response, so redirecting would show the user
+            # a page that cannot display what they just asked for.
+            return redirect(reverse("apitoken"))
+
+    return render(
+        request,
+        "apitoken.html",
+        {"name": "API Token", "token": token, "justcreated": justcreated},
     )
 
 

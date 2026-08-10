@@ -105,6 +105,7 @@
                         <li><a href="{% url 'email_change' %}">{{request.user.email}}</a></li>
                         <li><a href="{% url 'email_change' %}">Change email</a></li>
                         <li><a href="{% url 'password_change' %}">Change password</a></li>
+                        <li><a href="{% url 'apitoken' %}">API token</a></li>
                         <li>
                           {# Django's LogoutView only accepts POST, so a plain link would return HTTP 405. #}
                           {# No "next" field: LogoutView prefers it over LOGOUT_REDIRECT_URL, which would #}

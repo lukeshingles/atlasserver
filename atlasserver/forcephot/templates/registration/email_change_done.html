@@ -1,0 +1,15 @@
+{% extends "rest_framework/base.html" %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p class="alert alert-success">Your account's email address is now <b>{{ email }}</b>.</p>
+
+    <p>Result notifications and password resets will go there from now on.</p>
+
+    <p><a href="{% url 'task-list' %}">Back to the task queue</a></p>
+</div>
+{% endblock %}

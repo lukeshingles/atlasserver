@@ -102,6 +102,30 @@ class Task(models.Model):
     _imagerequest_cache: t.Any = UNSET
 
     class Meta:
+        constraints = [
+            # The rule ForcePhotTaskSerializer.validate() applies, stated once more where nothing
+            # can go around it: the serializer is the only path that enforced it, so the admin and
+            # the shell could both create a task with no target at all. __str__ still carries a
+            # branch for that case, and the task runner would dispatch a job for nothing.
+            #
+            # Exactly one of the two forms: an MPC object name (with no coordinates), or both
+            # coordinates (with no name). RA 0 / Dec 0 are real coordinates, so this tests for NULL
+            # rather than for falsiness, exactly as the serializer does.
+            models.CheckConstraint(
+                condition=(
+                    (
+                        models.Q(mpc_name__isnull=False)
+                        & ~models.Q(mpc_name="")
+                        & models.Q(ra__isnull=True, dec__isnull=True)
+                    )
+                    | (
+                        (models.Q(mpc_name__isnull=True) | models.Q(mpc_name=""))
+                        & models.Q(ra__isnull=False, dec__isnull=False)
+                    )
+                ),
+                name="task_target_is_mpcname_or_radec",
+            )
+        ]
         indexes = [
             # the task list: filter on (is_archived, user), order by (-timestamp, -id)
             models.Index(fields=["is_archived", "user", "-timestamp", "-id"], name="task_userlist_idx"),

@@ -62,7 +62,10 @@
                 <input type="submit" name="submit" value="Log in" class="btn btn-primary form-control" id="submit-id-submit">
               </div>
                 <br /><p>New user? <a href="{% url 'register' %}">Register for an account</a>
-                <br />Forgot password? <a href ="{% url 'password_reset' %}">Reset password</a></p>
+                <br />Forgot password? <a href ="{% url 'password_reset' %}">Reset password</a>
+                {# an unverified account cannot log in, and password reset skips inactive users, #}
+                {# so without this link such an account has no way back #}
+                <br />Never received your verification email? <a href="{% url 'resend_verification' %}">Send another</a></p>
             </form>
           </div>
         </div><!-- /.row-fluid -->

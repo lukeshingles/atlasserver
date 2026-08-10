@@ -1,0 +1,12 @@
+{% autoescape off %}You're receiving this email because an account was registered with this address at {{ site_name }}.
+
+Please go to the following page to confirm your address and activate the account:
+
+{{ verification_url }}
+
+Your username, in case you've forgotten: {{ user.get_username }}
+
+If you did not register, you can ignore this email. The account cannot be used until the link above is followed, and the link expires.
+
+The {{ site_name }} team
+{% endautoescape %}

@@ -21,7 +21,7 @@ import requests
 BASEURL = "https://fallingstar-data.com/forcedphot"
 </code></pre>
 
-<p>Next, we need to obtain a secret token from our username and password. This step normally only has to be done once, unless a token reset is specifically requested (e.g., if it accidentally becomes compromised).</p>
+<p>Next, we need to obtain a secret token from our username and password. This step normally only has to be done once. You can also view your token, and replace or delete it if it becomes compromised, on the <a href="{% url 'apitoken' %}">API token page</a>.</p>
 <pre><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
 
 if resp.status_code == 200:

@@ -1,0 +1,39 @@
+{% extends "rest_framework/base.html" %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    {% if sent %}
+        {# deliberately unconditional: whether an address has an unverified account here is not #}
+        {# something a stranger should be able to probe for #}
+        <p class="alert alert-success">If that address has an account awaiting verification, a new
+        link is on its way. The link expires, so use it soon.</p>
+    {% endif %}
+
+    <p>If your verification link expired before you used it, enter your address and we'll send
+    another.</p>
+
+    <form method="post">{% csrf_token %}
+        {% if form.errors %}
+            <p class="errornote">Please correct the error below.</p>
+        {% endif %}
+
+        <fieldset class="module aligned wide">
+            <div class="form-row">
+                {{ form.email.errors }}
+                {{ form.email.label_tag }} {{ form.email }}
+                {% if form.email.help_text %}
+                    <div class="help">{{ form.email.help_text|safe }}</div>
+                {% endif %}
+            </div>
+        </fieldset>
+
+        <div class="submit-row">
+            <input type="submit" value="Send verification email" class="btn btn-primary">
+        </div>
+    </form>
+</div>
+{% endblock %}
