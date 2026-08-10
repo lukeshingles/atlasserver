@@ -2395,6 +2395,20 @@ class ProcessTimeoutTests(TestCase):
         raise AssertionError(msg)
 
 
+def matplotlib_accepts(path: Path) -> bool:
+    """Whether matplotlib would infer a usable format from this filename.
+
+    plot_atlas_fp reaches savefig with whatever path it is handed, so the check that matters is
+    the one matplotlib itself performs on the extension.
+    """
+    import matplotlib as mpl
+
+    mpl.use("Agg")
+    from matplotlib.figure import Figure
+
+    return path.suffix.lstrip(".").lower() in Figure().canvas.get_supported_filetypes()
+
+
 class PdfPlotViewTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="pdfuser", email="pdf@example.com", password=None)
@@ -2408,6 +2422,45 @@ class PdfPlotViewTests(TestCase):
             resultfile.parent.mkdir(parents=True, exist_ok=True)
             resultfile.touch()
             yield
+
+    def test_the_render_path_is_still_named_as_a_pdf(self) -> None:
+        """plot_atlas_fp calls plt.savefig(path) with no explicit format.
+
+        Matplotlib infers the format from the extension, so a private render path whose final
+        suffix was not .pdf made it infer an unsupported one. The worker caught the resulting
+        ValueError, the child exited cleanly, and the view answered 404 having rendered nothing --
+        which no mocked test noticed, because the mock never reaches matplotlib.
+        """
+        captured = {}
+
+        def capture(**kwargs):
+            captured.update(kwargs)
+            return False
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=capture):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        outputpath = captured.get("outputpath")
+        assert outputpath is not None, captured
+        assert outputpath.suffix == ".pdf", outputpath
+        # and matplotlib itself has to accept it, which is the property that actually broke
+        assert matplotlib_accepts(outputpath), outputpath
+
+    def test_the_render_path_is_unique_per_request(self) -> None:
+        # two concurrent renders must not share a path, or one truncates the other's output
+        seen = []
+
+        def capture(**kwargs):
+            seen.append(kwargs["outputpath"])
+            return False
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=capture):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+            caches["default"].delete(f"pdfplot-lock-{self.task.id}")
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert len(seen) == 2, seen
+        assert seen[0] != seen[1], seen
 
     def test_a_timed_out_render_returns_503_rather_than_404(self) -> None:
         # 404 would tell the client the plot does not exist, when in fact it is only slow, and

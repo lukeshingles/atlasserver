@@ -1512,7 +1512,12 @@ def taskpdfplot(request, taskid):
             # neither can delete or half-overwrite the other's work. The rename is atomic within
             # a filesystem, and both renders are of the same data, so whichever lands second is
             # equally correct.
-            renderpath = pdfpath.with_name(f"{pdfpath.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+            # the uniqueness goes in the stem, keeping .pdf as the final suffix: plot_atlas_fp
+            # calls plt.savefig(path) with no explicit format, so matplotlib infers it from the
+            # extension. A name ending .part made it infer a "part" format, which it rejects --
+            # the worker caught the ValueError, the child exited cleanly, and the view answered
+            # 404 having rendered nothing.
+            renderpath = pdfpath.with_name(f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}")
 
             try:
                 completed = make_pdf_plot(
