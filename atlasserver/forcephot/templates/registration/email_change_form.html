@@ -7,10 +7,6 @@
 <h1>{% translate 'Email address change' %}</h1>
 </div>
 
-{% if success %}
-    <p class="alert alert-success">{% translate 'Your email address has been changed to' %} {{ request.user.email }}.</p>
-{% endif %}
-
 <form method="post">{% csrf_token %}
 <div>
 {% if form.errors %}

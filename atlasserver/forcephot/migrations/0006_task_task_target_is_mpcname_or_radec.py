@@ -14,17 +14,24 @@ from django.conf import settings
 from django.db import migrations
 from django.db import models
 
+# The rule, written once and used twice: the pre-check below excludes it to find violators, and
+# AddConstraint enforces it. Written out by hand rather than deconstructed from the model, because
+# a migration must keep working when the model moves on -- but only once, so the check cannot
+# quietly stop matching the constraint it is meant to be clearing the way for.
+# spelled exactly as Task.Meta spells it, negation included: Django compares constraints by their
+# deconstructed form, so a logically equivalent but differently written condition makes
+# makemigrations believe the model has drifted and demand another migration
+_HAS_MPC_NAME = models.Q(mpc_name__isnull=False) & ~models.Q(mpc_name="")
+_NO_MPC_NAME = models.Q(mpc_name__isnull=True) | models.Q(mpc_name="")
+TARGET_PRESENT = (_HAS_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True)) | (
+    _NO_MPC_NAME & models.Q(ra__isnull=False, dec__isnull=False)
+)
+
 
 def check_every_task_has_a_target(apps, schema_editor):
     task_model = apps.get_model("forcephot", "Task")
 
-    has_mpc_name = models.Q(mpc_name__isnull=False) & ~models.Q(mpc_name="")
-    has_radec = models.Q(ra__isnull=False, dec__isnull=False)
-
-    # the same condition as the constraint, negated: anything that is neither form
-    violators = task_model.objects.exclude(
-        (has_mpc_name & models.Q(ra__isnull=True, dec__isnull=True)) | (~has_mpc_name & has_radec)
-    )
+    violators = task_model.objects.exclude(TARGET_PRESENT)
 
     count = violators.count()
     if count:
@@ -52,22 +59,6 @@ class Migration(migrations.Migration):
         migrations.RunPython(check_every_task_has_a_target, noop),
         migrations.AddConstraint(
             model_name="task",
-            constraint=models.CheckConstraint(
-                condition=models.Q(
-                    models.Q(
-                        ("mpc_name__isnull", False),
-                        models.Q(("mpc_name", ""), _negated=True),
-                        ("dec__isnull", True),
-                        ("ra__isnull", True),
-                    ),
-                    models.Q(
-                        models.Q(("mpc_name__isnull", True), ("mpc_name", ""), _connector="OR"),
-                        ("dec__isnull", False),
-                        ("ra__isnull", False),
-                    ),
-                    _connector="OR",
-                ),
-                name="task_target_is_mpcname_or_radec",
-            ),
+            constraint=models.CheckConstraint(condition=TARGET_PRESENT, name="task_target_is_mpcname_or_radec"),
         ),
     ]

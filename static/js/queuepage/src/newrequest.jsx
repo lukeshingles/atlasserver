@@ -25,32 +25,39 @@ function errortext(value) {
 /*
  * Fields whose value is remembered across page loads, and how to read one back.
  *
- * This was fifteen separate localStorage.getItem calls in get_defaultstate() and a matching
- * setItem in all fifteen onChange handlers, which is why "clear the form after a successful
- * submission" needed its own list of nine removeItem calls that had drifted out of step with them.
- * One table, and persistence happens in a single effect below.
+ * This was fifteen separate localStorage.getItem calls in get_defaultstate() and a matching setItem
+ * in all fifteen onChange handlers. One table, read here and written in setField.
+ *
+ * `clearedOnSubmit` marks the ones a successful submission forgets: they describe the request that
+ * was just made. use_reduced and send_email are not among them -- they are standing preferences,
+ * and clearing them turned "email me when completed" back on for someone who had turned it off.
  */
 const STORED_FIELDS = {
-    radeclist: { fallback: '' },
-    mjd_min: { fallback: getDefaultMjdMin },
-    mjd_max: { fallback: '' },
-    comment: { fallback: '' },
-    radec_epoch_year: { fallback: '' },
-    propermotion_ra: { fallback: 0. },
-    propermotion_dec: { fallback: 0. },
-    // localStorage.getItem returns null for a key that was never set, and null is neither 'true'
-    // nor 'false', so each boolean is compared against the value that is *not* its default
-    use_reduced: { boolean: true, fallback: false },
-    send_email: { boolean: true, fallback: true },
-    enable_stack_rock: { boolean: true, fallback: false },
-    enable_propermotion: { boolean: true, fallback: false },
+    radeclist: { fallback: '', clearedOnSubmit: true },
+    mjd_min: { fallback: getDefaultMjdMin, clearedOnSubmit: true },
+    mjd_max: { fallback: '', clearedOnSubmit: true },
+    comment: { fallback: '', clearedOnSubmit: true },
+    radec_epoch_year: { fallback: '', clearedOnSubmit: true },
+    propermotion_ra: { fallback: 0., clearedOnSubmit: true },
+    propermotion_dec: { fallback: 0., clearedOnSubmit: true },
+    enable_stack_rock: { fallback: false, clearedOnSubmit: true },
+    enable_propermotion: { fallback: false, clearedOnSubmit: true },
+    use_reduced: { fallback: false },
+    send_email: { fallback: true },
 };
+
+/** Remember a field's value for the next visit. localStorage stringifies whatever it is given. */
+function storeValue(name, value) {
+    localStorage.setItem(name, value);
+}
 
 function storedValue(name) {
     const field = STORED_FIELDS[name];
     const stored = localStorage.getItem(name);
 
-    if (field.boolean) {
+    // a checkbox round-trips as the string "true"/"false"; which fields those are is already said
+    // by the type of their fallback, so it does not need saying twice in the table
+    if (typeof field.fallback === 'boolean') {
         return stored == null ? field.fallback : stored === 'true';
     }
     if (stored != null) {
@@ -86,21 +93,17 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
     const [httperror, setHttperror] = React.useState('');
     const [submitting, setSubmitting] = React.useState(false);
 
-    // One effect instead of a setItem beside every setState. It also covers the reset after a
-    // successful submission, which previously had to remove each key by hand.
-    React.useEffect(() => {
-        for (const [name, field] of Object.entries(STORED_FIELDS)) {
-            localStorage.setItem(name, field.boolean ? String(values[name]) : values[name]);
-        }
-    }, [values]);
-
-    // was one binding per field, each duplicating the setState-then-setItem pair
+    // was one binding per field, each duplicating the setState-then-setItem pair.
+    //
+    // Written here rather than from an effect on `values`: an effect also runs on mount, which
+    // persisted the *defaults* before the user had touched anything -- and mjd_min's default is
+    // "30 days ago", so once stored it was read back verbatim on every later visit and stopped
+    // moving. Only a field the user actually changed is remembered.
     const setField = (name) => (event) => {
         const input = event.target;
-        setValues((previous) => ({
-            ...previous,
-            [name]: input.type === 'checkbox' ? input.checked : input.value,
-        }));
+        const value = input.type === 'checkbox' ? input.checked : input.value;
+        setValues((previous) => ({ ...previous, [name]: value }));
+        storeValue(name, value);
     };
 
     // the captions are derived from the MJD values, so they are computed during render rather than
@@ -109,8 +112,10 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
     const mjd_max_isoformat = mjdCaption(values.mjd_max, '(leave blank to fetch latest)');
 
     function resetForm() {
-        for (const name of Object.keys(STORED_FIELDS)) {
-            localStorage.removeItem(name);
+        for (const [name, field] of Object.entries(STORED_FIELDS)) {
+            if (field.clearedOnSubmit) {
+                localStorage.removeItem(name);
+            }
         }
         setValues(defaultFormValues());
     }
@@ -252,7 +257,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
                 <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={values.mjd_min} onChange={setField('mjd_min')} />
                 {/* the emoji is the whole of this control, so without a label there is nothing
                     for a screen reader (or a hover) to say about it */}
-                <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() }))}>↩️</button>
+                <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { localStorage.removeItem('mjd_min'); setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() })); }}>↩️</button>
                 <p className="inputisodate" id='id_mjd_min_isoformat'>{mjd_min_isoformat}</p>
             </li>
             <li key="mjd_max">

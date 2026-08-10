@@ -30,6 +30,12 @@ a {
   margin-top: 0em;
 } */
 
+.notices {
+  color: black;
+  font-size: small;
+  margin-bottom: 1em;
+}
+
 div.page-header {
   margin: 0;
 }

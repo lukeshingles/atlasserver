@@ -3,7 +3,7 @@
 import React from "react"
 import ReactDOM from 'react-dom';
 import { describeAge } from "agetext";
-import { csrfHeader, getCookie } from "csrftoken";
+import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
 
@@ -100,6 +100,10 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
 
         return () => {
             debug_log('Unmounting plot for task ', taskid);
+            // the node too, not just the globals: jQuery's script transport removed it after
+            // evaluating, and without this a session that pages through finished tasks leaves one
+            // dead <script> in head per plot it has ever shown
+            script.remove();
             const key = '#plotforcedflux-task-' + taskid;
             delete jslimitsglobal[key];
             delete jslcdataglobal[key];
@@ -138,7 +142,29 @@ function useTimeElapsed(taskdata) {
     return running ? timeelapsed : -1;
 }
 
-export function Task(props) {
+/**
+ * Whether a re-render of a row can be skipped.
+ *
+ * Replaces the shouldComponentUpdate the class had: the task list is re-fetched every 6 seconds
+ * and the 304 branch always stamps a new "last updated" time, so the page re-renders on every
+ * poll and would re-render every row with it, whether or not the response differed.
+ *
+ * The identity check carries the 304 case, where results are re-applied unchanged. A 200 rebuilds
+ * every task from JSON, so identity never matches there and the deep compare is what does the
+ * work. fetchData and setSingleTaskView are not compared: both are useCallbacks with stable
+ * identities, so they cannot differ, and listing them would suggest otherwise.
+ *
+ * The elapsed-seconds ticker is component state, so it is unaffected by this and keeps running.
+ */
+function taskPropsEqual(prev, next) {
+    return (
+        prev.hidePlot === next.hidePlot
+        && (prev.taskdata === next.taskdata
+            || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
+    );
+}
+
+export const Task = React.memo(function Task(props) {
     const [httperror, setHttperror] = React.useState('');
 
     // The timer used to live in render state, as `interval`, started from
@@ -158,111 +184,111 @@ export function Task(props) {
     }, []);
 
     function deleteTask() {
-    const task = props.taskdata;
-    // deleting a finished task also removes its data file, plot and any retrieved images, and
-    // none of that can be recovered. Cancelling a task that has not finished stays one click.
-    if (task.finishtimestamp != null && !window.confirm(
-        'Delete task ' + task.id + '? Its data file, plot and any retrieved images will be'
-        + ' removed and cannot be recovered.')) {
-        return;
+        const task = props.taskdata;
+        // deleting a finished task also removes its data file, plot and any retrieved images, and
+        // none of that can be recovered. Cancelling a task that has not finished stays one click.
+        if (task.finishtimestamp != null && !window.confirm(
+            'Delete task ' + task.id + '? Its data file, plot and any retrieved images will be'
+            + ' removed and cannot be recovered.')) {
+            return;
+        }
+
+        collapseRow(task.id);
+        setTimeout(() => {
+            fetch(task.url, {
+                credentials: "same-origin",
+                method: "DELETE",
+                headers: csrfHeader(),
+            })
+                .then((response) => {
+                    if (response.ok) {
+                        console.log('Deleted task ', task.id);
+                        setHttperror('');
+                        // not fetchData(true): "user triggered" re-applies the cached pre-delete
+                        // body and scrolls the window to the top, which after deleting the last row
+                        // on a page means the viewport jumps away from what the user was looking at
+                        props.fetchData();
+                        return;
+                    }
+
+                    // the row comes back, so without a message the click looks like it simply did
+                    // nothing. A 403 here means the task belongs to somebody else; a 401 means the
+                    // session has ended, so reload the page, which lands on the login form.
+                    console.log('Failed to delete task ', task.id, response.status);
+                    if (response.status === 401) {
+                        window.location.reload();
+                        return;
+                    }
+                    expandRow(task.id);
+                    let message = 'ERROR: could not delete this task (HTTP ' + response.status + ').';
+                    if (response.status === 403) {
+                        message = 'ERROR: you are not allowed to delete this task.';
+                    }
+                    setHttperror(message);
+                    props.fetchData();
+                })
+                .catch((err) => {
+                    // fetch rejects only on a network-level failure, which has no HTTP status --
+                    // jQuery used to report those as status 0, which read as gibberish in a message
+                    console.log('Failed to reach the server to delete task ', task.id, err);
+                    expandRow(task.id);
+                    setHttperror('ERROR: could not reach the server to delete this task.');
+                    props.fetchData();
+                });
+        }, ROW_TRANSITION_MS);
     }
 
-    collapseRow(task.id);
-    setTimeout(() => {
-        fetch(task.url, {
-            credentials: "same-origin",
-            method: "DELETE",
-            headers: csrfHeader(),
-        })
-            .then((response) => {
-                if (response.ok) {
-                    console.log('Deleted task ', task.id);
-                    setHttperror('');
-                    // not fetchData(true): "user triggered" re-applies the cached pre-delete
-                    // body and scrolls the window to the top, which after deleting the last row
-                    // on a page means the viewport jumps away from what the user was looking at
-                    props.fetchData();
-                    return;
-                }
+    function requestImages() {
+        const request_image_url = new URL(props.taskdata.url);
+        // the trailing slash matters: without it APPEND_SLASH answers with a 301, and a browser
+        // retries a redirected POST as a GET, which this endpoint does not accept
+        request_image_url.pathname += 'requestimages/';
+        request_image_url.search = '';
 
-                // the row comes back, so without a message the click looks like it simply did
-                // nothing. A 403 here means the task belongs to somebody else; a 401 means the
-                // session has ended, so reload the page, which lands on the login form.
-                console.log('Failed to delete task ', task.id, response.status);
-                if (response.status === 401) {
-                    window.location.reload();
-                    return;
-                }
-                expandRow(task.id);
-                let message = 'ERROR: could not delete this task (HTTP ' + response.status + ').';
-                if (response.status === 403) {
-                    message = 'ERROR: you are not allowed to delete this task.';
-                }
-                setHttperror(message);
-                props.fetchData();
+        fetch(request_image_url,
+            {
+                credentials: "same-origin",
+                method: "POST",
+                headers: {
+                    ...csrfHeader(),
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                },
             })
-            .catch((err) => {
-                // fetch rejects only on a network-level failure, which has no HTTP status --
-                // jQuery used to report those as status 0, which read as gibberish in a message
-                console.log('Failed to reach the server to delete task ', task.id, err);
-                expandRow(task.id);
-                setHttperror('ERROR: could not reach the server to delete this task.');
-                props.fetchData();
+            .then((response) => {
+                if (response.status == 200 && response.redirected) {
+                    setHttperror('');
+                    const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
+                    newtaskids.push(newimgtask_id);
+                    debug_log('requestimages created task', newimgtask_id);
+                    const new_page_url = new URL(response.url);
+                    new_page_url.searchParams.delete('newids');
+                    window.history.pushState({}, document.title, new_page_url);
+                    props.fetchData(true);
+                } else {
+                    // the body is not always JSON (e.g. a plain-text 404), and DRF reports its
+                    // own errors under 'detail' rather than 'non_field_errors'
+                    return response.text().then(text => {
+                        let message = response.statusText || ('HTTP ' + response.status);
+                        try {
+                            const data = JSON.parse(text);
+                            message = data["non_field_errors"] || data["detail"] || message;
+                        } catch (err) {
+                            console.log('requestImages: non-JSON error body', text);
+                        }
+                        console.log('requestImages: error returned', response.status, message);
+                        setHttperror('ERROR: ' + message);
+                    });
+                }
+                return null;
+            })
+            .catch(error => {
+                console.log('requestImages HTTP request failed', error);
+                setHttperror('HTTP request failed.');
             });
-    }, ROW_TRANSITION_MS);
-}
+    }
 
-function requestImages() {
-    const request_image_url = new URL(props.taskdata.url);
-    // the trailing slash matters: without it APPEND_SLASH answers with a 301, and a browser
-    // retries a redirected POST as a GET, which this endpoint does not accept
-    request_image_url.pathname += 'requestimages/';
-    request_image_url.search = '';
-
-    fetch(request_image_url,
-        {
-            credentials: "same-origin",
-            method: "POST",
-            headers: {
-                ...csrfHeader(),
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-            },
-        })
-        .then((response) => {
-            if (response.status == 200 && response.redirected) {
-                setHttperror('');
-                const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
-                newtaskids.push(newimgtask_id);
-                debug_log('requestimages created task', newimgtask_id);
-                const new_page_url = new URL(response.url);
-                new_page_url.searchParams.delete('newids');
-                window.history.pushState({}, document.title, new_page_url);
-                props.fetchData(true);
-            } else {
-                // the body is not always JSON (e.g. a plain-text 404), and DRF reports its
-                // own errors under 'detail' rather than 'non_field_errors'
-                return response.text().then(text => {
-                    let message = response.statusText || ('HTTP ' + response.status);
-                    try {
-                        const data = JSON.parse(text);
-                        message = data["non_field_errors"] || data["detail"] || message;
-                    } catch (err) {
-                        console.log('requestImages: non-JSON error body', text);
-                    }
-                    console.log('requestImages: error returned', response.status, message);
-                    setHttperror('ERROR: ' + message);
-                });
-            }
-            return null;
-        })
-        .catch(error => {
-            console.log('requestImages HTTP request failed', error);
-            setHttperror('HTTP request failed.');
-        });
-}
-
-const task = props.taskdata;
+    const task = props.taskdata;
     // whether the data file this task produced is still on disk. The maintenance sweep
     // reclaims it after a few months, and the serializer answers with a null result_url from
     // then on; everything derived from that file — the download links, the plot, and the
@@ -424,7 +450,7 @@ const task = props.taskdata;
             {taskbox}
         </li>
     );
-}
+}, taskPropsEqual);
 
 let tasklist_api_request_active = false;
 // set when a refresh was requested while a request was already in flight; the settled request
@@ -571,16 +597,27 @@ export function TaskPage() {
      */
     const stateRef = React.useRef(state);
 
+    /*
+     * The ref is the authority, and is updated before setStateRaw is called.
+     *
+     * The merge deliberately does not happen inside a setStateRaw(previous => ...) updater: React
+     * runs an updater during a later render, not at call time, so a caller that set state and then
+     * read the ref got the value from before its own write. fetchQueuePositions does exactly that
+     * when it patches the caches, and was writing the pre-update rows back.
+     *
+     * Computing here instead also keeps the updater out of it entirely, so nothing impure runs
+     * during render, and consecutive calls in one tick accumulate because each reads the ref the
+     * previous one just wrote.
+     */
     const setState = React.useCallback((changes) => {
-        setStateRaw((previous) => {
-            const resolved = typeof changes === 'function' ? changes(previous) : changes;
-            if (resolved == null) {
-                return previous;
-            }
-            const next = { ...previous, ...resolved };
-            stateRef.current = next;
-            return next;
-        });
+        const previous = stateRef.current;
+        const resolved = typeof changes === 'function' ? changes(previous) : changes;
+        if (resolved == null) {
+            return;
+        }
+
+        stateRef.current = { ...previous, ...resolved };
+        setStateRaw(stateRef.current);
     }, []);
 
     function singleTaskViewTaskId(strurl) {
@@ -597,7 +634,9 @@ export function TaskPage() {
     function filterIsActive(filtername, strurl) {
         const started = new URL(strurl).searchParams.get('started');
         if (filtername == null) {
-            return started == null && singleTaskViewTaskId(stateRef.current.dataurl) == null;
+            // strurl, not the ref: both callers pass state.dataurl, and reading the ref here
+            // instead meant the two halves of one answer could come from different renders
+            return started == null && singleTaskViewTaskId(strurl) == null;
         }
         return filtername == 'started' && started == 'true';
     }
@@ -652,7 +691,7 @@ export function TaskPage() {
                     // round-trip, and the full fetch is exactly the work it exists to skip.
                     // Nothing is lost: the next unpaused tick repeats this comparison.
                     if (!pollingPaused()) {
-                        fetchDataRef.current(false);
+                        fetchData(false);
                     }
                     return;
                 }
@@ -687,8 +726,8 @@ export function TaskPage() {
 
                 // was the setState callback: the caches have to move with the state, or a
                 // user-triggered fetch (a filter, the pager, a delete) re-applies the body held
-                // here and visibly rewinds the positions that were just corrected. setState above
-                // has already updated stateRef, so the new results are readable here.
+                // here and visibly rewinds the positions that were just corrected. setState
+                // updates stateRef before it returns, so the new results are readable here.
                 const cached = tasklist_fetchcache[geturl];
                 if (cached != null && cached.results != null && geturl == window.location.href) {
                     const patched = { ...cached, results: stateRef.current.results };
@@ -783,7 +822,7 @@ export function TaskPage() {
                         // "Server error (HTTP 404)" during a perfectly normal navigation
                         window.history.pushState({}, document.title, api_url_base);
                         setState({ scrollToTopAfterUpdate: true });
-                        fetchDataRef.current(true);
+                        fetchData(true);
                         return null;
                     }
                     if (response.status == 200) {
@@ -809,7 +848,7 @@ export function TaskPage() {
                     // since the refresh was queued); a dropped refresh is covered by the first
                     // unpaused poll.
                     tasklist_refresh_queued = false;
-                    setTimeout(() => { if (!pollingPaused()) { fetchDataRef.current(false); } }, 0);
+                    setTimeout(() => { if (!pollingPaused()) { fetchData(false); } }, 0);
                 }
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
@@ -881,13 +920,14 @@ export function TaskPage() {
     }, [setState]);
 
     /*
-     * fetchData and updateCursor call each other, and both are reached from callbacks that were
-     * created in an earlier render. Held in refs so that every caller reaches the current one:
-     * a direct call would capture whichever copy existed when the caller was created.
+     * fetchData and updateCursor call each other. Both are useCallbacks whose only dependency is
+     * the stable setState, so each has one identity for the component's lifetime and can simply be
+     * named -- fetchData names itself, and updateCursor below names fetchData, because a reference
+     * inside a function body resolves when it is called rather than when it is defined.
+     *
+     * The one exception is the other direction: fetchData reaches updateCursor, which is declared
+     * after it, so that call goes through a ref.
      */
-    const fetchDataRef = React.useRef(fetchData);
-    fetchDataRef.current = fetchData;
-
     const updateCursor = React.useCallback((new_cursor) => {
         if (new_cursor == new URL(window.location.href).searchParams.get('cursor')) {
             return;
@@ -907,7 +947,7 @@ export function TaskPage() {
         // was a setState callback. The order does not matter: fetchData reads the URL from
         // window.location, which pushState has already changed, not from state.
         setState({ scrollToTopAfterUpdate: true });
-        fetchDataRef.current(true);
+        fetchData(true);
     }, [setState]);
 
     const updateCursorRef = React.useRef(updateCursor);
@@ -932,7 +972,7 @@ export function TaskPage() {
                 }
             }
             setState(statechanges);
-            fetchDataRef.current(true);
+            fetchData(true);
         }
     }
 
@@ -958,7 +998,7 @@ export function TaskPage() {
             pagefirsttaskposition: null,
             taskcount: null,
         });
-        fetchDataRef.current(true);
+        fetchData(true);
     }, [setState]);
 
     /**
@@ -1000,13 +1040,13 @@ export function TaskPage() {
                 taskcount: null,
                 scrollToTopAfterUpdate: false,
             });
-            fetchDataRef.current(true, false);
+            fetchData(true, false);
         }
 
-        const fetchinterval = pollInterval(() => fetchDataRef.current(false), TASKLIST_POLL_MS);
+        const fetchinterval = pollInterval(() => fetchData(false), TASKLIST_POLL_MS);
         const queueposinterval = pollInterval(fetchQueuePositions, QUEUEPOS_POLL_MS);
         window.addEventListener('popstate', handlePopState);
-        fetchDataRef.current(true);
+        fetchData(true);
 
         return () => {
             clearInterval(fetchinterval);

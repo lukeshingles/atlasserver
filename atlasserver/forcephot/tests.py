@@ -96,6 +96,12 @@ class EmailChangeTests(TestCase):
     def request_email_change(self, new_email: str = "new@example.com") -> t.Any:
         return self.client.post(reverse("email_change"), {"password": "testpassword123", "new_email": new_email})
 
+    def confirmation_link(self, index: int = 0) -> str:
+        """Return the confirmation URL from a sent email, like RegistrationVerificationTests.verification_link."""
+        match = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[index].body))
+        assert match is not None, django_mail.outbox[index].body
+        return match.group(0)
+
     def test_change_email_requires_confirmation_at_the_new_address(self) -> None:
         # verifying at registration would be pointless if the address could then be changed to an
         # unproved one, so nothing is written until the emailed link is followed
@@ -112,10 +118,8 @@ class EmailChangeTests(TestCase):
     def test_following_the_confirmation_link_applies_the_change(self) -> None:
         self.client.force_login(self.user)
         self.request_email_change()
-        link = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[0].body))
-        assert link is not None, django_mail.outbox[0].body
 
-        response = self.client.get(link.group(0))
+        response = self.client.get(self.confirmation_link())
 
         assert response.status_code == 200, response.status_code
         self.user.refresh_from_db()
@@ -131,15 +135,37 @@ class EmailChangeTests(TestCase):
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
+    def test_a_confirmation_link_cannot_be_replayed(self) -> None:
+        """A link is good for one change, or an old one can undo a later one.
+
+        It is delivered to a mailbox and scanners and forwarding rules keep copies, so anyone
+        holding it could otherwise point result mail and password resets back at that address for
+        as long as the signature stayed fresh.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change("first@example.com")
+        firstlink = self.confirmation_link()
+        assert self.client.get(firstlink).status_code == 200
+        django_mail.outbox.clear()
+
+        # move on to a third address, then replay the first link
+        self.request_email_change("second@example.com")
+        self.client.get(self.confirmation_link())
+
+        replayed = self.client.get(firstlink)
+
+        assert replayed.status_code == 400, replayed.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "second@example.com", self.user.email
+
     def test_an_address_taken_between_request_and_confirmation_is_refused(self) -> None:
         # the database index would otherwise turn this into a 500 rather than something actionable
         self.client.force_login(self.user)
         self.request_email_change()
-        link = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[0].body))
-        assert link is not None
+        link = self.confirmation_link()
         User.objects.create_user(username="sniper", email="new@example.com", password=None)
 
-        response = self.client.get(link.group(0))
+        response = self.client.get(link)
 
         assert response.status_code == 400, response.status_code
         self.user.refresh_from_db()
@@ -2230,6 +2256,11 @@ class RegistrationVerificationTests(TestCase):
 
     credentials = {"username": "newcomer", "password1": "a-long-test-password", "password2": "a-long-test-password"}
 
+    def setUp(self) -> None:
+        # the resend endpoint rate-limits per address through the default cache, and locmem is not
+        # reset between tests, so without this one test's resend silently suppresses the next one's
+        caches["default"].clear()
+
     def register(self, email: str = "newcomer@example.com") -> t.Any:
         return self.client.post(reverse("register"), {**self.credentials, "email": email})
 
@@ -2324,6 +2355,39 @@ class RegistrationVerificationTests(TestCase):
         assert sentforknown == 1, "no link was sent to the address that does have an unverified account"
         assert not django_mail.outbox, "mail was sent for an address with no unverified account"
 
+    def test_resend_is_rate_limited_per_address(self) -> None:
+        # otherwise this endpoint mails any address with an unverified account as fast as it is
+        # asked to, which makes the server an amplifier for flooding that inbox
+        self.register()
+        django_mail.outbox.clear()
+
+        for _ in range(3):
+            self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+
+    def test_a_rate_limited_resend_still_looks_the_same(self) -> None:
+        self.register()
+        self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        response = self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert response.status_code == 200
+        assert "on its way" in response.content.decode()
+
+    def test_a_failed_verification_email_creates_no_account(self) -> None:
+        # the address and username would otherwise be taken by a row nobody can log into, verify
+        # or recover, leaving the person unable even to register again
+        # patched on views, not on verification: views imports the name directly, so patching it
+        # at the definition site leaves the already-bound reference in place and the test passes
+        # for the wrong reason
+        with mock.patch.object(views, "send_verification_email", side_effect=OSError("smtp down")):
+            response = self.client.post(reverse("register"), {**self.credentials, "email": "doomed@example.com"})
+
+        assert response.status_code == 200, response.status_code
+        assert not User.objects.filter(username="newcomer").exists(), "the account survived a failed send"
+        assert "could not send the verification email" in response.content.decode().lower()
+
     def test_resend_does_nothing_for_an_already_active_account(self) -> None:
         User.objects.create_user(username="active", email="active@example.com", password=None)
         django_mail.outbox.clear()
@@ -2334,11 +2398,19 @@ class RegistrationVerificationTests(TestCase):
 
 
 class EmailUniquenessConstraintTests(TransactionTestCase):
-    """The form check is not enough on its own: it is bypassed by the admin, the shell and a race.
+    """New accounts may not share an address; ones that already did when the index was added may.
+
+    The form check is not enough on its own: it is bypassed by the admin, the shell and a race.
 
     TransactionTestCase because an IntegrityError aborts the surrounding transaction, which a
     TestCase would not be able to roll back cleanly.
     """
+
+    @staticmethod
+    def grandfather(user: User) -> None:
+        """Mark a row exempt, as migration 0005 does for accounts that already shared an address."""
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE auth_user SET email_unique_exempt = 1 WHERE id = %s", [user.pk])
 
     def test_the_database_rejects_a_duplicate_created_outside_the_form(self) -> None:
         User.objects.create_user(username="first", email="dupe@example.com", password=None)
@@ -2376,6 +2448,46 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
         user.save()
 
         assert User.objects.get(pk=user.pk).first_name == "Changed"
+
+    def test_an_account_grandfathered_by_the_migration_keeps_its_shared_address(self) -> None:
+        # the pairs that already existed when 0005 ran are kept, not merged or renamed
+        first = User.objects.create_user(username="old1", email="shared@example.com", password=None)
+        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
+        self.grandfather(second)
+        second.email = "shared@example.com"
+        second.save()
+
+        assert User.objects.filter(email="shared@example.com").count() == 2
+        assert User.objects.get(pk=first.pk).email == "shared@example.com"
+
+    def test_a_new_account_still_cannot_take_a_grandfathered_address(self) -> None:
+        """The oldest row of each set is left unexempt precisely so the address stays claimed.
+
+        Exempting every row would have handed the address back to the next person to register it.
+        """
+        User.objects.create_user(username="old1", email="shared@example.com", password=None)
+        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
+        self.grandfather(second)
+        second.email = "shared@example.com"
+        second.save()
+
+        try:
+            User.objects.create_user(username="newcomer", email="shared@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "a new account took an address that two grandfathered accounts already share"
+        raise AssertionError(msg)
+
+    def test_new_accounts_cannot_collide_with_each_other(self) -> None:
+        # nothing created after the migration is ever exempt, so the ordinary rule applies to both
+        User.objects.create_user(username="new1", email="fresh@example.com", password=None)
+
+        try:
+            User.objects.create_user(username="new2", email="FRESH@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "two accounts created after the migration were allowed to share an address"
+        raise AssertionError(msg)
 
 
 class ApiTokenPageTests(TestCase):
@@ -2458,10 +2570,13 @@ class ReadThrottleTests(TestCase):
 
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="throttled", email="throttled@example.com", password=None)
-        caches["default"].clear()
+        # the counters live in their own cache, not "default" -- see the "throttle" alias in
+        # settings. locmem is not reset between tests, so one test's requests would otherwise
+        # spend the next one's budget.
+        caches["throttle"].clear()
 
     def tearDown(self) -> None:
-        caches["default"].clear()
+        caches["throttle"].clear()
 
     # SimpleRateThrottle binds THROTTLE_RATES to the settings dict at class-definition time, so
     # override_settings(REST_FRAMEWORK=...) does not reach it and the tests silently see the real

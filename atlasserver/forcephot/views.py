@@ -1,6 +1,8 @@
 """Django views for the forcephot app."""
 
 import datetime
+import functools
+import hashlib
 import ipaddress
 import json
 import logging
@@ -84,6 +86,9 @@ from atlasserver.taskrunner import status as runnerstatus
 
 MAX_USER_IMGZIP_TASKS = 5
 MAX_USER_TASKS = 500
+
+# Shortest gap between two verification emails to the same address, see resend_verification.
+RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 
 logger = logging.getLogger(__name__)
 
@@ -853,8 +858,12 @@ def taskrunnerstatus(request):
     )
 
 
+@functools.cache
 def bokeh_cdn_scripts() -> list[dict[str, str]]:
     """Return the BokehJS CDN URLs to load on the stats page, each with its integrity hash.
+
+    Cached: the answer depends only on the installed bokeh, but get_sri_hashes_for_version reads
+    and parses a JSON file from site-packages on every call, and the stats page is not cached.
 
     Both come from the installed bokeh package. The template used to hardcode the version in the
     URL, which had to be kept in step with the pin in pyproject.toml by hand: the charts are built
@@ -908,17 +917,32 @@ def register(request):
             # inactive until the address is confirmed. Registration used to log the account
             # straight in, so the address that receives result mail and password resets was never
             # proved to belong to whoever typed it.
-            user = form.save(commit=False)
-            user.is_active = False
-            user.save()
+            #
+            # Both in one transaction: sending is what makes the account reachable, so an account
+            # created without it is worse than no account at all. The username and the address
+            # would be taken by a row nobody can log into, cannot verify (no link was sent) and
+            # cannot recover (password reset skips inactive users), leaving the person unable even
+            # to register again.
+            try:
+                with transaction.atomic():
+                    user = form.save(commit=False)
+                    user.is_active = False
+                    user.save()
 
-            send_verification_email(request, user)
-
-            return render(
-                request,
-                "registration/verification_sent.html",
-                {"name": "Check your email", "email": user.email},
-            )
+                    send_verification_email(request, user)
+            except Exception:
+                logger.exception("Could not send the verification email for a new registration")
+                form.add_error(
+                    None,
+                    "We could not send the verification email just now, so your account has not "
+                    "been created. Please try again in a few minutes.",
+                )
+            else:
+                return render(
+                    request,
+                    "registration/verification_sent.html",
+                    {"name": "Check your email", "email": user.email},
+                )
     else:
         form = RegistrationForm()
 
@@ -965,17 +989,27 @@ def resend_verification(request):
     form = ResendVerificationForm(request.POST or None)
 
     if request.method == "POST" and form.is_valid():
-        user = (
-            get_user_model()
-            .objects.filter(email__iexact=form.cleaned_data["email"], is_active=False)
-            .order_by("pk")
-            .first()
-        )
-        if user is not None:
-            send_verification_email(request, user)
+        email = form.cleaned_data["email"]
 
-        # reported as sent either way: whether an address has an unverified account here is not
-        # something a stranger should be able to probe for
+        # One send per address per interval. Without it this endpoint mails any address with an
+        # unverified account as fast as it is asked to, which makes the server an amplifier for
+        # flooding that inbox and puts the sending domain's reputation at risk. add() is the atomic
+        # operation, so concurrent posts cannot both win.
+        #
+        # The address is hashed into the key rather than used directly: cache keys are visible in
+        # filenames and memcached rejects some characters, and an address is personal data.
+        emailkey = hashlib.sha256(email.lower().encode()).hexdigest()
+        may_send = caches["default"].add(
+            f"resendverification-{emailkey}", True, timeout=RESEND_VERIFICATION_INTERVAL_SECONDS
+        )
+
+        if may_send:
+            user = get_user_model().objects.filter(email__iexact=email, is_active=False).order_by("pk").first()
+            if user is not None:
+                send_verification_email(request, user)
+
+        # reported as sent either way, whether or not an account exists and whether or not the
+        # rate limit allowed this one: neither is something a stranger should be able to probe for
         sent = True
 
     return render(
@@ -1007,7 +1041,7 @@ def change_email(request):
     return render(
         request,
         "registration/email_change_form.html",
-        {"form": form, "success": False, "name": "Email address change"},
+        {"form": form, "name": "Email address change"},
     )
 
 
@@ -1066,16 +1100,14 @@ def api_token(request):
 
         elif action == "delete":
             Token.objects.filter(user=request.user).delete()
-            token = None
+            # post/redirect/get, so a reload does not repeat a destructive action. The create and
+            # regenerate paths above deliberately fall through and render instead: the key is only
+            # recoverable from this response, so a redirect would show a page that cannot display
+            # what the user just asked for.
+            return redirect(reverse("apitoken"))
 
         else:
             return HttpResponseBadRequest("Unknown action")
-
-        if not justcreated:
-            # PRG, so that a reload does not repeat a destructive action. Not for a new token:
-            # the key is only recoverable from this response, so redirecting would show the user
-            # a page that cannot display what they just asked for.
-            return redirect(reverse("apitoken"))
 
     return render(
         request,

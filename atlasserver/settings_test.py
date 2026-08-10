@@ -49,7 +49,7 @@ if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
 # starts empty in every process.
 CACHES = {
     name: {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": name}
-    for name in ("default", "taskderived", "usagestats")
+    for name in ("default", "taskderived", "usagestats", "throttle")
 }
 
 # MAILERS is deliberately not overridden here: Django's test runner already swaps every mailer's

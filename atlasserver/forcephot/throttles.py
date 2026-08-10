@@ -1,22 +1,25 @@
 import typing as t
 
+from django.core.cache import caches
+
+# the same tuple ForcePhotPermission branches on, so the two cannot drift on what counts as a read.
+# Safe methods are throttled far more loosely than writes, but not exempt: the queue page polls the
+# task list every few seconds, so reads are the traffic most likely to be hammered, and they were
+# previously unlimited -- an unauthenticated caller could poll a task detail as fast as the server
+# would answer.
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.request import Request
 from rest_framework.throttling import SimpleRateThrottle
 
 if t.TYPE_CHECKING:
     # only for the annotations. DRF resolves DEFAULT_THROTTLE_CLASSES while rest_framework.views is
     # still being imported, so importing APIView here at run time is a circular import that leaves
-    # the whole app unable to start.
+    # the whole app unable to start. rest_framework.permissions above is safe: views.py already
+    # imports it at module scope.
     from rest_framework.views import APIView
 
-# Methods that only read. Throttled far more loosely than writes, but not exempt: the queue page
-# polls the task list every few seconds, so reads are the traffic most likely to be hammered, and
-# they were previously unlimited -- an unauthenticated caller could poll a task detail as fast as
-# the server would answer.
-SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-# Scope used for those, in place of whatever the view declares for writes. Separate so that a burst
-# of reads cannot use up a user's ability to submit, and so the two limits can be tuned apart.
+# Scope used for safe methods, in place of whatever the view declares for writes. Separate so that
+# a burst of reads cannot use up a user's ability to submit, and so the two can be tuned apart.
 READ_SCOPE = "forcephotread"
 
 
@@ -29,6 +32,10 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
     """
 
     scope_attr = "throttle_scope"
+
+    # not the default cache: see the "throttle" alias in settings for why these counters must not
+    # share a directory with the queue-recalc flag and the PDF render locks
+    cache = caches["throttle"]
 
     def __init__(self) -> None:
         # Override the usual SimpleRateThrottle, because we can't determine

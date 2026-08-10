@@ -93,7 +93,12 @@ def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email:
     from django.core import signing
     from django.urls import reverse
 
-    token = signing.dumps({"user_pk": user.pk, "email": new_email}, salt=EMAIL_CHANGE_SALT)
+    # from_email makes the link single-use: applying it changes the account's address, so a replay
+    # no longer matches. Without it the token stayed valid for the whole timeout, and anyone still
+    # holding an old link -- it was delivered to a mailbox, and scanners and forwarding rules keep
+    # copies -- could undo a later change and point result mail and password resets back at
+    # themselves.
+    token = signing.dumps({"user_pk": user.pk, "email": new_email, "from_email": user.email}, salt=EMAIL_CHANGE_SALT)
     url = request.build_absolute_uri(reverse("email_change_confirm", kwargs={"token": token}))
 
     body = render_to_string(
@@ -118,9 +123,17 @@ def load_email_change_token(token: str, max_age: int) -> tuple[t.Any, str] | Non
     except signing.BadSignature:
         return None
 
-    user = get_user_model().objects.filter(pk=payload.get("user_pk")).first()
+    # annotated, for the same reason the parameters above are: the type checkers disagree about
+    # whether get_user_model() yields the concrete User or AbstractBaseUser, and only one of them
+    # believes it has an `email`
+    user: t.Any = get_user_model().objects.filter(pk=payload.get("user_pk")).first()
     email = payload.get("email")
     if user is None or not email:
+        return None
+
+    # the address the account had when the link was issued. A link is good for one change: once
+    # applied (or once the address has moved on for any other reason) this no longer matches.
+    if user.email != payload.get("from_email"):
         return None
 
     return user, email

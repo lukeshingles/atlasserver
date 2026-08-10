@@ -135,6 +135,17 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "usagestats",
     },
+    # Throttle counters, kept out of "default" on purpose. There is one entry per (client, scope)
+    # and they are not expired eagerly, so a few hundred distinct callers exceed the default
+    # MAX_ENTRIES of 300 -- after which every throttled request culls a third of the directory at
+    # random. Sharing that directory with the queue-recalc flag and the PDF render locks meant
+    # ordinary API traffic could evict them. Reads are throttled now, so this is also the hottest
+    # cache on the site: it gets its own directory rather than globbing over everything else's.
+    "throttle": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": filecacheroot / "throttle",
+        "OPTIONS": {"MAX_ENTRIES": 10000},
+    },
 }
 
 ROOT_URLCONF = "atlasserver.urls"
@@ -248,8 +259,10 @@ def _static_version() -> str:
 
     mtimes = [path.stat().st_mtime_ns for path in assets if path.is_file()]
 
+    # nanoseconds, not seconds: two deploys landing within the same second would otherwise share
+    # a suffix and leave browsers on the earlier bundle
     # no assets found means an unbuilt checkout; a constant is fine, there is nothing to bust
-    return str(max(mtimes) // 1_000_000_000) if mtimes else "0"
+    return str(max(mtimes)) if mtimes else "0"
 
 
 STATIC_VERSION = _static_version()

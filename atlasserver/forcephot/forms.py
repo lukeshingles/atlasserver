@@ -50,11 +50,6 @@ class EmailChangeForm(forms.Form):
             raise forms.ValidationError(self.error_messages["email_taken"], code="email_taken")
         return new_email
 
-    def save(self):
-        self.user.email = self.cleaned_data["new_email"]
-        self.user.save(update_fields=["email"])
-        return self.user
-
 
 class ResendVerificationForm(forms.Form):
     """Asks only for the address, so that someone locked out of an unverified account can recover.

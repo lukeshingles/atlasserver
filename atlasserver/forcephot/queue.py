@@ -23,6 +23,15 @@ RECALC_FLAG_CACHEKEY: t.Final = "queue-positions-dirty"
 # or a wiped cache directory, so a stale ordering can never persist.
 RECALC_MAX_INTERVAL_SECONDS: t.Final = 30.0
 
+# How often the runner asks whether a renumbering was requested. Its loop runs twice a second, and
+# in production this flag is a file in the cache directory, so consulting it every pass was an open
+# and an unpickle twice a second to answer "no" almost every time.
+#
+# The added delay is not visible: a submitted task is given a provisional position at the back of
+# the queue before the request returns (see next_queuepos_relative), so what waits is only the
+# round-robin reordering among users.
+RECALC_CHECK_INTERVAL_SECONDS: t.Final = 2.0
+
 
 def request_recalc() -> None:
     """Ask the task runner to renumber the queue.
@@ -53,12 +62,12 @@ def consume_recalc_request() -> bool:
 def next_queuepos_relative() -> int:
     """Return a queue position at the back of the current queue.
 
-    Gives a task submitted between two renumberings a position that sorts correctly and displays
-    about right, instead of the NULL that reads as "no position yet" on the queue page.
+    Not only cosmetic. The task runner dispatches in `order_by("queuepos_relative")`, and NULL
+    sorts first, so a task left unnumbered between two renumberings would be picked up ahead of
+    everything already waiting. Renumbering used to happen inside the submitting request, so the
+    window did not exist; now it does, and this closes it.
     """
-    maxpos = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
-        models.Max("queuepos_relative")
-    )["queuepos_relative__max"]
+    maxpos = Task.queued().aggregate(models.Max("queuepos_relative"))["queuepos_relative__max"]
 
     return 0 if maxpos is None else maxpos + 1
 
@@ -69,11 +78,7 @@ def calculate_queue_positions() -> None:
         # Lock the queued rows and read them once. Without the lock, two concurrent
         # recalculations can each renumber from a snapshot that is missing the other's changes
         # and end up assigning duplicate queue positions.
-        queuedtasks = list(
-            Task.objects.select_for_update()
-            .filter(finishtimestamp__isnull=True, is_archived=False)
-            .order_by("user_id", "timestamp", "id")
-        )
+        queuedtasks = list(Task.queued().select_for_update().order_by("user_id", "timestamp", "id"))
 
         # to get position in current pass, check if job currently running (the one started last).
         # attrgetter rather than a lambda: the generator's None filter cannot narrow the
@@ -140,7 +145,16 @@ def calculate_queue_positions() -> None:
 
             passnum += 1
 
-        if queuepos_updates:
+        # Only the rows that actually move. This used to write every queued row every time, which
+        # was harmless when it ran on submit or delete, but the task runner now calls it on a
+        # 30-second backstop: an unchanged queue was rewriting every row, and with it every row's
+        # task_modified_datetime -- which get_tasklist_etag() aggregates, so every user with a
+        # queued task had their ETag invalidated twice a minute and every open queue page was
+        # pushed from a cheap 304 into a full serialisation on its next poll.
+        currentpositions = {tsk.id: tsk.queuepos_relative for tsk in queuedtasks}
+        moved = {taskid: newpos for taskid, newpos in queuepos_updates.items() if currentpositions[taskid] != newpos}
+
+        if moved:
             # task_modified_datetime is written explicitly: it is an auto_now field, and auto_now
             # is applied by Model.save(), not by a bulk write. Without it a reordering would be
             # invisible to get_tasklist_etag() and a user could be served a stale queue position.
@@ -148,7 +162,7 @@ def calculate_queue_positions() -> None:
             Task.objects.bulk_update(
                 [
                     Task(id=taskid, queuepos_relative=newpos, task_modified_datetime=now)
-                    for taskid, newpos in queuepos_updates.items()
+                    for taskid, newpos in moved.items()
                 ],
                 ["queuepos_relative", "task_modified_datetime"],
             )

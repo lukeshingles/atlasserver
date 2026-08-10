@@ -10,7 +10,7 @@
 // that node resolves them from node_modules, giving the test the same single React instance the
 // component tree uses.
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fireEvent } from '@testing-library/dom';

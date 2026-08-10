@@ -260,6 +260,17 @@ class Task(models.Model):
         return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
 
     @staticmethod
+    def queued() -> "models.QuerySet[Task]":
+        """Return the tasks that are waiting or running: everything the queue positions cover.
+
+        One definition, because both ends of the range are read together -- Task.queuepos subtracts
+        the minimum while forcephot.queue assigns from the maximum -- and the task runner scans the
+        same set. Changing what counts as queued in one place only would give a submitted task a
+        position measured against a differently scoped baseline.
+        """
+        return Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
+
+    @staticmethod
     def min_queuepos_relative() -> int:
         """Return the lowest queue position currently assigned, or 0 if the queue is empty.
 
@@ -269,9 +280,7 @@ class Task(models.Model):
         This does not depend on any particular task, so a caller serialising many tasks should call
         it once rather than once per task (see ForcePhotTaskSerializer.min_queuepos_relative).
         """
-        minqueuepos = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
-            Min("queuepos_relative")
-        )["queuepos_relative__min"]
+        minqueuepos = Task.queued().aggregate(Min("queuepos_relative"))["queuepos_relative__min"]
 
         return 0 if minqueuepos is None else int(minqueuepos)
 
