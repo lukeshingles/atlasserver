@@ -791,10 +791,27 @@ class TaskStrTests(TestCase):
         # the two must draw the same line, or one of them sends a row down the wrong branch
         user = User.objects.create_user(username="agreement", email="ag@example.com", password=None)
 
-        for name in ("\t", "\n", " ", " \t\n "):
+        for name in ("\t", "\n", " ", " \t\n ", "\u00a0", "\v\f"):
             task = Task(user=user, mpc_name=name, ra=100.0, dec=-20.0)
             task.save()  # blank by both readings, so it is a coordinate request and saves happily
             assert task.mpc_target == "", repr(name)
+            task.delete()
+
+    def test_whatever_the_constraint_calls_a_name_mpc_target_also_does(self) -> None:
+        """The invariant that keeps the runner off float(None).
+
+        The danger is one-directional: if the database accepts a name (and so lets ra/dec be NULL)
+        while mpc_target reads it as blank, the runner takes the coordinate branch on a row with no
+        coordinates. Both are derived from MPC_NAME_WHITESPACE, so they cannot disagree -- this
+        pins that, including for whitespace deliberately left out of the set.
+        """
+        user = User.objects.create_user(username="invariant", email="inv@example.com", password=None)
+
+        # \u2007 is Unicode whitespace that the set does not cover: both sides must treat it as a
+        # name, not one side as a name and the other as blank
+        for name in ("\u2007", "\u2003", "x", " x "):
+            task = Task.objects.create(user=user, mpc_name=name)  # accepted, so it is a name
+            assert task.mpc_target, f"the constraint took {name!r} as a target but mpc_target did not"
             task.delete()
 
     def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
@@ -3234,15 +3251,41 @@ class QueueRecalcHandoffTests(TestCase):
 
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="recalcuser", email="recalc@example.com", password=None)
-        caches["default"].delete(taskqueue.RECALC_FLAG_CACHEKEY)
+        caches["default"].delete(taskqueue.RECALC_GENERATION_CACHEKEY)
+        self.lastseen = taskqueue.recalc_generation()
 
-    def test_a_request_is_consumed_exactly_once(self) -> None:
-        assert taskqueue.consume_recalc_request() is False
+    def renumbering_requested(self) -> bool:
+        """Whether a request has arrived since this test last looked, as the runner asks it."""
+        generation = taskqueue.recalc_generation()
+        requested = generation != self.lastseen
+        self.lastseen = generation
+        return requested
+
+    def test_a_request_is_seen_once(self) -> None:
+        assert self.renumbering_requested() is False
 
         taskqueue.request_recalc()
 
-        assert taskqueue.consume_recalc_request() is True
-        assert taskqueue.consume_recalc_request() is False, "the flag was not cleared"
+        assert self.renumbering_requested() is True
+        assert self.renumbering_requested() is False, "the same request was seen twice"
+
+    def test_a_request_during_a_renumbering_is_not_swallowed(self) -> None:
+        """The lost update a clear-on-consume flag had.
+
+        The runner reads the counter, renumbers, and only then records what it read. A request
+        landing in between leaves a value it has not recorded, so the next pass still sees it --
+        where deleting the flag after reading it would have thrown that request away.
+        """
+        taskqueue.request_recalc()
+        seen = taskqueue.recalc_generation()
+
+        # arrives while the runner is renumbering
+        taskqueue.request_recalc()
+
+        # the runner records the value it read before renumbering, not the current one
+        self.lastseen = seen
+
+        assert self.renumbering_requested() is True
 
     def test_submitting_asks_for_a_renumbering_without_doing_one(self) -> None:
         self.client.force_login(self.user)
@@ -3257,7 +3300,7 @@ class QueueRecalcHandoffTests(TestCase):
 
         assert response.status_code == 201, response.content
         assert not recalc.called, "the renumbering must be left to the task runner"
-        assert taskqueue.consume_recalc_request() is True
+        assert self.renumbering_requested() is True
 
     def test_a_submitted_task_gets_a_provisional_position(self) -> None:
         # NULL would render as no queue position at all until the runner's next pass
@@ -3278,23 +3321,23 @@ class QueueRecalcHandoffTests(TestCase):
     def test_deleting_a_queued_task_asks_for_a_renumbering(self) -> None:
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
         self.client.force_login(self.user)
-        taskqueue.consume_recalc_request()
+        self.renumbering_requested()
 
         response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
 
         assert response.status_code == 204, response.status_code
-        assert taskqueue.consume_recalc_request() is True
+        assert self.renumbering_requested() is True
 
     def test_deleting_a_finished_task_does_not(self) -> None:
         # a finished task holds no queue position, so nothing downstream of it moves
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
         self.client.force_login(self.user)
-        taskqueue.consume_recalc_request()
+        self.renumbering_requested()
 
         response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
 
         assert response.status_code == 204, response.status_code
-        assert taskqueue.consume_recalc_request() is False
+        assert self.renumbering_requested() is False
 
 
 class TaskRunnerResultFileTests(TestCase):

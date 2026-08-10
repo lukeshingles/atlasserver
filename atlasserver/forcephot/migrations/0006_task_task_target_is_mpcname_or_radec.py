@@ -29,13 +29,24 @@ from django.db.models.lookups import Exact
 # This is the model's _space_normalised(), unrolled. SQL TRIM removes
 # only spaces, so the other whitespace is replaced with spaces first; the set must match the one
 # Task.mpc_target strips, or the database and the runner disagree about what counts as a target.
-_NORMALISED_MPC_NAME = Trim(
-    Replace(
-        Replace(Replace("mpc_name", models.Value("\t"), models.Value(" ")), models.Value("\n"), models.Value(" ")),
-        models.Value("\r"),
-        models.Value(" "),
-    )
-)
+_MPC_NAME_WHITESPACE = " \t\n\r\v\f\u00a0"
+
+
+def _space_normalised(field):
+    """Return the field with the whitespace above collapsed to spaces and then trimmed.
+
+    A copy of the model helper of the same name, because a migration must not import from the
+    live model.
+    """
+    expression = field
+    for character in _MPC_NAME_WHITESPACE:
+        if character != " ":
+            expression = Replace(expression, models.Value(character), models.Value(" "))
+
+    return Trim(expression)
+
+
+_NORMALISED_MPC_NAME = _space_normalised("mpc_name")
 _BLANK_MPC_NAME = models.Q(Exact(_NORMALISED_MPC_NAME, models.Value("")))
 _HAS_MPC_NAME = models.Q(mpc_name__isnull=False) & ~_BLANK_MPC_NAME
 _NO_MPC_NAME = models.Q(mpc_name__isnull=True) | _BLANK_MPC_NAME

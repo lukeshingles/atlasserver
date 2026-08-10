@@ -32,7 +32,14 @@ UNSET: t.Final = object()
 # newlines and more besides. A name of "\t" therefore satisfied the constraint as a real MPC name
 # while Task.mpc_target reduced it to nothing, and the runner took the coordinate branch on a row
 # whose coordinates the constraint had just permitted to be NULL -- float(None).
-MPC_NAME_WHITESPACE: t.Final = " \t\n\r"
+#
+# The set is the ASCII whitespace plus the non-breaking space, which is what actually turns up in
+# a name pasted from a web page or a PDF. It is deliberately not all of Unicode's whitespace: each
+# character costs another nested REPLACE in a stored constraint, and the property that matters is
+# not that every exotic space is rejected but that the constraint and mpc_target agree on which
+# are -- they are both derived from this constant, so they cannot disagree. A name made of some
+# rarer space is accepted as a (useless) target by both, and fails on sc01 like any bad name.
+MPC_NAME_WHITESPACE: t.Final = " \t\n\r\v\f\u00a0"
 
 
 def _space_normalised(field: str) -> Trim:

@@ -828,6 +828,10 @@ def main() -> None:
     last_statustime: float = float("-inf")
     last_queuerecalctime: float = float("-inf")
     last_queueflagchecktime: float = float("-inf")
+    # what the queue-recalc counter read the last time positions were renumbered; see
+    # forcephot.queue.recalc_generation. Starts below any real value so the first pass renumbers.
+    last_recalc_generation: int = -1
+    seen_generation: int = -1
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -866,13 +870,14 @@ def main() -> None:
         # thing that changes which task is running, and it already reads this table twice a second.
         # Doing it here also keeps positions fresh as tasks finish, which the old placement did not.
         #
-        # The flag is not consulted on every pass: it is a file read in production and the loop
+        # The counter is not consulted on every pass: it is a file read in production and the loop
         # runs twice a second, so it is asked for on its own interval. See
         # RECALC_CHECK_INTERVAL_SECONDS for why the delay does not show.
         recalc_requested = False
         if (time.perf_counter() - last_queueflagchecktime) > taskqueue.RECALC_CHECK_INTERVAL_SECONDS:
             last_queueflagchecktime = time.perf_counter()
-            recalc_requested = taskqueue.consume_recalc_request()
+            seen_generation = taskqueue.recalc_generation()
+            recalc_requested = seen_generation != last_recalc_generation
 
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
             # caught, because this loop is what dispatches every job: unguarded, a lock timeout or
@@ -886,6 +891,9 @@ def main() -> None:
             # stamped even on failure, so a persistent one retries on the interval rather than on
             # every pass of the loop
             last_queuerecalctime = time.perf_counter()
+            # the value read *before* renumbering, so a request that landed during it is still new
+            # next time round rather than being treated as already handled
+            last_recalc_generation = seen_generation
 
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:

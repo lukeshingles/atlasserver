@@ -14,9 +14,16 @@ from django.db import transaction
 
 from atlasserver.forcephot.models import Task
 
-# Set by the web app whenever it changes the set of queued tasks, consumed by the task runner.
-# A flag rather than a queue: the answer to "does this need renumbering" does not accumulate.
-RECALC_FLAG_CACHEKEY: t.Final = "queue-positions-dirty"
+# Bumped by the web app whenever it changes the set of queued tasks; the task runner watches it
+# for changes. A counter rather than a flag it clears, because clearing has a lost-update window:
+# a request arriving between the runner's read and its delete was deleted along with the one being
+# consumed, and the ordering then waited for the backstop below. Nothing deletes this, so there is
+# no window -- the runner simply remembers the value it last acted on.
+#
+# Exact counting is not required and is not provided: incr on the file-based cache is a read
+# followed by a write, so two simultaneous requests can collapse into one increment. That still
+# leaves the value different from the one the runner remembers, which is the whole question.
+RECALC_GENERATION_CACHEKEY: t.Final = "queue-positions-generation"
 
 # Renumber at least this often even when the flag says nothing changed. Covers the task runner's
 # own dispatches (which move the running task to the front) and any flag lost to a cache eviction
@@ -41,22 +48,25 @@ def request_recalc() -> None:
     behind one another. The runner already polls this table twice a second, and it is the only
     process that changes which task is running, so it is the natural owner of the ordering.
     """
-    caches["default"].set(RECALC_FLAG_CACHEKEY, True, timeout=None)
-
-
-def consume_recalc_request() -> bool:
-    """Return whether a renumbering was requested, clearing the request.
-
-    Clears before the caller renumbers, not after: a submission that lands during the renumbering
-    then leaves the flag set and gets its own pass, rather than being swallowed by a clear that
-    happens after its changes were already missed.
-    """
     cache = caches["default"]
-    requested = bool(cache.get(RECALC_FLAG_CACHEKEY))
-    if requested:
-        cache.delete(RECALC_FLAG_CACHEKEY)
+    try:
+        cache.incr(RECALC_GENERATION_CACHEKEY)
+    except ValueError:
+        # incr requires the key to exist, and it does not on the first request after a deploy or a
+        # cleared cache. Two callers can race to here and both add 1 rather than reaching 2, which
+        # does not matter: the runner is watching for a change, not counting submissions.
+        cache.add(RECALC_GENERATION_CACHEKEY, 1, timeout=None)
 
-    return requested
+
+def recalc_generation() -> int:
+    """Return the current request counter, for a caller to compare against the one it last saw.
+
+    Read before renumbering and remembered afterwards, so a request that lands *during* a
+    renumbering leaves a value the next pass still sees as new, rather than being swallowed.
+
+    A cleared cache restarts the count, which reads as a change and costs one extra renumbering.
+    """
+    return int(caches["default"].get(RECALC_GENERATION_CACHEKEY) or 0)
 
 
 def next_queuepos_relative() -> int:
