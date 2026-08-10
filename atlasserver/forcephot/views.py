@@ -1147,9 +1147,8 @@ def change_email(request):
             # no-op: without this, one logged-in account can post this form in a loop and have the
             # server mail an arbitrary address as fast as it will go. Keyed on the account rather
             # than the target, so changing the address each time does not buy another send.
-            may_send = caches["throttle"].add(
-                f"emailchange-{request.user.pk}", True, timeout=EMAIL_CHANGE_INTERVAL_SECONDS
-            )
+            limitkey = f"emailchange-{request.user.pk}"
+            may_send = caches["throttle"].add(limitkey, True, timeout=EMAIL_CHANGE_INTERVAL_SECONDS)
 
             if may_send:
                 # guarded like register()'s send: an unreachable relay would otherwise leave a
@@ -1158,6 +1157,10 @@ def change_email(request):
                     send_email_change_confirmation(request, request.user, new_email)
                 except Exception:
                     logger.exception("Could not send an email change confirmation")
+                    # and release the slot, or the retry this advises would be met by the
+                    # "just sent" message below for the next minute -- telling the user their mail
+                    # is on its way when the send is exactly what failed
+                    caches["throttle"].delete(limitkey)
                     form.add_error(
                         None,
                         "We could not send the confirmation email just now. Please try again in a "
@@ -1169,13 +1172,13 @@ def change_email(request):
                         "registration/verification_sent.html",
                         {"name": "Check your email", "email": new_email, "emailchange": True},
                     )
-
-            # said plainly: this is the user's own account and their own action, so unlike the
-            # resend page there is nothing to conceal by pretending it was sent
-            form.add_error(
-                None,
-                "A confirmation email was just sent. Please wait a minute before requesting another.",
-            )
+            else:
+                # said plainly: this is the user's own account and their own action, so unlike the
+                # resend page there is nothing to conceal by pretending it was sent
+                form.add_error(
+                    None,
+                    "A confirmation email was just sent. Please wait a minute before requesting another.",
+                )
     else:
         form = EmailChangeForm(request.user)
 

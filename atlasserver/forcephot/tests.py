@@ -175,6 +175,26 @@ class EmailChangeTests(TestCase):
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
+    def test_a_failed_send_says_only_that_and_allows_a_retry(self) -> None:
+        # the two messages used to be added together, so the page said the mail could not be sent
+        # and that it had just been sent; the slot also stayed taken, so the advised retry met
+        # only the second one
+        self.client.force_login(self.user)
+
+        with mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")):
+            failed = self.client.post(
+                reverse("email_change"), {"password": "testpassword123", "new_email": "new@example.com"}
+            )
+
+        content = failed.content.decode().lower()
+        assert "could not send" in content
+        assert "just sent" not in content, "a failed send was also reported as a send"
+
+        # the retry it advises has to be possible
+        retried = self.request_email_change()
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+        assert retried.status_code == 200
+
     def test_a_password_change_revokes_a_pending_email_change(self) -> None:
         """A pending change has to die when the account is recovered.
 
