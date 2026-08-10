@@ -29,3 +29,15 @@ updates:
           pre-commit:
               patterns:
                   - '*'
+
+    # A bump that changes babel's output makes the frontend CI job fail, because it rebuilds the
+    # bundles and diffs them against the committed ones. That is the point: run build.sh and commit
+    # the result onto the dependabot branch to make it pass.
+    - package-ecosystem: npm
+      directory: /static/js/queuepage
+      schedule:
+          interval: weekly
+      groups:
+          npm:
+              patterns:
+                  - '*'

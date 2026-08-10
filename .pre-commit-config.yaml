@@ -5,8 +5,7 @@ default_install_hook_types:
     - post-merge
     - post-rewrite
 ci:
-    # ty and uv-lock resolve and download the project's dependencies (uv-lock must fetch the
-    # djangorestframework tarball pinned in tool.uv.sources), and pre-commit.ci runs hooks
+    # ty and uv-lock resolve and download the project's dependencies, and pre-commit.ci runs hooks
     # without network access, so they fail there with a DNS error rather than a real finding.
     # Both run locally and in the "Lint and type check" GitHub Actions job, where the
     # environment is already installed.

@@ -17,6 +17,11 @@ export MAXMIND_LICENSE_KEY=''
 export ATLASSERVER_NPROCESSES='4'
 export ATLASSERVER_NTHREADPERPROC='1'
 
+# Only needed when the checkout's own path contains a space, which the apachectl script generated
+# by mod_wsgi-express cannot handle. Symlink the checkout somewhere without one and point this at
+# the symlink; atlaswebserver refuses to start rather than fail later with an unrelated error.
+# export ATLASSERVER_PATH='/Users/example/atlasserver'
+
 # Number of reverse proxies in front of this server that maintain X-Forwarded-For. Leave at 0
 # unless one really is in front: with 0 the header is ignored and the client address is taken from
 # the connection, which is what stops a caller choosing the country their submissions are filed
