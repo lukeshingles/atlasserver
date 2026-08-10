@@ -33,8 +33,11 @@ export async function importComponent(entry) {
         bundle: true,
         format: 'esm',
         platform: 'neutral',
-        external: ['react', 'react-dom'],
+        external: ['react', 'react-dom/client'],
         alias: {
+            // the browser's import map points "react-dom" at react-dom's *client* entry; node
+            // would otherwise resolve the package root, whose default export has no createRoot
+            'react-dom': 'react-dom/client',
             csrftoken: join(SRC, 'csrftoken.js'),
             agetext: join(SRC, 'agetext.js'),
             pollcache: join(SRC, 'pollcache.js'),

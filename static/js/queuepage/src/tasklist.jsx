@@ -85,14 +85,10 @@ function revealRow(taskid) {
     requestAnimationFrame(() => requestAnimationFrame(() => row.classList.remove('task-collapsed')));
 }
 
-class TaskPlot extends React.PureComponent {
-    constructor(props) {
-        super(props);
-    }
-
-    componentDidMount() {
-        debug_log('activating plot', this.props.taskid)
-        const plot_url = new URL(this.props.taskurl);
+const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
+    React.useEffect(() => {
+        debug_log('activating plot', taskid);
+        const plot_url = new URL(taskurl);
         plot_url.pathname += 'resultplotdata.js';
         plot_url.search = '';
         // was $.ajax({dataType: 'script'}), which fetches and evals. A <script> element does the
@@ -101,360 +97,333 @@ class TaskPlot extends React.PureComponent {
         const script = document.createElement('script');
         script.src = plot_url;
         document.head.appendChild(script);
-    }
 
-    componentWillUnmount() {
-        debug_log('Unmounting plot for task ', this.props.taskid);
-        delete jslimitsglobal['#plotforcedflux-task-' + this.props.taskid]
-        delete jslcdataglobal['#plotforcedflux-task-' + this.props.taskid]
-        delete jslabelsglobal['#plotforcedflux-task-' + this.props.taskid]
-    }
+        return () => {
+            debug_log('Unmounting plot for task ', taskid);
+            const key = '#plotforcedflux-task-' + taskid;
+            delete jslimitsglobal[key];
+            delete jslcdataglobal[key];
+            delete jslabelsglobal[key];
+        };
+    }, [taskid, taskurl]);
 
-    render() {
-        return (
-            <div key='plot' id={'plotforcedflux-task-' + this.props.taskid} className="plot" style={{ width: '100%', height: '300px' }}></div>
-        );
-    }
+    return (
+        <div key='plot' id={'plotforcedflux-task-' + taskid} className="plot" style={{ width: '100%', height: '300px' }}></div>
+    );
+});
+
+/** Seconds a running task has been going, ticking once a second while it runs. */
+function useTimeElapsed(taskdata) {
+    const running = taskdata.starttimestamp != null && taskdata.finishtimestamp == null;
+
+    const secondsSinceStart = () =>
+        ((new Date().getTime() - new Date(taskdata.starttimestamp).getTime()) / 1000.).toFixed(0);
+
+    const [timeelapsed, setTimeelapsed] = React.useState(() => (running ? secondsSinceStart() : -1));
+
+    React.useEffect(() => {
+        if (!running) {
+            return undefined;
+        }
+
+        // set immediately as well as on the interval, so a row that has just started rendering
+        // does not show a stale figure for a second
+        setTimeelapsed(secondsSinceStart());
+        const interval = setInterval(() => setTimeelapsed(secondsSinceStart()), 1000);
+
+        return () => clearInterval(interval);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [running, taskdata.starttimestamp]);
+
+    return running ? timeelapsed : -1;
 }
 
-export class Task extends React.Component {
-    constructor(props) {
-        super(props);
-        this.state = {}
-        this.state.updateTimeElapsed = this.updateTimeElapsed.bind(this);
-        this.state.interval = null;
-        this.state.timeelapsed = -1;
-        this.state.httperror = '';
-    }
+export function Task(props) {
+    const [httperror, setHttperror] = React.useState('');
 
-    deleteTask() {
-        const task = this.props.taskdata;
-        // deleting a finished task also removes its data file, plot and any retrieved images, and
-        // none of that can be recovered. Cancelling a task that has not finished stays one click.
-        if (task.finishtimestamp != null && !window.confirm(
-            'Delete task ' + task.id + '? Its data file, plot and any retrieved images will be'
-            + ' removed and cannot be recovered.')) {
-            return;
+    // The timer used to live in render state, as `interval`, started from
+    // getDerivedStateFromProps -- a side effect during render, which React 19 may run more than
+    // once or throw away, leaking a timer each time. A timer handle is not state anyway: nothing
+    // renders it.
+    const timeelapsed = useTimeElapsed(props.taskdata);
+
+    React.useEffect(() => {
+        if (newtaskids.includes(props.taskdata.id)) {
+            debug_log('showing new task', props.taskdata.id);
+            revealRow(props.taskdata.id);
+            newtaskids = newtaskids.filter(item => item !== props.taskdata.id);
         }
+        // mount only: this animates a row that has just appeared
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-        collapseRow(task.id);
-        setTimeout(() => {
-            fetch(task.url, {
-                credentials: "same-origin",
-                method: "DELETE",
-                headers: csrfHeader(),
-            })
-                .then((response) => {
-                    if (response.ok) {
-                        console.log('Deleted task ', task.id);
-                        this.setState({ 'httperror': '' });
-                        // not fetchData(true): "user triggered" re-applies the cached pre-delete
-                        // body and scrolls the window to the top, which after deleting the last row
-                        // on a page means the viewport jumps away from what the user was looking at
-                        this.props.fetchData();
-                        return;
-                    }
-
-                    // the row comes back, so without a message the click looks like it simply did
-                    // nothing. A 403 here means the task belongs to somebody else; a 401 means the
-                    // session has ended, so reload the page, which lands on the login form.
-                    console.log('Failed to delete task ', task.id, response.status);
-                    if (response.status === 401) {
-                        window.location.reload();
-                        return;
-                    }
-                    expandRow(task.id);
-                    let message = 'ERROR: could not delete this task (HTTP ' + response.status + ').';
-                    if (response.status === 403) {
-                        message = 'ERROR: you are not allowed to delete this task.';
-                    }
-                    this.setState({ 'httperror': message });
-                    this.props.fetchData();
-                })
-                .catch((err) => {
-                    // fetch rejects only on a network-level failure, which has no HTTP status --
-                    // jQuery used to report those as status 0, which read as gibberish in a message
-                    console.log('Failed to reach the server to delete task ', task.id, err);
-                    expandRow(task.id);
-                    this.setState({ 'httperror': 'ERROR: could not reach the server to delete this task.' });
-                    this.props.fetchData();
-                });
-        }, ROW_TRANSITION_MS);
+    function deleteTask() {
+    const task = props.taskdata;
+    // deleting a finished task also removes its data file, plot and any retrieved images, and
+    // none of that can be recovered. Cancelling a task that has not finished stays one click.
+    if (task.finishtimestamp != null && !window.confirm(
+        'Delete task ' + task.id + '? Its data file, plot and any retrieved images will be'
+        + ' removed and cannot be recovered.')) {
+        return;
     }
 
-    requestImages() {
-        const request_image_url = new URL(this.props.taskdata.url);
-        // the trailing slash matters: without it APPEND_SLASH answers with a 301, and a browser
-        // retries a redirected POST as a GET, which this endpoint does not accept
-        request_image_url.pathname += 'requestimages/';
-        request_image_url.search = '';
-
-        fetch(request_image_url,
-            {
-                credentials: "same-origin",
-                method: "POST",
-                headers: {
-                    "X-CSRFToken": getCookie("csrftoken"),
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                },
-            })
+    collapseRow(task.id);
+    setTimeout(() => {
+        fetch(task.url, {
+            credentials: "same-origin",
+            method: "DELETE",
+            headers: csrfHeader(),
+        })
             .then((response) => {
-                if (response.status == 200 && response.redirected) {
-                    this.setState({ 'httperror': '' });
-                    const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
-                    newtaskids.push(newimgtask_id);
-                    debug_log('requestimages created task', newimgtask_id);
-                    const new_page_url = new URL(response.url);
-                    new_page_url.searchParams.delete('newids');
-                    window.history.pushState({}, document.title, new_page_url);
-                    this.props.fetchData(true);
-                } else {
-                    // the body is not always JSON (e.g. a plain-text 404), and DRF reports its
-                    // own errors under 'detail' rather than 'non_field_errors'
-                    return response.text().then(text => {
-                        let message = response.statusText || ('HTTP ' + response.status);
-                        try {
-                            const data = JSON.parse(text);
-                            message = data["non_field_errors"] || data["detail"] || message;
-                        } catch (err) {
-                            console.log('requestImages: non-JSON error body', text);
-                        }
-                        console.log('requestImages: error returned', response.status, message);
-                        this.setState({ 'httperror': 'ERROR: ' + message });
-                    });
+                if (response.ok) {
+                    console.log('Deleted task ', task.id);
+                    setHttperror('');
+                    // not fetchData(true): "user triggered" re-applies the cached pre-delete
+                    // body and scrolls the window to the top, which after deleting the last row
+                    // on a page means the viewport jumps away from what the user was looking at
+                    props.fetchData();
+                    return;
                 }
-                return null;
+
+                // the row comes back, so without a message the click looks like it simply did
+                // nothing. A 403 here means the task belongs to somebody else; a 401 means the
+                // session has ended, so reload the page, which lands on the login form.
+                console.log('Failed to delete task ', task.id, response.status);
+                if (response.status === 401) {
+                    window.location.reload();
+                    return;
+                }
+                expandRow(task.id);
+                let message = 'ERROR: could not delete this task (HTTP ' + response.status + ').';
+                if (response.status === 403) {
+                    message = 'ERROR: you are not allowed to delete this task.';
+                }
+                setHttperror(message);
+                props.fetchData();
             })
-            .catch(error => {
-                console.log('requestImages HTTP request failed', error);
-                this.setState({ 'httperror': 'HTTP request failed.' });
+            .catch((err) => {
+                // fetch rejects only on a network-level failure, which has no HTTP status --
+                // jQuery used to report those as status 0, which read as gibberish in a message
+                console.log('Failed to reach the server to delete task ', task.id, err);
+                expandRow(task.id);
+                setHttperror('ERROR: could not reach the server to delete this task.');
+                props.fetchData();
             });
-    }
+    }, ROW_TRANSITION_MS);
+}
 
-    static getDerivedStateFromProps(props, state) {
-        if (props.taskdata.starttimestamp != null && props.taskdata.finishtimestamp == null) {
-            if (state.interval == null) {
-                const starttime = new Date(props.taskdata.starttimestamp).getTime();
-                const timeelapsed = (new Date().getTime() - starttime) / 1000.;
-                return { 'interval': setInterval(state.updateTimeElapsed, 1000), 'timeelapsed': timeelapsed.toFixed(0) };
-            }
-        } else if (state.interval != null) {
-            // the task is no longer running, so stop the timer. It must be cleared here:
-            // once state.interval is null, updateTimeElapsed() can no longer find it.
-            clearInterval(state.interval);
-            return { 'interval': null };
-        }
+function requestImages() {
+    const request_image_url = new URL(props.taskdata.url);
+    // the trailing slash matters: without it APPEND_SLASH answers with a 301, and a browser
+    // retries a redirected POST as a GET, which this endpoint does not accept
+    request_image_url.pathname += 'requestimages/';
+    request_image_url.search = '';
 
-        return null;
-    }
-
-    componentDidMount() {
-        // componentDidUpdate() {
-        this.updateTimeElapsed();
-        if (newtaskids.includes(this.props.taskdata.id)) {
-            debug_log('showing new task', this.props.taskdata.id);
-            revealRow(this.props.taskdata.id);
-            newtaskids = newtaskids.filter(item => { return item !== this.props.taskdata.id })
-        }
-
-        // this.interval = setInterval(() => {this.updateTimeElapsed()}, 1000);
-    }
-
-    componentWillUnmount() {
-        clearInterval(this.state.interval);
-        // this.state.interval = null;
-    }
-
-    updateTimeElapsed() {
-        if (this.props.taskdata.starttimestamp != null && this.props.taskdata.finishtimestamp == null) {
-            const starttime = new Date(this.props.taskdata.starttimestamp).getTime();
-            const timeelapsed = (new Date().getTime() - starttime) / 1000.;
-            this.setState({ 'timeelapsed': timeelapsed.toFixed(0) });
-        } else if (this.state.interval != null) {
-            clearInterval(this.state.interval);
-            this.setState({ 'interval': null });
-        }
-    }
-
-    shouldComponentUpdate(nextProps, nextState) {
-        if (nextState.httperror != this.state.httperror) {
-            return true;
-        }
-        if (nextProps.taskdata.starttimestamp != null && nextProps.taskdata.finishtimestamp == null) {
-            return true;
-        }
-        if (JSON.stringify(nextProps) != JSON.stringify(this.props)) {
-            return true;
-        }
-
-        return false;
-    }
-
-    render() {
-        const task = this.props.taskdata;
-        // whether the data file this task produced is still on disk. The maintenance sweep
-        // reclaims it after a few months, and the serializer answers with a null result_url from
-        // then on; everything derived from that file — the download links, the plot, and the
-        // image request that reads it to know which observations to fetch — turns on this.
-        const hasresultfile = task.result_url != null;
-        let statusclass = 'none';
-        let buttontext = 'none';
-        if (task.finishtimestamp != null) {
-            statusclass = "finished";
-            buttontext = 'Delete';
-        } else if (task.starttimestamp != null) {
-            statusclass = "queued started";
-            buttontext = 'Cancel';
-        } else {
-            statusclass = "queued notstarted";
-            buttontext = 'Cancel';
-        }
-        debug_log('Task ' + task.id + ' rendered');
-        let delbutton = null;
-        if (task.user_id == user_id) {
-            delbutton = <button className="btn btn-sm btn-danger" onClick={() => this.deleteTask()}>{buttontext}</button>;
-        }
-        // rendered only when there is one: React drops a null src, which left an empty <img> box in
-        // every row that has no preview, and without alt text there was nothing to announce either
-        const previewimage = task.previewimage_url ? (
-            <img className="previewimage" src={task.previewimage_url} height="100" loading="lazy"
-                alt={'Preview image for task ' + task.id} />
-        ) : null;
-
-        let taskbox = [
-            <div key="rightside" className="rightside">
-                {delbutton}
-                {previewimage}
-            </div>
-        ];
-
-        taskbox.push(<div key="tasknum"><a key="tasklink" href={task.url} onClick={(e) => { this.props.setSingleTaskView(e, task.id, task.url) }}>Task {task.id}</a></div>);
-
-        if (task.parent_task_url) {
-            taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url} onClick={(e) => { this.props.setSingleTaskView(e, task.parent_task_id, task.parent_task_url) }}>Task {task.parent_task_id}</a></p>);
-        } else if (task.parent_task_id) {
-            taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
-        } else if (task.request_type == 'IMGZIP') {
-            taskbox.push(<p key="imgrequest">Image request</p>);
-        }
-
-        if (task.request_type == 'IMGZIP') {
-            const imagetype = task.use_reduced ? 'reduced' : 'difference';
-            taskbox.push(<p key="imgrequestnote">Up to the first 1000 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
-        }
-
-        if (task.user_id != user_id) {
-            taskbox.push(<div key="user">User: {task.username}</div>);
-        }
-
-        if (task.comment != null && task.comment != '') {
-            taskbox.push(<div key="comment">Comment: <b>{task.comment}</b></div>);
-        }
-
-        if (task.mpc_name != null && task.mpc_name != '') {
-            taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
-        } else {
-            let radecepoch = '';
-            if (task.radec_epoch_year != null) {
-                radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
-            }
-            taskbox.push(<div key="target">RA Dec: {radecepoch}{task.ra} {task.dec}</div>);
-            // proper motion components are signed, so testing for > 0 hides half of all real values
-            if ((task.propermotion_ra != null && task.propermotion_ra != 0)
-                || (task.propermotion_dec != null && task.propermotion_dec != 0)) {
-                taskbox.push(<div key="propermotion">Proper motion [mas/yr]: {task.propermotion_ra} {task.propermotion_dec}</div>);
-            }
-        }
-
-        if (task.request_type == "SSOSTACK") {
-            taskbox.push(<div key="imgtype">Image: Stacked</div>);
-        } else {
-            taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
-        }
-
-        if (task.mjd_min != null || task.mjd_max != null) {
-            const mjdmin = task.mjd_min != null ? task.mjd_min : "0";
-            const mjdmax = task.mjd_max != null ? task.mjd_max : "∞";
-            taskbox.push(<div key="mjdrange">MJD request: [{mjdmin}, {mjdmax}]</div>);
-        }
-
-        taskbox.push(<div key="queuetime">Queued at {new Date(task.timestamp).toLocaleString()}</div>);
-        if (task.finishtimestamp != null) {
-            taskbox.push(<div key="status">Finished at {new Date(task.finishtimestamp).toLocaleString()}</div>);
-            if (task.error_msg != null) {
-                taskbox.push(<p key="error_msg" className="taskerror">Error: {task.error_msg}</p>);
+    fetch(request_image_url,
+        {
+            credentials: "same-origin",
+            method: "POST",
+            headers: {
+                ...csrfHeader(),
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
+        })
+        .then((response) => {
+            if (response.status == 200 && response.redirected) {
+                setHttperror('');
+                const newimgtask_id = parseInt(new URL(response.url).searchParams.get('newids'));
+                newtaskids.push(newimgtask_id);
+                debug_log('requestimages created task', newimgtask_id);
+                const new_page_url = new URL(response.url);
+                new_page_url.searchParams.delete('newids');
+                window.history.pushState({}, document.title, new_page_url);
+                props.fetchData(true);
             } else {
-                // React drops a null href, so before hasresultfile was checked here these rendered
-                // as buttons that looked live but did nothing at all when clicked.
-                const resultsexpired = (
-                    <p key="expired">The download link has expired. Delete this task and request again if necessary.</p>);
+                // the body is not always JSON (e.g. a plain-text 404), and DRF reports its
+                // own errors under 'detail' rather than 'non_field_errors'
+                return response.text().then(text => {
+                    let message = response.statusText || ('HTTP ' + response.status);
+                    try {
+                        const data = JSON.parse(text);
+                        message = data["non_field_errors"] || data["detail"] || message;
+                    } catch (err) {
+                        console.log('requestImages: non-JSON error body', text);
+                    }
+                    console.log('requestImages: error returned', response.status, message);
+                    setHttperror('ERROR: ' + message);
+                });
+            }
+            return null;
+        })
+        .catch(error => {
+            console.log('requestImages HTTP request failed', error);
+            setHttperror('HTTP request failed.');
+        });
+}
 
-                if (task.request_type == 'FP') {
-                    if (hasresultfile) {
-                        taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
-                        taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank" rel="noopener">PDF</a>);
-                    } else {
-                        taskbox.push(resultsexpired);
-                    }
-                } else if (task.request_type == 'SSOSTACK') {
-                    if (hasresultfile) {
-                        taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
-                    }
-                    if (task.result_imagestack_url != null) {
-                        taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagestack_url} target="_blank" rel="noopener">Stacked image (FITS)</a>);
-                    } else {
-                        taskbox.push(resultsexpired);
-                    }
+const task = props.taskdata;
+    // whether the data file this task produced is still on disk. The maintenance sweep
+    // reclaims it after a few months, and the serializer answers with a null result_url from
+    // then on; everything derived from that file — the download links, the plot, and the
+    // image request that reads it to know which observations to fetch — turns on this.
+    const hasresultfile = task.result_url != null;
+    let statusclass = 'none';
+    let buttontext = 'none';
+    if (task.finishtimestamp != null) {
+        statusclass = "finished";
+        buttontext = 'Delete';
+    } else if (task.starttimestamp != null) {
+        statusclass = "queued started";
+        buttontext = 'Cancel';
+    } else {
+        statusclass = "queued notstarted";
+        buttontext = 'Cancel';
+    }
+    debug_log('Task ' + task.id + ' rendered');
+    let delbutton = null;
+    if (task.user_id == user_id) {
+        delbutton = <button className="btn btn-sm btn-danger" onClick={() => deleteTask()}>{buttontext}</button>;
+    }
+    // rendered only when there is one: React drops a null src, which left an empty <img> box in
+    // every row that has no preview, and without alt text there was nothing to announce either
+    const previewimage = task.previewimage_url ? (
+        <img className="previewimage" src={task.previewimage_url} height="100" loading="lazy"
+            alt={'Preview image for task ' + task.id} />
+    ) : null;
+
+    let taskbox = [
+        <div key="rightside" className="rightside">
+            {delbutton}
+            {previewimage}
+        </div>
+    ];
+
+    taskbox.push(<div key="tasknum"><a key="tasklink" href={task.url} onClick={(e) => { props.setSingleTaskView(e, task.id, task.url) }}>Task {task.id}</a></div>);
+
+    if (task.parent_task_url) {
+        taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url} onClick={(e) => { props.setSingleTaskView(e, task.parent_task_id, task.parent_task_url) }}>Task {task.parent_task_id}</a></p>);
+    } else if (task.parent_task_id) {
+        taskbox.push(<p key="imgrequest">Image request for Task {task.parent_task_id} (deleted)</p>);
+    } else if (task.request_type == 'IMGZIP') {
+        taskbox.push(<p key="imgrequest">Image request</p>);
+    }
+
+    if (task.request_type == 'IMGZIP') {
+        const imagetype = task.use_reduced ? 'reduced' : 'difference';
+        taskbox.push(<p key="imgrequestnote">Up to the first 1000 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
+    }
+
+    if (task.user_id != user_id) {
+        taskbox.push(<div key="user">User: {task.username}</div>);
+    }
+
+    if (task.comment != null && task.comment != '') {
+        taskbox.push(<div key="comment">Comment: <b>{task.comment}</b></div>);
+    }
+
+    if (task.mpc_name != null && task.mpc_name != '') {
+        taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
+    } else {
+        let radecepoch = '';
+        if (task.radec_epoch_year != null) {
+            radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
+        }
+        taskbox.push(<div key="target">RA Dec: {radecepoch}{task.ra} {task.dec}</div>);
+        // proper motion components are signed, so testing for > 0 hides half of all real values
+        if ((task.propermotion_ra != null && task.propermotion_ra != 0)
+            || (task.propermotion_dec != null && task.propermotion_dec != 0)) {
+            taskbox.push(<div key="propermotion">Proper motion [mas/yr]: {task.propermotion_ra} {task.propermotion_dec}</div>);
+        }
+    }
+
+    if (task.request_type == "SSOSTACK") {
+        taskbox.push(<div key="imgtype">Image: Stacked</div>);
+    } else {
+        taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
+    }
+
+    if (task.mjd_min != null || task.mjd_max != null) {
+        const mjdmin = task.mjd_min != null ? task.mjd_min : "0";
+        const mjdmax = task.mjd_max != null ? task.mjd_max : "∞";
+        taskbox.push(<div key="mjdrange">MJD request: [{mjdmin}, {mjdmax}]</div>);
+    }
+
+    taskbox.push(<div key="queuetime">Queued at {new Date(task.timestamp).toLocaleString()}</div>);
+    if (task.finishtimestamp != null) {
+        taskbox.push(<div key="status">Finished at {new Date(task.finishtimestamp).toLocaleString()}</div>);
+        if (task.error_msg != null) {
+            taskbox.push(<p key="error_msg" className="taskerror">Error: {task.error_msg}</p>);
+        } else {
+            // React drops a null href, so before hasresultfile was checked here these rendered
+            // as buttons that looked live but did nothing at all when clicked.
+            const resultsexpired = (
+                <p key="expired">The download link has expired. Delete this task and request again if necessary.</p>);
+
+            if (task.request_type == 'FP') {
+                if (hasresultfile) {
+                    taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
+                    taskbox.push(<a key="pdflink" className="results btn btn-info getpdf" href={task.pdfplot_url} target="_blank" rel="noopener">PDF</a>);
+                } else {
+                    taskbox.push(resultsexpired);
                 }
-
-                if (task.request_type == 'IMGZIP') {
-                    if (task.result_imagezip_url != null) {
-                        taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagezip_url}>Download images (ZIP)</a>);
-                    } else {
-                        taskbox.push(resultsexpired);
-                    }
-                } else if (task.imagerequest_task_id != null) {
-                    if (task.imagerequest_finished) {
-                        taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url} onClick={(e) => { this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images retrieved</a>);
-                    } else {
-                        taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => { this.props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images requested</a>);
-                    }
-                } else if (task.request_type == 'FP' && user_id == task.user_id && hasresultfile) {
-                    // hasresultfile: without that file this could only queue a job certain to fail
-                    taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => this.requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
+            } else if (task.request_type == 'SSOSTACK') {
+                if (hasresultfile) {
+                    taskbox.push(<a key="datalink" className="results btn btn-info getdata" href={task.result_url} target="_blank" rel="noopener">Data</a>);
+                }
+                if (task.result_imagestack_url != null) {
+                    taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagestack_url} target="_blank" rel="noopener">Stacked image (FITS)</a>);
+                } else {
+                    taskbox.push(resultsexpired);
                 }
             }
-        } else if (task.starttimestamp != null) {
-            taskbox.push(<div key="status" className="taskstatus running">Running (started {this.state.timeelapsed} seconds ago)</div>);
-        } else if (task.queuepos != null) {
-            const tasksahead = task.queuepos == 1 ? '1 task' : task.queuepos + ' tasks';
-            taskbox.push(<div key="status" className="taskstatus waiting">Waiting ({tasksahead} ahead of this one)</div>);
-        } else {
-            // queuepos is null until the queue has been renumbered, and the sentence used to be
-            // rendered with the number simply missing: "Waiting ( tasks ahead of this one)"
-            taskbox.push(<div key="status" className="taskstatus waiting">Waiting in queue</div>);
+
+            if (task.request_type == 'IMGZIP') {
+                if (task.result_imagezip_url != null) {
+                    taskbox.push(<a key="imgdownload" className="results btn btn-info" href={task.result_imagezip_url}>Download images (ZIP)</a>);
+                } else {
+                    taskbox.push(resultsexpired);
+                }
+            } else if (task.imagerequest_task_id != null) {
+                if (task.imagerequest_finished) {
+                    taskbox.push(<a key="imgrequest" className="btn btn-primary" href={task.imagerequest_url} onClick={(e) => { props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images retrieved</a>);
+                } else {
+                    taskbox.push(<a key="imgrequest" className="btn btn-warning" href={task.imagerequest_url} onClick={(e) => { props.setSingleTaskView(e, task.imagerequest_task_id, task.imagerequest_url) }}>Images requested</a>);
+                }
+            } else if (task.request_type == 'FP' && user_id == task.user_id && hasresultfile) {
+                // hasresultfile: without that file this could only queue a job certain to fail
+                taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
+            }
         }
-
-        if (this.state.httperror != '') {
-            taskbox.push(<p key="httperror" className="errors" role="alert">{this.state.httperror}</p>);
-        }
-
-
-        // hasresultfile because there is nothing to plot once the data file has been reclaimed.
-        // Without it, every expired task reserved a 300px-tall empty box in its row and fetched
-        // a resultplotdata.js that the server answers with an empty body.
-        if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP'
-            && hasresultfile && !this.props.hidePlot) {
-            taskbox.push(<TaskPlot key='plot' taskid={task.id} taskurl={task.url} />);
-        }
-
-        return (
-            <li key={"task-" + task.id} className={"task " + statusclass} id={"task-" + task.id}>
-                {taskbox}
-            </li>
-        );
+    } else if (task.starttimestamp != null) {
+        taskbox.push(<div key="status" className="taskstatus running">Running (started {timeelapsed} seconds ago)</div>);
+    } else if (task.queuepos != null) {
+        const tasksahead = task.queuepos == 1 ? '1 task' : task.queuepos + ' tasks';
+        taskbox.push(<div key="status" className="taskstatus waiting">Waiting ({tasksahead} ahead of this one)</div>);
+    } else {
+        // queuepos is null until the queue has been renumbered, and the sentence used to be
+        // rendered with the number simply missing: "Waiting ( tasks ahead of this one)"
+        taskbox.push(<div key="status" className="taskstatus waiting">Waiting in queue</div>);
     }
+
+    if (httperror != '') {
+        taskbox.push(<p key="httperror" className="errors" role="alert">{httperror}</p>);
+    }
+
+
+    // hasresultfile because there is nothing to plot once the data file has been reclaimed.
+    // Without it, every expired task reserved a 300px-tall empty box in its row and fetched
+    // a resultplotdata.js that the server answers with an empty body.
+    if (task.finishtimestamp != null && task.error_msg == null && task.request_type == 'FP'
+        && hasresultfile && !props.hidePlot) {
+        taskbox.push(<TaskPlot key='plot' taskid={task.id} taskurl={task.url} />);
+    }
+
+    return (
+        <li key={"task-" + task.id} className={"task " + statusclass} id={"task-" + task.id}>
+            {taskbox}
+        </li>
+    );
 }
 
 let tasklist_api_request_active = false;
@@ -470,141 +439,105 @@ const tasklist_pollcache = new PollCache();
 // restored a scroll position of its own, and jumping to the top would throw it away.
 let historynavigations = 0;
 
-class RunnerStatus extends React.PureComponent {
-    constructor(props) {
-        super(props);
-        this.state = { status: null };
-        this.fetchStatus = this.fetchStatus.bind(this);
-    }
+const RunnerStatus = React.memo(function RunnerStatus() {
+    const [status, setStatus] = React.useState(null);
+    // when the endpoint was last actually reachable. A ref, not state: nothing renders it, and it
+    // must not be a render input or every poll would re-render the banner unchanged.
+    const lastgoodfetch = React.useRef(null);
 
-    componentDidMount() {
+    React.useEffect(() => {
+        function fetchStatus() {
+            // a stale runner is reported with HTTP 503 and a body, so the status is read from the
+            // body rather than from the status code
+            fetch(taskrunnerstatus_url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(response => response.json())
+                .then(status => {
+                    lastgoodfetch.current = Date.now();
+                    setStatus(status);
+                })
+                .catch(error => {
+                    // not being able to reach this endpoint says nothing about the runner, so do not
+                    // claim an outage on the strength of our own failed request — but a status we have
+                    // not been able to re-confirm for several polls is no longer worth asserting
+                    // either, in either direction: a frozen "3 slots busy" line outlives a dead
+                    // runner, and a frozen outage banner outlives a recovered one.
+                    debug_log('Could not read the task runner status', error);
+                    if (lastgoodfetch.current != null && (Date.now() - lastgoodfetch.current) > RUNNERSTATUS_POLL_MS * 5) {
+                        setStatus(null);
+                    }
+                });
+        }
+
         // the mount fetch runs whether or not polling is paused, for the same reason fetchData's
         // does: it is the one that fills the page, not a repeat of it. That also retires the
         // 2-second retry timer this used to need — the retry existed only because a tab opened in
         // the background (cmd-click, session restore) had its mount fetch dropped and would
         // otherwise have shown no outage banner until the 60-second interval first fired.
-        this.fetchStatus();
-        this.interval = pollInterval(this.fetchStatus, RUNNERSTATUS_POLL_MS);
+        fetchStatus();
+        const interval = pollInterval(fetchStatus, RUNNERSTATUS_POLL_MS);
+
+        return () => clearInterval(interval);
+    }, []);
+
+    if (status == null) {
+        return null;
     }
 
-    componentWillUnmount() {
-        clearInterval(this.interval);
-    }
-
-    fetchStatus() {
-        // a stale runner is reported with HTTP 503 and a body, so the status is read from the body
-        // rather than from the status code
-        fetch(taskrunnerstatus_url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-            .then(response => response.json())
-            .then(status => {
-                this.lastgoodfetch = Date.now();
-                this.setState({ 'status': status });
-            })
-            .catch(error => {
-                // not being able to reach this endpoint says nothing about the runner, so do not
-                // claim an outage on the strength of our own failed request — but a status we have
-                // not been able to re-confirm for several polls is no longer worth asserting
-                // either, in either direction: a frozen "3 slots busy" line outlives a dead
-                // runner, and a frozen outage banner outlives a recovered one.
-                debug_log('Could not read the task runner status', error);
-                if (this.lastgoodfetch != null && (Date.now() - this.lastgoodfetch) > RUNNERSTATUS_POLL_MS * 5) {
-                    this.setState({ 'status': null });
-                }
-            });
-    }
-
-    render() {
-        const status = this.state.status;
-        if (status == null) {
-            return null;
-        }
-
-        if (status.stale) {
-            const age = status.status_age_seconds != null
-                ? ' It last reported ' + describeAge(status.status_age_seconds) + '.'
-                : '';
-            return (
-                <p key="runnerstatus" id="runnerstatus" className="runnerstatus stale" role="status">
-                    The task runner is not currently processing jobs.{age} Queued tasks will start once it is
-                    back; there is no need to submit them again.
-                </p>
-            );
-        }
-
-        if (!status.queued_task_count) {
-            // an idle runner with an empty queue is the normal case and needs no commentary
-            return null;
-        }
-
-        // during the hourly maintenance sweep the slot counts are frozen (nothing is dispatched or
-        // reaped while it runs), so say what is happening rather than reporting numbers that are
-        // temporarily meaningless
-        const activity = status.maintenance
-            ? 'maintenance sweep in progress;'
-            : status.slots_busy + ' of ' + status.numslots + ' slots busy,';
-
+    if (status.stale) {
+        const age = status.status_age_seconds != null
+            ? ' It last reported ' + describeAge(status.status_age_seconds) + '.'
+            : '';
         return (
-            <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
-                Task runner: {activity}
-                {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
-                all users in the queue.
+            <p key="runnerstatus" id="runnerstatus" className="runnerstatus stale" role="status">
+                The task runner is not currently processing jobs.{age} Queued tasks will start once it is
+                back; there is no need to submit them again.
             </p>
         );
     }
-}
 
-class Pager extends React.PureComponent {
-    constructor(props) {
-        super(props);
-
-        this.state = {}
-        if (this.props.previous != null) {
-            this.state.previous_cursor = new URL(this.props.previous).searchParams.get('cursor');
-        }
-        if (this.props.next != null) {
-            this.state.next_cursor = new URL(this.props.next).searchParams.get('cursor');
-        }
+    if (!status.queued_task_count) {
+        // an idle runner with an empty queue is the normal case and needs no commentary
+        return null;
     }
 
-    // componentWillReceiveProps(nextProps) {
-    //   if (JSON.stringify(nextProps) != JSON.stringify(this.state))
-    //   {
-    //     this.setState(nextProps);
-    //     console.log('Pager changed');
-    //   }
-    // }
+    // during the hourly maintenance sweep the slot counts are frozen (nothing is dispatched or
+    // reaped while it runs), so say what is happening rather than reporting numbers that are
+    // temporarily meaningless
+    const activity = status.maintenance
+        ? 'maintenance sweep in progress;'
+        : status.slots_busy + ' of ' + status.numslots + ' slots busy,';
 
-    static getDerivedStateFromProps(props, state) {
-        const statechanges = {};
-        if (props.previous != null) {
-            statechanges.previous_cursor = new URL(props.previous).searchParams.get('cursor');
-        }
-        if (props.next != null) {
-            statechanges.next_cursor = new URL(props.next).searchParams.get('cursor');
-        }
+    return (
+        <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
+            Task runner: {activity}
+            {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
+            all users in the queue.
+        </p>
+    );
+});
 
-        return statechanges;
+const Pager = React.memo(function Pager({ previous, next, taskcount, pagefirsttaskposition, pagetaskcount, updateCursor }) {
+    debug_log('Pager rendered');
+    if (taskcount == null) {
+        return null;
     }
 
-    render() {
-        debug_log('Pager rendered');
-        if (this.props.taskcount == null) {
-            return null;
-        } else {
-            return (
-                <div id="paginator" key="paginator">
-                    <p key="pagedescription">Showing tasks {this.props.pagefirsttaskposition + 1}-{this.props.pagefirsttaskposition + this.props.pagetaskcount} of {this.props.taskcount}</p>
-                    {/* buttons, not links: these run JavaScript rather than navigating, and an <a>
-                        with no href is not focusable, so the pager could not be reached by keyboard */}
-                    <ul key="prevnext" className="pager">
-                        {this.props.previous != null ? <li key="previous" className="previous"><button type="button" onClick={() => { this.props.updateCursor(this.state.previous_cursor) }}>&laquo; Newer</button></li> : null}
-                        {this.props.next != null ? <li key="next" className="next"><button type="button" onClick={() => { this.props.updateCursor(this.state.next_cursor) }}>Older &raquo;</button></li> : null}
-                    </ul>
-                </div>
-            )
-        }
-    }
-}
+    // the cursors were copied into state by getDerivedStateFromProps, which is only ever a way of
+    // keeping a second copy of a prop in step with the first. They are derived during render now.
+    const cursorFrom = (url) => (url != null ? new URL(url).searchParams.get('cursor') : null);
+
+    return (
+        <div id="paginator" key="paginator">
+            <p key="pagedescription">Showing tasks {pagefirsttaskposition + 1}-{pagefirsttaskposition + pagetaskcount} of {taskcount}</p>
+            {/* buttons, not links: these run JavaScript rather than navigating, and an <a>
+                with no href is not focusable, so the pager could not be reached by keyboard */}
+            <ul key="prevnext" className="pager">
+                {previous != null ? <li key="previous" className="previous"><button type="button" onClick={() => updateCursor(cursorFrom(previous))}>&laquo; Newer</button></li> : null}
+                {next != null ? <li key="next" className="next"><button type="button" onClick={() => updateCursor(cursorFrom(next))}>Older &raquo;</button></li> : null}
+            </ul>
+        </div>
+    );
+});
 
 export class TaskPage extends React.Component {
     constructor(props) {
@@ -1114,6 +1047,10 @@ export class TaskPage extends React.Component {
 }
 
 
+// Guarded so the module can be imported without mounting: the component tests import this file
+// for TaskPage, and an unconditional mount ran on import against a container that is not there.
+// On the queue page the element always exists.
 const container = document.getElementById('taskpage');
-const root = ReactDOM.createRoot(container);
-root.render(<TaskPage />);
+if (container) {
+    ReactDOM.createRoot(container).render(<TaskPage />);
+}
