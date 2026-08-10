@@ -41,6 +41,7 @@ from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
 from atlasserver.forcephot.misc import splitradeclist
+from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.queue import calculate_queue_positions
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
@@ -194,6 +195,34 @@ class EmailChangeTests(TestCase):
         retried = self.request_email_change()
         assert len(django_mail.outbox) == 1, len(django_mail.outbox)
         assert retried.status_code == 200
+
+    def test_a_wrong_password_does_not_reveal_whether_an_address_is_registered(self) -> None:
+        """Django runs every clean_<field> independently and carries on past a failed one.
+
+        So this form used to answer "is this address registered here?" for anyone holding any
+        account, with no password at all -- an enumeration oracle over the whole user table.
+        """
+        User.objects.create_user(username="someone", email="known@example.com", password=None)
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("email_change"), {"password": "not-the-right-password", "new_email": "known@example.com"}
+        )
+
+        content = response.content.decode().lower()
+        assert "entered incorrectly" in content, content
+        assert "already exists" not in content, "a wrong password still learned the address was taken"
+
+    def test_the_taken_check_still_applies_with_the_right_password(self) -> None:
+        User.objects.create_user(username="someone", email="known@example.com", password=None)
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("email_change"), {"password": "testpassword123", "new_email": "known@example.com"}
+        )
+
+        assert "already exists" in response.content.decode().lower()
+        assert not django_mail.outbox, "a confirmation went to an address that is already taken"
 
     def test_a_password_change_revokes_a_pending_email_change(self) -> None:
         """A pending change has to die when the account is recovered.
@@ -2641,7 +2670,7 @@ class RegistrationVerificationTests(TestCase):
         """Unchecking is_active is how an account is disabled, not only how one awaits verification.
 
         Treating the two as one state would make verification a way back in for a disabled account.
-        Having logged in before is what tells them apart.
+        A PendingEmailVerification row is what tells them apart.
         """
         disabled = User.objects.create_user(username="banned", email="banned@example.com", password=None)
         disabled.last_login = timezone.now()
@@ -2652,6 +2681,41 @@ class RegistrationVerificationTests(TestCase):
         self.client.post(reverse("resend_verification"), {"email": "banned@example.com"})
 
         assert not django_mail.outbox, "a disabled account was sent a link that would reactivate it"
+
+    def test_resend_will_not_reactivate_an_account_disabled_before_its_first_login(self) -> None:
+        """The case the old last_login heuristic could not see.
+
+        An account created by createsuperuser or in the admin, or one that only ever used an API
+        token, has a null last_login while perfectly active. Disable it and the heuristic read it
+        as merely unverified, so anyone holding that mailbox could ask for a link and undo the
+        disable. It has no PendingEmailVerification row, because it never registered.
+        """
+        disabled = User.objects.create_user(username="madeinadmin", email="admin-made@example.com", password=None)
+        assert disabled.last_login is None
+        disabled.is_active = False
+        disabled.save()
+        django_mail.outbox.clear()
+
+        self.client.post(reverse("resend_verification"), {"email": "admin-made@example.com"})
+
+        assert not django_mail.outbox, "an account disabled before its first login was sent a link"
+
+    def test_registering_records_that_the_account_is_awaiting_verification(self) -> None:
+        # the marker is the whole state, so it has to exist for the flow to work at all
+        self.register()
+
+        user = User.objects.get(username="newcomer")
+        assert PendingEmailVerification.objects.filter(user=user).exists()
+
+    def test_verifying_clears_the_marker(self) -> None:
+        # leaving it behind would let a later resend issue links for an account that is already
+        # active and verified
+        self.register()
+        self.client.post(self.verification_link())
+
+        user = User.objects.get(username="newcomer")
+        assert user.is_active is True
+        assert not PendingEmailVerification.objects.filter(user=user).exists()
 
     def test_a_disabled_account_cannot_be_reactivated_by_an_old_link(self) -> None:
         # belt and braces for the check above: the activation view applies the same rule, so a link

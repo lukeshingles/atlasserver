@@ -70,6 +70,7 @@ from atlasserver.forcephot.misc import PDF_PLOT_TIMEOUT_SECONDS
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import BLANK_MPC_NAME
+from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_address
@@ -972,6 +973,11 @@ def register(request):
                     user.is_active = False
                     user.save()
 
+                    # in the same transaction as the account: the marker is what later tells this
+                    # inactive row apart from one an administrator switched off, so an account
+                    # without it would be unable to verify and unable to be recovered
+                    PendingEmailVerification.objects.create(user=user)
+
                     send_verification_email(request, user)
             except IntegrityError:
                 # separately from the send failure below, because the advice differs. The form's
@@ -1017,34 +1023,23 @@ def register(request):
     return render(request, "registration/register.html", {"form": form, "name": "Register"})
 
 
-def disabled_by_an_admin(user) -> bool:
-    """Whether this inactive account was switched off, rather than left waiting for verification.
+def awaiting_verification(user) -> bool:
+    """Whether this inactive account is one that registered and has not confirmed its address.
 
-    The two are the same flag. Unchecking is_active is also how an administrator disables an
-    account -- Django's own help text recommends it in place of deleting -- so treating every
-    inactive account as unverified would turn verification into a way back in for a disabled one.
-
-    Having logged in is what separates them, and it needs no extra column: registration leaves the
-    account inactive without logging it in, so an account awaiting verification has a null
-    last_login, while one that was disabled had to be usable first.
-
-    Known gap: an account disabled before it ever logged in -- one created by createsuperuser or in
-    the admin, then switched off -- is indistinguishable from an unverified one here, and the resend
-    path would let it back in. Closing that needs a column recording that an address was verified,
-    which the sidecar pattern of migration 0005 could carry; it is not worth a second rebuild of
-    auth_user on its own. Accounts that registered normally are unaffected either way: the flow that
-    creates them leaves them inactive, so there is nothing for an administrator to switch off.
+    Asked of the PendingEmailVerification row rather than inferred. is_active alone cannot answer
+    it -- unchecking that is equally how an administrator disables an account -- and the previous
+    answer, "has never logged in", is wrong for an account disabled before its first login, or one
+    that only ever used an API token.
     """
-    return not user.is_active and user.last_login is not None
+    return not user.is_active and PendingEmailVerification.objects.filter(user=user).exists()
 
 
 def unverified_account_for(email: str):
     """Return the account awaiting verification at this address, or None."""
     return (
-        # the queryset spelling of not disabled_by_an_admin(): the rule has to be applied here as
-        # SQL and there as Python, so the two are kept adjacent rather than merged
+        # the queryset spelling of awaiting_verification()
         get_user_model()
-        .objects.filter(email__iexact=email, is_active=False, last_login__isnull=True)
+        .objects.filter(email__iexact=email, is_active=False, pending_verification__isnull=False)
         .order_by("pk")
         .first()
     )
@@ -1063,7 +1058,7 @@ def verify_email(request, uidb64: str, token: str):
 
     # the same test the resend path applies, repeated here so that the rule guards the flag itself
     # rather than only the one door that hands out links
-    if user is None or disabled_by_an_admin(user) or not verification_token_generator.check_token(user, token):
+    if user is None or not awaiting_verification(user) or not verification_token_generator.check_token(user, token):
         # deliberately the same page for an unknown id, a bad token and an expired one: which of
         # those it was is not something the person following the link can act on differently, and
         # distinguishing them tells an attacker which user ids exist
@@ -1084,6 +1079,9 @@ def verify_email(request, uidb64: str, token: str):
     if not user.is_active:
         user.is_active = True
         user.save(update_fields=["is_active"])
+
+    # the address is proved, so the account is an ordinary one from here on
+    PendingEmailVerification.objects.filter(user=user).delete()
 
     # the token hashes is_active, so following the link a second time lands on the invalid page
     # rather than here. Log in anyway on the first pass: the user has just proved they hold the

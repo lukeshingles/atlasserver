@@ -46,6 +46,17 @@ class EmailChangeForm(forms.Form):
 
     def clean_new_email(self):
         new_email = self.cleaned_data["new_email"]
+
+        # Only once the password has been proved. Django runs every clean_<field> independently and
+        # carries on past a failed one, so this used to answer "is this address registered here?"
+        # for anyone with any account and no password at all -- an enumeration oracle over the
+        # whole user table, rendered right next to the field.
+        #
+        # password is declared above new_email, so it has already been cleaned by now; its absence
+        # from cleaned_data is exactly the case where clean_password rejected it.
+        if "password" not in self.cleaned_data:
+            return new_email
+
         if email_is_taken(new_email, exclude_user=self.user):
             raise forms.ValidationError(self.error_messages["email_taken"], code="email_taken")
         return new_email

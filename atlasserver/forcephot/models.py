@@ -454,3 +454,27 @@ class Task(models.Model):
             self.forget_derived_cache()
         else:
             super().delete(using=using, keep_parents=keep_parents)
+
+
+class PendingEmailVerification(models.Model):
+    """Marks an account that registered and has not yet proved its address.
+
+    This exists because "inactive" alone cannot say why. Unchecking is_active is equally how an
+    administrator disables an account -- Django's own help text recommends it in place of deleting
+    -- so a resend path that treats every inactive account as unverified hands a disabled one a way
+    back in. The previous answer inferred the difference from a null last_login, which is wrong for
+    any account that was disabled before it ever logged in, or that only ever used an API token.
+
+    A table this project owns, rather than a column on auth_user: the user model is
+    django.contrib.auth's and adding to it means either a custom user model or a sidecar column
+    Django cannot query through. A row here is created with the account and deleted the moment the
+    address is confirmed, so its presence is the whole state -- and existing accounts have no row,
+    which is correct, because none of them came from the verification flow.
+    """
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="pending_verification")
+    created = models.DateTimeField(default=timezone.now)
+
+    def __str__(self) -> str:
+        """Return a description for the admin changelist."""
+        return f"awaiting verification since {self.created:%Y-%m-%d}: {self.user}"
