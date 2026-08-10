@@ -2707,6 +2707,39 @@ class RegistrationVerificationTests(TestCase):
         user = User.objects.get(username="newcomer")
         assert PendingEmailVerification.objects.filter(user=user).exists()
 
+    def test_activating_in_the_admin_also_clears_the_marker(self) -> None:
+        """verify_email is not the only way an account becomes active.
+
+        An administrator ticking is_active is the usual answer to "I never got the email". If that
+        left the marker behind, disabling the account later would classify it as unverified again
+        and the resend path would hand out a link that undoes the disable.
+        """
+        self.register()
+        user = User.objects.get(username="newcomer")
+
+        user.is_active = True
+        user.save()
+
+        assert not PendingEmailVerification.objects.filter(user=user).exists()
+
+        # and the disable that follows must stick
+        user.is_active = False
+        user.save()
+        django_mail.outbox.clear()
+        self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert not django_mail.outbox, "an admin-activated then disabled account was sent a link"
+
+    def test_logging_in_does_not_disturb_the_marker(self) -> None:
+        # login() saves with update_fields=["last_login"], and the handler skips those; an
+        # unverified account cannot log in anyway, so the marker must survive an unrelated save
+        self.register()
+        user = User.objects.get(username="newcomer")
+
+        user.save(update_fields=["last_login"])
+
+        assert PendingEmailVerification.objects.filter(user=user).exists()
+
     def test_verifying_clears_the_marker(self) -> None:
         # leaving it behind would let a later resend issue links for an account that is already
         # active and verified

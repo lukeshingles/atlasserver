@@ -7,8 +7,10 @@ import ipaddress
 import json
 import logging
 import math
+import os
 import statistics
 import typing as t
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1501,20 +1503,34 @@ def taskpdfplot(request, taskid):
             if not caches["default"].add(lockkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
                 return _pdfplot_unavailable()
 
+            # Rendered to a path only this request knows, then published with a rename.
+            #
+            # Two things follow from that. A child killed mid-write leaves its wreckage on the
+            # private path, so the final name is never a truncated file that every later request
+            # would serve for ever without retrying. And because the lock above is not a real
+            # mutex, a second renderer may be running concurrently: it has its own path, so
+            # neither can delete or half-overwrite the other's work. The rename is atomic within
+            # a filesystem, and both renders are of the same data, so whichever lands second is
+            # equally correct.
+            renderpath = pdfpath.with_name(f"{pdfpath.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+
             try:
                 completed = make_pdf_plot(
-                    taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment, separate_process=True
+                    taskid=taskid,
+                    localresultfile=resultfilepath,
+                    taskcomment=item.comment,
+                    separate_process=True,
+                    outputpath=renderpath,
                 )
+
+                if completed and renderpath.is_file():
+                    renderpath.replace(pdfpath)
             finally:
+                renderpath.unlink(missing_ok=True)
                 caches["default"].delete(lockkey)
 
             if not completed:
                 logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
-                # the child is killed wherever it happened to be, which can be inside savefig()
-                # writing the final path. Left there, the truncated file satisfies the is_file()
-                # test above on every later request, so the task serves a corrupt plot for ever
-                # and never retries.
-                pdfpath.unlink(missing_ok=True)
                 return _pdfplot_unavailable()
 
         if pdfpath.is_file():

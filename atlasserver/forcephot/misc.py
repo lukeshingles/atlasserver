@@ -135,6 +135,7 @@ def make_pdf_plot_worker(
     taskcomment: str = "",
     logprefix: str = "",
     logfunc: t.Callable[[t.Any], t.Any] | None = None,
+    outputpath: Path | None = None,
 ) -> Path | None:
     # deferred: plot_atlas_fp imports matplotlib, and matplotlib imports numpy. This function only
     # ever runs in the process forked by make_pdf_plot (or in the task runner's own per-task
@@ -148,7 +149,12 @@ def make_pdf_plot_worker(
     #     pdftitle += ':' + taskcomment
 
     localresultfiles = [Path(localresultfile)]
-    plotfilepaths_requested = [f.with_suffix(".pdf") for f in localresultfiles]
+    # outputpath lets the caller render somewhere private and publish the result itself. The
+    # default -- the result file's own name with a .pdf suffix -- is what the task runner wants,
+    # since it is already the only writer for that task.
+    plotfilepaths_requested = (
+        [outputpath] if outputpath is not None else [f.with_suffix(".pdf") for f in localresultfiles]
+    )
 
     plotfilepaths = None
     try:
