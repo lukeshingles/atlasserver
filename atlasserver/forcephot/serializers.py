@@ -135,6 +135,14 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         if value is None or value == "":
             return value
 
+        # stripped here so that surrounding space cannot decide whether this is a target. A name of
+        # nothing but spaces becomes "", which validate() then reads as no name given and reports
+        # as a missing target -- rather than reaching the database, where the check constraint
+        # would refuse it as an unexplained 500.
+        value = value.strip()
+        if value == "":
+            return value
+
         badchars = "'\";"
         if any(c in dict.fromkeys(badchars) for c in value):
             raise serializers.ValidationError(

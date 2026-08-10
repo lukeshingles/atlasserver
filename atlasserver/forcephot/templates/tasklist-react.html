@@ -136,7 +136,9 @@
     {# have run arbitrary script in every logged-in session, and an import map cannot carry an #}
     {# integrity hash the way the <script> tags above do. build.sh generates these with esbuild, #}
     {# because React 19 publishes CommonJS only; react.min.js and react-dom-client.min.js share #}
-    {# their React through react-shared.js, which they import relatively, so it needs no entry here. #}
+    {# their React through a react-shared-<hash>.js chunk, which they import relatively, so it needs #}
+    {# no entry here -- and the hash in its name is what busts it, since a relative import does not #}
+    {# inherit the ?ver= below. #}
     <script type="importmap">
         {
             "imports": {

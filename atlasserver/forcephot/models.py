@@ -9,6 +9,8 @@ from django.contrib.auth.models import User  # pylint: disable=imported-auth-use
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
+from django.db.models.functions import Trim
+from django.db.models.lookups import Exact
 from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
@@ -114,15 +116,18 @@ class Task(models.Model):
             # Exactly one of the two forms: an MPC object name (with no coordinates), or both
             # coordinates (with no name). RA 0 / Dec 0 are real coordinates, so this tests for NULL
             # rather than for falsiness, exactly as the serializer does.
+            # TRIM, not a bare != "": a name of nothing but spaces is not a target, but it is
+            # truthy, so it used to satisfy this and then reach the runner, which interpolates it
+            # into ssforce.sh and would have asked for a blank object.
             models.CheckConstraint(
                 condition=(
                     (
                         models.Q(mpc_name__isnull=False)
-                        & ~models.Q(mpc_name="")
+                        & ~models.Q(Exact(Trim("mpc_name"), models.Value("")))
                         & models.Q(ra__isnull=True, dec__isnull=True)
                     )
                     | (
-                        (models.Q(mpc_name__isnull=True) | models.Q(mpc_name=""))
+                        (models.Q(mpc_name__isnull=True) | models.Q(Exact(Trim("mpc_name"), models.Value(""))))
                         & models.Q(ra__isnull=False, dec__isnull=False)
                     )
                 ),

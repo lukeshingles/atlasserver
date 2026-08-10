@@ -87,6 +87,10 @@ class EmailChangeTests(TestCase):
         self.user = User.objects.create_user(
             username="emailchanger", email="old@example.com", password="testpassword123"
         )
+        # the confirmation send is rate limited per account, in a locmem cache that outlives the
+        # database rollback between tests -- and ids get reused, so one test's send would otherwise
+        # suppress the next one's
+        caches["throttle"].clear()
 
     def test_requires_login(self) -> None:
         response = self.client.get(reverse("email_change"))
@@ -114,6 +118,29 @@ class EmailChangeTests(TestCase):
         assert self.user.email == "old@example.com", "the address changed before it was confirmed"
         assert len(django_mail.outbox) == 1
         assert django_mail.outbox[0].to == ["new@example.com"], "the link must go to the new address"
+
+    def test_the_confirmation_send_is_rate_limited(self) -> None:
+        """Nothing is stored until the link is followed, so nothing else makes a repeat a no-op.
+
+        Without a limit one logged-in account can post this form in a loop and have the server mail
+        an arbitrary address as fast as it will go.
+        """
+        self.client.force_login(self.user)
+
+        for _ in range(3):
+            self.request_email_change("victim@example.com")
+
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+
+    def test_the_limit_is_per_account_not_per_target_address(self) -> None:
+        # otherwise varying the address each time buys another send, which is the flooding case
+        self.client.force_login(self.user)
+
+        self.request_email_change("first@example.com")
+        response = self.request_email_change("second@example.com")
+
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+        assert "wait a minute" in response.content.decode().lower()
 
     def test_following_the_confirmation_link_applies_the_change(self) -> None:
         self.client.force_login(self.user)
@@ -148,7 +175,9 @@ class EmailChangeTests(TestCase):
         assert self.client.get(firstlink).status_code == 200
         django_mail.outbox.clear()
 
-        # move on to a third address, then replay the first link
+        # move on to a third address, then replay the first link. The limiter is cleared because
+        # this test is about token replay, not about the send rate -- two sends is the whole setup.
+        caches["throttle"].clear()
         self.request_email_change("second@example.com")
         self.client.get(self.confirmation_link())
 
@@ -585,6 +614,18 @@ class TaskStrTests(TestCase):
         except IntegrityError:
             return
         msg = "a task with neither an mpc_name nor coordinates was accepted"
+        raise AssertionError(msg)
+
+    def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
+        # it is truthy, so it satisfied a bare != "" and then reached the runner, which would have
+        # asked ssforce.sh for an object named nothing
+        user = User.objects.create_user(username="blanktarget", email="bt@example.com", password=None)
+
+        try:
+            Task.objects.create(user=user, mpc_name="   ")
+        except IntegrityError:
+            return
+        msg = "a task whose only target was whitespace was accepted"
         raise AssertionError(msg)
 
 
@@ -1904,6 +1945,18 @@ class AtlasCommandTests(TestCase):
         assert "/atlas/bin/ssforce.sh 'Makemake'" in command
         assert "force.sh" not in command.replace("ssforce.sh", "")
 
+    def test_a_padded_mpc_name_is_stripped_before_the_shell_sees_it(self) -> None:
+        # the constraint permits a padded name; what it must not become is ssforce.sh '  Makemake '
+        command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="  Makemake  ", mjd_min=None))
+        assert "/atlas/bin/ssforce.sh 'Makemake'" in command
+
+    def test_a_blank_mpc_name_takes_the_coordinate_path(self) -> None:
+        # such a row is a coordinate request: the constraint reads a whitespace-only name as absent
+        # and therefore required ra and dec, so dispatching it to ssforce.sh would drop the target
+        command = self.fp_command(self.make_task(mpc_name="   ", mjd_min=None))
+        assert "/atlas/bin/force.sh 100.0 -20.0" in command
+        assert "ssforce.sh" not in command
+
     def test_zero_mjd_min_is_still_passed(self) -> None:
         # a falsy-but-present bound used to be dropped, silently widening the request
         assert " m0=0.0" in self.fp_command(self.make_task(mjd_min=0))
@@ -2257,9 +2310,9 @@ class RegistrationVerificationTests(TestCase):
     credentials = {"username": "newcomer", "password1": "a-long-test-password", "password2": "a-long-test-password"}
 
     def setUp(self) -> None:
-        # the resend endpoint rate-limits per address through the default cache, and locmem is not
+        # the resend endpoint rate-limits per address through the throttle cache, and locmem is not
         # reset between tests, so without this one test's resend silently suppresses the next one's
-        caches["default"].clear()
+        caches["throttle"].clear()
 
     def register(self, email: str = "newcomer@example.com") -> t.Any:
         return self.client.post(reverse("register"), {**self.credentials, "email": email})
@@ -2396,6 +2449,36 @@ class RegistrationVerificationTests(TestCase):
 
         assert not django_mail.outbox
 
+    def test_resend_will_not_reactivate_an_account_an_admin_disabled(self) -> None:
+        """Unchecking is_active is how an account is disabled, not only how one awaits verification.
+
+        Treating the two as one state would make verification a way back in for a disabled account.
+        Having logged in before is what tells them apart.
+        """
+        disabled = User.objects.create_user(username="banned", email="banned@example.com", password=None)
+        disabled.last_login = timezone.now()
+        disabled.is_active = False
+        disabled.save()
+        django_mail.outbox.clear()
+
+        self.client.post(reverse("resend_verification"), {"email": "banned@example.com"})
+
+        assert not django_mail.outbox, "a disabled account was sent a link that would reactivate it"
+
+    def test_a_disabled_account_cannot_be_reactivated_by_an_old_link(self) -> None:
+        # belt and braces for the check above: the activation view applies the same rule, so a link
+        # obtained by any other route is refused too
+        self.register()
+        link = self.verification_link()
+        user = User.objects.get(username="newcomer")
+        user.last_login = timezone.now()
+        user.save()
+
+        response = self.client.get(link)
+
+        assert response.status_code == 400, response.status_code
+        assert User.objects.get(pk=user.pk).is_active is False
+
 
 class EmailUniquenessConstraintTests(TransactionTestCase):
     """New accounts may not share an address; ones that already did when the index was added may.
@@ -2407,10 +2490,15 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
     """
 
     @staticmethod
-    def grandfather(user: User) -> None:
-        """Mark a row exempt, as migration 0005 does for accounts that already shared an address."""
+    def grandfather(user: User, address: str) -> None:
+        """Exempt a row for one address, as migration 0005 does for accounts that already shared it.
+
+        The address is named rather than read off the row, because these tests have to reach the
+        shared state the migration found: the index already exists here, so the second account is
+        created on a placeholder address, licensed for the shared one, and only then moved onto it.
+        """
         with connection.cursor() as cursor:
-            cursor.execute("UPDATE auth_user SET email_unique_exempt = 1 WHERE id = %s", [user.pk])
+            cursor.execute("UPDATE auth_user SET email_unique_exempt = %s WHERE id = %s", [address.lower(), user.pk])
 
     def test_the_database_rejects_a_duplicate_created_outside_the_form(self) -> None:
         User.objects.create_user(username="first", email="dupe@example.com", password=None)
@@ -2453,7 +2541,7 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
         # the pairs that already existed when 0005 ran are kept, not merged or renamed
         first = User.objects.create_user(username="old1", email="shared@example.com", password=None)
         second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
-        self.grandfather(second)
+        self.grandfather(second, "shared@example.com")
         second.email = "shared@example.com"
         second.save()
 
@@ -2467,7 +2555,7 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
         """
         User.objects.create_user(username="old1", email="shared@example.com", password=None)
         second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
-        self.grandfather(second)
+        self.grandfather(second, "shared@example.com")
         second.email = "shared@example.com"
         second.save()
 
@@ -2476,6 +2564,31 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
         except IntegrityError:
             return
         msg = "a new account took an address that two grandfathered accounts already share"
+        raise AssertionError(msg)
+
+    def test_a_grandfathered_account_is_constrained_again_once_it_changes_address(self) -> None:
+        """The licence covers one address, not the row for ever.
+
+        Were it a flag, a grandfathered account that later moved -- through the confirmed
+        email-change flow, or from the shell -- would stay outside the index and claim nothing, so
+        its new address would still be free for a stranger to register.
+        """
+        User.objects.create_user(username="old1", email="shared@example.com", password=None)
+        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
+        self.grandfather(second, "shared@example.com")
+        second.email = "shared@example.com"
+        second.save()
+
+        # moving off the address it was pardoned for puts it back under the ordinary rule
+        third = User.objects.create_user(username="other", email="elsewhere@example.com", password=None)
+        second.email = "elsewhere@example.com"
+
+        try:
+            second.save()
+        except IntegrityError:
+            assert User.objects.get(pk=third.pk).email == "elsewhere@example.com"
+            return
+        msg = "a grandfathered account took another account's address after moving off its own"
         raise AssertionError(msg)
 
     def test_new_accounts_cannot_collide_with_each_other(self) -> None:

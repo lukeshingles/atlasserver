@@ -90,6 +90,9 @@ MAX_USER_TASKS = 500
 # Shortest gap between two verification emails to the same address, see resend_verification.
 RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 
+# The same, for the address-change confirmations one account can ask for. See change_email.
+EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
+
 logger = logging.getLogger(__name__)
 
 
@@ -951,9 +954,34 @@ def register(request):
     return render(request, "registration/register.html", {"form": form, "name": "Register"})
 
 
+def unverified_account_for(email: str):
+    """Return the account awaiting verification at this address, or None.
+
+    "Awaiting verification" is deliberately narrower than is_active=False. Unchecking is_active is
+    also how an administrator disables an account -- Django's own help text recommends it in place
+    of deleting -- and treating those two states as one would turn verification into a way for a
+    disabled account to let itself back in.
+
+    Never having logged in is what separates them, and it needs no extra column: registration
+    leaves the account inactive without logging it in, so an unverified account has a null
+    last_login, while an account that was disabled had to be usable first.
+    """
+    return (
+        get_user_model()
+        .objects.filter(email__iexact=email, is_active=False, last_login__isnull=True)
+        .order_by("pk")
+        .first()
+    )
+
+
 def verify_email(request, uidb64: str, token: str):
     """Activate an account from the link in its verification email."""
     user = user_from_uidb64(uidb64)
+
+    # the same test the resend path applies, repeated here so that the rule lives with the flag it
+    # protects rather than only at the one door that hands out links
+    if user is not None and not user.is_active and user.last_login is not None:
+        user = None
 
     if user is None or not verification_token_generator.check_token(user, token):
         # deliberately the same page for an unknown id, a bad token and an expired one: which of
@@ -998,13 +1026,17 @@ def resend_verification(request):
         #
         # The address is hashed into the key rather than used directly: cache keys are visible in
         # filenames and memcached rejects some characters, and an address is personal data.
+        #
+        # In the throttle cache, not "default": an unauthenticated caller can create one of these
+        # per syntactically valid address it posts, without any account having to exist, and
+        # "default" holds the queue-recalc flag and the PDF render locks behind a 300-entry cap.
         emailkey = hashlib.sha256(email.lower().encode()).hexdigest()
-        may_send = caches["default"].add(
+        may_send = caches["throttle"].add(
             f"resendverification-{emailkey}", True, timeout=RESEND_VERIFICATION_INTERVAL_SECONDS
         )
 
         if may_send:
-            user = get_user_model().objects.filter(email__iexact=email, is_active=False).order_by("pk").first()
+            user = unverified_account_for(email)
             if user is not None:
                 send_verification_email(request, user)
 
@@ -1028,12 +1060,30 @@ def change_email(request):
             # verification done at registration could be undone just by changing the address
             # afterwards.
             new_email = form.cleaned_data["new_email"]
-            send_email_change_confirmation(request, request.user, new_email)
 
-            return render(
-                request,
-                "registration/verification_sent.html",
-                {"name": "Check your email", "email": new_email, "emailchange": True},
+            # Rate limited like the resend path, and for the same reason. Nothing is stored until
+            # the link is followed, so there is no pending-change record to make a second attempt a
+            # no-op: without this, one logged-in account can post this form in a loop and have the
+            # server mail an arbitrary address as fast as it will go. Keyed on the account rather
+            # than the target, so changing the address each time does not buy another send.
+            may_send = caches["throttle"].add(
+                f"emailchange-{request.user.pk}", True, timeout=EMAIL_CHANGE_INTERVAL_SECONDS
+            )
+
+            if may_send:
+                send_email_change_confirmation(request, request.user, new_email)
+
+                return render(
+                    request,
+                    "registration/verification_sent.html",
+                    {"name": "Check your email", "email": new_email, "emailchange": True},
+                )
+
+            # said plainly: this is the user's own account and their own action, so unlike the
+            # resend page there is nothing to conceal by pretending it was sent
+            form.add_error(
+                None,
+                "A confirmation email was just sent. Please wait a minute before requesting another.",
             )
     else:
         form = EmailChangeForm(request.user)

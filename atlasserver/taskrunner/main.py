@@ -189,8 +189,11 @@ def remote_result_filename(task) -> str | None:
 
 def build_fp_command(task, remoteresultfile: Path) -> str:
     """Return the remote shell command for a forced photometry task."""
-    if task.mpc_name:
-        atlascommand = f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
+    # stripped, and tested after stripping: the database constraint treats a name of nothing but
+    # spaces as no name at all, so such a row is a coordinate request and must not be sent to
+    # ssforce.sh with an empty object name
+    if mpc_name := (task.mpc_name or "").strip():
+        atlascommand = f"/atlas/bin/ssforce.sh '{mpc_name}'"
     else:
         atlascommand = f"/atlas/bin/force.sh {float(task.ra)} {float(task.dec)}"
 
@@ -232,7 +235,7 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
 
 def build_ssostack_command(task, remoteresultfile: Path, remotedatafile: Path, remotetaskdir: Path) -> str:
     """Return the remote shell command for a solar system object image stack task."""
-    atlascommand = f"/atlas/bin/stack_rock.sh '{task.mpc_name}'"
+    atlascommand = f"/atlas/bin/stack_rock.sh '{(task.mpc_name or '').strip()}'"
     atlascommand += (  # stack_rock.sh doesn't support float mjds
         f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
     )

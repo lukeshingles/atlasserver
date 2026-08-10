@@ -15,6 +15,11 @@
     </p>
 {% endif %}
 
+{# errors belonging to no single field -- the rate limit on confirmation sends is one. Without #}
+{# this they are counted by form.errors above and then never shown, so the page says to correct #}
+{# an error it does not display. #}
+{{ form.non_field_errors }}
+
 <p>{% translate 'Your current email address is' %} <b>{{ request.user.email }}</b>.</p>
 <p>{% translate 'Please enter your password, for security’s sake, and then enter your new email address.' %}</p>
 

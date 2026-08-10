@@ -8,12 +8,19 @@ matching account.
 The rule is enforced at the database level rather than only in the form, but it cannot simply be a
 unique index: this database already has accounts sharing an address, and those are to be kept. So
 each address gets exactly one row that occupies the unique slot -- the oldest -- and any further
-rows sharing it are marked exempt and excluded from the index.
+rows sharing it record that address as exempt and are excluded from the index.
 
 That combination is what makes "existing yes, new no" hold. The grandfathered rows are exempt, so
 they survive; the address they share is still claimed by their oldest sibling, so a new account
 cannot take it either. A row created after this migration is never exempt, so two new accounts
 cannot collide with each other.
+
+The exemption stores the address rather than a yes/no flag, so it lapses the moment the row moves
+on. A boolean would have put the row outside the index permanently: a grandfathered account that
+later changed address -- through the confirmed email-change flow, or from the shell -- would have
+gone on claiming nothing, leaving its new address free for someone else to register and recreating
+the ambiguity this exists to remove. Comparing against the address means the row is constrained
+again as soon as it holds anything other than the one it was pardoned for.
 
 The columns are added here rather than on the model because this project uses
 django.contrib.auth's User, which it does not own; swapping in a custom user model to add two
@@ -35,8 +42,9 @@ from django.db.models.functions import Lower
 
 INDEX_NAME = "auth_user_email_ci_uniq"
 
-# Set on the rows that are allowed to keep a shared address. A real column, not a generated one:
-# it records a decision taken once, at migration time, and must not change when the row does.
+# Holds the one address a row is allowed to share, lowercased, or NULL for every row that has no
+# such licence -- which is every row created after this migration. A real column, not a generated
+# one: it records a decision taken once, at migration time, and nothing since should revise it.
 EXEMPT_COLUMN = "email_unique_exempt"
 
 # MySQL/MariaDB only. A generated column rather than a functional index on the expression: MariaDB
@@ -74,10 +82,10 @@ def grandfather_existing_duplicates(apps, schema_editor):
         )
         keep, exempt = sharing[0], sharing[1:]
         placeholders = ", ".join(["%s"] * len(exempt))
-        # the ids are passed as parameters; the only things interpolated into the statement are the
-        # constant above and a run of %s placeholders, so there is no user input in it
-        sql = f"UPDATE auth_user SET {EXEMPT_COLUMN} = 1 WHERE id IN ({placeholders})"  # noqa: S608
-        schema_editor.execute(sql, exempt)
+        # the address and the ids are passed as parameters; the only things interpolated into the
+        # statement are the constant above and a run of %s placeholders, so there is no user input
+        sql = f"UPDATE auth_user SET {EXEMPT_COLUMN} = %s WHERE id IN ({placeholders})"  # noqa: S608
+        schema_editor.execute(sql, [address, *exempt])
         exempted += len(exempt)
         print(f"  grandfathered {len(exempt)} account(s) sharing {address!r}; id {keep} keeps the address")
 
@@ -89,26 +97,30 @@ def create_index(apps, schema_editor):
     vendor = schema_editor.connection.vendor
 
     if vendor == "mysql":
-        schema_editor.execute(f"ALTER TABLE auth_user ADD COLUMN {EXEMPT_COLUMN} BOOL NOT NULL DEFAULT 0")
+        schema_editor.execute(f"ALTER TABLE auth_user ADD COLUMN {EXEMPT_COLUMN} VARCHAR(254) NULL")
         grandfather_existing_duplicates(apps, schema_editor)
         # Neither engine has partial indexes, so the rows that must not be constrained -- blank
         # addresses and the grandfathered duplicates -- are excluded by generating NULL for them: a
         # unique index permits repeated NULLs. LOWER() is belt and braces (the default collation of
         # both is already case-insensitive) so the index cannot silently become case-sensitive on a
         # server configured with a _bin or _cs collation.
+        #
+        # The exemption is compared, not merely tested: a grandfathered row that moves to some
+        # other address stops matching and rejoins the index, which is the whole point of storing
+        # the address. STORED means that comparison is redone on every write to the row.
         schema_editor.execute(
             f"ALTER TABLE auth_user ADD COLUMN {GENERATED_COLUMN} VARCHAR(254) GENERATED ALWAYS AS "
-            f"(CASE WHEN email = '' OR {EXEMPT_COLUMN} THEN NULL ELSE LOWER(email) END) STORED"
+            f"(CASE WHEN email = '' OR LOWER(email) = {EXEMPT_COLUMN} THEN NULL ELSE LOWER(email) END) STORED"
         )
         schema_editor.execute(f"CREATE UNIQUE INDEX {INDEX_NAME} ON auth_user ({GENERATED_COLUMN})")
     elif vendor == "sqlite":
         # the test default. SQLite has partial indexes and COLLATE NOCASE, so it needs no generated
         # column -- the exemption goes straight into the index's WHERE clause.
-        schema_editor.execute(f"ALTER TABLE auth_user ADD COLUMN {EXEMPT_COLUMN} BOOL NOT NULL DEFAULT 0")
+        schema_editor.execute(f"ALTER TABLE auth_user ADD COLUMN {EXEMPT_COLUMN} VARCHAR(254) NULL")
         grandfather_existing_duplicates(apps, schema_editor)
         schema_editor.execute(
             f"CREATE UNIQUE INDEX {INDEX_NAME} ON auth_user (email COLLATE NOCASE) "
-            f"WHERE email != '' AND {EXEMPT_COLUMN} = 0"
+            f"WHERE email != '' AND ({EXEMPT_COLUMN} IS NULL OR LOWER(email) != {EXEMPT_COLUMN})"
         )
     else:
         # named rather than guessed at: COLLATE NOCASE is SQLite's spelling, and running it against
@@ -118,7 +130,7 @@ def create_index(apps, schema_editor):
         msg = (
             f"Cannot add the case-insensitive unique index on auth_user.email: no SQL is defined for the "
             f"{vendor!r} backend. Add a branch here for it, using an index that ignores case and skips "
-            f"blank addresses and rows flagged {EXEMPT_COLUMN}."
+            f"blank addresses and rows whose {EXEMPT_COLUMN} matches the address they hold."
         )
         raise NotImplementedError(msg)
 

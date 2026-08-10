@@ -53,8 +53,15 @@ describe('self-hosted react bundles', () => {
     });
 
     test('the bundles are self-contained, with no CDN or bare specifiers left', async () => {
-        const { readFile } = await import('node:fs/promises');
-        for (const name of ['react.min.js', 'react-dom-client.min.js', 'react-shared.js']) {
+        const { readFile, readdir } = await import('node:fs/promises');
+        const vendordir = new URL('../../vendor/', import.meta.url);
+
+        // the shared chunk carries a content hash in its name, so it is discovered rather than
+        // spelled out; finding none at all would mean the split silently stopped happening
+        const chunks = (await readdir(vendordir)).filter((f) => f.startsWith('react-shared-'));
+        assert.equal(chunks.length, 1, `expected exactly one react-shared chunk, found ${chunks.length}`);
+
+        for (const name of ['react.min.js', 'react-dom-client.min.js', ...chunks]) {
             const source = await readFile(new URL(`../../vendor/${name}`, import.meta.url), 'utf8');
             assert.ok(!source.includes('esm.sh'), `${name} still references esm.sh`);
             // a leftover require() shim is how the --external:react attempt failed: it builds and

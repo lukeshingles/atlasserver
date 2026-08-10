@@ -42,11 +42,22 @@ mkdir -p ../vendor
 # --splitting is what keeps the page on a single React. The obvious alternative, building the two
 # entries separately with --external:react, does not work: react-dom is CommonJS, so esbuild cannot
 # turn its require("react") into an ESM import and emits a require() shim instead, which resolves
-# to nothing in a browser. Splitting instead lifts the shared React into react-shared.js, which
-# both entries import relatively -- so the browser instantiates it once, and hooks (whose
+# to nothing in a browser. Splitting instead lifts the shared React into a react-shared chunk,
+# which both entries import relatively -- so the browser instantiates it once, and hooks (whose
 # dispatcher is module-level state inside React) work across both. src/vendor.test.js renders a
 # component with a hook against these exact files to keep that honest.
+#
+# [hash] in the chunk name, because the entries import it as a plain relative URL and a relative
+# URL does not inherit the ?ver= query the import map puts on its importer. Under a fixed name, a
+# browser upgrading React could pair a fresh entry with the cached old chunk -- and esbuild renames
+# the chunk's exports every build, so the mismatch is an instantiation error and a blank page. The
+# hash is the cache-busting for this one file.
+#
+# The old chunks are removed first: their names change with their contents, so they would
+# otherwise accumulate in the repo one stale copy per React upgrade. The glob also sweeps up the
+# unhashed react-shared.js this replaced.
+rm -f ../vendor/react-shared*.js
 npx esbuild --bundle --format=esm --splitting --minify --log-level=warning \
     '--define:process.env.NODE_ENV="production"' \
-    --outdir=../vendor --entry-names='[name].min' --chunk-names='react-shared' \
+    --outdir=../vendor --entry-names='[name].min' --chunk-names='react-shared-[hash]' \
     vendor/entries/react.js vendor/entries/react-dom-client.js

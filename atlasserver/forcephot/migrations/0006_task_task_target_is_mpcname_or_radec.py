@@ -13,6 +13,8 @@ them; do not relax the constraint to fit them.
 from django.conf import settings
 from django.db import migrations
 from django.db import models
+from django.db.models.functions import Trim
+from django.db.models.lookups import Exact
 
 # The rule, written once and used twice: the pre-check below excludes it to find violators, and
 # AddConstraint enforces it. Written out by hand rather than deconstructed from the model, because
@@ -21,8 +23,9 @@ from django.db import models
 # spelled exactly as Task.Meta spells it, negation included: Django compares constraints by their
 # deconstructed form, so a logically equivalent but differently written condition makes
 # makemigrations believe the model has drifted and demand another migration
-_HAS_MPC_NAME = models.Q(mpc_name__isnull=False) & ~models.Q(mpc_name="")
-_NO_MPC_NAME = models.Q(mpc_name__isnull=True) | models.Q(mpc_name="")
+_BLANK_MPC_NAME = models.Q(Exact(Trim("mpc_name"), models.Value("")))
+_HAS_MPC_NAME = models.Q(mpc_name__isnull=False) & ~_BLANK_MPC_NAME
+_NO_MPC_NAME = models.Q(mpc_name__isnull=True) | _BLANK_MPC_NAME
 TARGET_PRESENT = (_HAS_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True)) | (
     _NO_MPC_NAME & models.Q(ra__isnull=False, dec__isnull=False)
 )
@@ -40,7 +43,9 @@ def check_every_task_has_a_target(apps, schema_editor):
             f"Cannot add the target constraint: {count} task(s) specify neither an MPC object name "
             f"nor a complete (ra, dec) pair, or specify both.\n"
             f"  example task ids: {examples}\n"
-            "Archive or correct these rows, then run this migration again."
+            # not "archive them": the constraint takes no notice of is_archived, so an archived
+            # violator fails this check just the same on the next attempt
+            "Give these rows a target or delete them, then run this migration again."
         )
         raise RuntimeError(msg)
 
