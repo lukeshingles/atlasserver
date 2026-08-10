@@ -974,12 +974,28 @@ def register(request):
 
                     send_verification_email(request, user)
             except IntegrityError:
-                # separately from the send failure below, because the advice differs. This is the
-                # race migration 0005 exists for: clean_email() checked the address and somebody
-                # else took it before this save. "Try again in a few minutes" would be a dead end,
-                # because the address is now permanently taken.
-                logger.info("registration lost the race for an email address")
-                form.add_error("email", "An account with this email address already exists.")
+                # separately from the send failure below, because the advice differs. The form's
+                # clean methods checked both the username and the address, and either can be taken
+                # between that check and this save. "Try again in a few minutes" would be a dead
+                # end for both, because whichever it was is now permanently taken.
+                #
+                # Which one is re-established by asking, rather than read off the exception: the
+                # message differs by backend and by constraint name, and pointing the error at the
+                # wrong field is what this branch exists to stop.
+                username = form.cleaned_data.get("username")
+                email = form.cleaned_data.get("email")
+
+                if username and get_user_model().objects.filter(username=username).exists():
+                    logger.info("registration lost the race for a username")
+                    form.add_error("username", "An account with this username already exists.")
+                elif email and email_is_taken(email):
+                    logger.info("registration lost the race for an email address")
+                    form.add_error("email", "An account with this email address already exists.")
+                else:
+                    # neither is taken now, so the collision was with a row that has since gone,
+                    # or with something this does not model. Retrying is genuinely the right advice
+                    logger.exception("registration failed on an integrity error it could not attribute")
+                    form.add_error(None, "We could not create your account just now. Please try again.")
             except Exception:
                 logger.exception("Could not send the verification email for a new registration")
                 form.add_error(

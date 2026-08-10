@@ -167,8 +167,12 @@ def user_from_uidb64(uidb64: str) -> t.Any:
     """Return the user a verification link refers to, or None if the id is unusable."""
     from django.contrib.auth import get_user_model
 
+    # int() inside the guard, not just the decode: "YWJj" is valid base64 and decodes cleanly to
+    # "abc", and it is the *lookup* that then rejects it -- raising ValueError from a queryset
+    # rather than from anything this had caught, so a malformed link answered 500 instead of the
+    # invalid-link page.
     try:
-        pk = urlsafe_base64_decode(uidb64).decode()
+        pk = int(urlsafe_base64_decode(uidb64).decode())
     except (TypeError, ValueError, OverflowError, UnicodeDecodeError):
         return None
 

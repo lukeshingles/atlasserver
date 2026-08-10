@@ -2473,6 +2473,13 @@ class RegistrationVerificationTests(TestCase):
 
         assert response.status_code == 400, response.status_code
 
+    def test_a_decodable_but_non_numeric_uid_is_an_invalid_link_not_a_500(self) -> None:
+        # "YWJj" is valid base64 and decodes cleanly to "abc"; it was the integer primary-key
+        # lookup that then raised, outside the block guarding the decode
+        response = self.client.post(reverse("verify_email", kwargs={"uidb64": "YWJj", "token": "aaa-bbb"}))
+
+        assert response.status_code == 400, response.status_code
+
     def test_a_tampered_token_is_rejected(self) -> None:
         self.register()
         link = self.verification_link()
@@ -2538,6 +2545,18 @@ class RegistrationVerificationTests(TestCase):
 
         assert response.status_code == 200
         assert "on its way" in response.content.decode()
+
+    def test_losing_the_race_for_a_username_says_so(self) -> None:
+        # username is unique too, and the handler used to report every integrity error as an email
+        # collision -- telling the user an address they can still have is taken
+        User.objects.create_user(username="newcomer", email="someoneelse@example.com", password=None)
+
+        with mock.patch.object(views, "email_is_taken", return_value=False):
+            response = self.client.post(reverse("register"), {**self.credentials, "email": "mine@example.com"})
+
+        content = response.content.decode().lower()
+        assert "username already exists" in content, content
+        assert "email address already exists" not in content, "a username clash was blamed on the address"
 
     def test_a_failed_verification_email_creates_no_account(self) -> None:
         # the address and username would otherwise be taken by a row nobody can log into, verify
