@@ -1244,10 +1244,12 @@ def confirm_email_change(request, token: str):
                     {"name": "Email address changed", "email": new_email},
                 )
 
+    # emailchange picks the copy for this flow: the shared page otherwise offers a verification
+    # resend, which does nothing for an account that is already active
     return render(
         request,
         "registration/verification_invalid.html",
-        {"name": "Confirmation link is not valid"},
+        {"name": "Confirmation link is not valid", "emailchange": True},
         status=400,
     )
 

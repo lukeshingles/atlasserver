@@ -224,6 +224,47 @@ class EmailChangeTests(TestCase):
         assert "already exists" in response.content.decode().lower()
         assert not django_mail.outbox, "a confirmation went to an address that is already taken"
 
+    def test_no_analytics_on_any_page_served_at_the_confirmation_url(self) -> None:
+        """Every response at that URL, not just the ones that ask for confirmation.
+
+        The success page renders at the same location after the POST, and although applying the
+        change spends the token, its payload is signed rather than encrypted -- anyone reading it
+        gets the account id and both addresses.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        pages = {
+            "the confirmation prompt": self.client.get(link),
+            "the invalid-link page": self.client.get(link[:-6] + "beef/"),
+            "the success page": self.client.post(link),
+        }
+
+        for description, response in pages.items():
+            body = response.content.decode()
+            assert "gtag(" not in body, f"{description} reports the token to analytics"
+            assert "googletagmanager" not in body, f"{description} loads the analytics script"
+
+    def test_an_expired_change_link_points_back_at_the_change_form(self) -> None:
+        # the page is shared with account verification, whose advice -- request another
+        # verification link -- does nothing for an account that is already active
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        response = self.client.post(link[:-6] + "beef/")
+
+        body = response.content.decode()
+        assert reverse("email_change") in body, body
+        assert reverse("resend_verification") not in body, "sent to a resend that would do nothing"
+
+    def test_the_verification_page_keeps_its_own_advice(self) -> None:
+        # the branch must not have swapped the copy for both flows
+        response = self.client.get(reverse("verify_email", kwargs={"uidb64": "YWJj", "token": "aaa-bbb"}))
+
+        assert reverse("resend_verification") in response.content.decode()
+
     def test_a_password_change_revokes_a_pending_email_change(self) -> None:
         """A pending change has to die when the account is recovered.
 
@@ -2706,6 +2747,7 @@ class RegistrationVerificationTests(TestCase):
         for response, description in (
             (self.client.get(link), "the confirmation page"),
             (self.client.get(link[:-4] + "beef/"), "the invalid-link page"),
+            (self.client.post(link[:-4] + "beef/"), "the invalid-link page on POST"),
         ):
             body = response.content.decode()
             assert "gtag(" not in body, f"{description} reports the token to analytics"
