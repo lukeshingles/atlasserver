@@ -226,9 +226,23 @@ def make_pdf_plot(*args, separate_process: bool = False, timeout: float = PDF_PL
     return run_process_with_timeout(Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs), timeout)
 
 
+# GeoIP codes that are not ISO country codes, so pycountry does not know them. They were the only
+# entries the hand-maintained country table held that pycountry does not supply, and rows recorded
+# with them are already in the database -- without these they would all read as "Unknown".
+GEOIP_NON_ISO_COUNTRIES: t.Final = {
+    "A2": "Satellite Provider",
+    "O1": "Other Country",
+    "AP": "Asia/Pacific Region",
+    "EU": "Europe",
+}
+
+
 def country_code_to_name(country_code):
     if country_code == "XX" or not country_code:
         return "Unknown"
+
+    if name := GEOIP_NON_ISO_COUNTRIES.get(country_code):
+        return name
 
     if c := pycountry.countries.get(alpha_2=country_code):
         return c.name

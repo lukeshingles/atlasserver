@@ -24,6 +24,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
 
 # from django.contrib.auth.models import User
+from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
@@ -37,6 +38,7 @@ from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
+from django.views.decorators.cache import never_cache
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import OpenApiResponse
@@ -981,7 +983,14 @@ def unverified_account_for(email: str):
 
 
 def verify_email(request, uidb64: str, token: str):
-    """Activate an account from the link in its verification email."""
+    """Activate an account from the link in its verification email, once its owner confirms.
+
+    The link is not self-acting. Mail security gateways, link scanners and some clients fetch every
+    URL in an incoming message, so anything a GET here performs is performed by that machinery
+    rather than by the recipient -- and this endpoint decides whether someone owns an address and
+    then logs the caller in. Registering with a victim's address and letting their own gateway
+    follow the link would otherwise hand the attacker a verified, active account.
+    """
     user = user_from_uidb64(uidb64)
 
     # the same test the resend path applies, repeated here so that the rule guards the flag itself
@@ -995,6 +1004,13 @@ def verify_email(request, uidb64: str, token: str):
             "registration/verification_invalid.html",
             {"name": "Verification link is not valid"},
             status=400,
+        )
+
+    if request.method != "POST":
+        return render(
+            request,
+            "registration/verify_email_confirm.html",
+            {"name": "Confirm your email address", "email": user.email},
         )
 
     if not user.is_active:
@@ -1024,8 +1040,12 @@ def resend_verification(request):
 
         # One send per address per interval. Without it this endpoint mails any address with an
         # unverified account as fast as it is asked to, which makes the server an amplifier for
-        # flooding that inbox and puts the sending domain's reputation at risk. add() is the atomic
-        # operation, so concurrent posts cannot both win.
+        # flooding that inbox and puts the sending domain's reputation at risk.
+        #
+        # add() rather than get()-then-set(), but note this is not a mutual exclusion: the
+        # file-based backend used in production implements add() as has_key() followed by set(),
+        # so two simultaneous posts can both be told yes. The limit is here to bound a sustained
+        # flood, and a burst of two is not what it exists to stop.
         #
         # The address is hashed into the key rather than used directly: cache keys are visible in
         # filenames and memcached rejects some characters, and an address is personal data.
@@ -1099,23 +1119,43 @@ def change_email(request):
 
 
 def confirm_email_change(request, token: str):
-    """Apply an email change once the link sent to the new address has been followed."""
+    """Apply an email change once the link sent to the new address has been confirmed.
+
+    Posted, not applied on GET, for the reason spelled out in verify_email: a scanner fetching the
+    link out of the recipient's mailbox would otherwise make the change before they had read it.
+    """
     loaded = load_email_change_token(token, max_age=settings.PASSWORD_RESET_TIMEOUT)
 
     if loaded is not None:
         user, new_email = loaded
-        # re-checked at use, not only when the link was sent: somebody else may have taken the
-        # address in between, and the database index would turn that into a 500 rather than a
-        # message the user can act on
-        if not email_is_taken(new_email, exclude_user=user):
-            user.email = new_email
-            user.save(update_fields=["email"])
 
+        if request.method != "POST":
             return render(
                 request,
-                "registration/email_change_done.html",
-                {"name": "Email address changed", "email": new_email},
+                "registration/email_change_confirm.html",
+                {"name": "Confirm your new email address", "email": new_email},
             )
+
+        # re-checked at use, not only when the link was sent: somebody else may have taken the
+        # address in between, and the database index would turn that into a 500 rather than a
+        # message the user can act on.
+        #
+        # The check cannot close the window on its own, though -- two people confirming the same
+        # free address at once both pass it, and the loser's save() raises. Catching that turns the
+        # race into the same answer the check gives, instead of a 500.
+        if not email_is_taken(new_email, exclude_user=user):
+            try:
+                with transaction.atomic():
+                    user.email = new_email
+                    user.save(update_fields=["email"])
+            except IntegrityError:
+                logger.info("email change to an address claimed concurrently was refused")
+            else:
+                return render(
+                    request,
+                    "registration/email_change_done.html",
+                    {"name": "Email address changed", "email": new_email},
+                )
 
     return render(
         request,
@@ -1125,6 +1165,10 @@ def confirm_email_change(request, token: str):
     )
 
 
+# never_cache, because the response body carries the token in the clear -- it is the one page here
+# that does. Without it a shared browser keeps a history snapshot that Back reaches after logout,
+# with no login_required in the way.
+@never_cache
 @login_required
 def api_token(request):
     """Let a user see, create, replace and delete their own API token.
@@ -1352,8 +1396,12 @@ def taskpdfplot(request, taskid):
             # One render per task at a time. Each one forks matplotlib, so without this a task
             # whose PDF does not exist yet forks a process per concurrent request -- and the
             # queue page links the PDF for every finished task, so that is a normal thing for a
-            # crawler or an impatient reload to cause. add() rather than get()/set(): it is the
-            # only atomic operation the cache API offers, so two racing requests cannot both win.
+            # crawler or an impatient reload to cause.
+            #
+            # add() rather than get()/set(), but this is a herd control, not a mutex: the
+            # file-based backend implements add() as has_key() followed by set(), so two requests
+            # arriving in the same instant can both proceed. That costs one extra render of a
+            # plot that is about to be written anyway; what it stops is the tenth.
             #
             # The lock expires a little after the render's own deadline so that a worker killed
             # mid-render (a deploy, an OOM) cannot wedge the task's plot until the cache is cleared.

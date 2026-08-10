@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{# Posts rather than applying the change on GET, for the reason given in verify_email_confirm.html: #}
+{# a link scanner fetching the URL out of the recipient's mailbox would otherwise make the change #}
+{# on their behalf, before they had seen it. #}
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p>Press the button to change your account's email address to <b>{{ email }}</b>.</p>
+
+    <p>Job completion mail and password resets will go to that address from then on.</p>
+
+    <form method="post">{% csrf_token %}
+        <button type="submit" class="btn btn-primary">Change my email address</button>
+    </form>
+</div>
+{% endblock %}

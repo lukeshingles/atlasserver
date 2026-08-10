@@ -27,6 +27,7 @@ from django.db import connection
 from django.db import IntegrityError
 from django.db import models
 from django.test import override_settings
+from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
@@ -119,6 +120,18 @@ class EmailChangeTests(TestCase):
         assert len(django_mail.outbox) == 1
         assert django_mail.outbox[0].to == ["new@example.com"], "the link must go to the new address"
 
+    def test_a_get_on_the_confirmation_link_changes_nothing(self) -> None:
+        # same reason as the verification link: a scanner in front of the new address would
+        # otherwise complete the change before the person had read the mail
+        self.client.force_login(self.user)
+        self.request_email_change()
+
+        response = self.client.get(self.confirmation_link())
+
+        assert response.status_code == 200, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", "a GET applied the change"
+
     def test_the_confirmation_send_is_rate_limited(self) -> None:
         """Nothing is stored until the link is followed, so nothing else makes a repeat a no-op.
 
@@ -146,7 +159,7 @@ class EmailChangeTests(TestCase):
         self.client.force_login(self.user)
         self.request_email_change()
 
-        response = self.client.get(self.confirmation_link())
+        response = self.client.post(self.confirmation_link())
 
         assert response.status_code == 200, response.status_code
         self.user.refresh_from_db()
@@ -172,16 +185,16 @@ class EmailChangeTests(TestCase):
         self.client.force_login(self.user)
         self.request_email_change("first@example.com")
         firstlink = self.confirmation_link()
-        assert self.client.get(firstlink).status_code == 200
+        assert self.client.post(firstlink).status_code == 200
         django_mail.outbox.clear()
 
         # move on to a third address, then replay the first link. The limiter is cleared because
         # this test is about token replay, not about the send rate -- two sends is the whole setup.
         caches["throttle"].clear()
         self.request_email_change("second@example.com")
-        self.client.get(self.confirmation_link())
+        self.client.post(self.confirmation_link())
 
-        replayed = self.client.get(firstlink)
+        replayed = self.client.post(firstlink)
 
         assert replayed.status_code == 400, replayed.status_code
         self.user.refresh_from_db()
@@ -194,7 +207,7 @@ class EmailChangeTests(TestCase):
         link = self.confirmation_link()
         User.objects.create_user(username="sniper", email="new@example.com", password=None)
 
-        response = self.client.get(link)
+        response = self.client.post(link)
 
         assert response.status_code == 400, response.status_code
         self.user.refresh_from_db()
@@ -591,6 +604,26 @@ class TaskListEtagTests(TestCase):
             reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json", HTTP_IF_NONE_MATCH=etag
         )
         assert conditional.status_code == 304
+
+
+class CountryCodeTests(SimpleTestCase):
+    """The hand-maintained country table was replaced by pycountry, which knows only ISO codes."""
+
+    def test_iso_codes_resolve(self) -> None:
+        assert misc.country_code_to_name("DE") == "Germany"
+
+    def test_the_geoip_only_codes_still_resolve(self) -> None:
+        # GeoIP emits these and pycountry has never heard of them, so dropping the old table
+        # silently turned every row recorded with one into "Unknown"
+        assert misc.country_code_to_name("A2") == "Satellite Provider"
+        assert misc.country_code_to_name("O1") == "Other Country"
+        assert misc.country_code_to_name("AP") == "Asia/Pacific Region"
+        assert misc.country_code_to_name("EU") == "Europe"
+
+    def test_unknown_and_blank_codes(self) -> None:
+        assert misc.country_code_to_name("XX") == "Unknown"
+        assert misc.country_code_to_name("") == "Unknown"
+        assert misc.country_code_to_name(None) == "Unknown"
 
 
 class TaskStrTests(TestCase):
@@ -2345,7 +2378,7 @@ class RegistrationVerificationTests(TestCase):
     def test_following_the_link_activates_and_logs_in(self) -> None:
         self.register()
 
-        response = self.client.get(self.verification_link())
+        response = self.client.post(self.verification_link())
 
         assert response.status_code == 302, response.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -2355,10 +2388,10 @@ class RegistrationVerificationTests(TestCase):
         # is_active is part of the token hash, so activation invalidates the link with no state kept
         self.register()
         link = self.verification_link()
-        self.client.get(link)
+        self.client.post(link)
         self.client.logout()
 
-        response = self.client.get(link)
+        response = self.client.post(link)
 
         assert response.status_code == 400, response.status_code
 
@@ -2366,7 +2399,7 @@ class RegistrationVerificationTests(TestCase):
         self.register()
         link = self.verification_link()
 
-        response = self.client.get(link[:-4] + "beef/")
+        response = self.client.post(link[:-4] + "beef/")
 
         assert response.status_code == 400, response.status_code
         assert User.objects.get(username="newcomer").is_active is False
@@ -2389,7 +2422,7 @@ class RegistrationVerificationTests(TestCase):
 
         assert response.status_code == 200
         assert len(django_mail.outbox) == 1
-        assert self.client.get(self.verification_link()).status_code == 302
+        assert self.client.post(self.verification_link()).status_code == 302
 
     def test_resend_says_the_same_thing_whether_or_not_the_account_exists(self) -> None:
         # whether an address has an account here is not something a stranger should be able to probe
@@ -2449,6 +2482,33 @@ class RegistrationVerificationTests(TestCase):
 
         assert not django_mail.outbox
 
+    def test_a_get_on_the_verification_link_activates_nothing(self) -> None:
+        """Link scanners fetch every URL in an incoming message.
+
+        If a GET activated the account, an attacker could register with someone else's address and
+        have that person's own mail gateway complete the ownership proof for them -- then log in
+        with the password the attacker chose.
+        """
+        self.register()
+        link = self.verification_link()
+
+        response = self.client.get(link)
+
+        assert response.status_code == 200, response.status_code
+        assert User.objects.get(username="newcomer").is_active is False, "a GET activated the account"
+        assert "_auth_user_id" not in self.client.session, "a GET logged the fetcher in"
+
+    def test_the_get_offers_a_form_that_completes_the_verification(self) -> None:
+        # the page a scanner cannot use has to be one the person can
+        self.register()
+        link = self.verification_link()
+
+        self.client.get(link)
+        response = self.client.post(link)
+
+        assert response.status_code == 302, response.status_code
+        assert User.objects.get(username="newcomer").is_active is True
+
     def test_resend_will_not_reactivate_an_account_an_admin_disabled(self) -> None:
         """Unchecking is_active is how an account is disabled, not only how one awaits verification.
 
@@ -2474,7 +2534,7 @@ class RegistrationVerificationTests(TestCase):
         user.last_login = timezone.now()
         user.save()
 
-        response = self.client.get(link)
+        response = self.client.post(link)
 
         assert response.status_code == 400, response.status_code
         assert User.objects.get(pk=user.pk).is_active is False
@@ -2617,6 +2677,13 @@ class ApiTokenPageTests(TestCase):
     def test_a_user_with_no_token_is_offered_one(self) -> None:
         content = self.client.get(reverse("apitoken")).content.decode()
         assert "do not currently have an API token" in content
+
+    def test_the_page_is_not_cacheable(self) -> None:
+        # it prints the token in the clear, so a history snapshot outlives the session: on a shared
+        # browser, Back reaches it after logout without passing login_required
+        response = self.client.get(reverse("apitoken"))
+
+        assert "no-store" in response.headers.get("Cache-Control", ""), response.headers.get("Cache-Control")
 
     def test_create_then_view(self) -> None:
         response = self.client.post(reverse("apitoken"), data={"action": "create"})
