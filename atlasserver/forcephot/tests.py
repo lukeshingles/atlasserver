@@ -2490,15 +2490,24 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
     """
 
     @staticmethod
-    def grandfather(user: User, address: str) -> None:
-        """Exempt a row for one address, as migration 0005 does for accounts that already shared it.
+    def grandfathered_pair(address: str = "shared@example.com") -> tuple[User, User]:
+        """Build the state migration 0005 leaves behind: two accounts on one address, the later exempt.
 
-        The address is named rather than read off the row, because these tests have to reach the
-        shared state the migration found: the index already exists here, so the second account is
-        created on a placeholder address, licensed for the shared one, and only then moved onto it.
+        The index already exists by the time these tests run, so the pair cannot simply be created
+        sharing the address. The second account is made on a placeholder, licensed for the shared
+        address, and only then moved onto it -- which is also why the licence is passed in rather
+        than read off the row.
         """
+        first = User.objects.create_user(username="old1", email=address, password=None)
+        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
+
         with connection.cursor() as cursor:
-            cursor.execute("UPDATE auth_user SET email_unique_exempt = %s WHERE id = %s", [address.lower(), user.pk])
+            cursor.execute("UPDATE auth_user SET email_unique_exempt = %s WHERE id = %s", [address.lower(), second.pk])
+
+        second.email = address
+        second.save()
+
+        return first, second
 
     def test_the_database_rejects_a_duplicate_created_outside_the_form(self) -> None:
         User.objects.create_user(username="first", email="dupe@example.com", password=None)
@@ -2539,11 +2548,7 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
 
     def test_an_account_grandfathered_by_the_migration_keeps_its_shared_address(self) -> None:
         # the pairs that already existed when 0005 ran are kept, not merged or renamed
-        first = User.objects.create_user(username="old1", email="shared@example.com", password=None)
-        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
-        self.grandfather(second, "shared@example.com")
-        second.email = "shared@example.com"
-        second.save()
+        first, _second = self.grandfathered_pair()
 
         assert User.objects.filter(email="shared@example.com").count() == 2
         assert User.objects.get(pk=first.pk).email == "shared@example.com"
@@ -2553,11 +2558,7 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
 
         Exempting every row would have handed the address back to the next person to register it.
         """
-        User.objects.create_user(username="old1", email="shared@example.com", password=None)
-        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
-        self.grandfather(second, "shared@example.com")
-        second.email = "shared@example.com"
-        second.save()
+        self.grandfathered_pair()
 
         try:
             User.objects.create_user(username="newcomer", email="shared@example.com", password=None)
@@ -2573,11 +2574,7 @@ class EmailUniquenessConstraintTests(TransactionTestCase):
         email-change flow, or from the shell -- would stay outside the index and claim nothing, so
         its new address would still be free for a stranger to register.
         """
-        User.objects.create_user(username="old1", email="shared@example.com", password=None)
-        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
-        self.grandfather(second, "shared@example.com")
-        second.email = "shared@example.com"
-        second.save()
+        _first, second = self.grandfathered_pair()
 
         # moving off the address it was pardoned for puts it back under the ordinary rule
         third = User.objects.create_user(username="other", email="elsewhere@example.com", password=None)

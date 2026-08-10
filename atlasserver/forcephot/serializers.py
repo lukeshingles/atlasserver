@@ -132,13 +132,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
 
         # mpc_name is nullable, and DRF calls validate_<field> even when the value is None
-        if value is None or value == "":
+        if value is None:
             return value
 
         # stripped here so that surrounding space cannot decide whether this is a target. A name of
         # nothing but spaces becomes "", which validate() then reads as no name given and reports
         # as a missing target -- rather than reaching the database, where the check constraint
-        # would refuse it as an unexplained 500.
+        # would refuse it as an unexplained 500. An already-empty name strips to itself.
         value = value.strip()
         if value == "":
             return value

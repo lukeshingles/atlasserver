@@ -26,6 +26,15 @@ def get_mjd_min_default() -> float:
 # value memoised below, so it cannot double as the "not computed" marker.
 UNSET: t.Final = object()
 
+# "the mpc_name column holds no target", for the check constraint below. TRIM, not a bare == "":
+# a name of nothing but spaces is not a target, but it is truthy, so it satisfied the plain test
+# and then reached the runner, which interpolates it into ssforce.sh.
+#
+# Migration 0006 spells this out again rather than importing it: a migration has to keep working
+# when the model moves on. The two must stay identical in deconstructed form, or makemigrations
+# reads the difference as model drift and asks for another migration.
+_BLANK_MPC_NAME = models.Q(Exact(Trim("mpc_name"), models.Value("")))
+
 
 class Task(models.Model):
     class RequestType(models.TextChoices):
@@ -116,18 +125,11 @@ class Task(models.Model):
             # Exactly one of the two forms: an MPC object name (with no coordinates), or both
             # coordinates (with no name). RA 0 / Dec 0 are real coordinates, so this tests for NULL
             # rather than for falsiness, exactly as the serializer does.
-            # TRIM, not a bare != "": a name of nothing but spaces is not a target, but it is
-            # truthy, so it used to satisfy this and then reach the runner, which interpolates it
-            # into ssforce.sh and would have asked for a blank object.
             models.CheckConstraint(
                 condition=(
-                    (
-                        models.Q(mpc_name__isnull=False)
-                        & ~models.Q(Exact(Trim("mpc_name"), models.Value("")))
-                        & models.Q(ra__isnull=True, dec__isnull=True)
-                    )
+                    (models.Q(mpc_name__isnull=False) & ~_BLANK_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True))
                     | (
-                        (models.Q(mpc_name__isnull=True) | models.Q(Exact(Trim("mpc_name"), models.Value(""))))
+                        (models.Q(mpc_name__isnull=True) | _BLANK_MPC_NAME)
                         & models.Q(ra__isnull=False, dec__isnull=False)
                     )
                 ),
@@ -202,6 +204,16 @@ class Task(models.Model):
             self._localresultfile_cache = resultfile
 
         return self._localresultfile_cache
+
+    @property
+    def mpc_target(self) -> str:
+        """Return the MPC object name without surrounding space, or "" if this is not an MPC task.
+
+        Callers should test this rather than mpc_name, which is truthy for a name of nothing but
+        spaces -- a value _BLANK_MPC_NAME reads as no target at all, so such a row carries
+        coordinates and belongs on the coordinate path.
+        """
+        return (self.mpc_name or "").strip()
 
     @property
     def localresultpreviewimagefile(self) -> str | None:
