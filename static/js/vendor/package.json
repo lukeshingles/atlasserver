@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "//": "Marks the generated bundles in this directory as ES modules. Written by hand, not by build.sh. Browsers do not consult it (the page loads them through an import map in a <script type=module>), but Node does, and vendor.test.js in ../queuepage/src imports these exact files to check that the page's React is self-hosted and single-instance."
+}

@@ -21,8 +21,11 @@
 
 {% block script %}
   {{ block.super }}
-  <script src="https://cdn.pydata.org/bokeh/release/bokeh-3.9.2.min.js"></script>
-  <script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-3.9.2.min.js"></script>
+  {# URL and hash both come from the installed bokeh package; see views.bokeh_cdn_scripts. These #}
+  {# were the only CDN tags on the site without an integrity attribute. #}
+  {% for script in bokehscripts %}
+  <script src="{{ script.src }}" integrity="{{ script.integrity }}" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  {% endfor %}
   <script language="javascript" type="text/javascript">
     // when no task has ever finished the view renders "N/A", which new Date() turns into an
     // Invalid Date; leave whatever the server wrote in place unless it actually parses

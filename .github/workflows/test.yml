@@ -71,10 +71,12 @@ jobs:
 
             - name: Check the committed bundles are up to date
               # the built .min.js files are committed and served directly, so a source change that
-              # was never rebuilt would ship stale JavaScript
+              # was never rebuilt would ship stale JavaScript. ../vendor is covered too: it holds
+              # the self-hosted react that the queue page's import map points at, so a react bump
+              # in package.json that was never rebuilt would leave the page on the old copy.
               run: |
                   ./build.sh
-                  git diff --exit-code -- ../*.min.js
+                  git diff --exit-code -- ../*.min.js ../vendor
 
     test:
         name: Run tests

@@ -843,10 +843,43 @@ def taskrunnerstatus(request):
     )
 
 
+def bokeh_cdn_scripts() -> list[dict[str, str]]:
+    """Return the BokehJS CDN URLs to load on the stats page, each with its integrity hash.
+
+    Both come from the installed bokeh package. The template used to hardcode the version in the
+    URL, which had to be kept in step with the pin in pyproject.toml by hand: the charts are built
+    server-side by that package and rendered by this script, so a mismatch breaks the page. Taking
+    the version from bokeh itself means the pin is the only place it is written.
+
+    bokeh ships the hashes for its own release (verified against the files served by the CDN), so
+    the integrity attribute costs nothing to keep correct across upgrades -- unlike a hash pasted
+    into the template, which an upgrade would silently invalidate.
+    """
+    from bokeh import __version__ as bokeh_version
+    from bokeh.resources import get_sri_hashes_for_version
+
+    hashes = get_sri_hashes_for_version(bokeh_version)
+
+    scripts = []
+    for component in ("bokeh", "bokeh-widgets"):
+        filename = f"{component}-{bokeh_version}.min.js"
+        scripts.append(
+            {
+                "src": f"https://cdn.pydata.org/bokeh/release/{filename}",
+                # a release that bokeh has no hash for would otherwise render integrity="", which
+                # browsers treat as no integrity at all rather than as a failure
+                "integrity": f"sha384-{hashes[filename]}",
+            }
+        )
+
+    return scripts
+
+
 def stats(request):
     dictparams = {
         "name": "Usage Statistics",
         "queuedtaskcount": Task.objects.filter(finishtimestamp__isnull=True).count(),
+        "bokehscripts": bokeh_cdn_scripts(),
     }
 
     lastfinishedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last()

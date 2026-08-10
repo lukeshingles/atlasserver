@@ -12,5 +12,9 @@
   },
   "allowScripts": {
     "fsevents@2.3.3": true
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "happy-dom": "20.11.2"
   }
 }

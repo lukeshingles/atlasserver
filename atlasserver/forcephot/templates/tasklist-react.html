@@ -132,16 +132,17 @@
         const jslabelsglobal = new Object();
         const jslimitsglobal = new Object();
     </script>
+    {# react and react-dom are served from here rather than from esm.sh. A third-party CDN on the #}
+    {# critical path of a signed-in page meant an outage took the page down and a compromise would #}
+    {# have run arbitrary script in every logged-in session, and an import map cannot carry an #}
+    {# integrity hash the way the <script> tags above do. build.sh generates these with esbuild, #}
+    {# because React 19 publishes CommonJS only; react.min.js and react-dom-client.min.js share #}
+    {# their React through react-shared.js, which they import relatively, so it needs no entry here. #}
     <script type="importmap">
         {
             "imports": {
-    {% if debug %}
-                "react": "https://esm.sh/react@19/?dev",
-                "react-dom": "https://esm.sh/react-dom@19/client?dev",
-    {% else %}
-                "react": "https://esm.sh/react@19",
-                "react-dom": "https://esm.sh/react-dom@19/client",
-    {% endif %}
+                "react": "{% static 'js/vendor/react.min.js' %}?ver=20260806",
+                "react-dom": "{% static 'js/vendor/react-dom-client.min.js' %}?ver=20260806",
                 "newrequest": "{% static 'js/newrequest.min.js' %}?ver=20260806",
                 "pollcache": "{% static 'js/pollcache.min.js' %}?ver=20260806",
                 "agetext": "{% static 'js/agetext.min.js' %}?ver=20260806"

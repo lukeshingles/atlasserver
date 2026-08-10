@@ -2160,6 +2160,48 @@ class PdfPlotViewTests(TestCase):
         assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None
 
 
+class ThirdPartyScriptTests(TestCase):
+    """Every script the site loads from a CDN must carry an integrity hash.
+
+    The queue page's react/react-dom are no longer among them: they are served from
+    static/js/vendor, because an import map cannot express integrity and esm.sh was therefore
+    unverifiable script running in every signed-in session.
+    """
+
+    def test_the_stats_page_pins_bokeh_with_a_matching_hash(self) -> None:
+        from bokeh import __version__ as bokeh_version
+        from bokeh.resources import get_sri_hashes_for_version
+
+        content = self.client.get(reverse("stats")).content.decode()
+        hashes = get_sri_hashes_for_version(bokeh_version)
+
+        for component in ("bokeh", "bokeh-widgets"):
+            filename = f"{component}-{bokeh_version}.min.js"
+            assert f"https://cdn.pydata.org/bokeh/release/{filename}" in content, filename
+            assert f'integrity="sha384-{hashes[filename]}"' in content, filename
+
+    def test_the_bokeh_url_tracks_the_installed_version(self) -> None:
+        # the version used to be hardcoded in the template, so an upgrade of the pin in
+        # pyproject.toml left the page loading a BokehJS that did not match the server-rendered plots
+        from bokeh import __version__ as bokeh_version
+
+        for script in views.bokeh_cdn_scripts():
+            assert bokeh_version in script["src"], script
+            assert script["integrity"].startswith("sha384-")
+
+    def test_the_queue_page_loads_react_from_this_site(self) -> None:
+        user = User.objects.create_user(username="importmap", email="importmap@example.com", password=None)
+        self.client.force_login(user)
+
+        # the viewset content-negotiates, and the default Accept gets the JSON representation
+        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
+        content = response.content.decode()
+
+        assert "esm.sh" not in content, "react is being fetched from a third-party CDN again"
+        assert "js/vendor/react.min.js" in content, content[:400]
+        assert "js/vendor/react-dom-client.min.js" in content
+
+
 class QueueRecalcHandoffTests(TestCase):
     """Renumbering moved out of the request and into the task runner loop.
 
