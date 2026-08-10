@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import ipaddress
 import itertools
@@ -7,8 +8,10 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
+from multiprocessing import Process
 from pathlib import Path
 from unittest import mock
 from unittest import skipUnless
@@ -29,11 +32,14 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.serializers import ValidationError
 
+from atlasserver.forcephot import misc
+from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot import views
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.queue import calculate_queue_positions
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import is_finite_float
-from atlasserver.forcephot.views import calculate_queue_positions
 from atlasserver.forcephot.views import geoip_reader
 from atlasserver.forcephot.views import geoip_reader_forget
 from atlasserver.forcephot.webhooks import CallbackUrlError
@@ -2070,6 +2076,160 @@ class QueuePositionConcurrencyTests(TransactionTestCase):
         positions = [pos for pos in rawpositions if pos is not None]
         assert len(set(positions)) == len(positions), f"duplicate queue positions: {sorted(positions)}"
         assert sorted(positions) == list(range(len(positions))), sorted(positions)
+
+
+class ProcessTimeoutTests(TestCase):
+    # time.sleep as the target rather than a helper defined here: the default start method on this
+    # platform is spawn, and a child that re-imports this module dies on AppRegistryNotReady before
+    # it can overrun, which would make the timeout test pass for the wrong reason
+
+    def test_a_process_that_finishes_reports_success(self) -> None:
+        assert misc.run_process_with_timeout(Process(target=time.sleep, args=(0,)), timeout=30.0) is True
+
+    def test_an_overrunning_process_is_killed_and_reports_failure(self) -> None:
+        """The whole point: taskpdfplot forks matplotlib and used to join() it without a deadline.
+
+        A result file that made plot_atlas_fp hang therefore held a mod_wsgi worker thread for as
+        long as the process lived, and enough of them exhausted the pool.
+        """
+        proc = Process(target=time.sleep, args=(300,))
+
+        started = time.monotonic()
+        completed = misc.run_process_with_timeout(proc, timeout=0.5)
+        elapsed = time.monotonic() - started
+
+        assert completed is False
+        assert elapsed < 30.0, f"took {elapsed:.1f}s, so it waited for the child rather than killing it"
+
+        # run_process_with_timeout closed the handle, which Process.close() only permits once the
+        # process has actually exited -- so a closed handle is the proof that the child was reaped
+        try:
+            proc.is_alive()
+        except ValueError:
+            return
+        msg = "the process handle is still open, so the child was never reaped"
+        raise AssertionError(msg)
+
+
+class PdfPlotViewTests(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="pdfuser", email="pdf@example.com", password=None)
+        self.task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+    @contextlib.contextmanager
+    def result_file(self):
+        """Give the task a result file but no PDF, so the view has to generate one."""
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{self.task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.touch()
+            yield
+
+    def test_a_timed_out_render_returns_503_rather_than_404(self) -> None:
+        # 404 would tell the client the plot does not exist, when in fact it is only slow, and
+        # nothing retries a 404
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
+            response = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert response.status_code == 503, response.status_code
+        assert response["Retry-After"] == "30"
+
+    def test_only_one_render_runs_at_a_time_for_a_task(self) -> None:
+        """The queue page links a PDF for every finished task, so concurrent hits are routine.
+
+        Without the lock each one forks its own matplotlib for the same missing file.
+        """
+        concurrent: list[int] = []
+
+        def render_while_reentering(*_args, **_kwargs) -> bool:
+            # a second request arriving while this one is rendering must not start its own
+            concurrent.append(self.client.get(reverse("taskpdfplot", args=[self.task.id])).status_code)
+            return False
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=render_while_reentering):
+            response = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert response.status_code == 503, response.status_code
+        assert concurrent == [503], concurrent
+
+    def test_the_lock_is_released_when_a_render_finishes(self) -> None:
+        # a lock left behind would make the task's plot unavailable until the cache entry expired
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None
+
+
+class QueueRecalcHandoffTests(TestCase):
+    """Renumbering moved out of the request and into the task runner loop.
+
+    It used to run inline on every submit and delete, holding a lock on every queued row while the
+    user waited, which also serialised concurrent submitters behind one another.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="recalcuser", email="recalc@example.com", password=None)
+        caches["default"].delete(taskqueue.RECALC_FLAG_CACHEKEY)
+
+    def test_a_request_is_consumed_exactly_once(self) -> None:
+        assert taskqueue.consume_recalc_request() is False
+
+        taskqueue.request_recalc()
+
+        assert taskqueue.consume_recalc_request() is True
+        assert taskqueue.consume_recalc_request() is False, "the flag was not cleared"
+
+    def test_submitting_asks_for_a_renumbering_without_doing_one(self) -> None:
+        self.client.force_login(self.user)
+
+        with mock.patch.object(taskqueue, "calculate_queue_positions") as recalc:
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"ra": 1.0, "dec": 2.0}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+        assert not recalc.called, "the renumbering must be left to the task runner"
+        assert taskqueue.consume_recalc_request() is True
+
+    def test_a_submitted_task_gets_a_provisional_position(self) -> None:
+        # NULL would render as no queue position at all until the runner's next pass
+        self.client.force_login(self.user)
+        existing = Task.objects.create(user=self.user, ra=1.0, dec=2.0, queuepos_relative=4)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 3.0, "dec": 4.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        newtask = Task.objects.exclude(id=existing.id).get()
+        assert newtask.queuepos_relative == 5, newtask.queuepos_relative
+
+    def test_deleting_a_queued_task_asks_for_a_renumbering(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+        taskqueue.consume_recalc_request()
+
+        response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 204, response.status_code
+        assert taskqueue.consume_recalc_request() is True
+
+    def test_deleting_a_finished_task_does_not(self) -> None:
+        # a finished task holds no queue position, so nothing downstream of it moves
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+        taskqueue.consume_recalc_request()
+
+        response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 204, response.status_code
+        assert taskqueue.consume_recalc_request() is False
 
 
 class TaskRunnerResultFileTests(TestCase):

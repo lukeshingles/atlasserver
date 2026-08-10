@@ -10,7 +10,12 @@ from astrocalc.coords.unit_conversion import unit_conversion
 from django.http import Http404
 from django.utils.log import AdminEmailHandler
 
-from atlasserver import plot_atlas_fp
+# How long a forked PDF render may run before it is killed. Generous: a large result file
+# legitimately takes a while, and the point is to bound a hang, not to police slow plots.
+PDF_PLOT_TIMEOUT_SECONDS: t.Final = 120.0
+
+# grace between SIGTERM and SIGKILL for that process
+TERMINATE_GRACE_SECONDS: t.Final = 5.0
 
 
 def splitradeclist(data, form=None):
@@ -131,6 +136,12 @@ def make_pdf_plot_worker(
     logprefix: str = "",
     logfunc: t.Callable[[t.Any], t.Any] | None = None,
 ) -> Path | None:
+    # deferred: plot_atlas_fp imports matplotlib, and matplotlib imports numpy. This function only
+    # ever runs in the process forked by make_pdf_plot (or in the task runner's own per-task
+    # process), so a module-scope import would put both of them permanently in every web worker
+    # instead -- misc is imported by views for splitradeclist and the country helpers.
+    from atlasserver import plot_atlas_fp
+
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"
     # if taskcomment:
@@ -178,14 +189,41 @@ def make_pdf_plot_worker(
     return None
 
 
-def make_pdf_plot(*args, separate_process=False, **kwargs):
-    if separate_process:
-        proc = Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
+def run_process_with_timeout(proc: Process, timeout: float) -> bool:
+    """Start `proc` and wait for it, killing it if it overruns. Return False if it was killed."""
+    proc.start()
+    proc.join(timeout)
 
-        proc.start()
-        proc.join()
-    else:
+    timed_out = proc.is_alive()
+    if timed_out:
+        # SIGTERM first so the child can unwind; SIGKILL only for one that ignores it, which would
+        # otherwise leave this thread waiting on the join below exactly as an unbounded wait did
+        proc.terminate()
+        proc.join(TERMINATE_GRACE_SECONDS)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+
+    proc.close()
+    return not timed_out
+
+
+def make_pdf_plot(*args, separate_process: bool = False, timeout: float = PDF_PLOT_TIMEOUT_SECONDS, **kwargs) -> bool:
+    """Render a task's PDF plot. Return False if it had to be killed for exceeding `timeout`.
+
+    matplotlib has to run in its own process or it crashes the caller, and that process is also the
+    only place a time limit can be imposed: plot_atlas_fp is third-party code run against a
+    user-supplied result file, and an unbounded join() here holds a mod_wsgi worker thread for as
+    long as it takes, so enough slow plots exhaust the pool.
+
+    `timeout` is ignored without `separate_process`, because there is nothing to interrupt: the
+    task runner calls it that way from a process that is already per-task and already capped.
+    """
+    if not separate_process:
         make_pdf_plot_worker(*args, **kwargs)
+        return True
+
+    return run_process_with_timeout(Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs), timeout)
 
 
 def country_code_to_name(country_code):

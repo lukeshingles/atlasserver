@@ -34,6 +34,7 @@ django.setup()
 
 import sys
 
+from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import send_task_callback
 
@@ -828,6 +829,7 @@ def main() -> None:
 
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
+    last_queuerecalctime: float = float("-inf")
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -860,6 +862,16 @@ def main() -> None:
             do_maintenance(heartbeat=maintenance_heartbeat)
             refresh_status()
             printedwaiting = False
+
+        # Renumbering used to happen in the web request that submitted or deleted a task, where it
+        # locked every queued row while the user waited. It belongs here: this loop is the only
+        # thing that changes which task is running, and it already reads this table twice a second.
+        # Doing it here also keeps positions fresh as tasks finish, which the old placement did not.
+        if taskqueue.consume_recalc_request() or (
+            (time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS
+        ):
+            taskqueue.calculate_queue_positions()
+            last_queuerecalctime = time.perf_counter()
 
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
