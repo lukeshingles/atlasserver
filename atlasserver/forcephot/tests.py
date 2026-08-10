@@ -2474,6 +2474,37 @@ class RegistrationVerificationTests(TestCase):
         assert not User.objects.filter(username="newcomer").exists(), "the account survived a failed send"
         assert "could not send the verification email" in response.content.decode().lower()
 
+    def test_losing_the_race_for_an_address_says_so(self) -> None:
+        """The race migration 0005 exists for, reported as what it is.
+
+        clean_email() checks the address and the save happens later, so the loser used to be told
+        the verification email could not be sent and to try again in a few minutes -- advice that
+        can never succeed, because the address is now permanently taken.
+        """
+        User.objects.create_user(username="incumbent", email="contested@example.com", password=None)
+
+        with mock.patch.object(views, "email_is_taken", return_value=False):
+            response = self.client.post(reverse("register"), {**self.credentials, "email": "contested@example.com"})
+
+        assert response.status_code == 200, response.status_code
+        assert not User.objects.filter(username="newcomer").exists()
+        content = response.content.decode().lower()
+        assert "already exists" in content, content
+        assert "could not send" not in content, "the duplicate was reported as a mail failure"
+
+    def test_a_failed_confirmation_send_does_not_500(self) -> None:
+        # an unreachable relay is temporary; it should not take a plain form post out as a 500
+        user = User.objects.create_user(username="changer", email="changer@example.com", password="pw-for-the-test")
+        self.client.force_login(user)
+
+        with mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")):
+            response = self.client.post(
+                reverse("email_change"), {"password": "pw-for-the-test", "new_email": "fresh@example.com"}
+            )
+
+        assert response.status_code == 200, response.status_code
+        assert "could not send the confirmation email" in response.content.decode().lower()
+
     def test_resend_does_nothing_for_an_already_active_account(self) -> None:
         User.objects.create_user(username="active", email="active@example.com", password=None)
         django_mail.outbox.clear()

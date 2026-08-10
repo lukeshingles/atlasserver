@@ -26,14 +26,15 @@ def get_mjd_min_default() -> float:
 # value memoised below, so it cannot double as the "not computed" marker.
 UNSET: t.Final = object()
 
-# "the mpc_name column holds no target", for the check constraint below. TRIM, not a bare == "":
+# "the mpc_name column holds no target", for the check constraint below and for the callers that
+# have to draw the same line in a query. TRIM, not a bare == "":
 # a name of nothing but spaces is not a target, but it is truthy, so it satisfied the plain test
 # and then reached the runner, which interpolates it into ssforce.sh.
 #
 # Migration 0006 spells this out again rather than importing it: a migration has to keep working
 # when the model moves on. The two must stay identical in deconstructed form, or makemigrations
 # reads the difference as model drift and asks for another migration.
-_BLANK_MPC_NAME = models.Q(Exact(Trim("mpc_name"), models.Value("")))
+BLANK_MPC_NAME = models.Q(Exact(Trim("mpc_name"), models.Value("")))
 
 
 class Task(models.Model):
@@ -127,9 +128,9 @@ class Task(models.Model):
             # rather than for falsiness, exactly as the serializer does.
             models.CheckConstraint(
                 condition=(
-                    (models.Q(mpc_name__isnull=False) & ~_BLANK_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True))
+                    (models.Q(mpc_name__isnull=False) & ~BLANK_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True))
                     | (
-                        (models.Q(mpc_name__isnull=True) | _BLANK_MPC_NAME)
+                        (models.Q(mpc_name__isnull=True) | BLANK_MPC_NAME)
                         & models.Q(ra__isnull=False, dec__isnull=False)
                     )
                 ),
@@ -153,8 +154,11 @@ class Task(models.Model):
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
         user = self.user
-        if self.mpc_name:
-            targetstr = f" MPC[{self.mpc_name}]"
+        # mpc_target, so that a name of nothing but spaces -- which the constraint reads as no
+        # name, and which the runner therefore dispatches by coordinates -- is not described here
+        # as an MPC target the admin changelist would then misreport
+        if self.mpc_target:
+            targetstr = f" MPC[{self.mpc_target}]"
         elif self.ra is not None and self.dec is not None:
             targetstr = f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
         else:  # a task with no target at all can be created in the admin panel
@@ -210,7 +214,7 @@ class Task(models.Model):
         """Return the MPC object name without surrounding space, or "" if this is not an MPC task.
 
         Callers should test this rather than mpc_name, which is truthy for a name of nothing but
-        spaces -- a value _BLANK_MPC_NAME reads as no target at all, so such a row carries
+        spaces -- a value BLANK_MPC_NAME reads as no target at all, so such a row carries
         coordinates and belongs on the coordinate path.
         """
         return (self.mpc_name or "").strip()

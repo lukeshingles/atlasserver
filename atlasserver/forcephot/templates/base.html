@@ -75,8 +75,8 @@
                   <li class="nav-item"><a class="nav-link{% if request.path == index_url %} active{% endif %}" href="{{ index_url }}">Home</a></li>
                   <li class="nav-item"><a class="nav-link{% if request.path == resultdesc_url %} active{% endif %}" href="{{ resultdesc_url }}">Output</a></li>
                   {# Queue and API share a path and differ only by the format parameter #}
-                  <li class="nav-item"><a class="nav-link loginrequired{% if request.path == tasklist_url and request.GET.format != 'api' %} active{% endif %}" href="{{ tasklist_url }}" rel="nofollow">Queue</a></li>
-                  <li class="nav-item"><a class="nav-link loginrequired{% if request.path == tasklist_url and request.GET.format == 'api' %} active{% endif %}" href="{{ tasklist_url }}?format=api" rel="nofollow">API</a></li>
+                  <li class="nav-item"><a class="nav-link{% if not user.is_authenticated %} loginrequired{% endif %}{% if request.path == tasklist_url and request.GET.format != 'api' %} active{% endif %}" href="{{ tasklist_url }}" rel="nofollow">Queue</a></li>
+                  <li class="nav-item"><a class="nav-link{% if not user.is_authenticated %} loginrequired{% endif %}{% if request.path == tasklist_url and request.GET.format == 'api' %} active{% endif %}" href="{{ tasklist_url }}?format=api" rel="nofollow">API</a></li>
                   <li class="nav-item"><a class="nav-link{% if request.path == apiguide_url %} active{% endif %}" href="{{ apiguide_url }}">API Guide</a></li>
                   <li class="nav-item"><a class="nav-link{% if request.path == faq_url %} active{% endif %}" href="{{ faq_url }}">FAQ</a></li>
                   <li class="nav-item"><a class="nav-link{% if request.path == stats_url %} active{% endif %}" href="{{ stats_url }}">Stats &amp; Issues</a></li>

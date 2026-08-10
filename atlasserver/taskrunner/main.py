@@ -580,12 +580,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     slot fields are frozen for that whole window (nothing is reaped or dispatched), so without the
     flag the file would confidently describe workers that may have already exited.
     """
-    oldest_queued = (
-        Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
-        .order_by("timestamp")
-        .values_list("timestamp", flat=True)
-        .first()
-    )
+    oldest_queued = Task.queued().order_by("timestamp").values_list("timestamp", flat=True).first()
 
     status = {
         "written": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -594,7 +589,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "slots_busy": len(procs_taskids),
         "running_taskids": sorted(procs_taskids.values()),
         "maintenance": maintenance,
-        "queued_task_count": Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).count(),
+        "queued_task_count": Task.queued().count(),
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -903,9 +898,7 @@ def main() -> None:
                 numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
-        queuedtasks = (
-            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
-        )
+        queuedtasks = Task.queued().order_by("queuepos_relative")
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()

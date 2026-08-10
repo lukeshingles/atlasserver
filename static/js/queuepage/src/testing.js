@@ -145,7 +145,12 @@ export async function flush(ms = 20) {
  */
 export async function setValue(element, value) {
     if (element.type === 'checkbox') {
-        fireEvent.click(element);
+        // a click toggles, so it is only the right way to reach `value` when the box disagrees
+        // with it. Clicking unconditionally made setValue(box, false) on an unchecked box tick it,
+        // and a second setValue(box, true) untick it -- the caller asks for a state, not a toggle.
+        if (element.checked !== Boolean(value)) {
+            fireEvent.click(element);
+        }
     } else {
         fireEvent.change(element, { target: { value } });
     }

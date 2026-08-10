@@ -132,9 +132,10 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
 
-# TODO: still to convert, roughly in increasing order of effort --
-# forcephot.misc, forcephot.forms, forcephot.serializers, taskrunner.main, forcephot.views.
-# Move each into the list above with the annotations, so the ratchet only ever tightens.
+# TODO: the modules still to convert are the ones carrying an "ANN" per-file-ignore under
+# [tool.ruff.lint.per-file-ignores] below -- that list rather than a third copy here, which would
+# be the one that goes stale. Converting one means adding it to the list above and deleting its
+# ignore line, so the ratchet only ever tightens.
 
 [tool.django-stubs]
 # settings_test star-imports the production settings after presetting the env vars needed to

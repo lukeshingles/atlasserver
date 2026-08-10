@@ -24,6 +24,7 @@ os.environ["ATLASSERVER_DEBUG"] = "1"
 os.environ.setdefault("ATLASSERVER_DJANGO_SECRET_KEY", "test-secret-key-not-for-production")
 
 from atlasserver.settings import *  # noqa: F403
+from atlasserver.settings import CACHES as _PRODUCTION_CACHES
 
 DEBUG = True
 
@@ -47,9 +48,11 @@ if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
 # the file-based caches are shared between runs (and with the dev server), so a stale entry from an
 # earlier run whose task happened to receive the same id would leak into a test. Use locmem, which
 # starts empty in every process.
+# the aliases are taken from the real settings rather than listed again: a second list is one that
+# can be forgotten, and an alias missing from it fails as "cache not configured" only once some
+# test happens to touch it.
 CACHES = {
-    name: {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": name}
-    for name in ("default", "taskderived", "usagestats", "throttle")
+    name: {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": name} for name in _PRODUCTION_CACHES
 }
 
 # MAILERS is deliberately not overridden here: Django's test runner already swaps every mailer's

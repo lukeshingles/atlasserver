@@ -69,6 +69,7 @@ from atlasserver.forcephot.misc import make_pdf_plot
 from atlasserver.forcephot.misc import PDF_PLOT_TIMEOUT_SECONDS
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
+from atlasserver.forcephot.models import BLANK_MPC_NAME
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_address
@@ -770,7 +771,9 @@ def statsshortterm(request):
     }
     dictparams["sevendaytaskrate"] = "{:.1f}/day".format(dictparams["sevendaytasks"] / 7.0)
 
-    dictparams["sevendaympctasks"] = int(sevendaytasks.filter(mpc_name__isnull=False).count())
+    # isnull=False alone counts a blank name, which is a coordinate request. BLANK_MPC_NAME is the
+    # same test the check constraint applies, so the count cannot disagree with what was stored
+    dictparams["sevendaympctasks"] = int(sevendaytasks.filter(mpc_name__isnull=False).exclude(BLANK_MPC_NAME).count())
     dictparams["sevendayimgtasks"] = int(sevendaytasks.filter(request_type="IMGZIP").count())
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
@@ -935,6 +938,13 @@ def register(request):
                     user.save()
 
                     send_verification_email(request, user)
+            except IntegrityError:
+                # separately from the send failure below, because the advice differs. This is the
+                # race migration 0005 exists for: clean_email() checked the address and somebody
+                # else took it before this save. "Try again in a few minutes" would be a dead end,
+                # because the address is now permanently taken.
+                logger.info("registration lost the race for an email address")
+                form.add_error("email", "An account with this email address already exists.")
             except Exception:
                 logger.exception("Could not send the verification email for a new registration")
                 form.add_error(
@@ -966,6 +976,13 @@ def disabled_by_an_admin(user) -> bool:
     Having logged in is what separates them, and it needs no extra column: registration leaves the
     account inactive without logging it in, so an account awaiting verification has a null
     last_login, while one that was disabled had to be usable first.
+
+    Known gap: an account disabled before it ever logged in -- one created by createsuperuser or in
+    the admin, then switched off -- is indistinguishable from an unverified one here, and the resend
+    path would let it back in. Closing that needs a column recording that an address was verified,
+    which the sidecar pattern of migration 0005 could carry; it is not worth a second rebuild of
+    auth_user on its own. Accounts that registered normally are unaffected either way: the flow that
+    creates them leaves them inactive, so there is nothing for an administrator to switch off.
     """
     return not user.is_active and user.last_login is not None
 
@@ -1061,7 +1078,13 @@ def resend_verification(request):
         if may_send:
             user = unverified_account_for(email)
             if user is not None:
-                send_verification_email(request, user)
+                # guarded like the send in register(), and for the same reason: an unreachable mail
+                # relay is a temporary condition, and letting it out of a plain Django view answers
+                # with a 500 rather than the page below. Nothing has been written to undo.
+                try:
+                    send_verification_email(request, user)
+                except Exception:
+                    logger.exception("Could not resend a verification email")
 
         # reported as sent either way, whether or not an account exists and whether or not the
         # rate limit allowed this one: neither is something a stranger should be able to probe for
@@ -1094,13 +1117,23 @@ def change_email(request):
             )
 
             if may_send:
-                send_email_change_confirmation(request, request.user, new_email)
-
-                return render(
-                    request,
-                    "registration/verification_sent.html",
-                    {"name": "Check your email", "email": new_email, "emailchange": True},
-                )
+                # guarded like register()'s send: an unreachable relay would otherwise leave a
+                # plain Django view raising, and answer a routine form post with a 500
+                try:
+                    send_email_change_confirmation(request, request.user, new_email)
+                except Exception:
+                    logger.exception("Could not send an email change confirmation")
+                    form.add_error(
+                        None,
+                        "We could not send the confirmation email just now. Please try again in a "
+                        "few minutes. Your address has not been changed.",
+                    )
+                else:
+                    return render(
+                        request,
+                        "registration/verification_sent.html",
+                        {"name": "Check your email", "email": new_email, "emailchange": True},
+                    )
 
             # said plainly: this is the user's own account and their own action, so unlike the
             # resend page there is nothing to conceal by pretending it was sent

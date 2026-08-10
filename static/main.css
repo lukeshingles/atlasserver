@@ -267,6 +267,14 @@ button.resetbutton {
   text-decoration: underline;
 }
 
+/* Queue and API need an account, and were greyed to say so before clicking. The rule used to live
+   in a conditional <style> block in the vendored DRF base template, which went away with it; the
+   class is now applied only to anonymous visitors, so this needs no condition of its own. After
+   .active deliberately: the two can coincide, and "you cannot use this" is the more useful cue. */
+.navbar-nav .nav-link.loginrequired {
+  color: lightgrey;
+}
+
 /* the log out control has to be a POST form (Django's LogoutView rejects GET). The button carries
    .dropdown-item, so bootstrap 5 gives it the same colour, padding and hover as the sibling links;
    only the form's own margin and the button's default chrome need clearing. */
