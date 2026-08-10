@@ -175,6 +175,38 @@ class EmailChangeTests(TestCase):
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
+    def test_a_password_change_revokes_a_pending_email_change(self) -> None:
+        """A pending change has to die when the account is recovered.
+
+        Someone with temporary access could otherwise request a move to their own mailbox, wait for
+        the owner to notice and reset the password, and confirm afterwards -- taking the address,
+        and with it every future reset link.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change("attacker@example.com")
+        link = self.confirmation_link()
+
+        self.user.set_password("the-owner-recovers-the-account")
+        self.user.save()
+
+        response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", self.user.email
+
+    def test_deactivation_revokes_a_pending_email_change(self) -> None:
+        self.client.force_login(self.user)
+        self.request_email_change("attacker@example.com")
+        link = self.confirmation_link()
+
+        self.user.is_active = False
+        self.user.save()
+
+        assert self.client.post(link).status_code == 400
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
+
     def test_a_confirmation_link_cannot_be_replayed(self) -> None:
         """A link is good for one change, or an old one can undo a later one.
 
@@ -648,6 +680,32 @@ class TaskStrTests(TestCase):
             return
         msg = "a task with neither an mpc_name nor coordinates was accepted"
         raise AssertionError(msg)
+
+    def test_a_tab_only_mpc_name_is_not_a_target_either(self) -> None:
+        """SQL TRIM() removes spaces and nothing else; Python str.strip() removes far more.
+
+        A name of one tab therefore satisfied the constraint as a real MPC target while
+        Task.mpc_target reduced it to nothing, so the runner took the coordinate branch on a row
+        whose coordinates the constraint had just allowed to be NULL -- float(None).
+        """
+        user = User.objects.create_user(username="tabtarget", email="tt@example.com", password=None)
+
+        try:
+            Task.objects.create(user=user, mpc_name="\t")
+        except IntegrityError:
+            return
+        msg = "a task whose only target was a tab was accepted"
+        raise AssertionError(msg)
+
+    def test_the_constraint_and_mpc_target_agree_on_what_is_blank(self) -> None:
+        # the two must draw the same line, or one of them sends a row down the wrong branch
+        user = User.objects.create_user(username="agreement", email="ag@example.com", password=None)
+
+        for name in ("\t", "\n", " ", " \t\n "):
+            task = Task(user=user, mpc_name=name, ra=100.0, dec=-20.0)
+            task.save()  # blank by both readings, so it is a coordinate request and saves happily
+            assert task.mpc_target == "", repr(name)
+            task.delete()
 
     def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
         # it is truthy, so it satisfied a bare != "" and then reached the runner, which would have

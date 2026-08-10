@@ -96,6 +96,12 @@ RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 # The same, for the address-change confirmations one account can ask for. See change_email.
 EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
 
+# Registrations allowed from one client address per window. A budget rather than a single slot,
+# because this service's users arrive from universities behind shared addresses and two colleagues
+# signing up together is ordinary; what it has to stop is a loop. See register.
+REGISTRATION_WINDOW_SECONDS: t.Final = 600
+REGISTRATION_WINDOW_LIMIT: t.Final = 3
+
 logger = logging.getLogger(__name__)
 
 
@@ -867,7 +873,7 @@ def taskrunnerstatus(request):
 
 
 @functools.cache
-def bokeh_cdn_scripts() -> list[dict[str, str]]:
+def bokeh_cdn_scripts() -> tuple[dict[str, str], ...]:
     """Return the BokehJS CDN URLs to load on the stats page, each with its integrity hash.
 
     Cached: the answer depends only on the installed bokeh, but get_sri_hashes_for_version reads
@@ -899,7 +905,9 @@ def bokeh_cdn_scripts() -> list[dict[str, str]]:
             }
         )
 
-    return scripts
+    # a tuple, not the list: functools.cache hands the same object to every request for the life of
+    # the worker, so a mutable one is a shared object waiting for someone to append to it
+    return tuple(scripts)
 
 
 def stats(request):
@@ -931,6 +939,33 @@ def register(request):
             # would be taken by a row nobody can log into, cannot verify (no link was sent) and
             # cannot recover (password reset skips inactive users), leaving the person unable even
             # to register again.
+            # Bounded per client address. Every valid submission sends mail synchronously, and
+            # nothing else limits this endpoint: an unauthenticated caller posting distinct
+            # addresses in a loop is an open mail relay as far as the SMTP quota is concerned, and
+            # plus-addressing aims the whole lot at one real inbox without tripping the unique
+            # index. The other two send paths were limited and this one was not.
+            clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
+            throttlecache = caches["throttle"]
+            # add() first so the window starts at the first attempt and expires on its own; incr()
+            # only counts once the key exists. Not exact under concurrency -- see the note on the
+            # resend limiter -- but a loop cannot outrun it for long enough to matter.
+            if throttlecache.add(clientkey, 1, timeout=REGISTRATION_WINDOW_SECONDS):
+                registrations = 1
+            else:
+                try:
+                    registrations = throttlecache.incr(clientkey)
+                except ValueError:  # expired between the add() and the incr()
+                    throttlecache.set(clientkey, 1, timeout=REGISTRATION_WINDOW_SECONDS)
+                    registrations = 1
+
+            if registrations > REGISTRATION_WINDOW_LIMIT:
+                form.add_error(
+                    None,
+                    "Several accounts have just been registered from this address. Please wait a "
+                    "few minutes before registering another.",
+                )
+                return render(request, "registration/register.html", {"form": form, "name": "Register"})
+
             try:
                 with transaction.atomic():
                     user = form.save(commit=False)
@@ -1222,8 +1257,15 @@ def api_token(request):
 
         if action in {"create", "regenerate"}:
             # delete and recreate in one transaction: the key is the primary key, so there is no
-            # rotating it in place, and a failure between the two would leave the user with none
+            # rotating it in place, and a failure between the two would leave the user with none.
+            #
+            # Locked, because Token.user is one-to-one: two of these arriving together (a double
+            # submit, an impatient second click) both delete nothing and then both insert, and the
+            # loser's insert raises. Locking the user row serialises them, so the second rotation
+            # runs after the first rather than failing -- and the token each response shows is the
+            # one that is actually current when it renders.
             with transaction.atomic():
+                get_user_model().objects.select_for_update().filter(pk=request.user.pk).first()
                 Token.objects.filter(user=request.user).delete()
                 token = Token.objects.create(user=request.user)
             justcreated = True
@@ -1451,6 +1493,11 @@ def taskpdfplot(request, taskid):
 
             if not completed:
                 logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
+                # the child is killed wherever it happened to be, which can be inside savefig()
+                # writing the final path. Left there, the truncated file satisfies the is_file()
+                # test above on every later request, so the task serves a corrupt plot for ever
+                # and never retries.
+                pdfpath.unlink(missing_ok=True)
                 return _pdfplot_unavailable()
 
         if pdfpath.is_file():

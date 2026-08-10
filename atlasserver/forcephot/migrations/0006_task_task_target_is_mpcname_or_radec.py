@@ -6,13 +6,15 @@ a branch for exactly that case.
 
 Deploy note: this can fail, on purpose. The pre-check reports how many existing rows violate the
 rule and stops without changing anything, because a bare constraint violation from the database
-names neither the rows nor the reason. If the offenders are old and harmless, archive or delete
-them; do not relax the constraint to fit them.
+names neither the rows nor the reason. Give the offenders a target or delete them; archiving does
+not help, because neither the pre-check nor the constraint looks at is_archived. Do not relax the
+constraint to fit them.
 """
 
 from django.conf import settings
 from django.db import migrations
 from django.db import models
+from django.db.models.functions import Replace
 from django.db.models.functions import Trim
 from django.db.models.lookups import Exact
 
@@ -20,10 +22,21 @@ from django.db.models.lookups import Exact
 # AddConstraint enforces it. Written out by hand rather than deconstructed from the model, because
 # a migration must keep working when the model moves on -- but only once, so the check cannot
 # quietly stop matching the constraint it is meant to be clearing the way for.
-# spelled exactly as Task.Meta spells it, negation included: Django compares constraints by their
+# Spelled exactly as Task.Meta spells it, negation included: Django compares constraints by their
 # deconstructed form, so a logically equivalent but differently written condition makes
-# makemigrations believe the model has drifted and demand another migration
-_BLANK_MPC_NAME = models.Q(Exact(Trim("mpc_name"), models.Value("")))
+# makemigrations believe the model has drifted and demand another migration.
+#
+# This is the model's _space_normalised(), unrolled. SQL TRIM removes
+# only spaces, so the other whitespace is replaced with spaces first; the set must match the one
+# Task.mpc_target strips, or the database and the runner disagree about what counts as a target.
+_NORMALISED_MPC_NAME = Trim(
+    Replace(
+        Replace(Replace("mpc_name", models.Value("\t"), models.Value(" ")), models.Value("\n"), models.Value(" ")),
+        models.Value("\r"),
+        models.Value(" "),
+    )
+)
+_BLANK_MPC_NAME = models.Q(Exact(_NORMALISED_MPC_NAME, models.Value("")))
 _HAS_MPC_NAME = models.Q(mpc_name__isnull=False) & ~_BLANK_MPC_NAME
 _NO_MPC_NAME = models.Q(mpc_name__isnull=True) | _BLANK_MPC_NAME
 TARGET_PRESENT = (_HAS_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True)) | (

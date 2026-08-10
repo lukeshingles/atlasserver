@@ -9,6 +9,7 @@ from django.contrib.auth.models import User  # pylint: disable=imported-auth-use
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
+from django.db.models.functions import Replace
 from django.db.models.functions import Trim
 from django.db.models.lookups import Exact
 from django.utils import timezone
@@ -26,15 +27,33 @@ def get_mjd_min_default() -> float:
 # value memoised below, so it cannot double as the "not computed" marker.
 UNSET: t.Final = object()
 
+# The whitespace "no target" is allowed to be made of. Spelled out because SQL and Python have to
+# agree on it exactly: TRIM() removes only spaces, while Python's str.strip() removes tabs,
+# newlines and more besides. A name of "\t" therefore satisfied the constraint as a real MPC name
+# while Task.mpc_target reduced it to nothing, and the runner took the coordinate branch on a row
+# whose coordinates the constraint had just permitted to be NULL -- float(None).
+MPC_NAME_WHITESPACE: t.Final = " \t\n\r"
+
+
+def _space_normalised(field: str) -> Trim:
+    """Return the field with MPC_NAME_WHITESPACE collapsed to spaces and then trimmed."""
+    expression: t.Any = field
+    for character in MPC_NAME_WHITESPACE:
+        if character != " ":
+            expression = Replace(expression, models.Value(character), models.Value(" "))
+
+    return Trim(expression)
+
+
 # "the mpc_name column holds no target", for the check constraint below and for the callers that
-# have to draw the same line in a query. TRIM, not a bare == "":
-# a name of nothing but spaces is not a target, but it is truthy, so it satisfied the plain test
-# and then reached the runner, which interpolates it into ssforce.sh.
+# have to draw the same line in a query. Not a bare == "": a name of nothing but whitespace is not
+# a target, but it is truthy, so it satisfied the plain test and then reached the runner, which
+# interpolates it into ssforce.sh.
 #
 # Migration 0006 spells this out again rather than importing it: a migration has to keep working
 # when the model moves on. The two must stay identical in deconstructed form, or makemigrations
 # reads the difference as model drift and asks for another migration.
-BLANK_MPC_NAME = models.Q(Exact(Trim("mpc_name"), models.Value("")))
+BLANK_MPC_NAME = models.Q(Exact(_space_normalised("mpc_name"), models.Value("")))
 
 
 class Task(models.Model):
@@ -214,10 +233,14 @@ class Task(models.Model):
         """Return the MPC object name without surrounding space, or "" if this is not an MPC task.
 
         Callers should test this rather than mpc_name, which is truthy for a name of nothing but
-        spaces -- a value BLANK_MPC_NAME reads as no target at all, so such a row carries
+        whitespace -- a value BLANK_MPC_NAME reads as no target at all, so such a row carries
         coordinates and belongs on the coordinate path.
+
+        Strips MPC_NAME_WHITESPACE rather than calling a bare strip(): str.strip() removes more
+        than the constraint does, and a name this reduced to nothing while the database still
+        counted it as a target would send a coordinate-less row down the coordinate branch.
         """
-        return (self.mpc_name or "").strip()
+        return (self.mpc_name or "").strip(MPC_NAME_WHITESPACE)
 
     @property
     def localresultpreviewimagefile(self) -> str | None:

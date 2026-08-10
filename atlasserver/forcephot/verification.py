@@ -10,6 +10,7 @@ password reset views use. Reusing it means there is no new model, no new column 
 expire by hand -- the token carries its own timestamp, and PASSWORD_RESET_TIMEOUT bounds it.
 """
 
+import hashlib
 import typing as t
 
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
@@ -79,6 +80,16 @@ def send_verification_email(request: HttpRequest, user: t.Any) -> None:
 EMAIL_CHANGE_SALT: t.Final = "atlasserver.forcephot.verification.email_change"
 
 
+def _credential_state(user: t.Any) -> str:
+    """Return a value that changes whenever the account's credentials or usability do.
+
+    The password hash covers a change, a reset and a forced logout (Django rotates the session
+    hash from it); is_active covers an administrator switching the account off. Hashed rather than
+    embedded, because the token is signed but not encrypted and the client can read its payload.
+    """
+    return hashlib.sha256(f"{user.password}:{user.is_active}".encode()).hexdigest()
+
+
 def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email: str) -> None:
     """Mail a confirmation link to the address a user wants to move to.
 
@@ -98,7 +109,15 @@ def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email:
     # holding an old link -- it was delivered to a mailbox, and scanners and forwarding rules keep
     # copies -- could undo a later change and point result mail and password resets back at
     # themselves.
-    token = signing.dumps({"user_pk": user.pk, "email": new_email, "from_email": user.email}, salt=EMAIL_CHANGE_SALT)
+    #
+    # The credential state goes in for the same reason PasswordResetTokenGenerator hashes it: a
+    # pending change has to die when the account is recovered. Someone with temporary access could
+    # otherwise request a move to their own mailbox, wait out the owner's password reset, and
+    # confirm afterwards -- taking the address, and with it every future reset link.
+    token = signing.dumps(
+        {"user_pk": user.pk, "email": new_email, "from_email": user.email, "state": _credential_state(user)},
+        salt=EMAIL_CHANGE_SALT,
+    )
     url = request.build_absolute_uri(reverse("email_change_confirm", kwargs={"token": token}))
 
     body = render_to_string(
@@ -134,6 +153,11 @@ def load_email_change_token(token: str, max_age: int) -> tuple[t.Any, str] | Non
     # the address the account had when the link was issued. A link is good for one change: once
     # applied (or once the address has moved on for any other reason) this no longer matches.
     if user.email != payload.get("from_email"):
+        return None
+
+    # and the credentials it was issued under, so that a password change, a reset or an
+    # administrative deactivation revokes anything still pending
+    if _credential_state(user) != payload.get("state"):
         return None
 
     return user, email
