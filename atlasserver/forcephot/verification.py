@@ -14,6 +14,7 @@ import typing as t
 
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.mail import EmailMessage
+from django.http import HttpRequest
 from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_decode
@@ -33,7 +34,9 @@ class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
 
     key_salt = "atlasserver.forcephot.verification.EmailVerificationTokenGenerator"
 
-    def _make_hash_value(self, user, timestamp: int) -> str:
+    # user is Any because the type checkers disagree: django-stubs declares these hooks against
+    # the concrete User, while ty reads Django's own source, where they are AbstractBaseUser.
+    def _make_hash_value(self, user: t.Any, timestamp: int) -> str:
         # email as well, so that changing the address invalidates any outstanding link for the old
         # one. The base implementation covers pk, password and last_login.
         return f"{super()._make_hash_value(user, timestamp)}{user.is_active}{user.email}"
@@ -42,7 +45,7 @@ class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
 token_generator = EmailVerificationTokenGenerator()
 
 
-def verification_url(request, user) -> str:
+def verification_url(request: HttpRequest, user: t.Any) -> str:
     """Return the absolute URL that verifies this user's current email address."""
     from django.urls import reverse
 
@@ -57,7 +60,7 @@ def verification_url(request, user) -> str:
     return request.build_absolute_uri(path)
 
 
-def send_verification_email(request, user) -> None:
+def send_verification_email(request: HttpRequest, user: t.Any) -> None:
     """Mail the user a link that confirms their address."""
     body = render_to_string(
         "registration/verification_email.txt",
@@ -76,7 +79,7 @@ def send_verification_email(request, user) -> None:
 EMAIL_CHANGE_SALT: t.Final = "atlasserver.forcephot.verification.email_change"
 
 
-def send_email_change_confirmation(request, user, new_email: str) -> None:
+def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email: str) -> None:
     """Mail a confirmation link to the address a user wants to move to.
 
     The pending address travels inside a signed token rather than being written to the user row or

@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.db.models import Model
+from django.http import HttpRequest
 
 import atlasserver.forcephot.models
 
@@ -13,7 +15,7 @@ class CustomAdmin(admin.ModelAdmin):
     # readonly_fields = ('parent_task',)
 
     # make all fields read-only
-    def has_change_permission(self, request, obj=None):
+    def has_change_permission(self, request: HttpRequest, obj: Model | None = None) -> bool:
         return False
 
 

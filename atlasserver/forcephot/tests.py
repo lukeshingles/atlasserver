@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import typing as t
 import urllib.error
 import urllib.parse
 from multiprocessing import Process
@@ -92,7 +93,7 @@ class EmailChangeTests(TestCase):
         assert response.status_code == 302
         assert reverse("login") in response["Location"]
 
-    def request_email_change(self, new_email: str = "new@example.com"):
+    def request_email_change(self, new_email: str = "new@example.com") -> t.Any:
         return self.client.post(reverse("email_change"), {"password": "testpassword123", "new_email": new_email})
 
     def test_change_email_requires_confirmation_at_the_new_address(self) -> None:
@@ -565,7 +566,7 @@ class TaskDeleteFileTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="deleter", email="d@example.com", password=None)
 
-    def make_finished_task(self, staticroot: Path, **kwargs) -> Task:
+    def make_finished_task(self, staticroot: Path, **kwargs: t.Any) -> Task:
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), **kwargs)
         resultfile = Path(staticroot, f"{task.localresultfileprefix()}.txt")
         resultfile.parent.mkdir(parents=True, exist_ok=True)
@@ -828,7 +829,7 @@ class ClientLocationTests(TestCase):
             **extra,
         )
 
-    def created_task(self, response) -> Task:
+    def created_task(self, response: t.Any) -> Task:
         assert response.status_code == 201, response.content
         return Task.objects.get(id=response.json()["id"])
 
@@ -1619,7 +1620,7 @@ class CallbackSendingTests(TestCase):
         opener.assert_not_called()
         assert any("public address" in line for line in logged), logged
 
-    def capture_callback_payload(self, task) -> dict:
+    def capture_callback_payload(self, task: Task) -> dict:
         """Run notify_finished() against a stubbed endpoint and return the JSON it posted."""
         captured: dict = {}
 
@@ -1858,12 +1859,12 @@ class AtlasCommandTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="cmd", email="cmd@example.com", password=None)
 
-    def make_task(self, **kwargs) -> Task:
+    def make_task(self, **kwargs: t.Any) -> Task:
         kwargs.setdefault("ra", 100.0)
         kwargs.setdefault("dec", -20.0)
         return Task.objects.create(user=self.user, **kwargs)
 
-    def fp_command(self, task) -> str:
+    def fp_command(self, task: Task) -> str:
         return taskrunner_main.build_fp_command(task, remoteresultfile=Path("~/atlasserver/results/job00001.txt"))
 
     def test_coordinates_are_passed_as_floats(self) -> None:
@@ -1916,7 +1917,7 @@ class AtlasCommandTests(TestCase):
         with mock.patch.object(taskrunner_main.settings, "TEST_USERS", [self.user.pk]):
             assert " tdo=1" in self.fp_command(task)
 
-    def ssostack_command(self, task) -> str:
+    def ssostack_command(self, task: Task) -> str:
         return taskrunner_main.build_ssostack_command(
             task,
             remoteresultfile=Path("~/atlasserver/results/job00001.fits"),
@@ -1995,7 +1996,7 @@ class RemoveOldTasksTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="sweeper", email="sw@example.com", password=None)
 
-    def make_old_task(self, days: int, **kwargs) -> Task:
+    def make_old_task(self, days: int, **kwargs: t.Any) -> Task:
         return Task.objects.create(
             user=self.user,
             ra=1.0,
@@ -2204,7 +2205,7 @@ class PdfPlotViewTests(TestCase):
         """
         concurrent: list[int] = []
 
-        def render_while_reentering(*_args, **_kwargs) -> bool:
+        def render_while_reentering(*_args: t.Any, **_kwargs: t.Any) -> bool:
             # a second request arriving while this one is rendering must not start its own
             concurrent.append(self.client.get(reverse("taskpdfplot", args=[self.task.id])).status_code)
             return False
@@ -2228,7 +2229,7 @@ class RegistrationVerificationTests(TestCase):
 
     credentials = {"username": "newcomer", "password1": "a-long-test-password", "password2": "a-long-test-password"}
 
-    def register(self, email: str = "newcomer@example.com"):
+    def register(self, email: str = "newcomer@example.com") -> t.Any:
         return self.client.post(reverse("register"), {**self.credentials, "email": email})
 
     def verification_link(self) -> str:
@@ -2465,7 +2466,7 @@ class ReadThrottleTests(TestCase):
     # override_settings(REST_FRAMEWORK=...) does not reach it and the tests silently see the real
     # rates. Patch the class attribute the throttle actually reads.
     @staticmethod
-    def rates(**overrides: str):
+    def rates(**overrides: str) -> t.Any:
         return mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephottasks": "60/min", **overrides})
 
     def test_the_read_scope_is_configured(self) -> None:

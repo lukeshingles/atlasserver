@@ -1,4 +1,13 @@
+import typing as t
+
+from rest_framework.request import Request
 from rest_framework.throttling import SimpleRateThrottle
+
+if t.TYPE_CHECKING:
+    # only for the annotations. DRF resolves DEFAULT_THROTTLE_CLASSES while rest_framework.views is
+    # still being imported, so importing APIView here at run time is a circular import that leaves
+    # the whole app unable to start.
+    from rest_framework.views import APIView
 
 # Methods that only read. Throttled far more loosely than writes, but not exempt: the queue page
 # polls the task list every few seconds, so reads are the traffic most likely to be hammered, and
@@ -21,12 +30,12 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
 
     scope_attr = "throttle_scope"
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Override the usual SimpleRateThrottle, because we can't determine
         # the rate until called by the view.
         pass
 
-    def allow_request(self, request, view):
+    def allow_request(self, request: Request, view: "APIView") -> bool:
         # We can only determine the scope once we're called by the view.
         writescope = getattr(view, self.scope_attr, None)
 
@@ -44,7 +53,7 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
         # We can now proceed as normal.
         return super().allow_request(request, view)
 
-    def get_cache_key(self, request, view):
+    def get_cache_key(self, request: Request, view: "APIView") -> str:
         """If `view.throttle_scope` is not set, don't apply this throttle.
 
         Otherwise generate the unique cache key by concatenating the user id

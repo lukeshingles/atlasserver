@@ -1,8 +1,10 @@
+import typing as t
 import urllib.parse
 
 from django.http import HttpResponseRedirect
 from django.urls import NoReverseMatch
 from django.urls import reverse
+from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
 # renderers that produce a page for a person to look at, rather than a body for a program to parse.
@@ -10,7 +12,7 @@ from rest_framework.views import exception_handler
 HTML_FORMATS = frozenset({"html", "api"})
 
 
-def custom_exception_handler(exc, context):
+def custom_exception_handler(exc: Exception, context: dict[str, t.Any]) -> Response | HttpResponseRedirect | None:
     """Send an unauthenticated browser to the login page, and leave every other response alone.
 
     Rewriting *every* 401/403 into a redirect made the API lie to its clients. An authenticated user

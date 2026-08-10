@@ -10,6 +10,7 @@ oracle. validate_callback_url() is applied when the task is submitted and again 
 the request is sent.
 """
 
+import email.message
 import json
 import socket
 import typing as t
@@ -20,6 +21,11 @@ from urllib.parse import urlparse
 from django.conf import settings
 
 from atlasserver.forcephot.netaddr import address_is_public
+
+if t.TYPE_CHECKING:
+    # only for the annotation: importing models here at run time would pull Django's app registry
+    # into a module the task runner imports before django.setup()
+    from atlasserver.forcephot.models import Task
 
 # a callback is a courtesy, not part of finishing the task: keep it short so that a slow or
 # blackholed endpoint cannot hold a worker slot open
@@ -92,11 +98,19 @@ def validate_callback_url(url: str) -> str:
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
     """Refuse redirects: a redirect is a second URL that was never validated."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: t.IO[bytes],
+        code: int,
+        msg: str,
+        headers: email.message.Message,
+        newurl: str,
+    ) -> None:
         return None
 
 
-def send_task_callback(task, logfunc: t.Callable[[t.Any], None]) -> bool:
+def send_task_callback(task: "Task", logfunc: t.Callable[[t.Any], None]) -> bool:
     """POST a completion notification for a finished task. Return whether it was accepted.
 
     Never raises: a callback that fails is logged and dropped. Retrying is deliberately not

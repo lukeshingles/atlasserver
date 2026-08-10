@@ -110,6 +110,32 @@ warn_return_any = false
 disallow_any_generics = false
 disallow_subclassing_any = false
 
+# A ratchet, not a global switch. The codebase is largely annotated already, so the modules that
+# are fully annotated turn the strict flags on here to keep them that way; the rest are listed in
+# the TODO below and get converted one at a time. Flipping disallow_untyped_defs on globally would
+# mean annotating views.py and serializers.py in one go, and their DRF hook methods (request, obj,
+# attrs, serializer) are exactly where a guessed annotation is worse than none.
+[[tool.mypy.overrides]]
+module = [
+    "atlasserver.forcephot.admin",
+    "atlasserver.forcephot.exception",
+    "atlasserver.forcephot.models",
+    "atlasserver.forcephot.netaddr",
+    "atlasserver.forcephot.pagination",
+    "atlasserver.forcephot.queue",
+    "atlasserver.forcephot.throttles",
+    "atlasserver.forcephot.verification",
+    "atlasserver.forcephot.webhooks",
+    "atlasserver.taskrunner.status",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+# TODO: still to convert, roughly in increasing order of effort --
+# forcephot.misc, forcephot.forms, forcephot.serializers, taskrunner.main, forcephot.views.
+# Move each into the list above with the annotations, so the ratchet only ever tightens.
+
 [tool.django-stubs]
 # settings_test star-imports the production settings after presetting the env vars needed to
 # import them, so type checking works on machines with no .env or secrets (e.g. the CI lint job)
@@ -176,9 +202,12 @@ ignore = [
     "A001",
     "A002",
     "A003",
+    # the rest of ANN is on; Any is genuinely the right annotation at the DRF and Django hook
+    # boundaries (a paginator's `view`, a serialized response body), where the framework passes
+    # whatever the caller had
+    "ANN401",
     "ARG001",  # ignored because variables in df.eval() are not detected
     "ARG002",
-    "ANN",
     "BLE001",
     "C901",    # complex-structure
     "CPY001",
@@ -238,6 +267,17 @@ ignore-fully-untyped = true
 [tool.ruff.lint.per-file-ignores]
 "plot_atlas_fp.py" = ["ALL"]
 "**/tests.py" = ["S106"]
+
+# The ANN rules are on globally (they were in the blanket ignore list, so nothing stopped new code
+# from being unannotated). These are the modules not yet converted; the same list as the mypy
+# ratchet TODO, and it should only ever get shorter. ANN401 is ignored where it is: DRF hook
+# methods legitimately take Any.
+"**/migrations/*.py" = ["ANN"]
+"atlasserver/forcephot/forms.py" = ["ANN"]
+"atlasserver/forcephot/misc.py" = ["ANN"]
+"atlasserver/forcephot/serializers.py" = ["ANN"]
+"atlasserver/forcephot/views.py" = ["ANN"]
+"atlasserver/taskrunner/main.py" = ["ANN"]
 
 [tool.ruff.lint.isort]
 force-single-line = true

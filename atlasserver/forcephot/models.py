@@ -3,6 +3,9 @@ import typing as t
 from pathlib import Path
 
 from django.conf import settings
+
+# the project uses the default user model, and django-stubs types against the concrete class
+from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
@@ -13,7 +16,7 @@ from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 
 
-def get_mjd_min_default():
+def get_mjd_min_default() -> float:
     return round(datetime_to_mjd(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=30)), 5)
 
 
@@ -309,7 +312,7 @@ class Task(models.Model):
             to_attr="live_imagerequests",
         )
 
-    def new_imagerequest(self, user) -> "Task":
+    def new_imagerequest(self, user: User) -> "Task":
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
 
         Here rather than in the view, so that the decision of which fields a child inherits sits
@@ -382,7 +385,11 @@ class Task(models.Model):
         """Drop the cached plot data generated from this task's result file."""
         caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
 
-    def delete(self, using: t.Any | None = None, keep_parents: bool = False):
+    # returns None rather than Model.delete's (count, per-type counts): a finished task is archived
+    # instead of deleted, so there is no honest count to report for that branch
+    def delete(  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        self, using: str | None = None, keep_parents: bool = False
+    ) -> None:
         # cleanup associated files when removing a task object from the database
         self.delete_result_files()
 
