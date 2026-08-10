@@ -1,6 +1,7 @@
 'use strict';
 
 import React from "react"
+import { csrfHeader } from "csrftoken";
 
 let submission_in_progress = false;
 
@@ -135,7 +136,7 @@ export class NewRequest extends React.Component {
                 method: "POST",
                 body: JSON.stringify(datadict),
                 headers: {
-                    "X-CSRFToken": getCookie("csrftoken"),
+                    ...csrfHeader(),
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
                 },

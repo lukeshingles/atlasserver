@@ -3,6 +3,7 @@
 import React from "react"
 import ReactDOM from 'react-dom';
 import { describeAge } from "agetext";
+import { csrfHeader, getCookie } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
 
@@ -48,6 +49,42 @@ function pollInterval(fn, ms) {
     return setInterval(() => { if (!pollingPaused()) { fn(); } }, ms);
 }
 
+/*
+ * Row show/hide animations.
+ *
+ * These were jQuery's slideUp/slideDown/hide, which set inline styles on a node React owns: React
+ * does not know the element was hidden, so a re-render that reused the node left it stuck. The
+ * class is applied to the same node but drives a CSS transition instead (see main.css), and is
+ * always removed again, so the only inline state is the one the stylesheet manages.
+ *
+ * Kept as direct DOM calls rather than component state because both callers act on a *sibling*
+ * row from a callback (a delete animates the row that is going away; a new task animates a row
+ * that has only just mounted), which is awkward to express as state on the row itself.
+ */
+const ROW_TRANSITION_MS = 200;
+
+function taskRow(taskid) {
+    return document.getElementById('task-' + taskid);
+}
+
+function collapseRow(taskid) {
+    taskRow(taskid)?.classList.add('task-collapsed');
+}
+
+function expandRow(taskid) {
+    taskRow(taskid)?.classList.remove('task-collapsed');
+}
+
+function revealRow(taskid) {
+    const row = taskRow(taskid);
+    if (!row) {
+        return;
+    }
+    row.classList.add('task-collapsed');
+    // next frame, so the browser has laid the row out collapsed and has something to animate from
+    requestAnimationFrame(() => requestAnimationFrame(() => row.classList.remove('task-collapsed')));
+}
+
 class TaskPlot extends React.PureComponent {
     constructor(props) {
         super(props);
@@ -58,7 +95,12 @@ class TaskPlot extends React.PureComponent {
         const plot_url = new URL(this.props.taskurl);
         plot_url.pathname += 'resultplotdata.js';
         plot_url.search = '';
-        $.ajax({ url: plot_url, cache: true, dataType: 'script' });
+        // was $.ajax({dataType: 'script'}), which fetches and evals. A <script> element does the
+        // same thing, and unlike jQuery's version it is served from the browser's HTTP cache
+        // (which the endpoint's ETag is there to make use of) rather than fetched every mount.
+        const script = document.createElement('script');
+        script.src = plot_url;
+        document.head.appendChild(script);
     }
 
     componentWillUnmount() {
@@ -95,42 +137,49 @@ export class Task extends React.Component {
             return;
         }
 
-        const li_id = '#task-' + task.id
-        // $(li_id).hide(300);
-        $(li_id).slideUp(200);
+        collapseRow(task.id);
         setTimeout(() => {
-            $.ajax({
-                headers: {
-                    "X-CSRFToken": getCookie("csrftoken")
-                },
-                url: task.url, method: 'delete',
-                // not fetchData(true): "user triggered" re-applies the cached pre-delete body and
-                // scrolls the window to the top, which after deleting the last row on a page means
-                // the viewport jumps away from what the user was looking at
-                success: (result) => { console.log('Deleted task ', task.id); this.setState({ 'httperror': '' }); this.props.fetchData() },
-                error: (err) => {
-                    // the row slides back, so without a message the click looks like it simply did
+            fetch(task.url, {
+                credentials: "same-origin",
+                method: "DELETE",
+                headers: csrfHeader(),
+            })
+                .then((response) => {
+                    if (response.ok) {
+                        console.log('Deleted task ', task.id);
+                        this.setState({ 'httperror': '' });
+                        // not fetchData(true): "user triggered" re-applies the cached pre-delete
+                        // body and scrolls the window to the top, which after deleting the last row
+                        // on a page means the viewport jumps away from what the user was looking at
+                        this.props.fetchData();
+                        return;
+                    }
+
+                    // the row comes back, so without a message the click looks like it simply did
                     // nothing. A 403 here means the task belongs to somebody else; a 401 means the
                     // session has ended, so reload the page, which lands on the login form.
-                    console.log('Failed to delete task ', task.id, err);
-                    if (err.status === 401) {
+                    console.log('Failed to delete task ', task.id, response.status);
+                    if (response.status === 401) {
                         window.location.reload();
                         return;
                     }
-                    $('#task-' + task.id).slideDown(100);
-                    // jQuery reports a network-level failure as status 0, which is not an HTTP
-                    // status and reads as gibberish in a message
-                    let message = 'ERROR: could not delete this task (HTTP ' + err.status + ').';
-                    if (err.status === 403) {
+                    expandRow(task.id);
+                    let message = 'ERROR: could not delete this task (HTTP ' + response.status + ').';
+                    if (response.status === 403) {
                         message = 'ERROR: you are not allowed to delete this task.';
-                    } else if (err.status === 0) {
-                        message = 'ERROR: could not reach the server to delete this task.';
                     }
                     this.setState({ 'httperror': message });
                     this.props.fetchData();
-                }
-            });
-        }, 200);
+                })
+                .catch((err) => {
+                    // fetch rejects only on a network-level failure, which has no HTTP status --
+                    // jQuery used to report those as status 0, which read as gibberish in a message
+                    console.log('Failed to reach the server to delete task ', task.id, err);
+                    expandRow(task.id);
+                    this.setState({ 'httperror': 'ERROR: could not reach the server to delete this task.' });
+                    this.props.fetchData();
+                });
+        }, ROW_TRANSITION_MS);
     }
 
     requestImages() {
@@ -204,11 +253,8 @@ export class Task extends React.Component {
         // componentDidUpdate() {
         this.updateTimeElapsed();
         if (newtaskids.includes(this.props.taskdata.id)) {
-            const li_id = '#task-' + this.props.taskdata.id
             debug_log('showing new task', this.props.taskdata.id);
-            $(li_id).hide();
-            // $(li_id).show(600);
-            $(li_id).slideDown(200);
+            revealRow(this.props.taskdata.id);
             newtaskids = newtaskids.filter(item => { return item !== this.props.taskdata.id })
         }
 

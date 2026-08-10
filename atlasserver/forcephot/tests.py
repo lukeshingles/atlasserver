@@ -2532,6 +2532,47 @@ class ThirdPartyScriptTests(TestCase):
             assert bokeh_version in script["src"], script
             assert script["integrity"].startswith("sha384-")
 
+    def test_no_page_loads_jquery_or_bootstrap_3(self) -> None:
+        """The site's own layout no longer copies DRF's, so it carries neither.
+
+        jQuery came in through that copy (DRF's browsable-API scripts are written against it) and
+        kept Bootstrap 3, which has been end of life since 2019, with it.
+        """
+        user = User.objects.create_user(username="chrome", email="chrome@example.com", password=None)
+        self.client.force_login(user)
+
+        # a <script src=...jquery...>, not the word: the templates explain in comments what the
+        # jQuery they replaced used to do, and those comments are served to the browser
+        loads_jquery = re.compile(r'<script[^>]*\bsrc="[^"]*jquery[^"]*"', re.IGNORECASE)
+        # $(...) or $.ajax(...), but not a bare "$" in prose or a jQuery-free template literal
+        uses_dollar = re.compile(r"[^\w$]\$[.(]")
+
+        pages = ["index", "faq", "apiguide", "resultdesc", "stats", "apitoken", "login", "register"]
+        for name in pages:
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            assert not loads_jquery.search(content), f"{name} loads jQuery"
+            assert not uses_dollar.search(content), f"{name} calls jQuery"
+            assert "bootstrap@3" not in content, f"{name} loads Bootstrap 3"
+            assert "bootstrap@5" in content, f"{name} does not load Bootstrap 5"
+
+    def test_every_cdn_script_carries_an_integrity_hash(self) -> None:
+        user = User.objects.create_user(username="sri", email="sri@example.com", password=None)
+        self.client.force_login(user)
+
+        # <script src="https://..."> with no integrity= before the tag closes
+        unpinned = re.compile(r'<script\b(?![^>]*\bintegrity=)[^>]*\bsrc="https://[^"]+"[^>]*>')
+
+        for name in ("index", "stats", "task-list"):
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            found = [
+                tag
+                for tag in unpinned.findall(content)
+                # Google Analytics is loaded from a URL whose contents google changes at will, so
+                # a hash would break the page rather than protect it
+                if "googletagmanager.com" not in tag
+            ]
+            assert not found, f"{name} has CDN scripts without integrity: {found}"
+
     def test_the_queue_page_loads_react_from_this_site(self) -> None:
         user = User.objects.create_user(username="importmap", email="importmap@example.com", password=None)
         self.client.force_login(user)

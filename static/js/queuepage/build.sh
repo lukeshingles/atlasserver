@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 # defaults need overriding, and the CLI flag has nowhere to put preset options.
 babelopts=(--minified --no-comments)
 
-for module in newrequest.jsx tasklist.jsx pollcache.js agetext.js lightcurveplotly.js; do
+for module in newrequest.jsx tasklist.jsx pollcache.js agetext.js csrftoken.js lightcurveplotly.js; do
     npx babel "${babelopts[@]}" "src/${module}" -o "../${module%.js*}.min.js"
 done
 

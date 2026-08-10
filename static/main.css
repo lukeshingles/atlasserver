@@ -11,7 +11,7 @@ a {
   cursor: pointer;
 }
 
-div.navbar {
+.navbar {
   background: white;
 }
 
@@ -23,9 +23,8 @@ div.navbar {
   height: 118px;
 }
 
-ul.nav {
-  padding-top: 96px;
-}
+/* bootstrap 3 floated navbar items, so the links needed a padding-top to sit at the foot of the
+   118px logo. Bootstrap 5's navbar is flexbox and centres them against the brand on its own. */
 
 /* div#content {
   margin-top: 0em;
@@ -258,39 +257,24 @@ button.resetbutton {
 
 /* the active class is set in base.html: a CSS file is not rendered by the template engine, so
    the {{ request.get_full_path }} that used to be in this selector never matched anything */
-.navbar-nav>li.active>a {
+.navbar-nav .nav-link.active {
   text-decoration: underline;
 }
 
-/* the log out control has to be a POST form (Django's LogoutView rejects GET), but its button
-   should be indistinguishable from the sibling links: same colour, font, padding and pointer
-   cursor as bootstrap's .dropdown-menu>li>a rule */
-.dropdown-menu>li>form.logoutform {
+/* the log out control has to be a POST form (Django's LogoutView rejects GET). The button carries
+   .dropdown-item, so bootstrap 5 gives it the same colour, padding and hover as the sibling links;
+   only the form's own margin and the button's default chrome need clearing. */
+.dropdown-menu form.logoutform {
   margin: 0;
 }
 
-.dropdown-menu>li>form.logoutform>button {
+.dropdown-menu form.logoutform>button.dropdown-item {
   background: none;
   border: none;
-  clear: both;
-  color: #333;
   cursor: pointer;
-  display: block;
-  font-family: inherit;
-  font-size: inherit;
-  font-weight: normal;
-  line-height: 1.42857143;
-  padding: 3px 20px;
+  font: inherit;
   text-align: left;
-  white-space: nowrap;
   width: 100%;
-}
-
-.dropdown-menu>li>form.logoutform>button:hover,
-.dropdown-menu>li>form.logoutform>button:focus {
-  background-color: #f5f5f5;
-  color: #262626;
-  text-decoration: none;
 }
 
 span.helptext {
@@ -470,38 +454,35 @@ table.countrystats th[scope="row"] {
   }
 }
 
-/* 767px, not 640px: the layout being corrected here is bootstrap's, and bootstrap only floats
-   navbar items from min-width 768px. Below that it stacks them one per line, and this navbar has no
-   collapse toggle, so the eight links plus a floated 118px logo filled an entire screen before any
-   content. At 640px the 641-767px band — a narrowed desktop window, a tablet in split view — kept
-   the broken layout. Lay the brand out on its own line and let the links wrap inline. */
-@media (max-width: 767px) {
-  .navbar-brand {
-    display: block;
-    float: none;
-    height: auto;
-    padding: 5px 0;
-  }
-
+/* the collapse toggle appears below 992px (navbar-expand-lg), and a 118px logo beside it fills
+   too much of a phone screen. Bootstrap 5 handles the rest of the small-screen navbar itself: the
+   block that used to be here worked around bootstrap 3 having no toggle at all, so the eight links
+   plus a floated logo filled an entire screen before any content. */
+@media (max-width: 991.98px) {
   .navbar-brand img {
     height: 56px;
   }
+}
 
-  ul.nav {
-    margin: 0;
-    padding-top: 0;
-  }
+/* Row show/hide for the task list, driven by tasklist.jsx adding and removing .task-collapsed.
+   This replaced jQuery's slideUp/slideDown, which wrote inline styles onto nodes React owns: a
+   re-render that reused such a node left it stuck at whatever height the animation had reached. */
+li.task {
+  overflow: hidden;
+  transition: max-height 200ms ease, opacity 200ms ease;
+  /* large enough for the tallest row (one with a light curve plot expanded); max-height cannot
+     transition to or from `auto`, so it has to be a number */
+  max-height: 400em;
+  opacity: 1;
+}
 
-  .navbar-nav>li {
-    display: inline-block;
-    float: none;
-  }
+li.task.task-collapsed {
+  max-height: 0;
+  opacity: 0;
+}
 
-  .navbar-nav>li>a {
-    padding: 6px 8px;
-  }
-
-  .navbar-nav.pull-right {
-    float: none !important;
+@media (prefers-reduced-motion: reduce) {
+  li.task {
+    transition: none;
   }
 }

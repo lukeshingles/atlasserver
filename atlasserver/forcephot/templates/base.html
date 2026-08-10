@@ -1,0 +1,139 @@
+{% load static %}
+{% load i18n %}
+
+{# The site's own layout. This used to be a 409-line copy of DRF's rest_framework/base.html, which #}
+{# coupled every public page to the browsable API's internals: a DRF upgrade drifted silently from #}
+{# the copy, and it was the reason the site was stuck on the Bootstrap 3 that DRF 3 targets. The #}
+{# browsable API now uses DRF's own unmodified templates, and this file only has to serve the #}
+{# pages this project actually writes. #}
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {% block head %}
+
+      {% block meta %}
+        <meta charset="utf-8" />
+        {# without this a phone lays the page out at 980px and then zooms out, so the text is #}
+        {# unreadable and none of the responsive rules in main.css ever apply #}
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="robots" content="NONE,NOARCHIVE" />
+      {% endblock %}
+
+      <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
+
+      <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
+
+      <!-- Global site tag (gtag.js) - Google Analytics -->
+      <script async src="https://www.googletagmanager.com/gtag/js?id=G-CK29QMXSZ9"></script>
+      <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-CK29QMXSZ9');
+      </script>
+
+      {% block style %}
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+
+        {# versioned like the JS bundles: the queue page's styling lives here, so a browser holding #}
+        {# a cached copy alongside a freshly deployed bundle renders the new class names unstyled #}
+        <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver={{ static_version }}"/>
+      {% endblock %}
+
+    {% endblock %}
+  </head>
+
+  {% block body %}
+  <body class="{% block bodyclass %}{% endblock %}">
+
+    <div class="wrapper">
+      {% block navbar %}
+        <nav class="navbar navbar-expand-lg" aria-label="{% translate "navbar" %}">
+          <div class="container">
+            {% block branding %}
+              <a class="navbar-brand" rel="nofollow" href="{% url 'index' %}"><img src="{% static "images/logos/atlas_logo.svg" %}" alt="ATLAS Forced Photometry home" /></a>
+            {% endblock %}
+
+            {# Bootstrap 5's collapse toggle. data-bs-* rather than Bootstrap 3's data-*, and it #}
+            {# needs no jQuery -- the bundle at the end of this file is self-contained. #}
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarmain" aria-controls="navbarmain" aria-expanded="false" aria-label="Toggle navigation">
+              <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <div class="collapse navbar-collapse" id="navbarmain">
+              {# the current page is marked here rather than in main.css, which is served as a #}
+              {# static file and so is never rendered by the template engine #}
+              {% url 'index' as index_url %}
+              {% url 'resultdesc' as resultdesc_url %}
+              {% url 'task-list' as tasklist_url %}
+              {% url 'apiguide' as apiguide_url %}
+              {% url 'faq' as faq_url %}
+              {% url 'stats' as stats_url %}
+              <ul class="navbar-nav me-auto">
+                  <li class="nav-item"><a class="nav-link{% if request.path == index_url %} active{% endif %}" href="{{ index_url }}">Home</a></li>
+                  <li class="nav-item"><a class="nav-link{% if request.path == resultdesc_url %} active{% endif %}" href="{{ resultdesc_url }}">Output</a></li>
+                  {# Queue and API share a path and differ only by the format parameter #}
+                  <li class="nav-item"><a class="nav-link loginrequired{% if request.path == tasklist_url and request.GET.format != 'api' %} active{% endif %}" href="{{ tasklist_url }}" rel="nofollow">Queue</a></li>
+                  <li class="nav-item"><a class="nav-link loginrequired{% if request.path == tasklist_url and request.GET.format == 'api' %} active{% endif %}" href="{{ tasklist_url }}?format=api" rel="nofollow">API</a></li>
+                  <li class="nav-item"><a class="nav-link{% if request.path == apiguide_url %} active{% endif %}" href="{{ apiguide_url }}">API Guide</a></li>
+                  <li class="nav-item"><a class="nav-link{% if request.path == faq_url %} active{% endif %}" href="{{ faq_url }}">FAQ</a></li>
+                  <li class="nav-item"><a class="nav-link{% if request.path == stats_url %} active{% endif %}" href="{{ stats_url }}">Stats &amp; Issues</a></li>
+              </ul>
+
+              <ul class="navbar-nav">
+                {% block userlinks %}
+                  {% if user.is_authenticated %}
+                    {% if user.is_staff %}
+                      <li class="nav-item"><a class="nav-link" href="{% url 'admin:index' %}" rel="nofollow">Admin</a></li>
+                    {% endif %}
+                    <li class="nav-item dropdown">
+                      <a href="#" class="nav-link dropdown-toggle" data-bs-toggle="dropdown" role="button" aria-expanded="false">
+                        {{ request.user.username }}
+                      </a>
+                      <ul class="dropdown-menu dropdown-menu-end">
+                        <li><span class="dropdown-item-text">{{ request.user.email }}</span></li>
+                        <li><a class="dropdown-item" href="{% url 'email_change' %}">Change email</a></li>
+                        <li><a class="dropdown-item" href="{% url 'password_change' %}">Change password</a></li>
+                        <li><a class="dropdown-item" href="{% url 'apitoken' %}">API token</a></li>
+                        <li>
+                          {# Django's LogoutView only accepts POST, so a plain link would return HTTP 405. #}
+                          {# No "next" field: LogoutView prefers it over LOGOUT_REDIRECT_URL, which would #}
+                          {# send the now-anonymous user back to a login-protected page. #}
+                          <form action="{% url 'logout' %}" method="post" class="logoutform">
+                            {% csrf_token %}
+                            <button type="submit" class="dropdown-item">Log out</button>
+                          </form>
+                        </li>
+                      </ul>
+                    </li>
+                  {% else %}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'register' %}">Register</a></li>
+                    {# was DRF's {% optional_login %} tag, which is one of the things that tied this #}
+                    {# layout to the browsable API #}
+                    <li class="nav-item"><a class="nav-link" href="{% url 'login' %}?next={{ request.path|urlencode }}">Log in</a></li>
+                  {% endif %}
+                {% endblock %}
+              </ul>
+            </div>
+          </div>
+        </nav>
+      {% endblock %}
+
+      <div class="container">
+        <div class="notices">{% include "notice.txt" %}</div>
+
+        <div id="content" role="main" aria-label="{% translate "content" %}">
+          {% block content %}{% endblock %}
+        </div><!-- /.content -->
+      </div><!-- /.container -->
+    </div><!-- ./wrapper -->
+
+    {% block script %}
+      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+    {% endblock %}
+
+  </body>
+  {% endblock %}
+</html>

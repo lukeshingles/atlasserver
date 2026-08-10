@@ -150,6 +150,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "atlasserver.forcephot.context_processors.static_version",
             ],
         },
     },
@@ -228,6 +229,30 @@ STATIC_URL = f"{PATHPREFIX}/static/"
 
 STATIC_ROOT = Path(BASE_DIR, "static")
 RESULTS_DIR = Path(STATIC_ROOT, "results")
+
+
+def _static_version() -> str:
+    """Return a cache-busting suffix that changes whenever a served asset does.
+
+    Appended as ?ver= to main.css and the JS bundles, which are served under stable names, so a
+    browser holding an old copy alongside freshly deployed markup would otherwise keep using it.
+    This replaced six hand-edited date strings across two templates.
+
+    Taken from the files rather than from the package version: a deployment here is a git pull and
+    a restart, which need not reinstall the package, and setuptools_scm bakes its version in at
+    install time. The mtimes move whenever a deploy actually replaces an asset, and not otherwise,
+    so every worker computes the same value and a browser keeps its cached copy until it is stale.
+    """
+    assets = [Path(STATIC_ROOT, "main.css"), *Path(STATIC_ROOT, "js").glob("*.min.js")]
+    assets += list(Path(STATIC_ROOT, "js", "vendor").glob("*.js"))
+
+    mtimes = [path.stat().st_mtime_ns for path in assets if path.is_file()]
+
+    # no assets found means an unbuilt checkout; a constant is fine, there is nothing to bust
+    return str(max(mtimes) // 1_000_000_000) if mtimes else "0"
+
+
+STATIC_VERSION = _static_version()
 
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False

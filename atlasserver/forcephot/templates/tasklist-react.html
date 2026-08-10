@@ -1,7 +1,6 @@
-{% extends "rest_framework/base.html" %}
+{% extends "base.html" %}
 {% load static %}
 {% load i18n %}
-{% load rest_framework %}
 
 {% block head %}
     {{ block.super }}
@@ -11,7 +10,7 @@
     {# already cache-busted with a ?ver= query string, so a deployed change is picked up on the #}
     {# next ordinary page load without one. #}
 
-    <script language="javascript" type="text/javascript">
+    <script type="text/javascript">
         "use strict";
         // There is deliberately no prefetch here. One used to fire an XMLHttpRequest for
         // "?format=json" while React fetched this same page *without* that parameter and with
@@ -43,7 +42,7 @@
 {% block script %}
     {{ block.super }}
 
-    <script language="javascript" type="text/javascript">
+    <script type="text/javascript">
     "use strict";
 
     function mjdFromDate(dateObj) { // Decimal days
@@ -123,7 +122,7 @@
     {# or written anywhere — easily confused with the ?newids= query parameter, which is real #}
     var newtaskids = [];
 
-    $(document).ready(inactivityTimer);
+    document.addEventListener('DOMContentLoaded', inactivityTimer);
     </script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/3.1.1/plotly.min.js" integrity="sha512-QaIUFweb9pyRnQZEYIujSDTHndibSwqsTSb69aedsfAAUpJRUE5yyYfaNAJIbTDuNECyHR/Cc0N7lQJrp0IEpA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -141,13 +140,14 @@
     <script type="importmap">
         {
             "imports": {
-                "react": "{% static 'js/vendor/react.min.js' %}?ver=20260806",
-                "react-dom": "{% static 'js/vendor/react-dom-client.min.js' %}?ver=20260806",
-                "newrequest": "{% static 'js/newrequest.min.js' %}?ver=20260806",
-                "pollcache": "{% static 'js/pollcache.min.js' %}?ver=20260806",
-                "agetext": "{% static 'js/agetext.min.js' %}?ver=20260806"
+                "react": "{% static 'js/vendor/react.min.js' %}?ver={{ static_version }}",
+                "react-dom": "{% static 'js/vendor/react-dom-client.min.js' %}?ver={{ static_version }}",
+                "newrequest": "{% static 'js/newrequest.min.js' %}?ver={{ static_version }}",
+                "pollcache": "{% static 'js/pollcache.min.js' %}?ver={{ static_version }}",
+                "agetext": "{% static 'js/agetext.min.js' %}?ver={{ static_version }}",
+                "csrftoken": "{% static 'js/csrftoken.min.js' %}?ver={{ static_version }}"
             }
         }
     </script>
-    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver=20260806"></script>
+    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver={{ static_version }}"></script>
 {% endblock %}

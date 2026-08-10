@@ -1,3 +1,73 @@
-{% extends "rest_framework/login.html" %}
+{% extends "base.html" %}
 
-{# Override this template in your own templates directory to customize #}
+{# The site's login page, for Django's LoginView via include("django.contrib.auth.urls"). The #}
+{# markup used to live in an override of DRF's rest_framework/login.html, which this extended; #}
+{# that override is gone, so the browsable API gets DRF's own login page and this one is free to #}
+{# be an ordinary page of the site. #}
+
+{# Without a title these pages are all just "ATLAS Forced Photometry" in the tab and in the #}
+{# history. The pages this project routes itself pass `name` instead (see urls.py and the #}
+{# register/change_email views), but the login and password_* views arrive through #}
+{# include("django.contrib.auth.urls"), where there is no extra_context to hang it on without #}
+{# re-declaring Django's own URLconf. block.super is the site name the parent block builds. #}
+{% block title %}Login – {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+  <div class="row justify-content-center">
+    <div class="col-md-5">
+      <div class="card mt-4">
+        <div class="card-body">
+          <h3 class="card-title mb-4">Login</h3>
+
+          {# posts to itself rather than to the browsable API's login view: this is the site's own #}
+          {# login, and LoginView handles the "next" parameter it was given #}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next }}" />
+
+            <div class="mb-3">
+              <label class="form-label" for="id_username">{{ form.username.label }}</label>
+              <input type="text" name="username" autocomplete="username" maxlength="100"
+                  autocapitalize="off" autocorrect="off"
+                  class="form-control{% if form.username.errors %} is-invalid{% endif %}"
+                  id="id_username" required autofocus
+                  {% if form.username.value %}value="{{ form.username.value }}"{% endif %}>
+              {% if form.username.errors %}
+                <div class="invalid-feedback">{{ form.username.errors|striptags }}</div>
+              {% endif %}
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label" for="id_password">{{ form.password.label }}</label>
+              <input type="password" name="password" maxlength="100" autocapitalize="off"
+                  autocorrect="off" autocomplete="current-password"
+                  class="form-control{% if form.password.errors %} is-invalid{% endif %}"
+                  id="id_password" required>
+              {% if form.password.errors %}
+                <div class="invalid-feedback">{{ form.password.errors|striptags }}</div>
+              {% endif %}
+            </div>
+
+            {% if form.non_field_errors %}
+              {% for error in form.non_field_errors %}
+                <div class="alert alert-danger">{{ error }}</div>
+              {% endfor %}
+            {% endif %}
+
+            <button type="submit" name="submit" class="btn btn-primary w-100" id="submit-id-submit">Log in</button>
+
+            <p class="mt-3 mb-0">
+              New user? <a href="{% url 'register' %}">Register for an account</a><br />
+              Forgot password? <a href="{% url 'password_reset' %}">Reset password</a><br />
+              {# an unverified account cannot log in, and password reset skips inactive users, #}
+              {# so without this link such an account has no way back #}
+              Never received your verification email? <a href="{% url 'resend_verification' %}">Send another</a>
+            </p>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
