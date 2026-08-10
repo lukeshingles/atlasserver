@@ -6,13 +6,19 @@
 // one left a require() shim that only fails in a browser, the other inlined a second copy of React
 // that would have thrown on the first hook rendered.
 import assert from 'node:assert/strict';
-import test, { describe } from 'node:test';
-import { Window } from 'happy-dom';
+import test, { after, describe } from 'node:test';
 
+import { flush, setupDom, teardownDom } from './testing.js';
+
+// the DOM has to exist before the bundled react-dom is imported: it decides at import time whether
+// it is running in a browser and caches the answer. See loadReact in testing.js.
+const window = setupDom();
 const React = (await import('../../vendor/react.min.js')).default;
 const ReactDOM = (await import('../../vendor/react-dom-client.min.js')).default;
 
 describe('self-hosted react bundles', () => {
+    after(() => teardownDom(window));
+
     test('react exposes the API the sources use', () => {
         assert.equal(typeof React.createElement, 'function');
         assert.equal(typeof React.Component, 'function');
@@ -28,12 +34,6 @@ describe('self-hosted react bundles', () => {
         // The real check on the shared chunk. If react-dom carried its own copy of React, hooks
         // would dispatch against a different module-level dispatcher and this would throw
         // "Invalid hook call" rather than rendering.
-        const window = new Window();
-        global.window = window;
-        global.document = window.document;
-        // node exposes globalThis.navigator as a getter-only property, so a plain assignment throws
-        Object.defineProperty(global, 'navigator', { value: window.navigator, configurable: true });
-
         const container = window.document.createElement('div');
         window.document.body.appendChild(container);
 
@@ -45,12 +45,11 @@ describe('self-hosted react bundles', () => {
         const root = ReactDOM.createRoot(container);
         root.render(React.createElement(Greeting));
         // React 19 renders concurrently, so let it flush before asserting
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await flush(50);
 
         assert.equal(container.textContent, 'hello world');
 
         root.unmount();
-        await window.happyDOM.close();
     });
 
     test('the bundles are self-contained, with no CDN or bare specifiers left', async () => {

@@ -14,7 +14,8 @@
     "fsevents@2.3.3": true
   },
   "devDependencies": {
+    "@testing-library/dom": "10.4.1",
     "esbuild": "0.28.2",
-    "happy-dom": "20.11.2"
+    "jsdom": "30.0.1"
   }
 }
