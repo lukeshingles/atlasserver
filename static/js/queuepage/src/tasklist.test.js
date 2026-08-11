@@ -352,10 +352,14 @@ describe('TaskPage', () => {
                 // flight so that something else can happen before it lands
                 const gate = control.hold ?? Promise.resolve();
                 control.hold = null;
+                // read now rather than when the body is unwrapped, so a held answer carries the queue
+                // as it stood when the request was made. That is what makes an overtaken response
+                // stale, and a test about one cannot set it up otherwise.
+                const body = control.heldpositions ?? control.positions;
                 return gate.then(() => ({
                     ok: true,
                     status: 200,
-                    json: () => Promise.resolve({ queuepositions: control.heldpositions ?? control.positions }),
+                    json: () => Promise.resolve({ queuepositions: body }),
                 }));
             }
             return Promise.resolve({
@@ -466,6 +470,53 @@ describe('TaskPage', () => {
             if (wasHidden) {
                 Object.defineProperty(window.document, 'hidden', wasHidden);
             }
+        }
+    });
+
+    test('a queue positions response overtaken by a later one is discarded', async () => {
+        // Nothing serialises the two-second poll, so a request slower than the interval overlaps the
+        // next. Landing second, its obsolete snapshot used to be written over the newer one.
+        mock.timers.enable({ apis: ['setInterval'] });
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.hidden = true;
+        badge.innerHTML = '<span class="queuecount-number">0</span>';
+        window.document.body.appendChild(badge);
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2, 3: 3 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(80);
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '3');
+
+            // a slow request goes out carrying the queue as it stands, and is still in flight when
+            // the next one is due
+            let land;
+            control.hold = new Promise((resolve) => {
+                land = resolve;
+            });
+            mock.timers.tick(2000);
+            await flush(20);
+
+            // two of the three finish, and the next poll -- issued second, answered first -- says so
+            control.positions = { 1: 1 };
+            mock.timers.tick(2000);
+            await flush(80);
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '1');
+
+            // only now does the slow one land, still saying three
+            land();
+            await flush(80);
+
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '1',
+                'an overtaken response was applied over a newer one');
+        } finally {
+            mock.timers.reset();
+            badge.remove();
         }
     });
 

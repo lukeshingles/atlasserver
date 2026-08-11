@@ -849,6 +849,16 @@ export function TaskPage() {
      */
     const askedQueuedIdsRef = React.useRef(new Set());
 
+    /*
+     * Counts queuepositions requests, so that a response can tell whether it is still the newest one.
+     * The poll is on a two-second interval with nothing serialising it, so a request slower than that
+     * overlaps the next; without this the older answer landing second would write its obsolete snapshot
+     * over the newer one -- rewinding the positions on screen, the navbar badge, and the set the away
+     * count measures against, which is the one that matters, since it is then preserved for the whole
+     * of the next absence.
+     */
+    const queueposRequestRef = React.useRef(0);
+
     /* Ticks skipped since the queue was last reported empty; see EMPTY_QUEUE_TICKS. */
     const emptyticksRef = React.useRef(0);
 
@@ -940,6 +950,8 @@ export function TaskPage() {
             emptyticksRef.current = 0;
         }
 
+        const requestnumber = ++queueposRequestRef.current;
+
         fetch(queuepositions_url,
             {
                 credentials: "same-origin",
@@ -948,6 +960,14 @@ export function TaskPage() {
             })
             .then(response => response.status == 200 ? response.json() : null)
             .then(data => {
+                // A newer request has been made since this one started, so this answer is already
+                // out of date and every write below it would be a rewind. Dropped rather than
+                // merged: the newer request is asking the same question of the same endpoint, so
+                // there is nothing here it will not also say, and nothing is lost by waiting for it.
+                if (requestnumber != queueposRequestRef.current) {
+                    debug_log('discarding a queue positions response overtaken by a later request');
+                    return;
+                }
                 if (data == null || data.queuepositions == null || stateRef.current.results == null) {
                     return;
                 }
