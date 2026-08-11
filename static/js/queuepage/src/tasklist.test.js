@@ -296,6 +296,18 @@ describe('TaskPage', () => {
         assert.equal(list.querySelectorAll('dt').length, list.querySelectorAll('dd').length);
     });
 
+    test('each row wraps its content in the element its show and hide animates over', async () => {
+        const { container } = await renderPage([task(1)]);
+        const row = container.querySelector('li.task');
+
+        // The row is a one-track grid and .taskinner is the item whose height the track animates.
+        // Exactly one child, because a second grid item would get a track of its own and be left
+        // outside the one that collapses.
+        assert.equal(row.children.length, 1, 'the row should have exactly one child');
+        assert.ok(row.firstElementChild.classList.contains('taskinner'), 'the child is not .taskinner');
+        assert.ok(row.querySelector('.taskinner .taskheading'), 'the content is not inside .taskinner');
+    });
+
     test('placeholder rows stand in for the list until it arrives', async () => {
         // the task list request is held open, because every other stub here resolves immediately and
         // there would otherwise be no loading state left to look at by the time render() returns

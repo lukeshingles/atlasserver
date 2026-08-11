@@ -501,8 +501,10 @@ export const Task = React.memo(function Task(props) {
     }
 
     return (
+        // the inner element is what the row's show and hide animates over: the row is a one-track
+        // grid, and a grid item can be given a height smaller than its content while this cannot
         <li key={"task-" + task.id} className={"task " + statusclass} id={"task-" + task.id}>
-            {taskbox}
+            <div className="taskinner">{taskbox}</div>
         </li>
     );
 }, taskPropsEqual);

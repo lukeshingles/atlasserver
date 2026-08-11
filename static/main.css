@@ -344,7 +344,10 @@ dl.taskmeta dd {
 
 /* Placeholder rows while the first task list is on its way. The border-left of a status the list
    does not know yet would be a guess, so the skeleton has the plain border every row starts from. */
-li.task.taskskeleton {
+/* ul.tasks for the same reason as the collapsed rule below: the status edge is more specific than a
+   plain li.task.taskskeleton, so without it the placeholders wear a 0.4em edge of a status the list
+   does not know yet */
+ul.tasks li.task.taskskeleton {
   border-left-width: 0.1em;
 }
 
@@ -1032,19 +1035,59 @@ table.countrystats th[scope="row"] {
 /* Row show/hide for the task list, driven by tasklist.jsx adding and removing .task-collapsed.
    This replaced jQuery's slideUp/slideDown, which wrote inline styles onto nodes React owns: a
    re-render that reused such a node left it stuck at whatever height the animation had reached. */
+/*
+The row is a one-track grid, and the track is what animates: 1fr to 0fr interpolates over the row's
+own height, whatever that is.
+
+This was a max-height animated between 0 and 400em, a number picked to clear the tallest row, and the
+distance between that number and a real row's height was the whole problem. The rendered height is
+min(content, max-height), so for a 321px row max-height spent the first two thirds of its 200ms
+travelling from 6800px to somewhere still far above 321px -- nothing moved -- and then crossed it and
+snapped shut in the last 50ms. Expanding was worse: the row was back at full height in a single
+frame. Measured on this page, not deduced.
+
+A collapsed row also could not reach zero. max-height caps the border box, and padding and border are
+not compressible, so 0 left the 1em of padding and the border standing -- 11% of the row, once per
+deleted task. Here the padding is on the inner element, inside the track that shrinks, and the border
+and the bottom margin animate away with it.
+*/
 li.task {
-  overflow: hidden;
-  /* the last two are the hover lift; the first two are this rule's own show and hide */
-  transition: max-height 200ms ease, opacity 200ms ease, box-shadow 150ms ease, transform 150ms ease;
-  /* large enough for the tallest row (one with a light curve plot expanded); max-height cannot
-     transition to or from `auto`, so it has to be a number */
-  max-height: 400em;
+  display: grid;
+  grid-template-rows: 1fr;
   opacity: 1;
+  /* the padding belongs to .taskinner below. .task keeps its own, for the New request card, which is
+     the other user of the class and has no reason to be a grid. */
+  padding: 0;
+  /* the first four are this rule's own show and hide; the last two are the hover lift */
+  transition: grid-template-rows 200ms ease, opacity 200ms ease, border-width 200ms ease,
+    margin-bottom 200ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
-li.task.task-collapsed {
-  max-height: 0;
+/* min-height, because a grid item's automatic minimum size is its content, which would stop the
+   track ever being shorter than the row and leave nothing to animate */
+li.task > .taskinner {
+  min-height: 0;
+  overflow: hidden;
+  padding: 1em;
+  transition: padding-top 200ms ease, padding-bottom 200ms ease;
+}
+
+/* ul.tasks, only to outrank the status edge above, which is one element more specific than a plain
+   li.task.task-collapsed would be and would otherwise hold the left border open at 0.4em */
+ul.tasks li.task.task-collapsed {
+  border-width: 0;
+  grid-template-rows: 0fr;
+  margin-bottom: 0;
   opacity: 0;
+}
+
+/* min-height: 0 frees the item's content box but not its padding, and a track cannot be shorter than
+   the item's border box -- so with the padding left standing a collapsed row rested at 34px, which is
+   what the max-height version left behind too. It goes over the same 200ms, so the row still shuts
+   smoothly, and reaches nothing. */
+ul.tasks li.task.task-collapsed > .taskinner {
+  padding-bottom: 0;
+  padding-top: 0;
 }
 
 /* The navbar's two moving parts are here as well: the logo's height as the bar becomes stuck, and
