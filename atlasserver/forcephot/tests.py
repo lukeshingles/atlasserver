@@ -30,6 +30,7 @@ from django.db import connection
 from django.db import IntegrityError
 from django.db import models
 from django.test import override_settings
+from django.test import RequestFactory
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import TransactionTestCase
@@ -43,6 +44,7 @@ from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
+from atlasserver.forcephot.context_processors import queued_task_count
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
@@ -3787,3 +3789,115 @@ class TaskRunnerResultFileTests(TestCase):
 
             assert not list(resultsdir.glob("job00042.*"))
             assert (resultsdir / "job00420.txt").exists()
+
+
+class NavbarQueueCountTests(TestCase):
+    """The badge on the Queue link, from the queued_task_count context processor.
+
+    The count is a database query added to the context of every render, so what it counts and when it
+    is spent are both worth pinning.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="counter", email="counter@example.com", password=None)
+        self.other = User.objects.create_user(username="somebodyelse", email="else@example.com", password=None)
+
+    def navbar_of(self, name: str = "index") -> str:
+        return self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+
+    def test_anonymous_visitors_get_no_badge_and_no_query(self) -> None:
+        """Nobody signed in means nothing to count, so the processor must not reach the database."""
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        with CaptureQueriesContext(connection) as queries:
+            content = self.navbar_of()
+
+        assert "queuecount" not in content
+        counting = [q["sql"] for q in queries.captured_queries if "COUNT" in q["sql"].upper() and "task" in q["sql"]]
+        assert not counting, counting
+
+    def test_a_user_with_nothing_queued_gets_no_badge(self) -> None:
+        """Absent rather than a zero: a badge that is always there stops being noticed."""
+        self.client.force_login(self.user)
+
+        assert "queuecount" not in self.navbar_of()
+
+    def test_the_badge_counts_the_users_own_waiting_and_running_tasks(self) -> None:
+        for _ in range(3):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+
+        content = self.navbar_of()
+
+        assert "queuecount" in content
+        assert re.search(r'class="badge rounded-pill queuecount">3<', content), "the badge does not show 3"
+
+    def test_another_users_queue_is_not_counted(self) -> None:
+        Task.objects.create(user=self.other, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+
+        assert "queuecount" not in self.navbar_of()
+
+    def test_finished_and_archived_tasks_are_not_counted(self) -> None:
+        """The badge follows Task.queued(), which is the same set the queue positions cover."""
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        Task.objects.create(user=self.user, ra=3.0, dec=4.0, is_archived=True)
+        Task.objects.create(user=self.user, ra=5.0, dec=6.0)
+        self.client.force_login(self.user)
+
+        assert re.search(r'queuecount">1<', self.navbar_of()), "only the one waiting task should be counted"
+
+    def test_the_count_is_not_spent_until_something_asks_for_it(self) -> None:
+        """The processor runs for every render, including ones that draw no navbar.
+
+        statsshortterm and statslongterm are HTML fragments the stats page fetches, and
+        password_reset_email is an email body; none of them has a navbar to put a badge in, so none
+        of them should pay for a count. Hence the SimpleLazyObject, which this pins.
+        """
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        request = RequestFactory().get("/")
+        request.user = self.user
+
+        with CaptureQueriesContext(connection) as untouched:
+            context = queued_task_count(request)
+
+        assert not untouched.captured_queries, untouched.captured_queries
+        # and it is a real count once read, not merely deferred into never working. Compared rather
+        # than passed to int(), which is the one thing SimpleLazyObject does not proxy.
+        assert context["queued_task_count"] == 1
+
+    def test_the_badge_is_on_every_page_including_the_browsable_api(self) -> None:
+        """It is in the shared navbar, so a page that draws the navbar differently would lose it."""
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+
+        for name in ("index", "faq", "apiguide", "stats"):
+            assert "queuecount" in self.navbar_of(name), name
+
+        api = self.client.get(reverse("task-list"), {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+        assert "queuecount" in api, "the browsable API's navbar has no badge"
+
+
+class NavbarSignInCueTests(TestCase):
+    """The padlock on Queue and API while nobody is signed in.
+
+    Those two links were greyed and nothing else, which reads as "broken" as readily as "not yet".
+    """
+
+    def test_anonymous_visitors_get_a_padlock_and_a_reason(self) -> None:
+        content = self.client.get(reverse("index"), HTTP_ACCEPT="text/html").content.decode()
+
+        assert content.count("navlock") == 2, "expected a padlock on each of Queue and API"
+        assert content.count("(sign in required)") == 2, "the padlock has no text alternative"
+        assert "Sign in to use the task queue" in content
+        assert "Sign in to use the browsable API" in content
+
+    def test_a_signed_in_user_gets_neither(self) -> None:
+        user = User.objects.create_user(username="signedin", email="s@example.com", password=None)
+        self.client.force_login(user)
+
+        content = self.client.get(reverse("index"), HTTP_ACCEPT="text/html").content.decode()
+
+        assert "navlock" not in content
+        assert "sign in required" not in content
+        assert "loginrequired" not in content, "the links are no longer greyed, so the class should be gone too"

@@ -1,0 +1,12 @@
+{# The padlock on the Queue and API links while nobody is signed in. Included twice rather than #}
+{# written inline, because an inline <svg> in the middle of those already long nav-link lines makes #}
+{# the conditional classes beside it unreadable. #}
+{# #}
+{# aria-hidden, with the reason given as text: the greying is the visual cue and this is the same #}
+{# cue for anyone who does not read colour, but a lone icon says nothing to a screen reader. The #}
+{# title is for the pointer, where the hidden text is not shown. #}
+<svg class="navlock" width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+  <path d="M5 6.5V4.5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+  <rect x="3.2" y="6.5" width="9.6" height="7.3" rx="1.2" fill="currentColor"/>
+</svg>
+<span class="visually-hidden">(sign in required)</span>

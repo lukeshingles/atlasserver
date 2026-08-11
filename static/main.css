@@ -23,6 +23,29 @@ a {
   --bs-navbar-hover-color: var(--bs-link-hover-color);
   --bs-navbar-active-color: var(--bs-link-color);
   background: var(--bs-body-bg);
+  /* the queue page is a long scrolling list whose filter tabs and pager live at the top, and every
+     page spends the height of the logo before its content. The background above is opaque, which is
+     what a sticky bar needs; the z-index is Bootstrap's own for .sticky-top, so the bar sits over
+     page content but under modals and popovers. */
+  position: sticky;
+  top: 0;
+  z-index: 1020;
+}
+
+/* what navbar.js watches to know whether the bar has left its place in the page; the negative
+   margin takes back the one pixel it costs */
+.navbar-sentinel {
+  height: 1px;
+  margin-bottom: -1px;
+}
+
+/* Only once the bar has left the top of the page. .navbar has no edge of its own and takes the page
+   background, so scrolled over content it would otherwise have text sliding underneath it with
+   nothing to separate the two. navbar.js adds the class; without it the bar is still sticky, just
+   without the edge. */
+.navbar.navbar-stuck {
+  border-bottom: var(--bs-border-width) solid var(--bs-border-color);
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
 }
 
 .navbar-brand {
@@ -33,6 +56,14 @@ a {
    was an <img> */
 .navbar-brand .atlaslogo {
   height: 118px;
+  transition: height 200ms ease;
+}
+
+/* A 118px logo at the top of the window is most of a phone screen and a good deal of a laptop one,
+   so once the bar is stuck it gives up its height to the content behind it. The links stay put:
+   Bootstrap centres them against the brand, so the bar closes up around them. */
+.navbar-stuck .navbar-brand .atlaslogo {
+  height: 44px;
 }
 
 /* The mark carries no background of its own, so on the dark theme its one shape that touches the
@@ -482,6 +513,61 @@ button.resetbutton {
   text-decoration: underline;
 }
 
+/*
+The bar that marks the current page and follows the pointer along the navigation.
+
+Only from the navbar's collapse breakpoint up: below it the links are a stacked column, where a
+horizontal bar sliding between them has nothing to say, so the underline above stays the marker
+there. .navindicator-host is added by navbar.js along with the bar itself, so a page without
+JavaScript keeps the underline too and never has a stray element to position.
+
+Its geometry comes from two custom properties the script measures onto the host, rather than the
+script writing left and width onto the bar: transform and width are what animate, and keeping them
+in the stylesheet keeps the duration and the easing here with the rest of the site's motion.
+*/
+
+/* Out of the layout entirely below the breakpoint, rather than left to be invisible by having no
+   size: in the stacked menu it is a block among the links, and a zero-height one still takes a row
+   and would take any gap the list is given. */
+.navindicator {
+  display: none;
+}
+
+@media (min-width: 992px) {
+  .navbar-nav.navindicator-host {
+    position: relative;
+  }
+
+  .navindicator {
+    display: block;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    border-radius: 3px;
+    /* the orange of the result buttons, the one colour on the site that is neither text nor a
+       Bootstrap variant, so the current page is marked in the site's own accent rather than in the
+       same blue as every link around it */
+    background-color: #ef4e19;
+    width: var(--navindicator-width, 0);
+    transform: translateX(var(--navindicator-x, 0));
+    opacity: var(--navindicator-opacity, 0);
+    /* the bar is decoration for a state the links already carry, and sits under the pointer */
+    pointer-events: none;
+  }
+
+  /* Added a frame after the first measurement, so the bar appears already under the current page
+     instead of sliding in from the left edge on every page load. */
+  .navindicator-host.navindicator-animated .navindicator {
+    transition: transform 220ms ease, width 220ms ease, opacity 150ms ease;
+  }
+
+  /* with the bar present the underline would mark the same thing twice */
+  .navbar-nav.navindicator-host .nav-link.active {
+    text-decoration: none;
+  }
+}
+
 /* Queue and API need an account, and were greyed to say so before clicking. The rule used to live
    in a conditional <style> block in the vendored DRF base template, which went away with it; the
    class is now applied only to anonymous visitors, so this needs no condition of its own. After
@@ -490,6 +576,27 @@ button.resetbutton {
   /* the navbar's own disabled colour rather than a fixed light grey, which on the dark theme would
      be brighter than the links that do work and so read as emphasis instead of unavailability */
   color: var(--bs-navbar-disabled-color);
+}
+
+/* the padlock from navlock.html, which says what the greying above only implies. Nudged off the
+   word it follows and lifted onto the text's baseline, since it is text-sized. */
+.navbar-nav .nav-link.loginrequired .navlock {
+  margin-left: 0.35em;
+  vertical-align: -0.1em;
+}
+
+/* The count of the signed-in user's waiting and running tasks, on the Queue link.
+
+   The navbar's link colour carries it, so it is the same blue as the navigation it sits in and needs
+   no value of its own in either theme; --bs-body-bg for the text, because the page background is
+   what the link colour was chosen to be legible against, so using it here inverts the pair -- white
+   numerals on the light theme's blue, dark ones on the lighter blue the dark theme uses. */
+.navbar-nav .nav-link .queuecount {
+  background-color: var(--bs-link-color);
+  color: var(--bs-body-bg);
+  font-size: 0.7em;
+  margin-left: 0.4em;
+  vertical-align: 0.15em;
 }
 
 /* Two controls in the navbar menus are buttons rather than links: log out, because Django's
@@ -754,6 +861,21 @@ table.countrystats th[scope="row"] {
   .navbar-brand .atlaslogo {
     height: 56px;
   }
+
+  /* after the rule above, so it is this one that applies when both match */
+  .navbar-stuck .navbar-brand .atlaslogo {
+    height: 38px;
+  }
+
+  /* The collapsed menu opens inside the sticky bar, and it is a tall menu -- seven links, the
+     account entries and the theme control. Stuck at the top of a phone screen it would otherwise
+     run off the bottom with no way to reach the end of it. dvh rather than vh so that the mobile
+     browser's own retracting toolbars are counted; vh first for anything that does not know dvh. */
+  .navbar-collapse {
+    max-height: calc(100vh - 5rem);
+    max-height: calc(100dvh - 5rem);
+    overflow-y: auto;
+  }
 }
 
 /* Row show/hide for the task list, driven by tasklist.jsx adding and removing .task-collapsed.
@@ -773,8 +895,14 @@ li.task.task-collapsed {
   opacity: 0;
 }
 
+/* The navbar's two moving parts are here as well: the logo's height as the bar becomes stuck, and
+   the indicator travelling between links. Both still end up where they belong -- what goes is the
+   travel, which is the part that is decoration. */
 @media (prefers-reduced-motion: reduce) {
-  li.task {
+
+  li.task,
+  .navbar-brand .atlaslogo,
+  .navindicator-host.navindicator-animated .navindicator {
     transition: none;
   }
 }

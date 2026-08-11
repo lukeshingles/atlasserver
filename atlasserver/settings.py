@@ -175,6 +175,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "atlasserver.forcephot.context_processors.static_version",
+                "atlasserver.forcephot.context_processors.queued_task_count",
             ],
         },
     },
