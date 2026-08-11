@@ -47,8 +47,18 @@ before(async () => {
  *
  * `storage` is 'working', 'rejects-writes' (setItem throws, as when a browser is set to refuse site
  * data) or 'unavailable' (every access throws).
+ *
+ * `mediaEvents` is which way the MediaQueryList can be listened to: 'both', as in any current
+ * browser; 'legacy' for addListener alone, which is all Safari has from 12.1 (where
+ * prefers-color-scheme arrived) to 13, MediaQueryList having become an EventTarget only in 14; or
+ * 'none'.
  */
-async function load({ systemDark = false, stored = null, storage = 'working' } = {}) {
+async function load({
+  systemDark = false,
+  stored = null,
+  storage = 'working',
+  mediaEvents = 'both'
+} = {}) {
   const dom = new JSDOM(`<!doctype html><html><body><ul>${NAVBAR}</ul></body></html>`, {
     runScripts: 'outside-only',
     url: 'http://testserver/'
@@ -57,17 +67,27 @@ async function load({ systemDark = false, stored = null, storage = 'working' } =
 
   const listeners = [];
   let dark = systemDark;
-  window.matchMedia = (query) => ({
-    media: query,
-    get matches() {
-      return dark;
-    },
-    addEventListener: (type, fn) => {
-      if (type === 'change') listeners.push(fn);
-    },
-    removeEventListener: () => {},
-    addListener: (fn) => listeners.push(fn)
-  });
+  window.matchMedia = (query) => {
+    const mql = {
+      media: query,
+      get matches() {
+        return dark;
+      }
+    };
+
+    if (mediaEvents === 'both') {
+      mql.addEventListener = (type, fn) => {
+        if (type === 'change') listeners.push(fn);
+      };
+      mql.removeEventListener = () => {};
+    }
+    if (mediaEvents === 'both' || mediaEvents === 'legacy') {
+      mql.addListener = (fn) => listeners.push(fn);
+      mql.removeListener = () => {};
+    }
+
+    return mql;
+  };
 
   const items = new Map();
   if (stored !== null) items.set('atlas-theme', stored);
@@ -223,6 +243,35 @@ describe('theme.js', () => {
 
       assert.equal(page.theme(), 'dark');
       assert.equal(page.marked(), 'dark', 'and the control still shows what is in force');
+    });
+  });
+
+  // MediaQueryList only became an EventTarget in Safari 14, so on 12.1 to 13 -- which do have
+  // prefers-color-scheme -- addEventListener is absent. Reaching for it unguarded throws, and since
+  // the theme and the control are set up in the same script, that would leave the page stuck light
+  // with no way to change it.
+  describe('on a browser without MediaQueryList.addEventListener', () => {
+    test('the older addListener is used, and the theme still follows the system', async () => {
+      const page = await start({ mediaEvents: 'legacy', systemDark: false });
+
+      assert.equal(page.theme(), 'light');
+      assert.equal(page.window.document.querySelector('.themeswitch').classList.contains('d-none'), false);
+
+      page.setSystemDark(true);
+
+      assert.equal(page.theme(), 'dark');
+    });
+
+    test('with neither method the theme is still applied and still switchable', async () => {
+      const page = await start({ mediaEvents: 'none', systemDark: true });
+
+      assert.equal(page.theme(), 'dark', 'the attribute is set before the listener is registered');
+      assert.equal(page.window.document.querySelector('.themeswitch').classList.contains('d-none'), false);
+
+      page.click('light');
+
+      assert.equal(page.theme(), 'light', 'and the control works');
+      assert.equal(page.marked(), 'light');
     });
   });
 });

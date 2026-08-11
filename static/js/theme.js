@@ -176,13 +176,16 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
     document.addEventListener('atlas:theme', recolourPlots);
   }
 
-  // only while the mode is "auto": an explicit choice outranks the system, and a visitor who has
-  // picked light should not be switched when their desktop turns dark for the evening
-  darkMediaQuery.addEventListener('change', function () {
+  /*
+  Follow the system preference as it changes, but only while the mode is "auto": an explicit choice
+  outranks the system, and a visitor who has picked light should not be switched when their desktop
+  turns dark for the evening.
+  */
+  function followSystem() {
     if (chosenMode === 'auto') {
       applyMode('auto');
     }
-  });
+  }
 
   window.atlasTheme = { current: currentTheme, plotlyColors: plotlyColors };
 
@@ -193,5 +196,22 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
+  }
+
+  /*
+  Registered last, and behind a feature test, because it is the one part of this file that is an
+  enhancement: reacting to a change of system preference must not be able to stop the theme being
+  applied or the control being revealed, which is what a throw here would do to everything above it.
+
+  MediaQueryList only became an EventTarget in Safari 14. From Safari 12.1 and iOS 13, where
+  prefers-color-scheme itself works, addListener is the only spelling there is, and reaching for
+  addEventListener throws -- so this is a test of the two methods rather than of a version. Where
+  neither exists the theme is still applied and still switchable by hand; it just stops tracking the
+  system while the page is open.
+  */
+  if (darkMediaQuery.addEventListener) {
+    darkMediaQuery.addEventListener('change', followSystem);
+  } else if (darkMediaQuery.addListener) {
+    darkMediaQuery.addListener(followSystem);
   }
 })();
