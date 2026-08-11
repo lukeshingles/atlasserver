@@ -12,6 +12,7 @@ import statistics
 import time
 import typing as t
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1425,8 +1426,15 @@ def resultplotdatajs(request, taskid):
                     resultfilepath,
                     sep=r"\s+",
                     escapechar="#",
-                    dtype=float,
-                    converters={"F": str, "Obs": str, "uJy": int, "duJy": int},
+                    # One dtype mapping rather than dtype=float plus converters for these four:
+                    # pandas warns for every column named in both -- four ParserWarnings per plot
+                    # request -- and then applies the converter and ignores the dtype anyway.
+                    #
+                    # A defaultdict, because the factory is what still types the columns that are
+                    # not named. With a plain dict they would be inferred instead, and a column of
+                    # whole numbers would come back as int64, a column with a stray non-numeric
+                    # token as object -- where dtype=float raises the ValueError caught below.
+                    dtype=defaultdict(lambda: float, {"F": str, "Obs": str, "uJy": int, "duJy": int}),
                 )
             except ValueError:
                 # an empty, truncated or ragged result file: EmptyDataError and ParserError are

@@ -185,7 +185,13 @@ class EmailChangeTests(TestCase):
         # only the second one
         self.client.force_login(self.user)
 
-        with mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")):
+        with (
+            mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")),
+            # the view logs the failure with a traceback. Captured rather than left to a handler,
+            # so a deliberately unreachable relay does not print a stack trace over the output of
+            # a passing test run -- and so the log line is asserted instead of being noise.
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
             failed = self.client.post(
                 reverse("email_change"), {"password": "testpassword123", "new_email": "new@example.com"}
             )
@@ -1663,7 +1669,12 @@ class ResultPlotDataTests(TestCase):
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200
-            assert b"jslcdata.push" in response.content, response.content[:200]
+            # the rendered values, not merely that some were emitted: how the result file is
+            # parsed decides whether these reach the plotting script as `100` or `100.0`, and the
+            # column dtypes are the only thing that says which
+            content = response.content.decode()
+            assert "jslcdata.push([[59000.0,100.0,10.0], [59001.0,101.0,10.0]]);" in content, content[:400]
+            assert '"ymin": 100, "ymax": 101,' in content, content[:400]
 
     @override_settings(DEBUG=False)
     def test_a_redeployed_plot_script_invalidates_the_cached_response(self) -> None:
@@ -1862,9 +1873,12 @@ class AllowedHostsTests(TestCase):
         # the Host header: accepting any host hands an attacker the reset link
         User.objects.create_user(username="victim", email="victim@example.com", password="pw12345678")
 
-        response = self.client.post(
-            reverse("password_reset"), {"email": "victim@example.com"}, HTTP_HOST="evil.example.com"
-        )
+        # Django logs a rejected Host with a traceback, through a logger of its own; captured for
+        # the same reason as the failed sends above
+        with self.assertLogs("django.security.DisallowedHost", level="ERROR"):
+            response = self.client.post(
+                reverse("password_reset"), {"email": "victim@example.com"}, HTTP_HOST="evil.example.com"
+            )
 
         assert response.status_code == 400, response.status_code
         assert not django_mail.outbox
@@ -2925,7 +2939,10 @@ class RegistrationVerificationTests(TestCase):
         # patched on views, not on verification: views imports the name directly, so patching it
         # at the definition site leaves the already-bound reference in place and the test passes
         # for the wrong reason
-        with mock.patch.object(views, "send_verification_email", side_effect=OSError("smtp down")):
+        with (
+            mock.patch.object(views, "send_verification_email", side_effect=OSError("smtp down")),
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
             response = self.client.post(reverse("register"), {**self.credentials, "email": "doomed@example.com"})
 
         assert response.status_code == 200, response.status_code
@@ -2955,7 +2972,10 @@ class RegistrationVerificationTests(TestCase):
         user = User.objects.create_user(username="changer", email="changer@example.com", password="pw-for-the-test")
         self.client.force_login(user)
 
-        with mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")):
+        with (
+            mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")),
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
             response = self.client.post(
                 reverse("email_change"), {"password": "pw-for-the-test", "new_email": "fresh@example.com"}
             )
