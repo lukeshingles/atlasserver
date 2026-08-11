@@ -96,15 +96,23 @@ while not result_url:
             sys.exit()
 
 with requests.Session() as s:
-    textdata = s.get(result_url, headers=headers, timeout=TIMEOUT_SECONDS).text
+    result = s.get(result_url, headers=headers, timeout=TIMEOUT_SECONDS)
+    # checked before the file is written, and before the task is deleted below: a transient error
+    # still has a body, which would otherwise be saved as the result and the only server-side copy
+    # then thrown away
+    result.raise_for_status()
+    textdata = result.text
 
     filename = f"result_{resp.json()['id']}.txt"
     # save the data file to disk with a file containing the task id
     with Path(filename).open("w", encoding="utf-8") as f:
         f.write(textdata)
 
-    # delete the task from the server
-    s.delete(task_url, headers=headers, timeout=TIMEOUT_SECONDS).json()
+    # delete the task from the server, now that its results are safely on disk. No .json() on the
+    # reply: a successful delete is 204 with an empty body, which is not JSON.
+    deleted = s.delete(task_url, headers=headers, timeout=TIMEOUT_SECONDS)
+    if deleted.status_code != 204:
+        print(f"WARNING: could not delete {task_url}: HTTP {deleted.status_code}")
 
     dfresult = pd.read_csv(filename, sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
     print(dfresult)

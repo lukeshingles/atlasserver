@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import statistics
+import time
 import typing as t
 import uuid
 from collections.abc import Callable
@@ -99,9 +100,9 @@ RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 # The same, for the address-change confirmations one account can ask for. See change_email.
 EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
 
-# Every limiter below uses cache.add(), which on the production file-based backend is has_key()
-# followed by set() -- so it bounds a sustained flood rather than excluding a race, and two
-# simultaneous callers can both be told yes. All three are sized on that basis.
+# None of the limiters below is a mutual exclusion. The production cache is file-based, where
+# add() is has_key() followed by set() and a read-modify-write is not atomic either, so two
+# simultaneous callers can both be admitted. They bound a sustained flood; all three are sized so.
 
 # Registrations allowed from one client address per window. A budget rather than a single slot,
 # because this service's users arrive from universities behind shared addresses and two colleagues
@@ -956,19 +957,23 @@ def register(request):
             # Bounded per client address: every valid submission sends mail synchronously, so a
             # loop of distinct addresses is an open relay as far as the SMTP quota is concerned,
             # and plus-addressing aims them all at one inbox without tripping the unique index.
+            # The window start is stored with the count so that it stays fixed. incr() cannot be
+            # used: it rewrites the value with the cache's *default* timeout rather than the
+            # remaining one, which both shortened the window and restarted it on every attempt --
+            # so a client that kept trying kept renewing its own block indefinitely.
             clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
             throttlecache = caches["throttle"]
-            # add() first so the window starts at the first attempt and expires on its own; incr()
-            # only counts once the key exists. Not exact under concurrency -- see the note on the
-            # resend limiter -- but a loop cannot outrun it for long enough to matter.
-            if throttlecache.add(clientkey, 1, timeout=REGISTRATION_WINDOW_SECONDS):
-                registrations = 1
+            now = time.monotonic()
+            window = throttlecache.get(clientkey)
+
+            if window is None or now - window[1] >= REGISTRATION_WINDOW_SECONDS:
+                registrations, started = 1, now
             else:
-                try:
-                    registrations = throttlecache.incr(clientkey)
-                except ValueError:  # expired between the add() and the incr()
-                    throttlecache.set(clientkey, 1, timeout=REGISTRATION_WINDOW_SECONDS)
-                    registrations = 1
+                registrations, started = window[0] + 1, window[1]
+
+            throttlecache.set(
+                clientkey, (registrations, started), timeout=REGISTRATION_WINDOW_SECONDS - (now - started)
+            )
 
             if registrations > REGISTRATION_WINDOW_LIMIT:
                 form.add_error(

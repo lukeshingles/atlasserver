@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 
+{# no analytics: the token is in this page's DOM, and third-party script served from another #}
+{# origin runs with this one's privileges, so a changed or compromised tag could read it. The #}
+{# token-bearing URLs opt out for the same reason -- see the analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
     <div class="page-header">

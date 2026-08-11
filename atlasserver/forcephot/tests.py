@@ -1,5 +1,6 @@
 import contextlib
 import datetime
+import hashlib
 import ipaddress
 import itertools
 import json
@@ -2772,6 +2773,34 @@ class RegistrationVerificationTests(TestCase):
         assert response.status_code == 200
         assert "on its way" in response.content.decode()
 
+    def test_the_registration_window_does_not_restart_on_each_attempt(self) -> None:
+        """A fixed window, not a rolling one.
+
+        cache.incr() rewrites the value with the cache's *default* timeout rather than the
+        remaining one, so counting with it both shortened the window and renewed it on every
+        attempt -- a client that kept trying kept extending its own block indefinitely.
+        """
+        # distinct usernames, because the limiter counts submissions that pass validation and a
+        # repeated username fails on the second one
+        for n in range(views.REGISTRATION_WINDOW_LIMIT):
+            self.client.post(
+                reverse("register"), {**self.credentials, "username": f"newcomer{n}", "email": f"a{n}@example.com"}
+            )
+
+        # the same key the view derives, so this reads what the view actually wrote
+        clientkey = f"registration-{hashlib.sha256(b'127.0.0.1').hexdigest()}"
+        count, started = caches["throttle"].get(clientkey)
+        assert count == views.REGISTRATION_WINDOW_LIMIT, count
+
+        # a further attempt counts, but must not move the window's start
+        self.client.post(
+            reverse("register"), {**self.credentials, "username": "another", "email": "another@example.com"}
+        )
+        count_after, started_after = caches["throttle"].get(clientkey)
+
+        assert count_after == count + 1
+        assert started_after == started, "the window restarted, so a persistent caller renews it"
+
     def test_losing_the_race_for_a_username_says_so(self) -> None:
         # username is unique too, and the handler used to report every integrity error as an email
         # collision -- telling the user an address they can still have is taken
@@ -3154,6 +3183,14 @@ class ApiTokenPageTests(TestCase):
     def test_a_user_with_no_token_is_offered_one(self) -> None:
         content = self.client.get(reverse("apitoken")).content.decode()
         assert "do not currently have an API token" in content
+
+    def test_the_page_reports_nothing_to_analytics(self) -> None:
+        # the token is in this page's DOM, and third-party script served from another origin runs
+        # with this one's privileges, so a changed tag could read it
+        body = self.client.get(reverse("apitoken")).content.decode()
+
+        assert "gtag(" not in body
+        assert "googletagmanager" not in body
 
     def test_the_page_is_not_cacheable(self) -> None:
         # it prints the token in the clear, so a history snapshot outlives the session: on a shared
