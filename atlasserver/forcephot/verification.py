@@ -6,8 +6,10 @@ unverified. Anyone could sign up as someone else's address, and the owner's only
 unexpected mail from a service they had never used.
 
 Django ships no verification flow, but it ships the pieces: the same signed-token machinery the
-password reset views use. Reusing it means there is no new model, no new column and nothing to
-expire by hand -- the token carries its own timestamp, and PASSWORD_RESET_TIMEOUT bounds it.
+password reset views use. Reusing it means no new column on auth_user and nothing to expire by
+hand -- the token carries its own timestamp, and PASSWORD_RESET_TIMEOUT bounds it. The one piece
+Django cannot supply is why an account is inactive, which forcephot.models.PendingEmailVerification
+records: is_active alone cannot tell "not yet verified" from "switched off by an administrator".
 """
 
 import hashlib

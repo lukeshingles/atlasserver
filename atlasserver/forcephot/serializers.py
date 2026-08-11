@@ -8,6 +8,7 @@ from rest_framework import serializers
 from rest_framework.reverse import reverse
 
 from atlasserver.forcephot.models import get_mjd_min_default
+from atlasserver.forcephot.models import MPC_NAME_WHITESPACE
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.models import UNSET
 from atlasserver.forcephot.webhooks import CallbackUrlError
@@ -132,11 +133,11 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         if value is None:
             return value
 
-        # stripped here so that surrounding space cannot decide whether this is a target. A name of
-        # nothing but spaces becomes "", which validate() then reads as no name given and reports
-        # as a missing target -- rather than reaching the database, where the check constraint
-        # would refuse it as an unexplained 500. An already-empty name strips to itself.
-        value = value.strip()
+        # MPC_NAME_WHITESPACE, not str.strip(): the model, both constraints and both migrations
+        # use that set, and stripping more here would make the API call an em-space blank while
+        # the database still called it a name. Task.save() does this too; doing it here as well is
+        # what turns a whitespace-only name into a 400 rather than an unexplained 500.
+        value = value.strip(MPC_NAME_WHITESPACE)
         if value == "":
             return value
 

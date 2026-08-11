@@ -81,6 +81,11 @@ _siteorigin = os.environ.get("ATLASSERVER_SITE_ORIGIN", "").strip().rstrip("/")
 if _siteorigin and not _siteorigin.startswith(("http://", "https://")):
     _msg = f"ATLASSERVER_SITE_ORIGIN must start with http:// or https://, but is {_siteorigin!r}"
     raise ImproperlyConfigured(_msg)
+if not _siteorigin and not DEBUG:
+    # required rather than optional in production, because the fallback is the exposure: an unset
+    # variable would leave the links built from the Host header and say nothing about it
+    _msg = "ATLASSERVER_SITE_ORIGIN must be set when DEBUG is off (e.g. https://fallingstar-data.com)"
+    raise ImproperlyConfigured(_msg)
 SITE_ORIGIN = _siteorigin
 
 ADMINS = [

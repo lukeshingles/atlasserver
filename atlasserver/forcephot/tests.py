@@ -3,9 +3,11 @@ import datetime
 import ipaddress
 import itertools
 import json
+import os
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -740,6 +742,49 @@ class TaskListEtagTests(TestCase):
             reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json", HTTP_IF_NONE_MATCH=etag
         )
         assert conditional.status_code == 304
+
+
+class SiteOriginSettingTests(SimpleTestCase):
+    """The links in security email are built from this, so an unset value is the exposure."""
+
+    @staticmethod
+    def load_settings(module: str, **env: str) -> "subprocess.CompletedProcess[str]":
+        """Import a settings module in a fresh interpreter with the given environment."""
+        # cleared from the inherited environment before the overrides, not after: a developer's
+        # own .env would otherwise decide the result of these tests
+        environment: dict[str, str] = dict(os.environ)
+        environment.pop("ATLASSERVER_SITE_ORIGIN", None)
+        environment |= {"DJANGO_SETTINGS_MODULE": module, **env}
+        return subprocess.run(
+            [sys.executable, "-c", "import django; django.setup()"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+
+    def test_production_refuses_to_start_without_an_origin(self) -> None:
+        # failing closed, because the fallback is the vulnerability: an unset variable would leave
+        # the links built from the Host header and say nothing about it
+        result = self.load_settings("atlasserver.settings", ATLASSERVER_DEBUG="0")
+
+        assert result.returncode != 0
+        assert "ATLASSERVER_SITE_ORIGIN must be set" in result.stderr, result.stderr
+
+    def test_production_starts_once_it_is_set(self) -> None:
+        result = self.load_settings(
+            "atlasserver.settings", ATLASSERVER_DEBUG="0", ATLASSERVER_SITE_ORIGIN="https://example.org"
+        )
+
+        assert result.returncode == 0, result.stderr
+
+    def test_development_and_the_tests_are_unaffected(self) -> None:
+        # settings_test presets ATLASSERVER_DEBUG=1 before star-importing the production settings,
+        # so this check never fires under test -- including on CI, where DEBUG would otherwise be
+        # off because the default follows the platform
+        result = self.load_settings("atlasserver.settings_test", ATLASSERVER_DEBUG="0")
+
+        assert result.returncode == 0, result.stderr
 
 
 class CountryCodeTests(SimpleTestCase):
