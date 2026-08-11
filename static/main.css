@@ -198,16 +198,164 @@ div#tasklist.singletaskdetail {
      too faint to carry that on its own */
   border: 0.1em solid var(--bs-secondary-color);
   background-color: var(--bs-body-bg);
+  /* a card rather than an outline, so a list of them reads as a stack of things */
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
 }
 
-ul.tasks li.queued {
-  background-color: var(--bs-secondary-bg);
-  border: none;
+/*
+Status as an edge down the left of the row, with the word in the badge beside the task number.
+
+This replaces flooding the whole row: a queued task was filled with --bs-secondary-bg and a running
+one with half-opacity orange, which is a lot of colour to say one word, cost the text inside its
+contrast against a background it was not chosen for -- on the dark theme, body text over that orange
+blends to a muddy brown -- and meant the light curve in a finished row sat on a different surface
+from the one in the row above. The edge marks the same four states in a strip that no content has to
+be legible against, and the rows keep one background.
+*/
+ul.tasks li.task {
+  border-left-width: 0.4em;
+}
+
+/* the quietest of the four, and --bs-tertiary-color rather than --bs-secondary-color for that reason:
+   a task that has not started yet is the least interesting row in the list, and the secondary colour
+   made its edge the brightest mark on the dark theme -- louder than the green of a finished one */
+ul.tasks li.queued.notstarted {
+  border-left-color: var(--bs-tertiary-color);
+}
+
+ul.tasks li.queued.started {
+  border-left-color: #f0ad4e;
+}
+
+ul.tasks li.finished {
+  border-left-color: var(--bs-success);
+}
+
+/* after .finished, so a task that finished with an error is not reported as a success */
+ul.tasks li.finished.errored {
+  border-left-color: var(--bs-danger);
+}
+
+/* The row is a control surface -- a link, download buttons, a delete -- and was a flat outline that
+   said so only by having things in it. The lift is one pixel: enough to answer the pointer, small
+   enough not to reflow the light curve inside. */
+li.task:hover {
+  border-color: var(--bs-emphasis-color);
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
+  transform: translateY(-1px);
+}
+
+/* the task number and its status word, on one line */
+.taskheading {
+  align-items: baseline;
+  display: flex;
+  gap: 0.5em;
+}
+
+/* The four status words. Bootstrap's -bg-subtle and -text-emphasis pairs rather than its solid
+   .text-bg-* variants: a solid badge next to the task number is a second thing shouting on a row
+   whose point is the data, and these two carry a light and a dark value each, so the badge follows
+   the theme without a value here. */
+.taskbadge {
+  font-weight: normal;
+}
+
+.taskbadge-queued {
+  background-color: var(--bs-secondary-bg-subtle);
+  border: var(--bs-border-width) solid var(--bs-border-color);
   color: var(--bs-secondary-color);
 }
 
-ul.tasks li.started {
-  background-color: rgb(255, 170, 50, 0.5);
+.taskbadge-running {
+  background-color: var(--bs-warning-bg-subtle);
+  border: var(--bs-border-width) solid var(--bs-warning-border-subtle);
+  color: var(--bs-warning-text-emphasis);
+}
+
+.taskbadge-finished {
+  background-color: var(--bs-success-bg-subtle);
+  border: var(--bs-border-width) solid var(--bs-success-border-subtle);
+  color: var(--bs-success-text-emphasis);
+}
+
+.taskbadge-error {
+  background-color: var(--bs-danger-bg-subtle);
+  border: var(--bs-border-width) solid var(--bs-danger-border-subtle);
+  color: var(--bs-danger-text-emphasis);
+}
+
+/* the queue position, on the waiting line. The same subtle pair as the Queued badge above, since it
+   is the same state said more precisely. */
+.taskposition {
+  background-color: var(--bs-secondary-bg-subtle);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
+  /* .taskstatus is italic, and a badge set in italic reads as emphasis rather than as a label */
+  font-style: normal;
+  font-weight: normal;
+}
+
+/*
+What the task is, as a two column grid: label, then value.
+
+The values were sentences, so the coordinates and MJD ranges of one row started at a different column
+from the next and could not be compared down the list. tabular-nums is the other half of that -- by
+default the digits in this font are proportional, so even aligned columns of numbers do not line up
+digit for digit.
+
+minmax(0, auto) on the label column so that a long value cannot push the labels out of the card: the
+column takes what it needs from the labels and no more, and the value wraps instead.
+*/
+dl.taskmeta {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr;
+  gap: 0.1em 0.6em;
+  margin: 0.6em 0;
+}
+
+dl.taskmeta dt {
+  color: var(--bs-secondary-color);
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+dl.taskmeta dd {
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  /* the values include coordinates and MJD ranges, which must be able to break rather than widen the
+     card past the column it sits in */
+  overflow-wrap: anywhere;
+}
+
+/* the bar on a running task: full width, because what it reports is that work is happening and not
+   how much of it is done */
+.taskprogress {
+  height: 0.4em;
+  margin-top: 0.4em;
+  max-width: 20em;
+}
+
+/* the amber the row's left edge and its badge use, rather than Bootstrap's default primary blue,
+   so that everything saying "running" on the row says it in one colour */
+.taskprogress .progress-bar {
+  background-color: #f0ad4e;
+  width: 100%;
+}
+
+/* Placeholder rows while the first task list is on its way. The border-left of a status the list
+   does not know yet would be a guess, so the skeleton has the plain border every row starts from. */
+li.task.taskskeleton {
+  border-left-width: 0.1em;
+}
+
+li.task.taskskeleton p {
+  margin-bottom: 0.5em;
+}
+
+li.task.taskskeleton:hover {
+  border-color: var(--bs-secondary-color);
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
+  transform: none;
 }
 
 ul.tasks div.rightside {
@@ -230,8 +378,11 @@ img.previewimage {
   margin-top: 1em;
 }
 
+/* Amber, matching the badge and the left edge of a running row. This line was red, which now sits on
+   a row whose other two marks of the same state are amber -- and red on a task that is running
+   perfectly well says failure, which is what the Error badge is for. */
 .taskstatus.running {
-  color: var(--bs-danger-text-emphasis);
+  color: var(--bs-warning-text-emphasis);
 }
 
 p.taskerror {
@@ -883,7 +1034,8 @@ table.countrystats th[scope="row"] {
    re-render that reused such a node left it stuck at whatever height the animation had reached. */
 li.task {
   overflow: hidden;
-  transition: max-height 200ms ease, opacity 200ms ease;
+  /* the last two are the hover lift; the first two are this rule's own show and hide */
+  transition: max-height 200ms ease, opacity 200ms ease, box-shadow 150ms ease, transform 150ms ease;
   /* large enough for the tallest row (one with a light curve plot expanded); max-height cannot
      transition to or from `auto`, so it has to be a number */
   max-height: 400em;
@@ -904,5 +1056,12 @@ li.task.task-collapsed {
   .navbar-brand .atlaslogo,
   .navindicator-host.navindicator-animated .navindicator {
     transition: none;
+  }
+
+  /* the shimmer on the placeholder rows and the travelling stripes on a running task. Both are
+     indefinite -- they do not run once and stop -- which is the kind this setting is mostly about. */
+  .placeholder-glow .placeholder,
+  .taskprogress .progress-bar-animated {
+    animation: none;
   }
 }

@@ -296,15 +296,28 @@ export const Task = React.memo(function Task(props) {
     const hasresultfile = task.result_url != null;
     let statusclass = 'none';
     let buttontext = 'none';
+    // the word in the badge beside the task number, and the modifier that colours it and the row's
+    // left edge. The four states are the ones the row already distinguished by other means: an error
+    // was only visible as red text further down, and a finished task only by not saying anything.
+    let statuslabel = '';
+    let statusbadge = '';
     if (task.finishtimestamp != null) {
-        statusclass = "finished";
+        // "errored" as well as "finished", so the row's left edge can disagree with the plain
+        // finished colour without the stylesheet having to look inside the row for the badge
+        statusclass = task.error_msg != null ? "finished errored" : "finished";
         buttontext = 'Delete';
+        statuslabel = task.error_msg != null ? 'Error' : 'Finished';
+        statusbadge = task.error_msg != null ? 'taskbadge-error' : 'taskbadge-finished';
     } else if (task.starttimestamp != null) {
         statusclass = "queued started";
         buttontext = 'Cancel';
+        statuslabel = 'Running';
+        statusbadge = 'taskbadge-running';
     } else {
         statusclass = "queued notstarted";
         buttontext = 'Cancel';
+        statuslabel = 'Queued';
+        statusbadge = 'taskbadge-queued';
     }
     debug_log('Task ' + task.id + ' rendered');
     let delbutton = null;
@@ -325,7 +338,11 @@ export const Task = React.memo(function Task(props) {
         </div>
     ];
 
-    taskbox.push(<div key="tasknum"><a key="tasklink" href={task.url} onClick={(e) => { props.setSingleTaskView(e, task.id, task.url) }}>Task {task.id}</a></div>);
+    taskbox.push(
+        <div key="tasknum" className="taskheading">
+            <a key="tasklink" href={task.url} onClick={(e) => { props.setSingleTaskView(e, task.id, task.url) }}>Task {task.id}</a>
+            <span key="taskbadge" className={'badge taskbadge ' + statusbadge}>{statuslabel}</span>
+        </div>);
 
     if (task.parent_task_url) {
         taskbox.push(<p key="imgrequest">Image request for <a key="parent_task_link" href={task.parent_task_url} onClick={(e) => { props.setSingleTaskView(e, task.parent_task_id, task.parent_task_url) }}>Task {task.parent_task_id}</a></p>);
@@ -340,46 +357,66 @@ export const Task = React.memo(function Task(props) {
         taskbox.push(<p key="imgrequestnote">Up to the first 1000 {imagetype} images will be retrieved. The image request and download link may expire after one week.</p>);
     }
 
+    // What the task is, as label and value pairs rather than a run of sentences: down a list of
+    // tasks the coordinates, MJD ranges and timestamps are what the eye compares, and as prose they
+    // started at a different column in every row. main.css lays the pairs out as a grid and gives
+    // the values tabular figures, so the digits line up between rows as well as within one.
+    const meta = [];
+
     if (task.user_id != user_id) {
-        taskbox.push(<div key="user">User: {task.username}</div>);
+        meta.push(['user', 'User:', task.username]);
     }
 
     if (task.comment != null && task.comment != '') {
-        taskbox.push(<div key="comment">Comment: <b>{task.comment}</b></div>);
+        meta.push(['comment', 'Comment:', <b>{task.comment}</b>]);
     }
 
     // task_mpc_name_not_blank keeps whitespace-only names out of the column, so an empty string
     // here means the task has no MPC target rather than one that only looks empty
     if (task.mpc_name != null && task.mpc_name != '') {
-        taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
+        meta.push(['target', 'MPC Object:', task.mpc_name]);
     } else {
         let radecepoch = '';
         if (task.radec_epoch_year != null) {
             radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
         }
-        taskbox.push(<div key="target">RA Dec: {radecepoch}{task.ra} {task.dec}</div>);
+        meta.push(['target', 'RA Dec:', <span>{radecepoch}{task.ra} {task.dec}</span>]);
         // proper motion components are signed, so testing for > 0 hides half of all real values
         if ((task.propermotion_ra != null && task.propermotion_ra != 0)
             || (task.propermotion_dec != null && task.propermotion_dec != 0)) {
-            taskbox.push(<div key="propermotion">Proper motion [mas/yr]: {task.propermotion_ra} {task.propermotion_dec}</div>);
+            // the unit moves into the value, so the label column stays as narrow as the longest
+            // short label rather than being set by this one
+            meta.push(['propermotion', 'Proper motion:',
+                <span>{task.propermotion_ra} {task.propermotion_dec} mas/yr</span>]);
         }
     }
 
     if (task.request_type == "SSOSTACK") {
-        taskbox.push(<div key="imgtype">Image: Stacked</div>);
+        meta.push(['imgtype', 'Image:', 'Stacked']);
     } else {
-        taskbox.push(<div key="imgtype">Images: {task.use_reduced ? 'Reduced' : 'Difference'}</div>);
+        meta.push(['imgtype', 'Images:', task.use_reduced ? 'Reduced' : 'Difference']);
     }
 
     if (task.mjd_min != null || task.mjd_max != null) {
         const mjdmin = task.mjd_min != null ? task.mjd_min : "0";
         const mjdmax = task.mjd_max != null ? task.mjd_max : "∞";
-        taskbox.push(<div key="mjdrange">MJD request: [{mjdmin}, {mjdmax}]</div>);
+        meta.push(['mjdrange', 'MJD request:', <span>[{mjdmin}, {mjdmax}]</span>]);
     }
 
-    taskbox.push(<div key="queuetime">Queued at {new Date(task.timestamp).toLocaleString()}</div>);
+    meta.push(['queuetime', 'Queued at:', new Date(task.timestamp).toLocaleString()]);
     if (task.finishtimestamp != null) {
-        taskbox.push(<div key="status">Finished at {new Date(task.finishtimestamp).toLocaleString()}</div>);
+        meta.push(['finishtime', 'Finished at:', new Date(task.finishtimestamp).toLocaleString()]);
+    }
+
+    taskbox.push(
+        <dl key="taskmeta" className="taskmeta">
+            {meta.map(([key, label, value]) => [
+                <dt key={key + '-label'}>{label}</dt>,
+                <dd key={key + '-value'}>{value}</dd>
+            ])}
+        </dl>);
+
+    if (task.finishtimestamp != null) {
         if (task.error_msg != null) {
             taskbox.push(<p key="error_msg" className="taskerror">Error: {task.error_msg}</p>);
         } else {
@@ -424,10 +461,26 @@ export const Task = React.memo(function Task(props) {
             }
         }
     } else if (task.starttimestamp != null) {
-        taskbox.push(<div key="status" className="taskstatus running">Running (started {timeelapsed} seconds ago)</div>);
+        // An indeterminate bar, striped and moving: the server reports that a task has started and
+        // how long ago, and nothing about how far through it is, so there is no fraction to draw.
+        // Bootstrap reads a role="progressbar" with no aria-valuenow as exactly that, and the label
+        // carries what is actually known to anyone who cannot see it moving.
+        taskbox.push(
+            <div key="status" className="taskstatus running">
+                Running (started {timeelapsed} seconds ago)
+                <div className="progress taskprogress" role="progressbar"
+                    aria-label={'Task ' + task.id + ' is running'}>
+                    <div className="progress-bar progress-bar-striped progress-bar-animated"></div>
+                </div>
+            </div>);
     } else if (task.queuepos != null) {
-        const tasksahead = task.queuepos == 1 ? '1 task' : task.queuepos + ' tasks';
-        taskbox.push(<div key="status" className="taskstatus waiting">Waiting ({tasksahead} ahead of this one)</div>);
+        // the position as a chip rather than inside the sentence, so it can be found down a column
+        // of rows. queuepos counts the tasks ahead, so zero is the one that runs next.
+        const ahead = task.queuepos == 0 ? 'next' : task.queuepos + ' ahead';
+        taskbox.push(
+            <div key="status" className="taskstatus waiting">
+                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>
+            </div>);
     } else {
         // queuepos is null until the queue has been renumbered, and the sentence used to be
         // rendered with the number simply missing: "Waiting ( tasks ahead of this one)"
@@ -1112,7 +1165,20 @@ export function TaskPage() {
 
     let tasklist;
     if (state.results == null) {
-        tasklist = <p key="message">Loading tasks...</p>;
+        // Rows the size of the ones about to arrive, rather than a line of text the list then shoves
+        // out of the way. aria-hidden on the shapes and the message left as text, so what a screen
+        // reader gets is "Loading tasks" and not a description of three empty boxes.
+        tasklist = (
+            <ul key="ultasklist" className="tasks" aria-busy="true">
+                <li key="message" className="visually-hidden" role="status">Loading tasks...</li>
+                {[0, 1, 2].map((row) => (
+                    <li key={'skeleton' + row} className="task taskskeleton" aria-hidden="true">
+                        <p className="placeholder-glow"><span className="placeholder col-4"></span></p>
+                        <p className="placeholder-glow"><span className="placeholder col-7"></span></p>
+                        <p className="placeholder-glow"><span className="placeholder col-6"></span></p>
+                    </li>
+                ))}
+            </ul>);
     } else if (state.results.length == 0) {
         tasklist = <p key="message">There are no tasks.</p>;
     } else {
