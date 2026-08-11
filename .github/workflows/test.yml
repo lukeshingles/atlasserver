@@ -96,6 +96,10 @@ jobs:
             # below is only reachable over TCP on the mapped port
             ATLASSERVER_DJANGO_MYSQL_HOST: 127.0.0.1
             DJANGO_SETTINGS_MODULE: atlasserver.settings_test
+            # required whenever DEBUG is off, which the "Start and stop server" step below is: it
+            # runs the real production settings, so it has to supply the real production
+            # configuration. The suite itself never sees this -- settings_test forces DEBUG on.
+            ATLASSERVER_SITE_ORIGIN: https://fallingstar-data.com
 
         services:
             mysql:
