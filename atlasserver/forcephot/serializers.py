@@ -1,6 +1,7 @@
 # from django.contrib.auth.models import User
 import math
 import typing as t
+from typing import override
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.exceptions import ObjectDoesNotExist
@@ -27,7 +28,7 @@ def is_finite_float(val):
     return bool(math.isfinite(f_val))
 
 
-class ForcePhotTaskSerializer(serializers.ModelSerializer):
+class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     # memoised queue offset. 0 is a normal value, so it cannot double as "not computed yet".
     _min_queuepos_cache: t.Any = UNSET
 
@@ -208,6 +209,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return default
 
+    @override
     def validate(self, attrs):
         mpc_name = self.submitted(attrs, "mpc_name")
         request_type = self.submitted(attrs, "request_type")

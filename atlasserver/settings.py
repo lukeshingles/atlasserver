@@ -10,6 +10,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 import platform
 from pathlib import Path
+from typing import cast
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -484,7 +485,7 @@ LOGGING = {
         # where sending failed silently without credentials; with MAILERS the reports would reach
         # the test outbox and real inboxes alike.
         "django.security.DisallowedHost": {
-            "handlers": [],
+            "handlers": cast("list[str]", []),
             "propagate": False,
         },
         "django.server": {

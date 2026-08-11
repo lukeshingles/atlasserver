@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from typing import override
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -54,8 +55,10 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
+from rest_framework.serializers import BaseSerializer
 from rest_framework.utils.urls import replace_query_param
 from rest_framework.views import APIView
 
@@ -277,9 +280,11 @@ class ForcePhotPermission(permissions.BasePermission):
 
     message = "You must be the owner of this object."
 
+    @override
     def has_permission(self, request, view) -> bool:
         return bool(request.method in permissions.SAFE_METHODS or request.user.is_authenticated)
 
+    @override
     def has_object_permission(self, request, view, obj) -> bool:
         # Reading a task is public, including to anonymous callers, and is meant to be: a task and
         # the results it produced describe measurements from a public survey, so a link to one can
@@ -292,11 +297,16 @@ class ForcePhotPermission(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        # staff and instance owner have all permissions
+        # staff and instance owner have all permissions.
+        #
+        # pyrefly: ignore [missing-attribute]
+        # is_staff is on the concrete User, and django-stubs types request.user as
+        # AbstractBaseUser because AUTH_USER_MODEL is swappable in principle. It is not swapped
+        # here -- verification.py carries the same note where the checkers disagree about it.
         return request.user.is_staff or obj.user_id == request.user.id
 
 
-class ForcePhotTaskViewSet(viewsets.ModelViewSet):
+class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
     """API endpoint that allows force.sh tasks to be created and deleted."""
 
     # the prefetch feeds Task._imagerequest_task(), so serialising a page of tasks costs one query
@@ -318,7 +328,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
     # filterset_fields = ['finishtimestamp']
     template_name = "tasklist-react.html"
 
-    def create(self, request, *args, **kwargs) -> Response:
+    @override
+    def create(self, request: Request, *args: t.Any, **kwargs: t.Any) -> Response:
         """Create new tasks if the user is authenticated and the request is valid."""
         if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
@@ -350,7 +361,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def perform_create(self, serializer) -> None:
+    @override
+    def perform_create(self, serializer: BaseSerializer[Task]) -> None:
         """Create new task(s)."""
         usertaskcount_before = (
             Task.objects.filter(
@@ -374,7 +386,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         # take the ids from the saved objects rather than serializer.data: accessing .data here
         # would cache the response body before the updates below have been applied
-        newtasks = serializer.instance if isinstance(serializer.instance, list) else [serializer.instance]
+        # save() above populated this, so it is not None; many=True makes it a list. Narrowed
+        # rather than assumed, because everything below indexes into it.
+        created = serializer.instance
+        newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
 
         # Provisional positions at the back of the queue. The real ordering is round-robin across
         # users and is assigned by the task runner; this only stops a task submitted between two
@@ -402,23 +417,30 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         for task in newtasks:
             task.refresh_from_db()
 
-    def perform_update(self, serializer) -> None:
+    @override
+    def perform_update(self, serializer: BaseSerializer[Task]) -> None:
         """Update a task."""
         # don't pass user=request.user here: a staff user editing someone else's task would
         # otherwise take ownership of it
         serializer.save()
 
-    def perform_destroy(self, instance) -> None:
+    @override
+    def perform_destroy(self, instance: Task) -> None:
         """Delete a task, and if the task is queued (not finished), then update queue positions."""
         update_queue_positions = not instance.finishtimestamp
         instance.delete()
         if update_queue_positions:
             request_queue_recalc()
 
-    def list(self, request, *args, **kwargs):
+    @override
+    # pyrefly: ignore [bad-override]
+    # returns HttpResponseNotModified/NotFound as well as Response, which the
+    # base's annotation does not allow but DRF supports: finalize_response passes
+    # anything that is not a Response straight through.
+    def list(self, request: Request, *args: t.Any, **kwargs: t.Any):
         """List tasks belonging to the current user."""
         if request.user.is_authenticated:
-            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
+            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user=request.user))
         else:
             listqueryset = Task.objects.none()
             raise PermissionDenied
@@ -438,8 +460,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         # answer a conditional request before paginating: an unchanged page then costs one
         # aggregate instead of a count, a page fetch, a prefetch and a full serialisation.
-        # request.user.pk is not None here: the anonymous case raised PermissionDenied above
-        etag = get_tasklist_etag(request, request.user.pk)
+        # the anonymous case raised PermissionDenied above, so this is set -- stated as a check
+        # rather than a comment, because get_tasklist_etag would otherwise take an Optional
+        userpk = request.user.pk
+        if userpk is None:
+            raise PermissionDenied
+
+        etag = get_tasklist_etag(request, userpk)
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
@@ -458,7 +485,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(listqueryset, many=True).data)
 
-    def retrieve(self, request, *args, **kwargs):
+    @override
+    # pyrefly: ignore [bad-override]
+    # returns HttpResponseNotModified/NotFound as well as Response, which the
+    # base's annotation does not allow but DRF supports: finalize_response passes
+    # anything that is not a Response straight through.
+    def retrieve(self, request: Request, *args: t.Any, **kwargs: t.Any):
         instance = self.get_object()
         if instance.is_archived:
             return HttpResponseNotFound("Page not found")
@@ -1449,7 +1481,7 @@ def resultplotdatajs(request, taskid):
 
     # only set the header when there is one: Django stringifies whatever it is given, so passing the
     # DEBUG-mode None sent the literal header "ETag: None"
-    headers = {"ETag": etag} if etag is not None else {}
+    headers: dict[str, str] = {"ETag": etag} if etag is not None else {}
 
     return HttpResponse(strjs, content_type="text/javascript", headers=headers)
 

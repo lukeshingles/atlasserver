@@ -1,4 +1,5 @@
 import typing as t
+from typing import override
 
 from django.core.cache import caches
 
@@ -42,6 +43,7 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
         # the rate until called by the view.
         pass
 
+    @override
     def allow_request(self, request: Request, view: "APIView") -> bool:
         # We can only determine the scope once we're called by the view.
         writescope = getattr(view, self.scope_attr, None)
@@ -60,6 +62,7 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
         # We can now proceed as normal.
         return super().allow_request(request, view)
 
+    @override
     def get_cache_key(self, request: Request, view: "APIView") -> str:
         """If `view.throttle_scope` is not set, don't apply this throttle.
 

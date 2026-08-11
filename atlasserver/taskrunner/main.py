@@ -690,7 +690,6 @@ def remove_old_tasks(
     }
 
     if request_type is not None:
-        # pyrefly: ignore [bad-assignment]
         filteropts["request_type"] = request_type
 
     if not harddeleterecord:

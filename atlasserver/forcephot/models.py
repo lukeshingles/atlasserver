@@ -364,7 +364,7 @@ class Task(models.Model):
         return self.user.username
 
     @staticmethod
-    def prefetch_imagerequests() -> models.Prefetch:
+    def prefetch_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
         """Return the prefetch that lets _imagerequest_task() answer without a query per task."""
         return models.Prefetch(
             "imagerequest",

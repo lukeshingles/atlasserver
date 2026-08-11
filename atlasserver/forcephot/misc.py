@@ -1,8 +1,10 @@
 import datetime
+import logging
 import multiprocessing
 import typing as t
 from multiprocessing.process import BaseProcess
 from pathlib import Path
+from typing import override
 
 import fundamentals.logs
 import julian
@@ -284,7 +286,11 @@ def country_region_to_name(country_code, region_code):
 
     if region_code:
         fullcode = f"{country_code}-{region_code}"
+        # get() returns a list only on the country_code= lookup, where it substitutes [] for a
+        # country it knows to have no subdivisions. This asks by code=, which yields one
+        # subdivision or None -- and the walrus below would skip an empty list in any case.
         if subdiv := pycountry.subdivisions.get(code=fullcode):
+            # pyrefly: ignore [missing-attribute]
             region_name = subdiv.name
 
     return f"{region_name}, {country_code_to_name(country_code)}"
@@ -293,9 +299,16 @@ def country_region_to_name(country_code, region_code):
 class AdminEmailHandlerNo404(AdminEmailHandler):
     """Custom Handler that ignores 404 errors instead of sending them by email."""
 
-    def handle(self, record):
+    @override
+    def handle(self, record: logging.LogRecord) -> bool:
+        """Return whether the record was emitted, as Handler.handle does.
+
+        The base returns a bool and callers may read it; returning None said "not emitted" even
+        when it had been.
+        """
         if record.exc_info:
             _exc_type, exc_value, _tb = record.exc_info
             if isinstance(exc_value, Http404):
-                return
-        super().handle(record)
+                return False
+
+        return super().handle(record)

@@ -16,6 +16,7 @@ import socket
 import typing as t
 import urllib.error
 import urllib.request
+from typing import override
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -98,6 +99,7 @@ def validate_callback_url(url: str) -> str:
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
     """Refuse redirects: a redirect is a second URL that was never validated."""
 
+    @override
     def redirect_request(
         self,
         req: urllib.request.Request,

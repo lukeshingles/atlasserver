@@ -154,11 +154,52 @@ project-excludes = [
     "**/plot_atlas_fp.py",
 ]
 python-version = "3.13"
-preset = "legacy"
+preset = "strict"
 ignore-missing-imports = ["*"]
+
+# implicit-any-parameter is on everywhere except the modules that the annotation ratchet has not
+# reached yet -- the same five listed under [tool.ruff.lint.per-file-ignores] as "ANN" and named by
+# the mypy TODO above. Scoped rather than switched off globally, so the other forty-odd modules are
+# held to it and a module drops off this list the moment it is converted. Deleting an entry here,
+# its ANN ignore, and adding it to the mypy overrides is the one change that "converting a module"
+# means.
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/views.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/serializers.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/taskrunner/main.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/misc.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/forms.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
 
 [tool.pyrefly.errors]
 redundant-cast = "warn"
+missing-import = false
+unbound-name = false
+unsupported-operation = false
+implicit-any-empty-container = true
+implicit-any-lambda = false
 
 [tool.pyright]
 typeCheckingMode = "off"

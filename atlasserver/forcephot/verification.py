@@ -12,6 +12,7 @@ expire by hand -- the token carries its own timestamp, and PASSWORD_RESET_TIMEOU
 
 import hashlib
 import typing as t
+from typing import override
 
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.mail import EmailMessage
@@ -37,6 +38,7 @@ class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
 
     # user is Any because the type checkers disagree: django-stubs declares these hooks against
     # the concrete User, while ty reads Django's own source, where they are AbstractBaseUser.
+    @override
     def _make_hash_value(self, user: t.Any, timestamp: int) -> str:
         # email as well, so that changing the address invalidates any outstanding link for the old
         # one. The base implementation covers pk, password and last_login.

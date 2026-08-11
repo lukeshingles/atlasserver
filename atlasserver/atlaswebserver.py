@@ -116,7 +116,7 @@ def start() -> None:
     if platform.system() == "Darwin":
         print("Detected macOS, so using testing configuration for http://localhost/")
         port = 80
-        includefile = []
+        includefile: list[str] = []
     else:
         port = 8086
         includefile = ["--include-file", str(ATLASSERVERPATH / "httpconf.txt")]
