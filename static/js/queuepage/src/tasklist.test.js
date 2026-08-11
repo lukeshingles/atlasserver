@@ -473,6 +473,57 @@ describe('TaskPage', () => {
         }
     });
 
+    test('a submitted task joins the away baseline even if the tab goes before the answer lands', async () => {
+        // The narrowest form of "submit, then leave": the request the new row asks for is itself still in
+        // flight when the tab goes. It cannot be taken as the baseline wholesale -- a late answer already
+        // omits whatever finished during its round trip -- but the task it adds is safe to keep.
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            // the set is taken while visible, and holds task 1 alone
+            mock.timers.tick(2000);
+            await flush(60);
+
+            // the submission creates task 2, and the request its arrival asks for is held open
+            let land;
+            control.hold = new Promise((resolve) => {
+                land = resolve;
+            });
+            control.created = [{ id: 2 }];
+            control.results = [task(1, { queuepos: 1 }), task(2, { queuepos: 2 })];
+            control.positions = { 1: 1, 2: 2 };
+            rendered.container.querySelector('#newrequest').dispatchEvent(
+                new window.Event('submit', { bubbles: true, cancelable: true }));
+            await flush(80);
+
+            // the tab is left before it lands
+            hidden = true;
+            land();
+            await flush(80);
+
+            control.positions = {};
+            mock.timers.tick(60000);
+            await flush(60);
+
+            assert.match(window.document.title, /^\(2\) Task Queue/,
+                'the submitted task was dropped along with the response that named it');
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
     test('a queue positions response overtaken by a later one is discarded', async () => {
         // Nothing serialises the two-second poll, so a request slower than the interval overlaps the
         // next. Landing second, its obsolete snapshot used to be written over the newer one.

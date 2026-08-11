@@ -987,9 +987,23 @@ export function TaskPage() {
                  * the difference between counting and never counting at all.
                  *
                  * The badge is written either way; nothing is lost by it being right early.
+                 *
+                 * What a late answer must not do is take a task *out* of the set, for the reason above.
+                 * Putting one in is safe in a way that is worth using: a task this answer still lists is
+                 * queued as of the moment it was taken, so counting it later can only ever report a
+                 * completion, never conceal one. Which closes the last hole in "submit, then leave" --
+                 * the request the new row asks for can itself be in flight as the tab goes, and dropping
+                 * it whole left the count measuring against a set from before the submission, missing
+                 * the one task the user was waiting on.
                  */
                 if (!document[hidden] || queuedIdsRef.current == null) {
                     queuedIdsRef.current = queuedids;
+                } else {
+                    const alreadyknown = new Set(queuedIdsRef.current);
+                    const added = queuedids.filter(taskid => !alreadyknown.has(taskid));
+                    if (added.length > 0) {
+                        queuedIdsRef.current = queuedIdsRef.current.concat(added);
+                    }
                 }
                 updateQueueBadge(queuedids.length);
 
