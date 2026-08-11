@@ -12,7 +12,6 @@ import requests
 # and this file is what users copy as a starting point
 TIMEOUT_SECONDS = 60
 
-# against a local development server this is http://127.0.0.1:8000
 BASEURL = "https://fallingstar-data.com/forcedphot"
 
 if os.environ.get("ATLASFORCED_SECRET_KEY"):
