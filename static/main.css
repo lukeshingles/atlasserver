@@ -275,6 +275,31 @@ p.runnerstatus.stale {
   --bs-btn-active-border-color: #c37e00;
 }
 
+/* The code examples on the API guide. The frame is CSS alone, so it holds on a page where
+   copycode.js has not run; the script adds the .codeblock-wrap and the button inside it. */
+.codeblock {
+  padding: 1rem;
+  overflow-x: auto;
+  background-color: var(--bs-tertiary-bg);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+}
+
+.codeblock-wrap {
+  position: relative;
+}
+
+/* over the block rather than in it: .codeblock scrolls sideways for a long line, and a button
+   inside that box travels with the code */
+.codeblock-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  /* opaque, because .btn-outline-* has a transparent background and a long line passes underneath
+     the button rather than wrapping */
+  background-color: var(--bs-body-bg);
+}
+
 li.task .btn:not(.btn-sm) {
   margin-right: 0.2em;
   /* background-color: #6BA3E8; */
