@@ -258,10 +258,21 @@ p.runnerstatus.stale {
   --bs-link-hover-color-rgb: 35, 82, 124;
 }
 
-/* the orange the result links have always had, over whichever .btn variant carries them */
+/* The orange for the result links. Set through the button custom properties rather than as a plain
+   background-color so that it holds in every state: .btn:hover and .btn:active take their
+   background from these variables, and a bare background-color here is outranked by those rules,
+   leaving the underlying .btn-info colour to show through on hover. Hover and active are the base
+   darkened by 15%, the step Bootstrap uses for its own variants. */
 .results {
-  background-color: #ef4e19;
-  border-color: #e59400;
+  --bs-btn-color: #fff;
+  --bs-btn-bg: #ef4e19;
+  --bs-btn-border-color: #e59400;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #cb4215;
+  --bs-btn-hover-border-color: #c37e00;
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: #cb4215;
+  --bs-btn-active-border-color: #c37e00;
 }
 
 li.task .btn:not(.btn-sm) {

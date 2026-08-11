@@ -224,25 +224,31 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         elif request_type == "SSOSTACK":
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
-        elif request_type == "IMGZIP":
-            parent_task_id = self.submitted(attrs, "parent_task_id")
-            if not parent_task_id:
-                msg = "IMGZIP requests must have a parent_task_id set to an FP task."
-                raise serializers.ValidationError(msg)
+        else:
+            if request_type == "IMGZIP":
+                parent_task_id = self.submitted(attrs, "parent_task_id")
+                if not parent_task_id:
+                    msg = "IMGZIP requests must have a parent_task_id set to an FP task."
+                    raise serializers.ValidationError(msg)
 
-            try:
-                Task.objects.all().get(id=parent_task_id, request_type="FP")
-            except (ObjectDoesNotExist, IndexError):
-                msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
-                raise serializers.ValidationError(msg) from None
+                try:
+                    Task.objects.all().get(id=parent_task_id, request_type="FP")
+                except (ObjectDoesNotExist, IndexError):
+                    msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
+                    raise serializers.ValidationError(msg) from None
 
-        elif ra_missing and dec_missing:
-            msg = "Either an mpc_name or (ra, dec) must be specified."
-            raise serializers.ValidationError({"non_field_errors": msg})
-        elif dec_missing:
-            raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
-        elif ra_missing:
-            raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
+            # The target rules, which apply to an IMGZIP task as much as to any other: an image
+            # request carries the parent's own coordinates (see Task.new_imagerequest) and the
+            # runner dispatches on them, and task_target_is_mpcname_or_radec requires a target of
+            # every row. Checking here is what makes a request that clears ra and dec a 400 rather
+            # than an IntegrityError raised by the constraint.
+            if ra_missing and dec_missing:
+                msg = "Either an mpc_name or (ra, dec) must be specified."
+                raise serializers.ValidationError({"non_field_errors": msg})
+            if dec_missing:
+                raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
+            if ra_missing:
+                raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
 
         if "mjd_min" in attrs and attrs["mjd_min"] is not None and not is_finite_float(attrs["mjd_min"]):
             raise serializers.ValidationError(

@@ -1502,6 +1502,29 @@ class RequestImagesTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
 
+    def test_clearing_the_target_of_an_image_request_is_a_400(self) -> None:
+        """An IMGZIP task needs a target like any other, and the database says so.
+
+        The image request carries the parent's own coordinates and the runner dispatches on them,
+        so there is no targetless one to accommodate. task_target_is_mpcname_or_radec requires a
+        target of every row, and the serializer has to refuse one before the insert does, or the
+        answer is an IntegrityError rather than a validation error.
+        """
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user)
+        child.save()
+
+        self.client.force_login(self.user)
+        response = self.client.patch(
+            reverse("task-detail", args=[child.id]),
+            json.dumps({"ra": None, "dec": None}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400, response.status_code
+        child.refresh_from_db()
+        assert (child.ra, child.dec) == (1.0, 2.0), (child.ra, child.dec)
+
     def test_get_is_not_allowed(self) -> None:
         # creating a task from a GET handler is not CSRF protected
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
