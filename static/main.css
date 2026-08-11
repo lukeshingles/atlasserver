@@ -208,44 +208,45 @@ div#tasklist.singletaskdetail {
 }
 
 /*
-Status as an edge down the left of the row, with the word in the badge beside the task number.
+Status as the colour of the row's frame, thickened down its left side, with the word in the badge
+beside the task number.
 
 This replaces flooding the whole row: a queued task was filled with --bs-secondary-bg and a running
 one with half-opacity orange, which is a lot of colour to say one word, cost the text inside its
 contrast against a background it was not chosen for -- on the dark theme, body text over that orange
 blends to a muddy brown -- and meant the light curve in a finished row sat on a different surface
-from the one in the row above. The edge marks the same four states in a strip that no content has to
-be legible against, and the rows keep one background.
+from the one in the row above. The frame marks the same four states in a line no content has to be
+legible against, and the rows keep one background.
 */
 ul.tasks li.task {
   border-left-width: 0.4em;
 }
 
-/* the quietest of the four, and --bs-tertiary-color rather than --bs-secondary-color for that reason:
-   a task that has not started yet is the least interesting row in the list, and the secondary colour
-   made its edge the brightest mark on the dark theme -- louder than the green of a finished one */
+/* The status colours the whole frame, with the left edge thickened above so the state is legible
+   down the margin of a long list as well as around each card. One colour per state rather than a
+   coloured edge on a grey box: the frame is the row's outline, and having it disagree with the edge
+   beside it read as two different signals. */
 ul.tasks li.queued.notstarted {
-  border-left-color: var(--bs-tertiary-color);
+  border-color: var(--bs-secondary-color);
 }
 
 ul.tasks li.queued.started {
-  border-left-color: #f0ad4e;
+  border-color: #f0ad4e;
 }
 
 ul.tasks li.finished {
-  border-left-color: var(--bs-success);
+  border-color: var(--bs-success);
 }
 
 /* after .finished, so a task that finished with an error is not reported as a success */
 ul.tasks li.finished.errored {
-  border-left-color: var(--bs-danger);
+  border-color: var(--bs-danger);
 }
 
 /* The row is a control surface -- a link, download buttons, a delete -- and was a flat outline that
    said so only by having things in it. The lift is one pixel: enough to answer the pointer, small
    enough not to reflow the light curve inside. */
 li.task:hover {
-  border-color: var(--bs-emphasis-color);
   box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
   transform: translateY(-1px);
 }
@@ -370,7 +371,9 @@ li.task:hover .copybutton,
   color: var(--bs-link-color);
 }
 
-/* the word replaces the icon rather than joining it, so the row does not change width as it is read */
+/* The word replaces the icon rather than joining it, so the control does not grow by the width of
+   both. It does still widen while the word is there, which the row absorbs: the value beside it is
+   in a grid column that takes the space it is given. */
 .copyfeedback:not(:empty) {
   font-variant-numeric: normal;
   white-space: nowrap;

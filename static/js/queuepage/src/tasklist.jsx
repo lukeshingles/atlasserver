@@ -942,7 +942,12 @@ export function TaskPage() {
             })
             .then(response => response.status == 200 ? response.json() : null)
             .then(data => {
-                if (data == null || data.queuepositions == null) {
+                // hidden is re-checked because the tab can have been looked at again during this
+                // request's round-trip, the same hazard fetchQueuePositions re-checks the pause for.
+                // Without it a response landing just after the user came back would put a count in
+                // the title of a tab they are looking at, and handleVisibilityChange has already run
+                // and will not run again until the next time they leave and return.
+                if (!document[hidden] || data == null || data.queuepositions == null) {
                     return;
                 }
 
@@ -1338,10 +1343,15 @@ export function TaskPage() {
             <ul key="ultasklist" className="tasks" aria-busy="true">
                 <li key="message" className="visually-hidden" role="status">Loading tasks...</li>
                 {[0, 1, 2].map((row) => (
+                    // .taskinner as on a real row: li.task carries no padding of its own, because on a
+                    // real row the padding belongs inside the grid track that the show and hide
+                    // animates, so a placeholder without the wrapper sits flush against its border
                     <li key={'skeleton' + row} className="task taskskeleton" aria-hidden="true">
-                        <p className="placeholder-glow"><span className="placeholder col-4"></span></p>
-                        <p className="placeholder-glow"><span className="placeholder col-7"></span></p>
-                        <p className="placeholder-glow"><span className="placeholder col-6"></span></p>
+                        <div className="taskinner">
+                            <p className="placeholder-glow"><span className="placeholder col-4"></span></p>
+                            <p className="placeholder-glow"><span className="placeholder col-7"></span></p>
+                            <p className="placeholder-glow"><span className="placeholder col-6"></span></p>
+                        </div>
                     </li>
                 ))}
             </ul>);
