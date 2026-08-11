@@ -14,15 +14,10 @@ from django.db import transaction
 
 from atlasserver.forcephot.models import Task
 
-# Bumped by the web app whenever it changes the set of queued tasks; the task runner watches it
-# for changes. A counter rather than a flag it clears, because clearing has a lost-update window:
-# a request arriving between the runner's read and its delete was deleted along with the one being
-# consumed, and the ordering then waited for the backstop below. Nothing deletes this, so there is
-# no window -- the runner simply remembers the value it last acted on.
-#
-# Exact counting is not required and is not provided: incr on the file-based cache is a read
-# followed by a write, so two simultaneous requests can collapse into one increment. That still
-# leaves the value different from the one the runner remembers, which is the whole question.
+# Bumped by the web app when the queued set changes; the runner watches it and remembers the value
+# it last acted on. A counter rather than a flag it clears, because clearing loses a request that
+# arrives between the read and the delete. Simultaneous bumps can collapse into one increment,
+# which does not matter: the question is whether the value changed, not by how much.
 RECALC_GENERATION_CACHEKEY: t.Final = "queue-positions-generation"
 
 # Renumber at least this often even when the flag says nothing changed. Covers the task runner's

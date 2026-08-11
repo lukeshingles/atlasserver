@@ -106,15 +106,11 @@ def create_index(apps, schema_editor):
     if vendor == "mysql":
         schema_editor.execute(f"ALTER TABLE auth_user ADD COLUMN {EXEMPT_COLUMN} VARCHAR(254) NULL")
         grandfather_existing_duplicates(apps, schema_editor)
-        # Neither engine has partial indexes, so the rows that must not be constrained -- blank
-        # addresses and the grandfathered duplicates -- are excluded by generating NULL for them: a
-        # unique index permits repeated NULLs. LOWER() is belt and braces (the default collation of
-        # both is already case-insensitive) so the index cannot silently become case-sensitive on a
-        # server configured with a _bin or _cs collation.
-        #
-        # The exemption is compared, not merely tested: a grandfathered row that moves to some
-        # other address stops matching and rejoins the index, which is the whole point of storing
-        # the address. STORED means that comparison is redone on every write to the row.
+        # No partial indexes on either engine, so the rows that must not be constrained -- blank
+        # and grandfathered -- are excluded by generating NULL, which a unique index allows to
+        # repeat. LOWER() guards against a _bin or _cs collation. The exemption is compared rather
+        # than merely tested, so a row that moves off its pardoned address rejoins the index;
+        # STORED redoes that on every write.
         schema_editor.execute(
             f"ALTER TABLE auth_user ADD COLUMN {GENERATED_COLUMN} VARCHAR(254) GENERATED ALWAYS AS "
             f"(CASE WHEN email = '' OR LOWER(email) = {EXEMPT_COLUMN} THEN NULL ELSE LOWER(email) END) STORED"

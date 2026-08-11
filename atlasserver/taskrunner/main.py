@@ -865,14 +865,10 @@ def main() -> None:
             refresh_status()
             printedwaiting = False
 
-        # Renumbering used to happen in the web request that submitted or deleted a task, where it
-        # locked every queued row while the user waited. It belongs here: this loop is the only
-        # thing that changes which task is running, and it already reads this table twice a second.
-        # Doing it here also keeps positions fresh as tasks finish, which the old placement did not.
-        #
-        # The counter is not consulted on every pass: it is a file read in production and the loop
-        # runs twice a second, so it is asked for on its own interval. See
-        # RECALC_CHECK_INTERVAL_SECONDS for why the delay does not show.
+        # Renumbering belongs here rather than in the submitting request: this loop is the only
+        # thing that changes which task is running, it already reads the table twice a second, and
+        # doing it here keeps positions fresh as tasks finish. The counter is a file read in
+        # production, so it is consulted on its own interval rather than on every pass.
         recalc_requested = False
         if (time.perf_counter() - last_queueflagchecktime) > taskqueue.RECALC_CHECK_INTERVAL_SECONDS:
             last_queueflagchecktime = time.perf_counter()

@@ -102,6 +102,10 @@ RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 # The same, for the address-change confirmations one account can ask for. See change_email.
 EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
 
+# Every limiter below uses cache.add(), which on the production file-based backend is has_key()
+# followed by set() -- so it bounds a sustained flood rather than excluding a race, and two
+# simultaneous callers can both be told yes. All three are sized on that basis.
+
 # Registrations allowed from one client address per window. A budget rather than a single slot,
 # because this service's users arrive from universities behind shared addresses and two colleagues
 # signing up together is ordinary; what it has to stop is a loop. See register.
@@ -968,20 +972,9 @@ def register(request):
     if request.method == "POST":
         form = RegistrationForm(request.POST)
         if form.is_valid():
-            # inactive until the address is confirmed. Registration used to log the account
-            # straight in, so the address that receives result mail and password resets was never
-            # proved to belong to whoever typed it.
-            #
-            # Both in one transaction: sending is what makes the account reachable, so an account
-            # created without it is worse than no account at all. The username and the address
-            # would be taken by a row nobody can log into, cannot verify (no link was sent) and
-            # cannot recover (password reset skips inactive users), leaving the person unable even
-            # to register again.
-            # Bounded per client address. Every valid submission sends mail synchronously, and
-            # nothing else limits this endpoint: an unauthenticated caller posting distinct
-            # addresses in a loop is an open mail relay as far as the SMTP quota is concerned, and
-            # plus-addressing aims the whole lot at one real inbox without tripping the unique
-            # index. The other two send paths were limited and this one was not.
+            # Bounded per client address: every valid submission sends mail synchronously, so a
+            # loop of distinct addresses is an open relay as far as the SMTP quota is concerned,
+            # and plus-addressing aims them all at one inbox without tripping the unique index.
             clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
             throttlecache = caches["throttle"]
             # add() first so the window starts at the first attempt and expires on its own; incr()
@@ -1004,6 +997,9 @@ def register(request):
                 )
                 return render(request, "registration/register.html", {"form": form, "name": "Register"})
 
+            # Account and send in one transaction: a row created without its link is worse than
+            # none, because it holds the username and address while being unable to log in, verify
+            # (nothing was sent) or recover (password reset skips inactive users).
             try:
                 with transaction.atomic():
                     user = form.save(commit=False)
@@ -1017,14 +1013,10 @@ def register(request):
 
                     send_verification_email(request, user)
             except IntegrityError:
-                # separately from the send failure below, because the advice differs. The form's
-                # clean methods checked both the username and the address, and either can be taken
-                # between that check and this save. "Try again in a few minutes" would be a dead
-                # end for both, because whichever it was is now permanently taken.
-                #
-                # Which one is re-established by asking, rather than read off the exception: the
-                # message differs by backend and by constraint name, and pointing the error at the
-                # wrong field is what this branch exists to stop.
+                # Separate from the send failure below, whose "try again shortly" is a dead end
+                # here: username and address are both checked before this save and either can be
+                # taken in between. Which one is asked rather than read off the exception, whose
+                # text varies by backend -- naming the wrong field is what this exists to stop.
                 username = form.cleaned_data.get("username")
                 email = form.cleaned_data.get("email")
 
@@ -1141,21 +1133,10 @@ def resend_verification(request):
     if request.method == "POST" and form.is_valid():
         email = form.cleaned_data["email"]
 
-        # One send per address per interval. Without it this endpoint mails any address with an
-        # unverified account as fast as it is asked to, which makes the server an amplifier for
-        # flooding that inbox and puts the sending domain's reputation at risk.
-        #
-        # add() rather than get()-then-set(), but note this is not a mutual exclusion: the
-        # file-based backend used in production implements add() as has_key() followed by set(),
-        # so two simultaneous posts can both be told yes. The limit is here to bound a sustained
-        # flood, and a burst of two is not what it exists to stop.
-        #
-        # The address is hashed into the key rather than used directly: cache keys are visible in
-        # filenames and memcached rejects some characters, and an address is personal data.
-        #
-        # In the throttle cache, not "default": an unauthenticated caller can create one of these
-        # per syntactically valid address it posts, without any account having to exist, and
-        # "default" holds the queue-recalc flag and the PDF render locks behind a 300-entry cap.
+        # One send per address per interval; without it this endpoint floods any inbox with an
+        # unverified account. The address is hashed because cache keys appear in filenames, and the
+        # throttle cache is used because an unauthenticated caller can create one key per address
+        # it posts -- "default" holds the queue signal and PDF locks behind a 300-entry cap.
         emailkey = hashlib.sha256(email.lower().encode()).hexdigest()
         may_send = caches["throttle"].add(
             f"resendverification-{emailkey}", True, timeout=RESEND_VERIFICATION_INTERVAL_SECONDS
@@ -1312,14 +1293,10 @@ def api_token(request):
         action = request.POST.get("action")
 
         if action in {"create", "regenerate"}:
-            # delete and recreate in one transaction: the key is the primary key, so there is no
-            # rotating it in place, and a failure between the two would leave the user with none.
-            #
-            # Locked, because Token.user is one-to-one: two of these arriving together (a double
-            # submit, an impatient second click) both delete nothing and then both insert, and the
-            # loser's insert raises. Locking the user row serialises them, so the second rotation
-            # runs after the first rather than failing -- and the token each response shows is the
-            # one that is actually current when it renders.
+            # The key is the primary key, so rotating means delete-then-create; one transaction so
+            # a failure between them cannot leave the user with none. Locked because Token.user is
+            # one-to-one: two rotations arriving together would both delete nothing, both insert,
+            # and one would raise.
             with transaction.atomic():
                 get_user_model().objects.select_for_update().filter(pk=request.user.pk).first()
                 Token.objects.filter(user=request.user).delete()
@@ -1525,36 +1502,18 @@ def taskpdfplot(request, taskid):
         #     os.remove(pdfpath)
 
         if not pdfpath.is_file():
-            # One render per task at a time. Each one forks matplotlib, so without this a task
-            # whose PDF does not exist yet forks a process per concurrent request -- and the
-            # queue page links the PDF for every finished task, so that is a normal thing for a
-            # crawler or an impatient reload to cause.
-            #
-            # add() rather than get()/set(), but this is a herd control, not a mutex: the
-            # file-based backend implements add() as has_key() followed by set(), so two requests
-            # arriving in the same instant can both proceed. That costs one extra render of a
-            # plot that is about to be written anyway; what it stops is the tenth.
-            #
-            # The lock expires a little after the render's own deadline so that a worker killed
-            # mid-render (a deploy, an OOM) cannot wedge the task's plot until the cache is cleared.
+            # Herd control: the queue page links a PDF for every finished task, so a crawler or a
+            # reload would otherwise fork matplotlib once per concurrent request. Not a mutex (see
+            # the note by the limiter constants); losing the race costs one extra render, not the
+            # tenth. The timeout outlives the render so a killed worker cannot wedge the task.
             lockkey = f"pdfplot-lock-{taskid}"
             if not caches["default"].add(lockkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
                 return _pdfplot_unavailable()
 
-            # Rendered to a path only this request knows, then published with a rename.
-            #
-            # Two things follow from that. A child killed mid-write leaves its wreckage on the
-            # private path, so the final name is never a truncated file that every later request
-            # would serve for ever without retrying. And because the lock above is not a real
-            # mutex, a second renderer may be running concurrently: it has its own path, so
-            # neither can delete or half-overwrite the other's work. The rename is atomic within
-            # a filesystem, and both renders are of the same data, so whichever lands second is
-            # equally correct.
-            # the uniqueness goes in the stem, keeping .pdf as the final suffix: plot_atlas_fp
-            # calls plt.savefig(path) with no explicit format, so matplotlib infers it from the
-            # extension. A name ending .part made it infer a "part" format, which it rejects --
-            # the worker caught the ValueError, the child exited cleanly, and the view answered
-            # 404 having rendered nothing.
+            # A private path published by rename, so a killed child leaves its wreckage there
+            # rather than at the final name, and two concurrent renders cannot damage each other.
+            # The uniqueness goes in the stem so .pdf stays the suffix: plot_atlas_fp calls
+            # savefig() with no explicit format, and matplotlib infers it from the extension.
             renderpath = pdfpath.with_name(f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}")
 
             try:

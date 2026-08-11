@@ -133,16 +133,10 @@ def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email:
     from django.core import signing
     from django.urls import reverse
 
-    # from_email makes the link single-use: applying it changes the account's address, so a replay
-    # no longer matches. Without it the token stayed valid for the whole timeout, and anyone still
-    # holding an old link -- it was delivered to a mailbox, and scanners and forwarding rules keep
-    # copies -- could undo a later change and point result mail and password resets back at
-    # themselves.
-    #
-    # The credential state goes in for the same reason PasswordResetTokenGenerator hashes it: a
-    # pending change has to die when the account is recovered. Someone with temporary access could
-    # otherwise request a move to their own mailbox, wait out the owner's password reset, and
-    # confirm afterwards -- taking the address, and with it every future reset link.
+    # from_email makes the link single-use: applying it moves the address, so a replay no longer
+    # matches -- and copies of an old link outlive the mailbox it was sent to. The credential state
+    # kills a pending change when the account is recovered, so temporary access cannot be parked
+    # and cashed in after the owner resets their password.
     token = signing.dumps(
         {"user_pk": user.pk, "email": new_email, "from_email": user.email, "state": _credential_state(user)},
         salt=EMAIL_CHANGE_SALT,

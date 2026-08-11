@@ -30,15 +30,11 @@ if not SECRET_KEY:
 
 TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split(",") if x]
 
-# How many reverse proxies in front of this server append to X-Forwarded-For. Zero means the
-# header is ignored entirely, which is right for the current deployment: httpconf.txt sets
-# X-Forwarded-Proto but nothing sets X-Forwarded-For, so every value of it is client-supplied and
-# says only what the client chose to claim. Set this only if a proxy that *overwrites* the header
-# (or appends to a chain it controls) is actually in front, and count the proxies exactly: reading
-# one hop too far left takes the attacker's value again.
-#
-# Validated rather than passed straight to int(), for the same reason as ATLASSERVER_DEBUG below:
-# a typo here is a bare ValueError at import that names no variable, and the site does not start.
+# How many reverse proxies in front of this server append to X-Forwarded-For. Zero ignores the
+# header, which is right for the current deployment: nothing sets it, so any value is whatever the
+# client chose to claim. Set it only for a proxy that overwrites the header, and count the hops
+# exactly -- one too far left reads the attacker's value again. Validated rather than passed to
+# int(), so a typo names the variable instead of failing the whole import with a bare ValueError.
 _proxycount_env = os.environ.get("ATLASSERVER_TRUSTED_PROXY_COUNT", "0").strip() or "0"
 # isdecimal, not isdigit: isdigit also accepts superscripts, and "²" would pass the check and
 # then fail int() with the bare ValueError this exists to replace
@@ -76,17 +72,11 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
-# Absolute origin for links in security-sensitive email -- account verification and email change.
-# Built from configuration rather than from the request's Host header, because pinning
-# ALLOWED_HOSTS is not the protection it looks like: the list above legitimately contains wildcard
-# entries, so any subdomain of qub.ac.uk or fallingstar-data.com passes host validation. An
-# attacker able to serve one of those (a dangling DNS record is the usual way) can register with a
-# victim's address, aim the Host header at their own server, and be sent the victim's token when
-# the victim opens the link -- then replay it here.
-#
-# Empty means "use the request", which is what development and the tests want. Set it in
-# production. django.contrib.sites would be the other way to do this, but it is not installed and
-# adding it for one string is not worth a migration.
+# Absolute origin for links in verification and email-change mail. Not the request's Host header:
+# ALLOWED_HOSTS above holds wildcard entries, so any subdomain of qub.ac.uk or
+# fallingstar-data.com passes validation, and whoever can serve one could be sent a victim's token
+# by aiming the Host at their own server. Empty means "use the request", which is what development
+# wants; set it in production.
 _siteorigin = os.environ.get("ATLASSERVER_SITE_ORIGIN", "").strip().rstrip("/")
 if _siteorigin and not _siteorigin.startswith(("http://", "https://")):
     _msg = f"ATLASSERVER_SITE_ORIGIN must start with http:// or https://, but is {_siteorigin!r}"
@@ -288,14 +278,6 @@ STATIC_VERSION = _static_version()
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
 
-# If your Django app is behind a proxy that sets a header to specify secure
-# connections, AND that proxy ensures that user-submitted headers with the
-# same name are ignored (so that people can't spoof it), set this value to
-# a tuple of (header_name, header_value). For any requests that come in with
-# that header/value, request.is_secure() will return True.
-# WARNING! Only set this if you fully understand what you're doing. Otherwise,
-# you may be opening yourself up to a security risk.
-# SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
 if not DEBUG:
     # httpconf.txt sets this header unconditionally (so a client cannot spoof it). The previous
     # value keyed off SERVER_SOFTWARE, which Apache always populates with its own banner, so
@@ -304,14 +286,10 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 if not DEBUG:
-    # the four warnings that `manage.py check --deploy` raised. Guarded, because development runs
-    # over plain http on localhost and secure-only cookies would never be sent there.
-    #
-    # SECURE_SSL_REDIRECT never fires as things stand: httpconf.txt sets X-Forwarded-Proto to https
-    # unconditionally, so request.is_secure() is always true. It is here as a backstop for a
-    # deployment that stops setting that header, which would otherwise quietly serve plain http.
-    # annotated rather than left to inference: without a declared type these are literal types, and
-    # settings_test.py (which switches them back off, see the note there) would not type check
+    # the four warnings `manage.py check --deploy` raised, guarded because development runs over
+    # plain http and would never send secure-only cookies. SECURE_SSL_REDIRECT never fires today
+    # (httpconf.txt always sets X-Forwarded-Proto) and is a backstop for a deployment that stops.
+    # Annotated because otherwise these infer as literal types and settings_test cannot switch them.
     SECURE_SSL_REDIRECT: bool = True
     SESSION_COOKIE_SECURE: bool = True
     CSRF_COOKIE_SECURE: bool = True

@@ -27,18 +27,11 @@ def get_mjd_min_default() -> float:
 # value memoised below, so it cannot double as the "not computed" marker.
 UNSET: t.Final = object()
 
-# The whitespace "no target" is allowed to be made of. Spelled out because SQL and Python have to
-# agree on it exactly: TRIM() removes only spaces, while Python's str.strip() removes tabs,
-# newlines and more besides. A name of "\t" therefore satisfied the constraint as a real MPC name
-# while Task.mpc_target reduced it to nothing, and the runner took the coordinate branch on a row
-# whose coordinates the constraint had just permitted to be NULL -- float(None).
-#
-# The set is the ASCII whitespace plus the non-breaking space, which is what actually turns up in
-# a name pasted from a web page or a PDF. It is deliberately not all of Unicode's whitespace: each
-# character costs another nested REPLACE in a stored constraint, and the property that matters is
-# not that every exotic space is rejected but that the constraint and mpc_target agree on which
-# are -- they are both derived from this constant, so they cannot disagree. A name made of some
-# rarer space is accepted as a (useless) target by both, and fails on sc01 like any bad name.
+# The whitespace a name may be made of and still count as no target. SQL and Python must agree on
+# it exactly -- TRIM() strips only spaces where str.strip() strips much more -- or the constraint
+# accepts a name the runner reads as absent and dispatches by coordinates the constraint let be
+# NULL. Not all of Unicode's whitespace: each character is another nested REPLACE in a stored
+# constraint, and what matters is that both sides derive from this one constant.
 MPC_NAME_WHITESPACE: t.Final = " \t\n\r\v\f\u00a0"
 
 
@@ -144,14 +137,10 @@ class Task(models.Model):
 
     class Meta:
         constraints = [
-            # The rule ForcePhotTaskSerializer.validate() applies, stated once more where nothing
-            # can go around it: the serializer is the only path that enforced it, so the admin and
-            # the shell could both create a task with no target at all. __str__ still carries a
-            # branch for that case, and the task runner would dispatch a job for nothing.
-            #
-            # Exactly one of the two forms: an MPC object name (with no coordinates), or both
-            # coordinates (with no name). RA 0 / Dec 0 are real coordinates, so this tests for NULL
-            # rather than for falsiness, exactly as the serializer does.
+            # Exactly one of the two forms: an MPC name with no coordinates, or both coordinates
+            # with no name. The serializer applies the same rule, but was the only thing that did,
+            # so the admin and the shell could create a task the runner would dispatch for nothing.
+            # NULL rather than falsiness, because RA 0 / Dec 0 are real coordinates.
             models.CheckConstraint(
                 condition=(
                     (models.Q(mpc_name__isnull=False) & ~BLANK_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True))

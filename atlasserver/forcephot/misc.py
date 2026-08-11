@@ -20,23 +20,10 @@ PDF_PLOT_TIMEOUT_SECONDS: t.Final = 120.0
 # grace between SIGTERM and SIGKILL for that process
 TERMINATE_GRACE_SECONDS: t.Final = 5.0
 
-# How the PDF render process is started. Spawn explicitly, rather than taking the platform default,
-# because make_pdf_plot's live caller is a view running inside a mod_wsgi worker thread.
-#
-# fork() from a multithreaded process copies only the calling thread, but copies all of the memory
-# -- including any lock another thread happened to be holding at that instant, which in the child
-# is held by a thread that does not exist and will never release it. The child then deadlocks the
-# moment it touches whatever that lock guards, which for an import-heavy child (matplotlib) means
-# the import machinery. CPython 3.14 warns about this, and it gets worse on a free-threaded build,
-# where the other threads are genuinely running rather than merely runnable.
-#
-# The default hid this: macOS already spawns, so the path is exercised that way in development,
-# while Linux forks on 3.13 and forkserver on 3.14+. Naming it makes every platform and version do
-# what is already tested.
-#
-# Spawn's cost is that the child re-imports instead of inheriting. That costs nothing here: the
-# expensive import is matplotlib, which plot_atlas_fp pulls in and which make_pdf_plot_worker
-# defers precisely so it stays out of the parent -- so there was never anything to inherit.
+# Spawn, not the platform default, because the live caller is a mod_wsgi worker thread: fork()
+# there copies locks held by threads that do not exist in the child, which then deadlocks on the
+# import machinery. Costs nothing, since matplotlib is deferred into the worker and so was never
+# in the parent to inherit.
 PLOT_PROCESS_CONTEXT: t.Final = multiprocessing.get_context("spawn")
 
 

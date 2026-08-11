@@ -18,17 +18,11 @@ from django.db.models.functions import Replace
 from django.db.models.functions import Trim
 from django.db.models.lookups import Exact
 
-# The rule, written once and used twice: the pre-check below excludes it to find violators, and
-# AddConstraint enforces it. Written out by hand rather than deconstructed from the model, because
-# a migration must keep working when the model moves on -- but only once, so the check cannot
-# quietly stop matching the constraint it is meant to be clearing the way for.
-# Spelled exactly as Task.Meta spells it, negation included: Django compares constraints by their
-# deconstructed form, so a logically equivalent but differently written condition makes
-# makemigrations believe the model has drifted and demand another migration.
-#
-# This is the model's _space_normalised(), unrolled. SQL TRIM removes
-# only spaces, so the other whitespace is replaced with spaces first; the set must match the one
-# Task.mpc_target strips, or the database and the runner disagree about what counts as a target.
+# The rule, written once here and used twice below: the pre-check excludes it to find violators,
+# AddConstraint enforces it. Spelled out by hand rather than imported, because a migration must
+# keep working when the model moves on -- but spelled *exactly* as Task.Meta spells it, negation
+# included, since Django compares constraints by deconstructed form and reads any rewording as
+# model drift. TRIM strips only spaces, so the rest of the set is replaced with spaces first.
 _MPC_NAME_WHITESPACE = " \t\n\r\v\f\u00a0"
 
 
@@ -67,8 +61,6 @@ def check_every_task_has_a_target(apps, schema_editor):
             f"Cannot add the target constraint: {count} task(s) specify neither an MPC object name "
             f"nor a complete (ra, dec) pair, or specify both.\n"
             f"  example task ids: {examples}\n"
-            # not "archive them": the constraint takes no notice of is_archived, so an archived
-            # violator fails this check just the same on the next attempt
             "Give these rows a target or delete them, then run this migration again."
         )
         raise RuntimeError(msg)

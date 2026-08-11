@@ -1,24 +1,14 @@
 """Keep the pending-verification marker in step with accounts activated outside the flow.
 
-forcephot.views.verify_email clears the marker when someone follows their link, but that is not
-the only way an account becomes active. An administrator ticking is_active in the Django admin
-(the usual answer to "I never got the email"), or a shell one-liner doing the same, would leave
-the row behind on an account that is now perfectly ordinary.
+verify_email clears the marker, but an administrator ticking is_active -- the usual answer to "I
+never got the email" -- does not. A marker left on an active account matters once that account is
+disabled: awaiting_verification() would read it as unverified again, and the resend path would
+hand out a link undoing the disable.
 
-That matters later rather than immediately: awaiting_verification() reads the marker, so if the
-account were disabled afterwards it would be classified as unverified again -- and the resend path
-would hand out a link that undoes the administrative disable. The marker has to mean "registered
-and still unproved", so it is cleared wherever activation actually happens.
-
-Known gap: QuerySet.update() emits no signals, so `User.objects.filter(...).update(is_active=True)`
-leaves the marker behind and reopens exactly that hole. This is not an oversight in the handler --
-it is what update() is: a deliberate bypass of save(), which skips signals, auto_now and
-full_clean alike. The same caveat already applies elsewhere in this project (see the comment in
-forcephot.queue about bulk_update not firing auto_now). Closing it properly would mean a database
-trigger, which is a large amount of machinery for a shell idiom; activating an account through
-Model.save() -- what the admin, any form, and `user.is_active = True; user.save()` all do -- is
-covered. If you do reach for update() to activate accounts, delete their PendingEmailVerification
-rows in the same breath.
+Known gap: QuerySet.update() emits no signals, so update(is_active=True) leaves the marker behind.
+That is what update() is, a deliberate bypass of save() that skips auto_now and full_clean too;
+closing it means a database trigger, which is a lot of machinery for a shell idiom. Every
+Model.save() path is covered. If you do activate accounts with update(), delete their rows too.
 """
 
 import typing as t
