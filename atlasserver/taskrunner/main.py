@@ -220,9 +220,6 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
     if task.user_id in settings.TEST_USERS:
         atlascommand += " tdo=1"
 
-    # force.sh takes minutes, so replacing atlascommand with an echo is the usual way to exercise
-    # the surrounding dispatch and result handling quickly
-
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}; "
     atlascommand += f"~/atlas_gettaskimage.py {remoteresultfile}"
@@ -353,7 +350,6 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     if stdout:
         stdoutlines = stdout.split("\n")
-        # counted rather than echoed: force.sh is chatty and the per-slot logs were unreadable
         logfunc(f"{REMOTE_SERVER} STDOUT: ({len(stdoutlines)} lines of output)")
 
     if stderr:
