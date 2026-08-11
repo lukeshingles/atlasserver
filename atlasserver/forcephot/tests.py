@@ -2801,6 +2801,29 @@ class RegistrationVerificationTests(TestCase):
         assert count_after == count + 1
         assert started_after == started, "the window restarted, so a persistent caller renews it"
 
+    def test_a_window_from_another_boot_does_not_lock_the_client_out(self) -> None:
+        """The stored start is a wall clock, and an impossible elapsed time restarts the window.
+
+        It was time.monotonic(), whose epoch does not survive a reboot -- and the value goes into a
+        file-based cache that does. A start from the previous boot reads as being in the future, so
+        the timeout below was computed as the machine's former uptime and a shared address stayed
+        blocked for as long as the host had been up.
+        """
+        clientkey = f"registration-{hashlib.sha256(b'127.0.0.1').hexdigest()}"
+        # as a pre-reboot entry looks: a start far in the future, at the limit
+        caches["throttle"].set(
+            clientkey,
+            (views.REGISTRATION_WINDOW_LIMIT, time.time() + 3_000_000),
+            timeout=views.REGISTRATION_WINDOW_SECONDS,
+        )
+
+        response = self.client.post(reverse("register"), {**self.credentials, "email": "afterreboot@example.com"})
+
+        assert "wait a few minutes" not in response.content.decode().lower(), "a stale window blocked a new client"
+        count, started = caches["throttle"].get(clientkey)
+        assert count == 1, count
+        assert started <= time.time(), "the window still starts in the future"
+
     def test_losing_the_race_for_a_username_says_so(self) -> None:
         # username is unique too, and the handler used to report every integrity error as an email
         # collision -- telling the user an address they can still have is taken

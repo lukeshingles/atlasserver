@@ -963,10 +963,20 @@ def register(request):
             # so a client that kept trying kept renewing its own block indefinitely.
             clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
             throttlecache = caches["throttle"]
-            now = time.monotonic()
+            # time.time(), not monotonic(): this value is written to a file-based cache that
+            # outlives the process and the host, and monotonic() is measured from an epoch that
+            # does not survive a reboot -- a stored value from the previous boot reads as being in
+            # the future here.
+            #
+            # An elapsed time outside the window is therefore treated as no window at all, which
+            # covers an expiry, a clock stepped by NTP, and any stale epoch. Without that the
+            # arithmetic below could compute a timeout of the machine's former uptime and lock a
+            # shared address out for weeks.
+            now = time.time()
             window = throttlecache.get(clientkey)
+            elapsed = now - window[1] if window is not None else None
 
-            if window is None or now - window[1] >= REGISTRATION_WINDOW_SECONDS:
+            if elapsed is None or not (0 <= elapsed < REGISTRATION_WINDOW_SECONDS):
                 registrations, started = 1, now
             else:
                 registrations, started = window[0] + 1, window[1]
