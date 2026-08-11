@@ -11,7 +11,17 @@ a {
   cursor: pointer;
 }
 
+/* Bootstrap 3 was loaded here without a .navbar-default or .navbar-inverse variant, so the
+   navigation took its plain link colour rather than any navbar colour of its own. Bootstrap 5's
+   navbar does have one -- a translucent near-black -- so the blue has to be asked for. Through the
+   navbar's custom properties, which is where .nav-link, .navbar-brand and the toggler all read
+   their colour from, rather than a selector per element. #337ab7 and #23527c are Bootstrap 3's
+   link and link-hover; the active item is the same blue as the rest, distinguished by the
+   underline below, as it was before. */
 .navbar {
+  --bs-navbar-color: #337ab7;
+  --bs-navbar-hover-color: #23527c;
+  --bs-navbar-active-color: #337ab7;
   background: white;
 }
 
