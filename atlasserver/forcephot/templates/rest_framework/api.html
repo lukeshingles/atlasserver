@@ -1,0 +1,81 @@
+{% extends "rest_framework/base.html" %}
+{% load static %}
+{% load i18n %}
+
+{# The browsable API wearing the site's chrome, without vendoring DRF's base template again. That #}
+{# copy was 409 lines and drifted from DRF's own on every upgrade, which is why it was deleted;   #}
+{# these are the blocks DRF publishes for the purpose, so an upgrade carries the rest of the page #}
+{# forward on its own.                                                                           #}
+{#                                                                                                #}
+{# DRF's markup is Bootstrap 3 and the rest of the site is Bootstrap 5, so DRF's stylesheet stays #}
+{# and the site's is layered over it: replacing it would leave this page's own widgets unstyled.  #}
+
+{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}
+
+{% block bootstrap_theme %}
+  {{ block.super }}
+  <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver={{ static_version }}"/>
+  <style>
+    /* The navbar is laid out here rather than by Bootstrap 3, whose floats assume a 50px brand
+       and cannot accommodate the 118px logo the rest of the site uses. */
+    .sitenav { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
+               background: white; padding: 0 1rem; margin-bottom: 1em; }
+    .sitenav .navbar-brand { height: auto; padding: 0; }
+    .sitenav ul { display: flex; align-items: center; gap: 1rem; list-style: none; margin: 0; padding: 0; }
+    .sitenav .siteuserlinks { margin-left: auto; }
+    /* Bootstrap 5's navbar link colour, which is what base.html gets by default */
+    .sitenav a, .sitenav button { color: rgba(0, 0, 0, 0.65); text-decoration: none; }
+    .sitenav a:hover, .sitenav a:focus, .sitenav button:hover { color: rgba(0, 0, 0, 0.8); text-decoration: none; }
+    .sitenav li.active > a { text-decoration: underline; }
+    .sitenav a.loginrequired { color: lightgrey; }
+    .sitenav form { margin: 0; }
+    .sitenav form button { padding: 0; border: 0; background: none; }
+  </style>
+{% endblock %}
+
+{% block navbar %}
+  {% url 'index' as index_url %}
+  {% url 'resultdesc' as resultdesc_url %}
+  {% url 'task-list' as tasklist_url %}
+  {% url 'apiguide' as apiguide_url %}
+  {% url 'faq' as faq_url %}
+  {% url 'stats' as stats_url %}
+  <nav class="sitenav" aria-label="{% translate "navbar" %}">
+    <a class="navbar-brand" rel="nofollow" href="{{ index_url }}">
+      <img src="{% static "images/logos/atlas_logo.svg" %}" alt="ATLAS Forced Photometry home" />
+    </a>
+
+    <ul>
+      <li{% if request.path == index_url %} class="active"{% endif %}><a href="{{ index_url }}">Home</a></li>
+      <li{% if request.path == resultdesc_url %} class="active"{% endif %}><a href="{{ resultdesc_url }}">Output</a></li>
+      {# Queue and API share a path and differ only by the format parameter, as in base.html #}
+      <li{% if request.path == tasklist_url and request.GET.format != 'api' %} class="active"{% endif %}><a class="{% if not user.is_authenticated %}loginrequired{% endif %}" href="{{ tasklist_url }}" rel="nofollow">Queue</a></li>
+      <li{% if request.path == tasklist_url and request.GET.format == 'api' %} class="active"{% endif %}><a class="{% if not user.is_authenticated %}loginrequired{% endif %}" href="{{ tasklist_url }}?format=api" rel="nofollow">API</a></li>
+      <li{% if request.path == apiguide_url %} class="active"{% endif %}><a href="{{ apiguide_url }}">API Guide</a></li>
+      <li{% if request.path == faq_url %} class="active"{% endif %}><a href="{{ faq_url }}">FAQ</a></li>
+      <li{% if request.path == stats_url %} class="active"{% endif %}><a href="{{ stats_url }}">Stats &amp; Issues</a></li>
+    </ul>
+
+    {# the site's own accounts, not DRF's rest_framework:login, so signing in here lands back here #}
+    <ul class="siteuserlinks">
+      {% block userlinks %}
+        {% if user.is_authenticated %}
+          {% if user.is_staff %}
+            <li><a href="{% url 'admin:index' %}" rel="nofollow">{% translate "Admin" %}</a></li>
+          {% endif %}
+          <li><a href="{% url 'apitoken' %}" rel="nofollow">{% translate "API token" %}</a></li>
+          {# a form, not a link: Django's LogoutView only accepts POST #}
+          <li>
+            <form action="{% url 'logout' %}" method="post">
+              {% csrf_token %}
+              <button type="submit">{% translate "Log out" %} ({{ user.username }})</button>
+            </form>
+          </li>
+        {% else %}
+          <li><a href="{% url 'login' %}?next={{ request.get_full_path|urlencode }}" rel="nofollow">{% translate "Log in" %}</a></li>
+          <li><a href="{% url 'register' %}" rel="nofollow">{% translate "Register" %}</a></li>
+        {% endif %}
+      {% endblock %}
+    </ul>
+  </nav>
+{% endblock %}

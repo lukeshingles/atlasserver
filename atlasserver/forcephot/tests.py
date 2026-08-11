@@ -3386,6 +3386,26 @@ class ThirdPartyScriptTests(TestCase):
             assert "bootstrap@3" not in content, f"{name} loads Bootstrap 3"
             assert "bootstrap@5" in content, f"{name} does not load Bootstrap 5"
 
+    def test_the_browsable_api_wears_the_site_chrome(self) -> None:
+        """DRF's own base template is used, with only the blocks it publishes overridden.
+
+        The 409-line vendored copy that used to provide this drifted from DRF's on every upgrade,
+        so the override is deliberately small -- which makes it worth pinning that the page really
+        does come out with the site's navigation rather than DRF's.
+        """
+        user = User.objects.create_user(username="browsable", email="b@example.com", password=None)
+        self.client.force_login(user)
+
+        content = self.client.get(reverse("task-list"), {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+
+        assert "django-rest-framework.org" not in content, "DRF's own branding is still in the navbar"
+        assert "main.css" in content, "the site stylesheet is not loaded"
+        for label in ("Home", "Output", "API Guide", "FAQ", "Stats &amp; Issues"):
+            assert label in content, label
+        # and DRF's own page is still there underneath, not replaced by ours
+        assert "Force Phot Task List" in content
+        assert "bootstrap.min.css" in content, "DRF's stylesheet was dropped, so its widgets are unstyled"
+
     def test_every_cdn_script_carries_an_integrity_hash(self) -> None:
         user = User.objects.create_user(username="sri", email="sri@example.com", password=None)
         self.client.force_login(user)
