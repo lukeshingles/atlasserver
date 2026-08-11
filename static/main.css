@@ -332,6 +332,99 @@ p.runnerstatus.stale {
   position: relative;
 }
 
+/*
+---- syntax highlighting ----
+
+The token classes prettify-min.js adds in the browser, to the Python on the API guide and to the
+request and response on the browsable API. Both pages get their colours from here so that the two
+read as one scheme; prettify.css ships a light palette of its own, but only the browsable API loads
+it, and main.css comes after it there, so this is the palette that applies on both.
+
+The dark values are the light ones lightened until they clear 4.5:1 against the card the code sits on
+(--bs-tertiary-bg in either theme), keeping each hue so the two themes are the same scheme. Note
+that this is a lightening, not a mix with white: .kwd starts as a very dark navy, and mixing it
+towards white drains the colour out of it, leaving keywords a grey that recedes behind the plain text
+they are supposed to stand out from. Raising its lightness and holding its saturation keeps them the
+most prominent thing in the block, which is what they are on the light theme.
+
+.com and .pun -- with .opn and .clo, which share its colour -- are the two ends of one grey rather
+than a single value: prettify.css's #93a1a1 reads at about 5:1 on the dark card but only 2.5:1 on the
+light one, which is too little for a comment and far too little for the punctuation and operators
+.pun covers. The light value is the darker grey from the same family, at about 5:1. .pln is the plain
+text between tokens, so on the dark theme it is simply the body colour.
+*/
+.com,
+.pun,
+.opn,
+.clo {
+  color: #586e75;
+}
+
+.pln {
+  color: #48484c;
+}
+
+.str,
+.atv {
+  color: #dd1144;
+}
+
+.kwd,
+.tag {
+  color: #1e347b;
+}
+
+.lit {
+  color: #195f91;
+}
+
+.fun {
+  color: #dc322f;
+}
+
+.typ,
+.atn,
+.dec,
+.var {
+  color: teal;
+}
+
+[data-bs-theme="dark"] .com,
+[data-bs-theme="dark"] .pun,
+[data-bs-theme="dark"] .opn,
+[data-bs-theme="dark"] .clo {
+  color: #93a1a1;
+}
+
+[data-bs-theme="dark"] .pln {
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .str,
+[data-bs-theme="dark"] .atv {
+  color: #ec7c98;
+}
+
+[data-bs-theme="dark"] .kwd,
+[data-bs-theme="dark"] .tag {
+  color: #8ca0e3;
+}
+
+[data-bs-theme="dark"] .lit {
+  color: #98b7ce;
+}
+
+[data-bs-theme="dark"] .fun {
+  color: #ea8482;
+}
+
+[data-bs-theme="dark"] .typ,
+[data-bs-theme="dark"] .atn,
+[data-bs-theme="dark"] .dec,
+[data-bs-theme="dark"] .var {
+  color: #73b9b9;
+}
+
 /* over the block rather than in it: .codeblock scrolls sideways for a long line, and a button
    inside that box travels with the code */
 .codeblock-copy {
