@@ -17,11 +17,32 @@
   <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver={{ static_version }}"/>
   <style>
     /* The navbar is laid out here rather than by Bootstrap 3, whose floats assume a 50px brand
-       and cannot accommodate the 118px logo the rest of the site uses. */
-    .sitenav { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
-               background: white; padding: 0 1rem; margin-bottom: 1em; }
-    .sitenav .navbar-brand { height: auto; padding: 0; }
-    .sitenav ul { display: flex; align-items: center; gap: 1rem; list-style: none; margin: 0; padding: 0; }
+       and cannot accommodate the 118px logo the rest of the site uses.
+       The measurements come from base.html as rendered: an 8px vertical padding on the bar and a
+       centred Bootstrap 5 .container inside it. Bootstrap 3's own .container is 1170px at the top
+       breakpoint rather than 1140px, so using it would leave the navbar shifting sideways as a
+       reader moved between this page and the rest of the site. */
+    /* Bootstrap 3 imposes Helvetica Neue and a 1.428 line-height on the whole page, which makes
+       every label a fraction of a pixel wider and the row 2px shorter than the same row elsewhere */
+    .sitenav { background: white; padding: 8px 0; margin-bottom: 16px;
+               font-family: var(--bs-font-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+                            "Helvetica Neue", Arial, sans-serif);
+               line-height: 1.5; }
+    .sitenav-inner { display: flex; align-items: center; flex-wrap: wrap;
+                     width: 100%; margin: 0 auto; padding: 0 12px; }
+    @media (min-width: 576px)  { .sitenav-inner { max-width: 540px; } }
+    @media (min-width: 768px)  { .sitenav-inner { max-width: 720px; } }
+    @media (min-width: 992px)  { .sitenav-inner { max-width: 960px; } }
+    @media (min-width: 1200px) { .sitenav-inner { max-width: 1140px; } }
+    @media (min-width: 1400px) { .sitenav-inner { max-width: 1320px; } }
+    /* Bootstrap 5's .navbar-brand padding, so the logo sits where it does elsewhere */
+    /* px, not rem: Bootstrap 3 sets html { font-size: 10px }, so a rem here is not the rem the
+       rest of the site is laid out in and every measurement copied from it would come out small */
+    .sitenav .navbar-brand { height: auto; padding: 5px 0; margin-right: 16px; }
+    .sitenav ul { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; }
+    /* Bootstrap 5's .nav-link padding: it is what spaces the items on every other page, so
+       without it this row is narrower and shorter than the same row elsewhere */
+    .sitenav li > a, .sitenav li > form button { display: inline-block; padding: 8px; }
     .sitenav .siteuserlinks { margin-left: auto; }
     /* Bootstrap 5's navbar link colour, which is what base.html gets by default */
     .sitenav a, .sitenav button { color: rgba(0, 0, 0, 0.65); text-decoration: none; }
@@ -41,6 +62,7 @@
   {% url 'faq' as faq_url %}
   {% url 'stats' as stats_url %}
   <nav class="sitenav" aria-label="{% translate "navbar" %}">
+   <div class="sitenav-inner">
     <a class="navbar-brand" rel="nofollow" href="{{ index_url }}">
       <img src="{% static "images/logos/atlas_logo.svg" %}" alt="ATLAS Forced Photometry home" />
     </a>
@@ -77,5 +99,6 @@
         {% endif %}
       {% endblock %}
     </ul>
+   </div>
   </nav>
 {% endblock %}
