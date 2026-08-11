@@ -323,38 +323,3 @@ rest_framework/base.html or the filters/ and horizontal/ template packs asks for
   background-color: var(--bs-tertiary-bg);
   border-color: var(--bs-border-color);
 }
-
-/*
-Each token colour is prettify's own mixed with enough white to clear 4.5:1 against that surface, so
-the dark theme reads as the same scheme rather than a different one. .com and .pun (with .opn and
-.clo, which share its rule) are left alone: prettify picks a mid grey for them that already sits near
-5:1 on the dark card as well as on the light one.
-*/
-[data-bs-theme="dark"] .pln {
-  color: var(--bs-body-color);
-}
-
-[data-bs-theme="dark"] .str,
-[data-bs-theme="dark"] .atv {
-  color: #ec7c98;
-}
-
-[data-bs-theme="dark"] .kwd,
-[data-bs-theme="dark"] .prettyprint .tag {
-  color: #a5aeca;
-}
-
-[data-bs-theme="dark"] .lit {
-  color: #98b7ce;
-}
-
-[data-bs-theme="dark"] .fun {
-  color: #ea8482;
-}
-
-[data-bs-theme="dark"] .typ,
-[data-bs-theme="dark"] .atn,
-[data-bs-theme="dark"] .dec,
-[data-bs-theme="dark"] .var {
-  color: #73b9b9;
-}

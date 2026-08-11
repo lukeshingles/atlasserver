@@ -10,7 +10,7 @@
     <p>The forced photometry server has a REST API that makes it easy to script requests. In this example, we'll use Python.</p>
 
     <p>First, let's import some useful packages and set the API URL:</p>
-<pre class="codeblock"><code>import io
+<pre class="codeblock prettyprint lang-py"><code>import io
 import re
 import sys
 import time
@@ -22,7 +22,7 @@ BASEURL = "https://fallingstar-data.com/forcedphot"
 </code></pre>
 
 <p>Next, we need to obtain a secret token from our username and password. This step normally only has to be done once. You can also view your token, and replace or delete it if it becomes compromised, on the <a href="{% url 'apitoken' %}">API token page</a>.</p>
-<pre class="codeblock"><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
+<pre class="codeblock prettyprint lang-py"><code>resp = requests.post(url=f"{BASEURL}/api-token-auth/", data={'username': "__my_username__", 'password': "__my_password__"})
 
 if resp.status_code == 200:
     token = resp.json()['token']
@@ -34,7 +34,7 @@ else:
 </code></pre>
 
 <p>Next, submit an RA and Dec coordinate to the server to obtain a URL for checking the status. Note that our request may be throttled if we make too many in a short time.</p>
-<pre class="codeblock"><code>task_url = None
+<pre class="codeblock prettyprint lang-py"><code>task_url = None
 while not task_url:
     with requests.Session() as s:
         resp = s.post(f"{BASEURL}/queue/", headers=headers, data={
@@ -63,7 +63,7 @@ while not task_url:
 </code></pre>
 
 Now we can check if the task has completed, and if so, retrieve the results. Be aware that the result URL is for short term use and may expire in the future.
-<pre class="codeblock"><code>result_url = None
+<pre class="codeblock prettyprint lang-py"><code>result_url = None
 while not result_url:
     with requests.Session() as s:
         resp = s.get(task_url, headers=headers)
@@ -89,7 +89,7 @@ with requests.Session() as s:
 </code></pre>
 
 <p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>
-<pre class="codeblock"><code>dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), sep=r"\s+")
+<pre class="codeblock prettyprint lang-py"><code>dfresult = pd.read_csv(io.StringIO(textdata.replace("###", "")), sep=r"\s+")
 print(dfresult)
 </code></pre>
 
@@ -98,13 +98,13 @@ print(dfresult)
 <h3>Being notified instead of polling</h3>
 
 <p>Rather than polling the task URL until it finishes, a task can carry a <code>callback_url</code>. When the task completes, the server sends it a single POST with a JSON body. The URL must be <code>https</code> and must resolve to a public address. Redirects are not followed, and the callback is attempted once and not retried, so treat it as a hint to fetch the result rather than as the result itself.</p>
-<pre class="codeblock"><code>resp = s.post(f"{BASEURL}/queue/", headers=headers, data={
+<pre class="codeblock prettyprint lang-py"><code>resp = s.post(f"{BASEURL}/queue/", headers=headers, data={
     'ra': 44, 'dec': 22, 'mjd_min': 59248.,
     'callback_url': 'https://example.org/my-atlas-hook'})
 </code></pre>
 
 <p>The body posted to that URL looks like:</p>
-<pre class="codeblock"><code>{
+<pre class="codeblock prettyprint lang-py"><code>{
     "task_id": 12345,
     "task_url": "https://fallingstar-data.com/forcedphot/queue/12345/",
     "request_type": "FP",
@@ -129,5 +129,21 @@ print(dfresult)
 
 {% block script %}
   {{ block.super }}
+  {# Syntax colouring for the examples above, which carry prettify's .prettyprint and lang-py
+     classes. The script is the copy that comes with Django REST framework, which the browsable API
+     already loads to mark up its request and response; the token colours both pages use are in
+     main.css, so the Python here and the JSON there read as one scheme.
+
+     Its own stylesheet is deliberately not loaded: prettify.css would bring a light card and 8px of
+     padding for .prettyprint, and these blocks already have .codeblock's frame. Nothing here depends
+     on the script arriving -- without it the examples are the plain framed text they were. #}
+  <script src="{% static "rest_framework/js/prettify-min.js" %}"></script>
+  {# prettify-min.js only defines prettyPrint, it does not call it -- on the browsable API that call
+     comes from drf-bootstrap5.js. Running here rather than on DOMContentLoaded is safe because every
+     code block is above this script, and guarded so that a failed download cannot throw. #}
+  <script>
+    "use strict";
+    if (window.prettyPrint) { window.prettyPrint(); }
+  </script>
   <script src="{% static "js/copycode.js" %}?ver={{ static_version }}"></script>
 {% endblock %}
