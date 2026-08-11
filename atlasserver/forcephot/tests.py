@@ -357,7 +357,7 @@ class EmailChangeTests(TestCase):
         link = self.confirmation_link()
 
         real = views.load_email_change_token
-        calls = []
+        calls: list[None] = []
 
         def reset_after_the_first_check(*args: t.Any, **kwargs: t.Any) -> t.Any:
             calls.append(None)
@@ -3169,7 +3169,7 @@ class RegistrationVerificationTests(TestCase):
         link = self.verification_link()
 
         real = views.awaiting_verification
-        calls = []
+        calls: list[None] = []
 
         def consumed_after_the_first_check(candidate: t.Any) -> bool:
             calls.append(None)
