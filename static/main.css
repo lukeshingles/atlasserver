@@ -1192,12 +1192,18 @@ point of having stopped flooding rows with colour.
   }
 }
 
-/* ul.tasks and :not() on the arrival rule below, so the two are mutually exclusive selectors of the
-   same specificity rather than a cascade to win: `animation` is a shorthand, so whichever rule won
-   replaced the other's name outright, and the arrival rule -- later in the file and one element more
-   specific -- silently took the flash off every row that had just been created. */
+/*
+A row that was just created runs both: the arrival stays first in the list, and the flash is added
+after it.
+
+Both names, rather than the flash alone, because the list is matched by position -- so keeping
+task-arrive at index 0 on every row means adding and removing .task-flash never introduces or removes
+it. Naming only the flash here made the two rules mutually exclusive, which stopped them overriding
+each other but meant task-arrive began the moment revealRow took .task-flash off again, 1.6 seconds
+after the row appeared, and the row faded in a second time.
+*/
 ul.tasks li.task.task-flash {
-  animation: task-flash 1600ms ease-out;
+  animation: task-arrive 260ms ease-out both, task-flash 1600ms ease-out;
 }
 
 /* ul.tasks, only to outrank the status edge above, which is one element more specific than a plain
@@ -1357,32 +1363,29 @@ is a genuinely new row, or the whole list after a filter or a page change, which
   }
 }
 
-/* :not(.task-flash), because a row that was just submitted has its own arrival -- it is revealed from
-   collapsed and tinted, which is more than this would give it. */
-ul.tasks li.task:not(.task-flash) {
+ul.tasks li.task {
   animation: task-arrive 260ms ease-out both;
 }
 
-ul.tasks li.task:not(.task-flash):nth-child(2) {
+ul.tasks li.task:nth-child(2) {
   animation-delay: 40ms;
 }
 
-ul.tasks li.task:not(.task-flash):nth-child(3) {
+ul.tasks li.task:nth-child(3) {
   animation-delay: 80ms;
 }
 
-ul.tasks li.task:not(.task-flash):nth-child(4) {
+ul.tasks li.task:nth-child(4) {
   animation-delay: 120ms;
 }
 
-ul.tasks li.task:not(.task-flash):nth-child(n+5) {
+ul.tasks li.task:nth-child(n+5) {
   animation-delay: 160ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
 
   ul.tasks li.task,
-  ul.tasks li.task:not(.task-flash),
   ul.tasks li.task.task-flash,
   #taskfilters .btn,
   #submitrequest {
