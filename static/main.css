@@ -148,10 +148,9 @@ form#newrequest li>*:nth-child(2) {
   width: 100%;
 }
 
-/* :not([type=submit]), because the submit button is a Bootstrap button and these are the field
-   styles: the grey border and the 0.3em padding here would otherwise land on it and undo the
-   padding, border and hover it gets from .btn-primary */
-form#newrequest input:not([type=submit]),
+/* the form's fields. Every input in the form is one: submit is a <button>, so the grey border and the
+   0.3em padding here cannot land on it and undo what .btn-primary gives it. */
+form#newrequest input,
 textarea {
   display: inline-block;
   padding: 0.3em 0.3em;
@@ -174,8 +173,14 @@ p.inputisodate {
   background: var(--bs-secondary-bg);
 }
 
-form#newrequest input[type=submit] {
+form#newrequest button[type=submit] {
   width: 100%;
+}
+
+/* the spinner inside the submit control while a request is in flight */
+#submitrequest .submitspinner {
+  margin-right: 0.5em;
+  vertical-align: -0.1em;
 }
 
 div#tasklist {
@@ -325,6 +330,55 @@ dl.taskmeta dd {
   /* the values include coordinates and MJD ranges, which must be able to break rather than widen the
      card past the column it sits in */
   overflow-wrap: anywhere;
+}
+
+/*
+The copy control beside a coordinate or an object name.
+
+Faint until the row is hovered or the button itself is focused, so a list of rows is not a column of
+icons; never hidden outright, because a control that only exists on hover cannot be reached by touch
+at all. It stays at full strength while it is reporting, so the confirmation is not the one thing on
+the row that fades as you read it.
+*/
+.copyable {
+  align-items: baseline;
+  display: inline-flex;
+  gap: 0.35em;
+}
+
+.copybutton {
+  background: none;
+  border: none;
+  border-radius: var(--bs-border-radius-sm);
+  color: var(--bs-secondary-color);
+  cursor: pointer;
+  font-size: 0.8em;
+  line-height: 1;
+  opacity: 0.45;
+  padding: 0.15em 0.3em;
+  transition: opacity 150ms ease, color 150ms ease;
+}
+
+li.task:hover .copybutton,
+.copybutton:focus-visible,
+.copybutton:hover {
+  opacity: 1;
+}
+
+.copybutton:focus-visible,
+.copybutton:hover {
+  color: var(--bs-link-color);
+}
+
+/* the word replaces the icon rather than joining it, so the row does not change width as it is read */
+.copyfeedback:not(:empty) {
+  font-variant-numeric: normal;
+  white-space: nowrap;
+}
+
+.copyable:has(.copyfeedback:not(:empty)) .copybutton {
+  color: var(--bs-success-text-emphasis);
+  opacity: 1;
 }
 
 /* the bar on a running task: full width, because what it reports is that work is happening and not
@@ -770,10 +824,33 @@ button.dropdown-item {
   margin: 0;
 }
 
-/* the icon in the theme control's toggle, which is text-sized and so sits above the text baseline
-   without this */
-.themeswitch .themeicon {
+/*
+The theme control's icon: three of them in one place, with the one in force faded and turned into
+view. theme.js marks it with .themeicon-shown.
+
+The stack is what carries the size and the baseline, since the icons inside it are taken out of the
+flow -- text-sized, and so above the text baseline without the nudge.
+*/
+.themeswitch .themeicon-stack {
+  display: inline-block;
+  height: 16px;
+  position: relative;
   vertical-align: -0.15em;
+  width: 16px;
+}
+
+.themeswitch .themeicon {
+  inset: 0;
+  opacity: 0;
+  position: absolute;
+  /* a quarter turn and slightly small, so the incoming icon arrives rather than simply appears */
+  transform: rotate(-90deg) scale(0.7);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.themeswitch .themeicon.themeicon-shown {
+  opacity: 1;
+  transform: none;
 }
 
 /* From the navbar's collapse breakpoint (navbar-expand-lg) upwards the control is an icon among
@@ -796,8 +873,9 @@ button.dropdown-item {
 }
 
 /* below that breakpoint the icon needs separating from the word beside it */
+/* on the stack rather than the icons, which are absolutely positioned and so have no margin to give */
 @media (max-width: 991.98px) {
-  .themeswitch .themeicon {
+  .themeswitch .themeicon-stack {
     margin-right: 0.4em;
   }
 }
@@ -1072,6 +1150,28 @@ li.task > .taskinner {
   transition: padding-top 200ms ease, padding-bottom 200ms ease;
 }
 
+/*
+The tint on a row a submission has just created, fading out over its own keyframes rather than a
+transition: this runs once on arrival and has nothing to transition back to.
+
+The colour is the site's accent, at the low alpha of a wash rather than a fill, so it reads on either
+theme without a value per theme -- and the row underneath keeps its own background, which is the
+point of having stopped flooding rows with colour.
+*/
+@keyframes task-flash {
+  from {
+    background-color: rgba(239, 78, 25, 0.16);
+  }
+
+  to {
+    background-color: transparent;
+  }
+}
+
+li.task.task-flash {
+  animation: task-flash 1600ms ease-out;
+}
+
 /* ul.tasks, only to outrank the status edge above, which is one element more specific than a plain
    li.task.task-collapsed would be and would otherwise hold the left border open at 0.4em */
 ul.tasks li.task.task-collapsed {
@@ -1097,7 +1197,9 @@ ul.tasks li.task.task-collapsed > .taskinner {
 
   li.task,
   .navbar-brand .atlaslogo,
-  .navindicator-host.navindicator-animated .navindicator {
+  .navindicator-host.navindicator-animated .navindicator,
+  li.task>.taskinner,
+  .themeswitch .themeicon {
     transition: none;
   }
 

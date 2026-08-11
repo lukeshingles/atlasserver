@@ -289,7 +289,16 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
         );
     }
 
-    formcontent.push(<input key="submitbutton" className={submitting ? 'btn btn-primary submitting' : 'btn btn-primary'} id="submitrequest" type="submit" value={submitting ? 'Requesting...' : 'Request'} />);
+    // a <button> rather than an <input type="submit">, which cannot contain anything: the spinner has
+    // to be an element inside the control, and an input's label is an attribute
+    formcontent.push(
+        <button key="submitbutton" type="submit" id="submitrequest"
+            className={submitting ? 'btn btn-primary submitting' : 'btn btn-primary'}>
+            {submitting
+                ? <span className="spinner-border spinner-border-sm submitspinner" aria-hidden="true"></span>
+                : null}
+            {submitting ? 'Requesting...' : 'Request'}
+        </button>);
     if (httperror != '') {
         formcontent.push(<p key="httperror" className="errors">{httperror}</p>);
     }

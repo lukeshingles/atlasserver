@@ -88,17 +88,24 @@
         {# which entry is marked is also theme.js's, since only it knows the stored preference. #}
         <li class="nav-item dropdown themeswitch d-none">
           <button class="nav-link dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Colour theme">
-            <svg class="themeicon themeicon-light d-none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <circle cx="8" cy="8" r="3.4"/>
-              <path d="M8 0v2.1M8 13.9V16M0 8h2.1M13.9 8H16M2.34 2.34l1.5 1.5M12.16 12.16l1.5 1.5M13.66 2.34l-1.5 1.5M3.84 12.16l-1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-            <svg class="themeicon themeicon-dark d-none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M8 1A7 7 0 1 0 8 15A9 9 0 0 1 8 1Z" transform="rotate(-25 8 8)"/>
-            </svg>
-            <svg class="themeicon themeicon-auto d-none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.4"/>
-              <path d="M8 1.6A6.4 6.4 0 0 0 8 14.4Z"/>
-            </svg>
+            {# The three are stacked one over another so the change between them can be a rotation and #}
+            {# a fade rather than one icon vanishing and another appearing: display cannot transition, #}
+            {# and opacity can only cross-fade two things that occupy the same place. All three start #}
+            {# transparent, so nothing shows until theme.js marks the one that is in force -- which is #}
+            {# what the d-none on each of them used to do. #}
+            <span class="themeicon-stack">
+              <svg class="themeicon themeicon-light" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <circle cx="8" cy="8" r="3.4"/>
+                <path d="M8 0v2.1M8 13.9V16M0 8h2.1M13.9 8H16M2.34 2.34l1.5 1.5M12.16 12.16l1.5 1.5M13.66 2.34l-1.5 1.5M3.84 12.16l-1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+              <svg class="themeicon themeicon-dark" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M8 1A7 7 0 1 0 8 15A9 9 0 0 1 8 1Z" transform="rotate(-25 8 8)"/>
+              </svg>
+              <svg class="themeicon themeicon-auto" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+                <path d="M8 1.6A6.4 6.4 0 0 0 8 14.4Z"/>
+              </svg>
+            </span>
             {# a word below the navbar's collapse breakpoint, where this sits in a stacked menu of #}
             {# words; beside the other links on a wide screen the icon carries it and main.css #}
             {# hides the text from sight but not from assistive technology #}

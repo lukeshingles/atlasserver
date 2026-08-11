@@ -6,7 +6,7 @@
 // closures in the polling intervals and lost setState callbacks, and both show up here as a fetch
 // that goes to the wrong URL or does not happen at all.
 import assert from 'node:assert/strict';
-import test, { after, beforeEach, describe } from 'node:test';
+import test, { after, beforeEach, describe, mock } from 'node:test';
 
 import { flush, importComponent, loadReact, render, setupDom, teardownDom } from './testing.js';
 
@@ -294,6 +294,75 @@ describe('TaskPage', () => {
         // one <dt> for every <dd>, or the grid would be misaligned from that point down
         const list = container.querySelector('li.task dl.taskmeta');
         assert.equal(list.querySelectorAll('dt').length, list.querySelectorAll('dd').length);
+    });
+
+    test('a coordinate can be copied, and the control says so', async () => {
+        const written = [];
+        // jsdom implements no clipboard, which is also the state of any page served over plain http to
+        // a host other than localhost -- see the test below for what the row does then
+        Object.defineProperty(global.navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: (text) => { written.push(text); return Promise.resolve(); } },
+        });
+
+        try {
+            const { container } = await renderPage([task(1, { ra: 150.25, dec: -20.5 })]);
+            const button = container.querySelector('li.task .copybutton');
+            assert.ok(button, 'no copy control on the coordinates');
+
+            button.click();
+            await flush(40);
+
+            // the pair alone: what it is for is pasting the position into something else
+            assert.deepEqual(written, ['150.25 -20.5']);
+            assert.match(container.querySelector('li.task .copyfeedback').textContent, /Copied/);
+        } finally {
+            delete global.navigator.clipboard;
+        }
+    });
+
+    test('without a clipboard the value is shown with no control that could not work', async () => {
+        const { container } = await renderPage([task(1)]);
+
+        assert.equal(container.querySelector('li.task .copybutton'), null);
+        // and the coordinates are still there
+        assert.equal(rowMeta(container)['RA Dec:'], '150 20');
+    });
+
+    test('the tab title counts tasks that left the queue while the tab was hidden', async () => {
+        // the away poll runs on an interval an hour of test time would not reach
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => true });
+
+        try {
+            // queuepositions answers with nothing, so both of these have left the queue
+            const { container } = await renderPage([task(1, { queuepos: 1 }), task(2, { queuepos: 2 })]);
+            assert.doesNotMatch(window.document.title, /^\(/, 'counting before any poll');
+
+            mock.timers.tick(60000);
+            await flush(60);
+
+            assert.match(window.document.title, /^\(2\) Task Queue/);
+
+            // asked again, the answer is the same rather than doubled: the count is recomputed from
+            // the rows as they stood when the tab was hidden, not accumulated
+            mock.timers.tick(60000);
+            await flush(60);
+            assert.match(window.document.title, /^\(2\) Task Queue/);
+
+            // and looking at the tab again clears it
+            Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => false });
+            window.dispatchEvent(new window.Event('visibilitychange'));
+            await flush(60);
+
+            assert.doesNotMatch(window.document.title, /^\(/);
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
     });
 
     test('each row wraps its content in the element its show and hide animates over', async () => {

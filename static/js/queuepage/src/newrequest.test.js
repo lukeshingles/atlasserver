@@ -40,7 +40,13 @@ describe('NewRequest', () => {
         const { container } = await renderForm();
 
         assert.ok(container.querySelector('#id_radeclist'));
-        assert.equal(container.querySelector('#submitrequest').value, 'Request');
+        const submit = container.querySelector('#submitrequest');
+        // a <button>, so the label is its content rather than a value attribute -- it has to be able
+        // to hold the spinner shown while a request is in flight
+        assert.equal(submit.tagName, 'BUTTON');
+        assert.equal(submit.type, 'submit');
+        assert.equal(submit.textContent, 'Request');
+        assert.equal(submit.querySelector('.submitspinner'), null, 'not requesting yet');
     });
 
     test('typing a coordinate updates the field and is remembered', async () => {

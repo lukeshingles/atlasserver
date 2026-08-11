@@ -25,14 +25,47 @@ const RUNNERSTATUS_POLL_MS = 60000;
 
 const SITE_TITLE = 'ATLAS Forced Photometry';
 
-function pageTitle(taskid) {
+/*
+How often to look for finished tasks while the tab is not being looked at.
+
+Everything else stops when the tab is hidden -- see pollingPaused() -- which is the right policy for
+the task list, a full serialisation nobody is reading. But it also means a queue left open in a
+background tab can never say that anything has finished, and waiting is what this page is for. So one
+request a minute, to queuepositions, which is the cheap endpoint (a dictionary of ids to positions,
+no serialisation) and the one the code already treats as the signal that a task has left the queue.
+
+Deliberately much slower than QUEUEPOS_POLL_MS: nobody is watching, so this only has to be quick
+enough that the count is right by the time they look back.
+*/
+const AWAY_POLL_MS = 60000;
+
+function pageTitle(taskid, finishedwhileaway) {
     // matches the server-rendered <title>, so a client-side navigation does not leave the tab
     // claiming to show something else
-    return (taskid != null ? 'Task ' + taskid : 'Task Queue') + ' – ' + SITE_TITLE;
+    const title = (taskid != null ? 'Task ' + taskid : 'Task Queue') + ' – ' + SITE_TITLE;
+
+    // in front, because a tab shows the beginning of its title and little else
+    return finishedwhileaway > 0 ? '(' + finishedwhileaway + ') ' + title : title;
 }
 
 function pollingPaused() {
     return document[hidden] || !user_is_active;
+}
+
+/**
+ * Whether the queuepositions response can be expected to say anything about this task.
+ *
+ * Only this user's own tasks appear in it, so a staff member looking at somebody else's task must not
+ * be counted as "no longer queued". A task whose position has not been assigned yet is not in the
+ * response either, and counting it would fire a full fetch on every tick, which is worse than not
+ * having the endpoint at all.
+ *
+ * One definition, because two pollers ask the question: fetchQueuePositions, to notice a task
+ * leaving the queue while the page is being watched, and countFinishedWhileAway, to count the ones
+ * that left while it was not.
+ */
+function tracksQueuePosition(task) {
+    return task.user_id == user_id && task.finishtimestamp == null && task.queuepos != null;
 }
 
 /**
@@ -75,6 +108,10 @@ function expandRow(taskid) {
     taskRow(taskid)?.classList.remove('task-collapsed');
 }
 
+/* How long the highlight on a just-created row lasts. Longer than the row's own show, because it is
+   there to be noticed after the movement has finished and the eye has arrived. */
+const ROW_FLASH_MS = 1600;
+
 function revealRow(taskid) {
     const row = taskRow(taskid);
     if (!row) {
@@ -83,6 +120,72 @@ function revealRow(taskid) {
     row.classList.add('task-collapsed');
     // next frame, so the browser has laid the row out collapsed and has something to animate from
     requestAnimationFrame(() => requestAnimationFrame(() => row.classList.remove('task-collapsed')));
+
+    // and a tint that fades out, so the row you just made is findable in a list of others. Removed
+    // again, so nothing is left on a node React owns -- the same reason the collapse is a class.
+    row.classList.add('task-flash');
+    setTimeout(() => row.classList.remove('task-flash'), ROW_FLASH_MS);
+}
+
+/**
+ * A value with a control that copies it, for the coordinates people retype into other tools.
+ *
+ * The same shape as the button copycode.js adds to the API guide -- a label that reports what
+ * happened, and "Press Ctrl-C" when the browser refuses the write -- but rendered rather than
+ * inserted, because this value is React's and a node added underneath it would be removed on the
+ * next poll.
+ *
+ * Nothing is rendered where navigator.clipboard is missing, which is any page served over plain http
+ * to a host other than localhost: there the button could only ever fail.
+ */
+const COPY_LABEL_RESET_MS = 2000;
+
+function CopyableValue({ text, label, children }) {
+    const [state, setState] = React.useState('idle');
+    const timer = React.useRef(null);
+
+    React.useEffect(() => () => clearTimeout(timer.current), []);
+
+    if (!navigator.clipboard) {
+        return children;
+    }
+
+    const announce = (next) => {
+        setState(next);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setState('idle'), COPY_LABEL_RESET_MS);
+    };
+
+    const copy = () => {
+        navigator.clipboard.writeText(text).then(() => announce('copied'), () => announce('failed'));
+    };
+
+    return (
+        <span className="copyable">
+            {children}
+            {/* aria-live, so the change of state is announced rather than read over whatever has
+                focus; the title is what the pointer gets, where the live text is not shown */}
+            <button type="button" className="copybutton" onClick={copy}
+                title={'Copy ' + label} aria-label={'Copy ' + label}>
+                {state === 'idle' ? <CopyIcon /> : null}
+                <span className="copyfeedback" aria-live="polite">
+                    {state === 'copied' ? 'Copied' : null}
+                    {state === 'failed' ? 'Press Ctrl-C' : null}
+                </span>
+            </button>
+        </span>
+    );
+}
+
+function CopyIcon() {
+    // two offset rounded rectangles, the usual shorthand for a copy
+    return (
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+            strokeWidth="1.5" aria-hidden="true">
+            <rect x="5.5" y="5.5" width="8.5" height="9" rx="1.5" />
+            <path d="M10.5 3.2A1.7 1.7 0 0 0 8.8 2H3.7A1.7 1.7 0 0 0 2 3.7v5.1a1.7 1.7 0 0 0 1.2 1.6" />
+        </svg>
+    );
 }
 
 const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
@@ -374,13 +477,19 @@ export const Task = React.memo(function Task(props) {
     // task_mpc_name_not_blank keeps whitespace-only names out of the column, so an empty string
     // here means the task has no MPC target rather than one that only looks empty
     if (task.mpc_name != null && task.mpc_name != '') {
-        meta.push(['target', 'MPC Object:', task.mpc_name]);
+        meta.push(['target', 'MPC Object:',
+            <CopyableValue text={task.mpc_name} label="object name">{task.mpc_name}</CopyableValue>]);
     } else {
         let radecepoch = '';
         if (task.radec_epoch_year != null) {
             radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
         }
-        meta.push(['target', 'RA Dec:', <span>{radecepoch}{task.ra} {task.dec}</span>]);
+        // the pair on its own, without the epoch, because what this is for is pasting the position
+        // into something else
+        meta.push(['target', 'RA Dec:',
+            <CopyableValue text={task.ra + ' ' + task.dec} label="coordinates">
+                {radecepoch}{task.ra} {task.dec}
+            </CopyableValue>]);
         // proper motion components are signed, so testing for > 0 hides half of all real values
         if ((task.propermotion_ra != null && task.propermotion_ra != 0)
             || (task.propermotion_dec != null && task.propermotion_dec != 0)) {
@@ -642,6 +751,9 @@ export function TaskPage() {
         // poll did render, the variable had already been cleared, so a connection problem was
         // never actually shown to anyone.
         tasklist_api_error: '',
+        // how many of the user's tasks have left the queue since the tab was last looked at; see
+        // countFinishedWhileAway and pageTitle
+        finishedwhileaway: 0,
     });
 
     /*
@@ -719,13 +831,7 @@ export function TaskPage() {
             return;
         }
 
-        // only this user's own tasks appear in the response, so a staff member looking at somebody
-        // else's task must not be counted as "no longer queued". A task whose position has not been
-        // assigned yet is not in the response either, and counting it would fire a full fetch on
-        // every tick, which is worse than not having this endpoint at all.
-        const trackable = task => (
-            task.user_id == user_id && task.finishtimestamp == null && task.queuepos != null);
-        if (!stateRef.current.results.some(trackable)) {
+        if (!stateRef.current.results.some(tracksQueuePosition)) {
             return;
         }
 
@@ -745,7 +851,7 @@ export function TaskPage() {
                 // positive costs one extra full fetch and a false negative is caught on the next
                 // tick, so it does not need to be exact
                 if (stateRef.current.results.some(
-                    task => trackable(task) && !(String(task.id) in data.queuepositions))) {
+                    task => tracksQueuePosition(task) && !(String(task.id) in data.queuepositions))) {
                     debug_log('a task left the queue: fetching the full task list');
                     // the pause is re-checked because it can have begun during this request's
                     // round-trip, and the full fetch is exactly the work it exists to skip.
@@ -800,6 +906,60 @@ export function TaskPage() {
                 // means the positions are refreshed a few seconds later than they might have been
                 debug_log('Queue positions request failed', error);
             });
+    }, [setState]);
+
+    /*
+     * Count the user's tasks that have left the queue while the tab has not been looked at, for the
+     * tab title to report.
+     *
+     * Runs only while hidden, which is exactly when nothing else runs, and asks the cheap endpoint
+     * rather than re-fetching the list: what is wanted is a number, not the rows.
+     *
+     * The count is recomputed from scratch each time rather than accumulated, and that is what makes
+     * it safe to repeat: the rows do not refresh while the tab is hidden, so the set of tasks that
+     * were queued when the user left is frozen, and "how many of those are no longer in the queue" is
+     * the same answer however many times it is asked. Accumulating would count each finished task
+     * again on every tick.
+     *
+     * A deleted task would also count as finished, which cannot happen here: deleting one takes a
+     * click on a page nobody is looking at.
+     */
+    const countFinishedWhileAway = React.useCallback(() => {
+        if (!document[hidden] || stateRef.current.results == null) {
+            return;
+        }
+
+        const waiting = stateRef.current.results.filter(tracksQueuePosition);
+        if (waiting.length == 0) {
+            return;
+        }
+
+        fetch(queuepositions_url,
+            {
+                credentials: "same-origin",
+                headers: { 'Accept': 'application/json' },
+                cache: "no-store",
+            })
+            .then(response => response.status == 200 ? response.json() : null)
+            .then(data => {
+                if (data == null || data.queuepositions == null) {
+                    return;
+                }
+
+                const finished = waiting.filter(task => !(String(task.id) in data.queuepositions)).length;
+                if (finished != stateRef.current.finishedwhileaway) {
+                    setState({ finishedwhileaway: finished });
+                }
+            })
+            .catch(error => debug_log('Away queue positions request failed', error));
+    }, [setState]);
+
+    /* Looking at the tab again clears the count: the polls resume on the same event and will put the
+       real state on screen, which is a better answer than a number in the title. */
+    const handleVisibilityChange = React.useCallback(() => {
+        if (!document[hidden] && stateRef.current.finishedwhileaway != 0) {
+            setState({ finishedwhileaway: 0 });
+        }
     }, [setState]);
 
     const fetchData = React.useCallback((usertriggered, scrolltotop = usertriggered) => {
@@ -1105,12 +1265,16 @@ export function TaskPage() {
 
         const fetchinterval = pollInterval(() => fetchData(false), TASKLIST_POLL_MS);
         const queueposinterval = pollInterval(fetchQueuePositions, QUEUEPOS_POLL_MS);
+        const awayinterval = setInterval(countFinishedWhileAway, AWAY_POLL_MS);
+        window.addEventListener('visibilitychange', handleVisibilityChange);
         window.addEventListener('popstate', handlePopState);
         fetchData(true);
 
         return () => {
             clearInterval(fetchinterval);
             clearInterval(queueposinterval);
+            clearInterval(awayinterval);
+            window.removeEventListener('visibilitychange', handleVisibilityChange);
             window.removeEventListener('popstate', handlePopState);
         };
         // mount only, like the componentDidMount this replaces: the callbacks are reached through
@@ -1123,7 +1287,7 @@ export function TaskPage() {
         // the tab title used to keep saying "Task Queue" after a client-side navigation, because
         // every pushState passed the title it already had. Derived from dataurl here so that it is
         // right no matter which navigation path got us here.
-        const title = pageTitle(singleTaskViewTaskId(state.dataurl));
+        const title = pageTitle(singleTaskViewTaskId(state.dataurl), state.finishedwhileaway);
         if (document.title != title) {
             document.title = title;
         }
