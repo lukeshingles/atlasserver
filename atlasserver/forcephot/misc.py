@@ -191,7 +191,9 @@ def make_pdf_plot_worker(
 
         plotfilepaths = myplotter.plot()
 
-    except Exception as ex:
+    except Exception as ex:  # noqa: BLE001 (plot_atlas_fp is vendored third-party code run
+        # against a user-supplied file: anything it raises has to become a failed render, not
+        # a failed request)
         if logfunc:
             logfunc(f"{logprefix}ERROR: plot_atlas_fp caused exception: {ex}")
         plotfilepaths = [None for _ in plotfilepaths_requested]
@@ -208,7 +210,8 @@ def make_pdf_plot_worker(
             logfunc(f"{logprefix}Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
         elif logfunc:
             logfunc(
-                f"{logprefix}plot_atlas_fp returned an error but the PDF file {plotfilepath_requested.relative_to(localresultdir)} exists"
+                f"{logprefix}plot_atlas_fp returned an error but the PDF file "
+                f"{plotfilepath_requested.relative_to(localresultdir)} exists"
             )
         return plotfilepath_requested
 

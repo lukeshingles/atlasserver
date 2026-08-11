@@ -83,7 +83,7 @@ def next_queuepos_relative() -> int:
 
 
 def calculate_queue_positions() -> None:
-    """Calculate and assign the queue positions (determining the order of execution in the task runner) for all queued tasks."""
+    """Assign every queued task its position, which is the order the task runner executes them in."""
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent
         # recalculations can each renumber from a snapshot that is missing the other's changes

@@ -36,6 +36,7 @@ class EmailChangeForm(forms.Form):
     )
 
     def __init__(self, user, *args, **kwargs) -> None:
+        """Bind the form to the account whose address is being changed."""
         self.user = user
         super().__init__(*args, **kwargs)
 

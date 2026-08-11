@@ -300,13 +300,13 @@ class Task(models.Model):
 
     @property
     def imagerequest_task_id(self) -> int | None:
-        """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
+        """Return the image request task id associated with this forced photometry task, or None."""
         imagerequest = self._imagerequest_task()
         return imagerequest.id if imagerequest is not None else None
 
     @property
     def imagerequest_finished(self) -> bool | None:
-        """Return whether the image request task associated with this forced photometry task has finished, otherwise None."""
+        """Return whether this task's image request has finished, or None if it has none."""
         imagerequest = self._imagerequest_task()
         return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
 

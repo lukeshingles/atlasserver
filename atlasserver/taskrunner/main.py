@@ -62,9 +62,9 @@ def mjdnow() -> float:
     return datetime_to_mjd(datetime.datetime.now(datetime.UTC))
 
 
-def localresultfileprefix(id: int) -> str:
+def localresultfileprefix(taskid: int) -> str:
     """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / f"job{id:05d}"))
+    return str(Path(settings.RESULTS_DIR / f"job{taskid:05d}"))
 
 
 def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
@@ -481,7 +481,8 @@ def notify_finished(task, logfunc) -> None:
     if task.callback_url:
         try:
             send_task_callback(task=task, logfunc=logfunc)
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001 (a callback is a courtesy; no failure of it
+            # may stop the task being marked finished)
             logfunc(f"ERROR: unexpected failure sending callback for task {task.id}: {ex}")
 
     send_email_if_needed(task=task, logfunc=logfunc)
@@ -678,7 +679,7 @@ def remove_old_tasks(
     logfunc=log_general,
     heartbeat: t.Callable[[], None] | None = None,
 ) -> None:
-    """Remove old tasks matching given criteria from the database and optionally delete their result files (if harddeleterecord).
+    """Remove old tasks matching given criteria, optionally deleting their result files.
 
     `heartbeat` is called after every batch so that a long sweep does not look like a dead runner
     to whatever is watching the status file.
@@ -885,7 +886,8 @@ def main() -> None:
             # stale is a display problem; not dispatching anything is not.
             try:
                 taskqueue.calculate_queue_positions()
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001 (this loop dispatches every job; stale
+                # queue positions are a display problem, not dispatching is not)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
             # stamped even on failure, so a persistent one retries on the interval rather than on
             # every pass of the loop

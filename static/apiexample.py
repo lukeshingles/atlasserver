@@ -8,6 +8,10 @@ from io import StringIO
 import pandas as pd
 import requests
 
+# every request here carries one: a hung connection would otherwise block the script for ever,
+# and this file is what users copy as a starting point
+TIMEOUT_SECONDS = 60
+
 BASEURL = "https://fallingstar-data.com/forcedphot"
 # BASEURL = "http://127.0.0.1:8000"
 
@@ -17,7 +21,7 @@ if os.environ.get("ATLASFORCED_SECRET_KEY"):
 else:
     data = {"username": "USERNAME", "password": "PASSWORD"}
 
-    resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
+    resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data, timeout=TIMEOUT_SECONDS)
 
     if resp.status_code == 200:
         token = resp.json()["token"]

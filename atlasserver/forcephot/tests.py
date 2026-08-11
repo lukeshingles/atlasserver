@@ -2409,7 +2409,8 @@ class QueuePositionConcurrencyTests(TransactionTestCase):
         def recalculate() -> None:
             try:
                 calculate_queue_positions()
-            except BaseException as ex:
+            except BaseException as ex:  # noqa: BLE001 (this runs in a thread; anything it raises
+                # has to reach the assertions rather than vanish into the thread's stack)
                 errors.append(ex)
             finally:
                 connection.close()  # each thread holds its own connection

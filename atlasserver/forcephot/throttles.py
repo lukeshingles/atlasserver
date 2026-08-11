@@ -39,9 +39,7 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
     cache = caches["throttle"]
 
     def __init__(self) -> None:
-        # Override the usual SimpleRateThrottle, because we can't determine
-        # the rate until called by the view.
-        pass
+        """Do none of SimpleRateThrottle's setup: the rate is not known until the view is known."""
 
     @override
     def allow_request(self, request: Request, view: "APIView") -> bool:

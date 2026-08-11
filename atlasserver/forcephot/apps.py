@@ -13,6 +13,6 @@ class ForcephotConfig(AppConfig):
     @override
     def ready(self) -> None:
         """Connect the signal handlers, which is what importing the module does."""
-        # noqa/import-outside-toplevel is the documented shape for this: signals must be connected
-        # after the app registry is populated, which is exactly what ready() means.
-        from atlasserver.forcephot import signals  # noqa: F401  # imported for its @receiver
+        # Imported here rather than at module scope, which is the documented shape: signals must
+        # be connected after the app registry is populated, and that is what ready() means.
+        from atlasserver.forcephot import signals  # noqa: F401 (imported for its @receiver)

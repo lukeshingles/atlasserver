@@ -562,7 +562,10 @@ class RequestImages(APIView):
                 user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
             ).count()
             if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
-                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS}). Delete some before making new requests."
+                msg = (
+                    f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
+                    " Delete some before making new requests."
+                )
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
@@ -1424,15 +1427,16 @@ def resultplotdatajs(request, taskid):
             )
             divid = f"plotforcedflux-task-{taskid}"
 
-            for color, filter in [(11, "c"), (12, "o"), (8, "w")]:
-                dffilter = dfforcedphot.query("F == @filter", inplace=False)
+            for color, filterband in [(11, "c"), (12, "o"), (8, "w")]:
+                # @filterband is resolved by pandas from this scope, so the names must agree
+                dffilter = dfforcedphot.query("F == @filterband", inplace=False)
 
                 jsout.extend(
                     (
                         '\njslabels.push({"color": '
                         + str(color)
                         + ', "display": false, "label": "'
-                        + filter
+                        + filterband
                         + '"});\n',
                         "jslcdata.push(["
                         + ", ".join(
