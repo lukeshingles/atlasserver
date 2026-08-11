@@ -3,7 +3,7 @@ import os
 import re
 import sys
 import time
-from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -94,8 +94,13 @@ while not result_url:
 with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
 
-    # if you make a lot of requests, DELETE each task_url when you are done with it: it keeps the
-    # web queue readable and reduces storage on the server
+    filename = f"result_{resp.json()['id']}.txt"
+    # save the data file to disk with a file containing the task id
+    with Path(filename).open("w", encoding="utf-8") as f:
+        f.write(textdata)
 
-dfresult = pd.read_csv(StringIO(textdata), sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
-print(dfresult)
+    # delete the task from the server
+    s.delete(task_url, headers=headers).json()
+
+    dfresult = pd.read_csv(filename, sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
+    print(dfresult)
