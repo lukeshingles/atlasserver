@@ -2885,10 +2885,11 @@ class RegistrationVerificationTests(TestCase):
         assert "evil.fallingstar-data.com" not in body, "the link followed the Host header"
         assert "evil.fallingstar-data.com" not in django_mail.outbox[0].subject
 
+    @override_settings(SITE_ORIGIN="")
     def test_the_link_falls_back_to_the_request_without_a_configured_origin(self) -> None:
-        # development and the tests run without one, and must keep working
-        assert settings.SITE_ORIGIN == ""
-
+        # development runs without one and must keep working. Overridden rather than read from the
+        # ambient settings: CI sets ATLASSERVER_SITE_ORIGIN for the deploy smoke test, so asserting
+        # on what happens to be configured made this test depend on the environment running it.
         self.register()
 
         assert "http://testserver/" in str(django_mail.outbox[0].body)
