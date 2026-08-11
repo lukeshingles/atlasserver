@@ -1887,7 +1887,8 @@ class ApiGuideTests(TestCase):
         import re
 
         page = Path(settings.BASE_DIR, "atlasserver/forcephot/templates/apiguide.html").read_text()
-        blocks = re.findall(r"<pre><code>(.*?)</code></pre>", page, flags=re.DOTALL)
+        # <pre[^>]*>, because the blocks carry a class that copycode.js and main.css key off
+        blocks = re.findall(r"<pre[^>]*><code>(.*?)</code></pre>", page, flags=re.DOTALL)
         assert blocks, "no code blocks found in the API guide"
 
         for index, block in enumerate(blocks):
