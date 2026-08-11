@@ -43,6 +43,17 @@
 
 {% block navbar %}{% include "navbar.html" %}{% endblock %}
 
+{% block breadcrumbs %}
+  {% comment %}
+    DRF builds a trail from the URL, and on a list endpoint that trail is one entry -- the page's own
+    heading, printed a second time immediately above itself.
+
+    Only suppressed at that length. A task detail's trail is "Force Phot Task List > Force Phot Task
+    Instance", where the first is a link back to the list, and that is worth keeping.
+  {% endcomment %}
+  {% if breadcrumblist|length > 1 %}{{ block.super }}{% endif %}
+{% endblock %}
+
 {% block script %}
   {# DRF's own block, with rest_framework/js/bootstrap.min.js (Bootstrap 3, and jQuery-dependent) #}
   {# replaced by the bundle the rest of the site loads, and default.js by the port of it that     #}

@@ -3969,3 +3969,34 @@ class TemplateCommentTests(TestCase):
         ]
 
         assert not offenders, f"multi-line {{# #}} comments are served as text: {offenders}"
+
+
+class BrowsableApiBreadcrumbTests(TestCase):
+    """The browsable API does not print its own heading twice.
+
+    DRF builds a breadcrumb trail from the URL. On a list endpoint that trail is a single entry, which
+    is the page's <h1> repeated immediately above itself; on a detail endpoint it is a real trail whose
+    first entry links back to the list.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="breadcrumbs", email="b@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def api_html(self, url: str) -> str:
+        return self.client.get(url, {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+
+    def test_the_list_page_names_itself_once(self) -> None:
+        content = self.api_html(reverse("task-list"))
+
+        assert "<h1>Force Phot Task List" in content
+        assert 'class="breadcrumb"' not in content, "a one-entry trail is the heading a second time"
+
+    def test_a_detail_page_keeps_its_trail(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        content = self.api_html(reverse("task-detail", args=[task.id]))
+
+        assert 'class="breadcrumb"' in content, "the way back to the list was removed with it"
+        assert f'<a href="{reverse("task-list")}?format=api">Force Phot Task List</a>' in content
+        assert "<h1>Force Phot Task Instance" in content
