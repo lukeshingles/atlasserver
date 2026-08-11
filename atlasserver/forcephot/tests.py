@@ -20,7 +20,7 @@ from unittest import skipUnless
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
-from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
+from django.contrib.auth.models import User
 from django.core import mail as django_mail
 from django.core.cache import caches
 from django.db import connection

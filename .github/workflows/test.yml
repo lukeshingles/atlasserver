@@ -36,8 +36,9 @@ jobs:
             - name: Run mypy
               run: uv run -- mypy --install-types --non-interactive
 
-            - name: Run pylint
-              run: uv run -- pylint atlasserver
+            - name: Run pyrefly
+              if: always()
+              run: uv run -- pyrefly check
 
             - name: Run ty
               # skipped on pre-commit.ci (see .pre-commit-config.yaml), which has no network access

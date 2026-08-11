@@ -52,8 +52,7 @@ dev = [
     "mypy>=2.0",
     "pip>=26.1.2",
     "prek>=0.4.12",
-    "pylint>=4.0.6",
-    "pylint-django>=2.5.5",
+    "pyrefly>=1.2.0",
     "ruff>=0.16.0",
     "ty>=0.0.63",
     "types-pyyaml>=6.0.12.20240311",
@@ -142,20 +141,6 @@ check_untyped_defs = true
 # import them, so type checking works on machines with no .env or secrets (e.g. the CI lint job)
 django_settings_module = "atlasserver.settings_test"
 ignore_missing_model_attributes = true
-
-[tool.pylint]
-max-line-length = 120
-errors-only = true
-load-plugins = "pylint_django"
-# settings_test, for the same reason as tool.django-stubs below: it presets the env vars that
-# settings.py refuses to import without, so pylint works on machines with no .env or secrets
-django-settings-module = "atlasserver.settings_test"
-
-[tool.pylint.typecheck]
-ignored-modules = ["astropy", "extinction"]
-
-[tool.pylint.MASTER]
-ignore-paths = "atlasserver/plot_atlas_fp.py"
 
 [tool.pyrefly]
 project-includes = ["**/*.py"]

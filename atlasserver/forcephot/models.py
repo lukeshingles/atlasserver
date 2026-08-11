@@ -5,7 +5,7 @@ from pathlib import Path
 from django.conf import settings
 
 # the project uses the default user model, and django-stubs types against the concrete class
-from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
+from django.contrib.auth.models import User
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
