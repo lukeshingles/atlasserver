@@ -60,10 +60,6 @@ input::placeholder {
   color: #d3d3d3;
 }
 
-.submit {
-  background-color: #6BA3E8;
-}
-
 div.newrequest {
   float: right;
   /* width: 50%; */
@@ -105,7 +101,10 @@ form#newrequest li>*:nth-child(2) {
   width: 100%;
 }
 
-form#newrequest input,
+/* :not([type=submit]), because the submit button is a Bootstrap button and these are the field
+   styles: the grey border and the 0.3em padding here would otherwise land on it and undo the
+   padding, border and hover it gets from .btn-primary */
+form#newrequest input:not([type=submit]),
 textarea {
   display: inline-block;
   padding: 0.3em 0.3em;
@@ -140,7 +139,7 @@ div#tasklist.singletaskdetail {
   margin: 0 0 1.0em 0;
   padding: 1em;
   border-radius: 0.5em;
-  border: 0.1em solid rgb(0, 0, 0, 0.8);
+  border: 0.1em solid #495057;
   background-color: white;
 }
 

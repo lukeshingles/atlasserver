@@ -289,7 +289,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
         );
     }
 
-    formcontent.push(<input key="submitbutton" className={submitting ? 'btn btn-info submitting' : 'btn btn-info'} id="submitrequest" type="submit" value={submitting ? 'Requesting...' : 'Request'} />);
+    formcontent.push(<input key="submitbutton" className={submitting ? 'btn btn-primary submitting' : 'btn btn-primary'} id="submitrequest" type="submit" value={submitting ? 'Requesting...' : 'Request'} />);
     if (httperror != '') {
         formcontent.push(<p key="httperror" style={{ 'color': 'red' }}>{httperror}</p>);
     }
