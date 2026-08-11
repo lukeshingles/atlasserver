@@ -213,34 +213,8 @@ ul {
 
 /* Controls that run JavaScript are <button>, not <a> without an href: a hrefless link is not
    focusable, so the filter tabs, the pager and the help toggle could not be reached by keyboard and
-   were invisible to assistive technology. These rules give the buttons the appearance the links
-   had; bootstrap's .btn classes already cover <button>, so only the pager and the inline text
-   toggle need anything here. */
-.pager li>button {
-  background-color: #fff;
-  border: 1px solid #ddd;
-  border-radius: 15px;
-  color: #337ab7;
-  display: inline-block;
-  padding: 5px 14px;
-}
-
-/* bootstrap puts these floats on `.pager .previous>a`, so a <button> gets neither and the two
-   opposite directions end up side by side in the middle of a centred pager */
-.pager .previous>button {
-  float: left;
-}
-
-.pager .next>button {
-  float: right;
-}
-
-.pager li>button:hover,
-.pager li>button:focus {
-  background-color: #eee;
-  text-decoration: underline;
-}
-
+   were invisible to assistive technology. Bootstrap's .btn, .page-link and .nav-link classes all
+   style a <button> as readily as a link, so only the inline text toggle needs anything here. */
 button.linkbutton {
   background: none;
   border: none;

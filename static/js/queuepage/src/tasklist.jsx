@@ -558,10 +558,13 @@ const Pager = React.memo(function Pager({ previous, next, taskcount, pagefirstta
         <div id="paginator" key="paginator">
             <p key="pagedescription">Showing tasks {pagefirsttaskposition + 1}-{pagefirsttaskposition + pagetaskcount} of {taskcount}</p>
             {/* buttons, not links: these run JavaScript rather than navigating, and an <a>
-                with no href is not focusable, so the pager could not be reached by keyboard */}
-            <ul key="prevnext" className="pager">
-                {previous != null ? <li key="previous" className="previous"><button type="button" onClick={() => updateCursor(cursorFrom(previous))}>&laquo; Newer</button></li> : null}
-                {next != null ? <li key="next" className="next"><button type="button" onClick={() => updateCursor(cursorFrom(next))}>Older &raquo;</button></li> : null}
+                with no href is not focusable, so the pager could not be reached by keyboard.
+                .pagination rather than Bootstrap 3's .pager, which Bootstrap 5 dropped: .page-link
+                styles a <button> as readily as a link, so the hand-written rules that used to
+                stand in for the missing component are gone from main.css. */}
+            <ul key="prevnext" className="pagination">
+                {previous != null ? <li key="previous" className="page-item"><button type="button" className="page-link" onClick={() => updateCursor(cursorFrom(previous))}>&laquo; Newer</button></li> : null}
+                {next != null ? <li key="next" className="page-item"><button type="button" className="page-link" onClick={() => updateCursor(cursorFrom(next))}>Older &raquo;</button></li> : null}
             </ul>
         </div>
     );

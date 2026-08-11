@@ -1,21 +1,14 @@
-<ul class="pager">
+{# TaskPagination's controls in the browsable API. Bootstrap 5 dropped .pager, so this is its #}
+{# .pagination; DRF's base template already wraps it in the <nav> that goes with one. The #}
+{# greyed-out halves the Bootstrap 3 pager showed are left out rather than disabled: at the ends #}
+{# of the list there is nothing to page to, and a disabled control that is never enabled is only #}
+{# something more to explain. #}
+<ul class="pagination">
   {% if previous_url %}
-    <li class="previous">
-      <a href="{{ previous_url }}">&laquo; Newer</a>
-    </li>
-  {% else %}
-    <!-- <li class="previous disabled">
-      <a href="#">&laquo; Newer</a>
-    </li> -->
+    <li class="page-item"><a class="page-link" href="{{ previous_url }}" rel="prev">&laquo; Newer</a></li>
   {% endif %}
 
   {% if next_url %}
-    <li class="next">
-      <a href="{{ next_url }}">Older &raquo;</a>
-    </li>
-  {% else %}
-    <!-- <li class="next disabled">
-      <a href="#">Older &raquo;</a>
-    </li> -->
+    <li class="page-item"><a class="page-link" href="{{ next_url }}" rel="next">Older &raquo;</a></li>
   {% endif %}
 </ul>

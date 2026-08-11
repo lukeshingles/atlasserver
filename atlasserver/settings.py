@@ -255,7 +255,7 @@ RESULTS_DIR = Path(STATIC_ROOT, "results")
 def _static_version() -> str:
     """Return a cache-busting suffix that changes whenever a served asset does.
 
-    Appended as ?ver= to main.css and the JS bundles, which are served under stable names, so a
+    Appended as ?ver= to the stylesheets and JS bundles, which are served under stable names, so a
     browser holding an old copy alongside freshly deployed markup would otherwise keep using it.
     This replaced six hand-edited date strings across two templates.
 
@@ -264,7 +264,9 @@ def _static_version() -> str:
     install time. The mtimes move whenever a deploy actually replaces an asset, and not otherwise,
     so every worker computes the same value and a browser keeps its cached copy until it is stale.
     """
-    assets = [Path(STATIC_ROOT, "main.css"), *Path(STATIC_ROOT, "js").glob("*.min.js")]
+    # globs rather than a list of names: every hand-written asset served under a stable name lives
+    # at one of these three levels, so adding one does not mean remembering to add it here too
+    assets = [*Path(STATIC_ROOT).glob("*.css"), *Path(STATIC_ROOT, "js").glob("*.js")]
     assets += list(Path(STATIC_ROOT, "js", "vendor").glob("*.js"))
 
     mtimes = [path.stat().st_mtime_ns for path in assets if path.is_file()]
