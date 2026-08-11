@@ -47,6 +47,11 @@
         {# versioned like the JS bundles: the queue page's styling lives here, so a browser holding #}
         {# a cached copy alongside a freshly deployed bundle renders the new class names unstyled #}
         <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver={{ static_version }}"/>
+
+        {# In the style block and without defer, because it sets the data-bs-theme attribute that #}
+        {# the stylesheet above colours the page from. Deferred, or at the foot of the page with #}
+        {# the other scripts, the browser would paint a light page and then repaint it dark. #}
+        <script src="{% static "js/theme.js" %}?ver={{ static_version }}"></script>
       {% endblock %}
 
     {% endblock %}

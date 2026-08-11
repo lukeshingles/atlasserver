@@ -19,18 +19,33 @@ a {
    link and link-hover; the active item is the same blue as the rest, distinguished by the
    underline below, as it was before. */
 .navbar {
-  --bs-navbar-color: #337ab7;
-  --bs-navbar-hover-color: #23527c;
-  --bs-navbar-active-color: #337ab7;
-  background: white;
+  --bs-navbar-color: var(--bs-link-color);
+  --bs-navbar-hover-color: var(--bs-link-hover-color);
+  --bs-navbar-active-color: var(--bs-link-color);
+  background: var(--bs-body-bg);
 }
 
 .navbar-brand {
   height: auto;
 }
 
-.navbar-brand img {
+/* width follows from the viewBox's aspect ratio, so only the height is given, as it was when this
+   was an <img> */
+.navbar-brand .atlaslogo {
   height: 118px;
+}
+
+/* The mark carries no background of its own, so on the dark theme its one shape that touches the
+   page background -- the leading "a", which sits outside the disc -- is lightened: the brand navy
+   is about 2:1 against the dark background, so the wordmark otherwise reads "tlas". The value is
+   that navy mixed with 55% white, which keeps it the same blue rather than a different colour.
+
+   The disc keeps the navy. It is the background for the white "tlas" on top of it, and lightening
+   it to stand out from the page takes those letters down to about 4:1; the disc is read from the
+   white letters and the comet crossing it rather than from its edge. Everything else in the mark is
+   white or one of the two oranges and reads on either theme. */
+[data-bs-theme="dark"] .atlaslogo .logo-lettera {
+  fill: #a1aed4;
 }
 
 /* bootstrap 3 floated navbar items, so the links needed a padding-top to sit at the foot of the
@@ -41,7 +56,6 @@ a {
 } */
 
 .notices {
-  color: black;
   font-size: small;
   margin-bottom: 1em;
 }
@@ -56,8 +70,10 @@ h1 {
   font-weight: bold;
 }
 
+/* the body colour at low opacity rather than a fixed light grey, so the placeholder stays as faint
+   against a dark field as it is against a light one */
 input::placeholder {
-  color: #d3d3d3;
+  color: rgba(var(--bs-body-color-rgb), 0.25);
 }
 
 div.newrequest {
@@ -110,14 +126,21 @@ textarea {
   padding: 0.3em 0.3em;
   margin: 8px 0;
   box-sizing: border-box;
-  border: 1px solid grey;
+  border: 1px solid var(--bs-border-color);
 }
 
 p.inputisodate {
   clear: left;
   margin-left: 10px;
   padding-left: 5em;
-  color: grey;
+  color: var(--bs-tertiary-color);
+}
+
+/* the proper motion and shift-and-stack panels, which the request form reveals when their checkbox
+   is ticked. The shading marks them as belonging to the box above rather than being more of the
+   form, and is a step off the page background in either direction. */
+.optionpanel {
+  background: var(--bs-secondary-bg);
 }
 
 form#newrequest input[type=submit] {
@@ -139,14 +162,17 @@ div#tasklist.singletaskdetail {
   margin: 0 0 1.0em 0;
   padding: 1em;
   border-radius: 0.5em;
-  border: 0.1em solid #495057;
-  background-color: white;
+  /* --bs-secondary-color rather than --bs-border-color: the box is the page's own background, so
+     the outline is the only thing separating one task from the next and Bootstrap's border grey is
+     too faint to carry that on its own */
+  border: 0.1em solid var(--bs-secondary-color);
+  background-color: var(--bs-body-bg);
 }
 
 ul.tasks li.queued {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: var(--bs-secondary-bg);
   border: none;
-  color: grey;
+  color: var(--bs-secondary-color);
 }
 
 ul.tasks li.started {
@@ -174,27 +200,30 @@ img.previewimage {
 }
 
 .taskstatus.running {
-  color: red;
+  color: var(--bs-danger-text-emphasis);
 }
 
 p.taskerror {
-  color: black;
+  color: var(--bs-body-color);
   font-weight: bold;
   margin-top: 1em;
 }
 
 /* the task runner health line, from /taskrunnerstatus.json */
 p.runnerstatus {
-  color: #737373;
+  color: var(--bs-secondary-color);
   font-size: 0.85em;
   margin-bottom: 0.5em;
 }
 
+/* Bootstrap's own warning panel colours, which is what this yellow was a hand-written copy of.
+   The -subtle and -emphasis variables have a dark value as well as a light one, so the panel
+   stays a warning on the dark theme rather than a pale yellow block. */
 p.runnerstatus.stale {
-  background-color: #fcf8e3;
-  border: 1px solid #faebcc;
+  background-color: var(--bs-warning-bg-subtle);
+  border: 1px solid var(--bs-warning-border-subtle);
   border-radius: 0.3em;
-  color: #8a6d3b;
+  color: var(--bs-warning-text-emphasis);
   font-size: 1em;
   padding: 0.7em 1em;
 }
@@ -250,12 +279,26 @@ p.runnerstatus.stale {
 /* Bootstrap 3's link colour, for the same reason as the buttons above: Bootstrap 5's is a brighter
    blue, so every link on the site shifted. Both the plain and the -rgb forms, because that is what
    Bootstrap reads -- `a` resolves rgba(var(--bs-link-color-rgb), ...) while .btn-link and
-   .page-link read the plain one, so setting only one leaves the two disagreeing. */
+   .page-link read the plain one, so setting only one leaves the two disagreeing.
+
+   These are the site's one definition of the link blue: the navbar and button.linkbutton below read
+   them rather than naming a colour of their own, so the dark values come to those too. */
 :root {
   --bs-link-color: #337ab7;
   --bs-link-color-rgb: 51, 122, 183;
   --bs-link-hover-color: #23527c;
   --bs-link-hover-color-rgb: 35, 82, 124;
+}
+
+/* Bootstrap 3's blue is a dark colour, chosen against a white page: on the dark theme's near-black
+   background it sits at about 3:1, below what text needs. Both are the light values mixed with
+   white -- 40% and 60% -- which is how Bootstrap derives its own dark-mode link colours, and takes
+   the link to about 7:1. */
+[data-bs-theme="dark"] {
+  --bs-link-color: #85afd4;
+  --bs-link-color-rgb: 133, 175, 212;
+  --bs-link-hover-color: #adcae2;
+  --bs-link-hover-color-rgb: 173, 202, 226;
 }
 
 /* The orange for the result links. Set through the button custom properties rather than as a plain
@@ -323,7 +366,7 @@ ul {
 button.linkbutton {
   background: none;
   border: none;
-  color: #337ab7;
+  color: var(--bs-link-color);
   cursor: pointer;
   font: inherit;
   padding: 0;
@@ -351,23 +394,58 @@ button.resetbutton {
    class is now applied only to anonymous visitors, so this needs no condition of its own. After
    .active deliberately: the two can coincide, and "you cannot use this" is the more useful cue. */
 .navbar-nav .nav-link.loginrequired {
-  color: lightgrey;
+  /* the navbar's own disabled colour rather than a fixed light grey, which on the dark theme would
+     be brighter than the links that do work and so read as emphasis instead of unavailability */
+  color: var(--bs-navbar-disabled-color);
 }
 
-/* the log out control has to be a POST form (Django's LogoutView rejects GET). The button carries
-   .dropdown-item, so bootstrap 5 gives it the same colour, padding and hover as the sibling links;
-   only the form's own margin and the button's default chrome need clearing. */
-.dropdown-menu form.logoutform {
-  margin: 0;
-}
-
-.dropdown-menu form.logoutform>button.dropdown-item {
+/* Two controls in the navbar menus are buttons rather than links: log out, because Django's
+   LogoutView rejects GET and so needs a POST form, and the three theme choices, which run
+   JavaScript. .dropdown-item gives each of them the colour, padding and hover of the sibling
+   links; a button's own chrome is what has to be cleared. */
+button.dropdown-item {
   background: none;
   border: none;
   cursor: pointer;
   font: inherit;
   text-align: left;
   width: 100%;
+}
+
+.dropdown-menu form.logoutform {
+  margin: 0;
+}
+
+/* the icon in the theme control's toggle, which is text-sized and so sits above the text baseline
+   without this */
+.themeswitch .themeicon {
+  vertical-align: -0.15em;
+}
+
+/* From the navbar's collapse breakpoint (navbar-expand-lg) upwards the control is an icon among
+   the links and its name is left to assistive technology; below it, the navigation is a stacked
+   list of words and a lone icon in that column reads as an unlabelled control. Bootstrap's
+   .visually-hidden has no responsive form, so its declarations are given here for the one width
+   that needs them. */
+@media (min-width: 992px) {
+  .themeswitch .themeswitch-label {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+  }
+}
+
+/* below that breakpoint the icon needs separating from the word beside it */
+@media (max-width: 991.98px) {
+  .themeswitch .themeicon {
+    margin-right: 0.4em;
+  }
 }
 
 span.helptext {
@@ -388,13 +466,15 @@ span.helptext {
 }
 
 .form-row .help {
-  color: #737373;
+  color: var(--bs-secondary-color);
   margin: 0.3em 0 0 14.5em;
 }
 
+/* Bootstrap's danger text colour, which has a light and a dark value. A fixed red reads as either
+   too dark on the dark theme or too light on the light one, and every message below is an error. */
 .errornote,
 .form-row .errorlist {
-  color: #a94442;
+  color: var(--bs-danger-text-emphasis);
   font-weight: bold;
 }
 
@@ -426,15 +506,27 @@ ul.logos img {
   margin: 10px;
 }
 
+/* Images with a light background of their own: the partner logos, which are photographs and flat
+   PNGs where the ink is dark and the paper is either an opaque white rectangle or nothing at all,
+   and the two example light curves, which are matplotlib renderings with white paper and black axes
+   in the file. Neither can follow the theme, so on the dark one they are given a card to sit on and
+   read as deliberate panels rather than as bright rectangles. */
+[data-bs-theme="dark"] ul.logos img,
+[data-bs-theme="dark"] img.examplelightcurve {
+  background-color: #f8f9fa;
+  border-radius: 0.3em;
+  padding: 0.4em;
+}
+
 ul.errorlist {
   display: block;
-  color: red;
+  color: var(--bs-danger-text-emphasis);
 }
 
 /* the per-task error line. Was an inline style; the only other .errors rule is scoped to
    #tasklistfetchstatus, so without this the message rendered in ordinary black body text. */
 .errors {
-  color: red;
+  color: var(--bs-danger-text-emphasis);
 }
 
 ul#taskfilters>* {
@@ -465,17 +557,31 @@ table.countrystats th[scope="row"] {
   display: none !important;
 }
 
+/* The two stats charts are drawn by bokeh on the server, into a white figure with dark text, and
+   both endpoints are cached and served to every visitor alike -- so unlike the light curves, which
+   Plotly draws in the browser, they cannot be asked to follow a preference held in the browser.
+   They stay as they are and get a light card to sit on, so on the dark theme they read as panels
+   rather than as two bare white rectangles. */
+[data-bs-theme="dark"] #statsusagechart,
+[data-bs-theme="dark"] #statscoordchart {
+  background-color: #f8f9fa;
+  /* the "Loading..." placeholder and the message left behind if the fetch fails are ordinary text
+     in these containers, so they need the colour that goes with the card rather than the page's */
+  color: #212529;
+  border-radius: 0.5em;
+}
+
 #submitrequest.submitting {
   background: grey;
 }
 
 #tasklistfetchstatus {
-  color: rgb(60%, 60%, 60%);
+  color: var(--bs-tertiary-color);
   font-size: 0.7em;
 }
 
 #tasklistfetchstatus .errors {
-  color: red;
+  color: var(--bs-danger-text-emphasis);
 }
 
 
@@ -552,7 +658,7 @@ table.countrystats th[scope="row"] {
    block that used to be here worked around bootstrap 3 having no toggle at all, so the eight links
    plus a floated logo filled an entire screen before any content. */
 @media (max-width: 991.98px) {
-  .navbar-brand img {
+  .navbar-brand .atlaslogo {
     height: 56px;
   }
 }

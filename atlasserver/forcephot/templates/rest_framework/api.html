@@ -34,6 +34,11 @@
   {# last, so it can correct the two above where Bootstrap 3 is assumed #}
   <link rel="stylesheet" type="text/css" href="{% static "drf-bootstrap5.css" %}?ver={{ static_version }}"/>
   {% if code_style %}<style>{{ code_style }}</style>{% endif %}
+
+  {# see base.html: this has to run before the first paint, and DRF's base template offers no #}
+  {# other block inside <head>. It sets the attribute on <html> from JavaScript, so this page #}
+  {# needs no say over DRF's <html> tag. #}
+  <script src="{% static "js/theme.js" %}?ver={{ static_version }}"></script>
 {% endblock %}
 
 {% block navbar %}{% include "navbar.html" %}{% endblock %}

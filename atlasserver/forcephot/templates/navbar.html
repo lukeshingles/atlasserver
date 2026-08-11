@@ -8,7 +8,13 @@
 
 <nav class="navbar navbar-expand-lg" aria-label="{% translate "navbar" %}">
   <div class="container">
-    <a class="navbar-brand" rel="nofollow" href="{% url 'index' %}"><img src="{% static "images/logos/atlas_logo.svg" %}" alt="ATLAS Forced Photometry home" /></a>
+    {# the mark is aria-hidden and the link is named by the text beside it, which is what the img #}
+    {# alt used to do: an inline <svg> has no alt attribute, and a <title> inside it is announced #}
+    {# less consistently than a plain visually-hidden string #}
+    <a class="navbar-brand" rel="nofollow" href="{% url 'index' %}">
+      {% include "atlaslogo.html" %}
+      <span class="visually-hidden">ATLAS Forced Photometry home</span>
+    </a>
 
     {# Bootstrap 5's collapse toggle. data-bs-* rather than Bootstrap 3's data-*, and it #}
     {# needs no jQuery -- the bundle at the end of the page is self-contained. #}
@@ -67,6 +73,39 @@
           {# layout to the browsable API #}
           <li class="nav-item"><a class="nav-link" href="{% url 'login' %}?next={{ request.get_full_path|urlencode }}">Log in</a></li>
         {% endif %}
+
+        {# Light/dark mode. Hidden until theme.js removes the d-none, so a visitor without #}
+        {# JavaScript is not offered a control that cannot do anything -- the same reason #}
+        {# copycode.js adds its button rather than the template carrying one. Which icon shows and #}
+        {# which entry is marked is also theme.js's, since only it knows the stored preference. #}
+        <li class="nav-item dropdown themeswitch d-none">
+          <button class="nav-link dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Colour theme">
+            <svg class="themeicon themeicon-light d-none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="8" cy="8" r="3.4"/>
+              <path d="M8 0v2.1M8 13.9V16M0 8h2.1M13.9 8H16M2.34 2.34l1.5 1.5M12.16 12.16l1.5 1.5M13.66 2.34l-1.5 1.5M3.84 12.16l-1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+            <svg class="themeicon themeicon-dark d-none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 1A7 7 0 1 0 8 15A9 9 0 0 1 8 1Z" transform="rotate(-25 8 8)"/>
+            </svg>
+            <svg class="themeicon themeicon-auto d-none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M8 1.6A6.4 6.4 0 0 0 8 14.4Z"/>
+            </svg>
+            {# a word below the navbar's collapse breakpoint, where this sits in a stacked menu of #}
+            {# words; beside the other links on a wide screen the icon carries it and main.css #}
+            {# hides the text from sight but not from assistive technology #}
+            <span class="themeswitch-label">Colour theme</span>
+          </button>
+
+          {# menuitemradio, because the three are one choice and exactly one of them holds: a #}
+          {# screen reader then reads the stored mode as the checked option rather than reading #}
+          {# three unrelated commands. #}
+          <ul class="dropdown-menu dropdown-menu-end" role="menu" aria-label="Colour theme">
+            <li><button type="button" class="dropdown-item" data-theme-value="light" role="menuitemradio" aria-checked="false">Light</button></li>
+            <li><button type="button" class="dropdown-item" data-theme-value="dark" role="menuitemradio" aria-checked="false">Dark</button></li>
+            <li><button type="button" class="dropdown-item" data-theme-value="auto" role="menuitemradio" aria-checked="false">Auto</button></li>
+          </ul>
+        </li>
       </ul>
     </div>
   </div>

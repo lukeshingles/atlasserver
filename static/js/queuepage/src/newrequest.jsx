@@ -223,7 +223,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
         </div>);
     if (values.enable_propermotion) {
         formcontent.push(
-            <div key="propermotion_panel" id="propermotion_panel" style={{ background: 'rgb(235,235,235)' }}>
+            <div key="propermotion_panel" id="propermotion_panel" className="optionpanel">
                 <p key="propermotiondesc" style={{ fontSize: 'small' }}>If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
                 <ul key="propermotion_inputs">
                     <li key="radec_epoch_year"><label htmlFor="id_radec_epoch_year">Epoch year:</label><input type="number" name="radec_epoch_year" step="0.1" id="id_radec_epoch_year" value={values.radec_epoch_year} onChange={setField('radec_epoch_year')} /></li>
@@ -244,7 +244,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
 
         if (values.enable_stack_rock) {
             formcontent.push(
-                <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
+                <div key="stackrock_panel" id="stackrock_panel" className="optionpanel">
                     <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
                 </div>
             );
@@ -291,7 +291,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
 
     formcontent.push(<input key="submitbutton" className={submitting ? 'btn btn-primary submitting' : 'btn btn-primary'} id="submitrequest" type="submit" value={submitting ? 'Requesting...' : 'Request'} />);
     if (httperror != '') {
-        formcontent.push(<p key="httperror" style={{ 'color': 'red' }}>{httperror}</p>);
+        formcontent.push(<p key="httperror" className="errors">{httperror}</p>);
     }
 
     return (
