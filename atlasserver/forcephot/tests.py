@@ -2425,6 +2425,25 @@ class ProcessTimeoutTests(TestCase):
     # platform is spawn, and a child that re-imports this module dies on AppRegistryNotReady before
     # it can overrun, which would make the timeout test pass for the wrong reason
 
+    def test_the_render_process_is_spawned_not_forked(self) -> None:
+        """The live caller is a view inside a mod_wsgi worker thread.
+
+        fork() there copies only the calling thread but all of the memory, so a lock another
+        thread held at that instant is held forever in the child -- which then deadlocks on first
+        touching whatever it guards, and for an import-heavy child that is the import machinery.
+        The platform default hid this: macOS spawns, Linux forks on 3.13 and forkserver on 3.14+.
+        """
+        captured = []
+
+        with mock.patch.object(
+            misc, "run_process_with_timeout", side_effect=lambda proc, _timeout: captured.append(proc)
+        ):
+            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1, separate_process=True)
+
+        assert len(captured) == 1, captured
+        # the class, not the constant: this is what was actually handed to the runner
+        assert type(captured[0]).__name__ == "SpawnProcess", type(captured[0]).__name__
+
     def test_a_process_that_finishes_reports_success(self) -> None:
         assert misc.run_process_with_timeout(Process(target=time.sleep, args=(0,)), timeout=30.0) is True
 

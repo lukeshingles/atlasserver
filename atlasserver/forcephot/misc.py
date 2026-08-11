@@ -1,6 +1,7 @@
 import datetime
+import multiprocessing
 import typing as t
-from multiprocessing import Process
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 
 import fundamentals.logs
@@ -16,6 +17,25 @@ PDF_PLOT_TIMEOUT_SECONDS: t.Final = 120.0
 
 # grace between SIGTERM and SIGKILL for that process
 TERMINATE_GRACE_SECONDS: t.Final = 5.0
+
+# How the PDF render process is started. Spawn explicitly, rather than taking the platform default,
+# because make_pdf_plot's live caller is a view running inside a mod_wsgi worker thread.
+#
+# fork() from a multithreaded process copies only the calling thread, but copies all of the memory
+# -- including any lock another thread happened to be holding at that instant, which in the child
+# is held by a thread that does not exist and will never release it. The child then deadlocks the
+# moment it touches whatever that lock guards, which for an import-heavy child (matplotlib) means
+# the import machinery. CPython 3.14 warns about this, and it gets worse on a free-threaded build,
+# where the other threads are genuinely running rather than merely runnable.
+#
+# The default hid this: macOS already spawns, so the path is exercised that way in development,
+# while Linux forks on 3.13 and forkserver on 3.14+. Naming it makes every platform and version do
+# what is already tested.
+#
+# Spawn's cost is that the child re-imports instead of inheriting. That costs nothing here: the
+# expensive import is matplotlib, which plot_atlas_fp pulls in and which make_pdf_plot_worker
+# defers precisely so it stays out of the parent -- so there was never anything to inherit.
+PLOT_PROCESS_CONTEXT: t.Final = multiprocessing.get_context("spawn")
 
 
 def splitradeclist(data, form=None):
@@ -195,7 +215,7 @@ def make_pdf_plot_worker(
     return None
 
 
-def run_process_with_timeout(proc: Process, timeout: float) -> bool:
+def run_process_with_timeout(proc: BaseProcess, timeout: float) -> bool:
     """Start `proc` and wait for it, killing it if it overruns. Return False if it was killed."""
     proc.start()
     proc.join(timeout)
@@ -229,7 +249,10 @@ def make_pdf_plot(*args, separate_process: bool = False, timeout: float = PDF_PL
         make_pdf_plot_worker(*args, **kwargs)
         return True
 
-    return run_process_with_timeout(Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs), timeout)
+    # every argument is pickled to reach the spawned child, which is why no caller passes a logfunc
+    # on this path: a bound method or a closure would not survive the trip.
+    proc = PLOT_PROCESS_CONTEXT.Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
+    return run_process_with_timeout(proc, timeout)
 
 
 # GeoIP codes that are not ISO country codes, so pycountry does not know them. They were the only
