@@ -258,36 +258,36 @@ li.task:hover {
   gap: 0.5em;
 }
 
-/* The four status words. Bootstrap's -bg-subtle and -text-emphasis pairs rather than its solid
-   .text-bg-* variants: a solid badge next to the task number is a second thing shouting on a row
-   whose point is the data, and these two carry a light and a dark value each, so the badge follows
-   the theme without a value here. */
+/* The four status words, as fills: the frame around the row already carries the state quietly, so the
+   badge is where it can be said loudly. Each takes the text colour that clears 4.5:1 against its own
+   fill, which for the amber is a dark one and for the other two is white.
+
+   Queued is the exception and stays a quiet chip. A waiting task is the least interesting row in the
+   list, and as a solid fill its badge was the brightest mark on the page -- the loud states are the
+   ones worth looking at. */
 .taskbadge {
   font-weight: normal;
 }
 
 .taskbadge-queued {
-  background-color: var(--bs-secondary-bg-subtle);
+  background-color: var(--bs-secondary-bg);
   border: var(--bs-border-width) solid var(--bs-border-color);
   color: var(--bs-secondary-color);
 }
 
 .taskbadge-running {
-  background-color: var(--bs-warning-bg-subtle);
-  border: var(--bs-border-width) solid var(--bs-warning-border-subtle);
-  color: var(--bs-warning-text-emphasis);
+  background-color: #f0ad4e;
+  color: #212529;
 }
 
 .taskbadge-finished {
-  background-color: var(--bs-success-bg-subtle);
-  border: var(--bs-border-width) solid var(--bs-success-border-subtle);
-  color: var(--bs-success-text-emphasis);
+  background-color: var(--bs-success);
+  color: #fff;
 }
 
 .taskbadge-error {
-  background-color: var(--bs-danger-bg-subtle);
-  border: var(--bs-border-width) solid var(--bs-danger-border-subtle);
-  color: var(--bs-danger-text-emphasis);
+  background-color: var(--bs-danger);
+  color: #fff;
 }
 
 /* the queue position, on the waiting line. The same subtle pair as the Queued badge above, since it
@@ -530,6 +530,20 @@ p.runnerstatus.stale {
   --bs-link-color-rgb: 51, 122, 183;
   --bs-link-hover-color: #23527c;
   --bs-link-hover-color-rgb: 35, 82, 124;
+
+  /*
+  The site's accent, and its one non-Bootstrap colour: the orange of the result buttons. It marks
+  the current thing -- the bar under the active navigation item, the rule under the queue page's
+  heading, the edge of the panel that submits a request, the tint on a row just created.
+
+  Deliberately one colour rather than a gradient. A sweep between two hues has to stay legible at both
+  ends against both themes and against anything on top of it, which for white button text came out at
+  1.9:1 at the pale end -- so it needed a second darker sweep beneath it for filled controls, two
+  palettes to say one thing. Held here as a variable so the four places that mark "current" cannot
+  drift apart.
+  */
+  --atlas-accent: #ef4e19;
+  --atlas-accent-rgb: 239, 78, 25;
 }
 
 /* Bootstrap 3's blue is a dark colour, chosen against a white page: on the dark theme's near-black
@@ -550,7 +564,8 @@ p.runnerstatus.stale {
    darkened by 15%, the step Bootstrap uses for its own variants. */
 .results {
   --bs-btn-color: #fff;
-  --bs-btn-bg: #ef4e19;
+  /* the same accent as :root defines, which is where this orange came from */
+  --bs-btn-bg: var(--atlas-accent);
   --bs-btn-border-color: #e59400;
   --bs-btn-hover-color: #fff;
   --bs-btn-hover-bg: #cb4215;
@@ -756,10 +771,9 @@ in the stylesheet keeps the duration and the easing here with the rest of the si
     left: 0;
     height: 3px;
     border-radius: 3px;
-    /* the orange of the result buttons, the one colour on the site that is neither text nor a
-       Bootstrap variant, so the current page is marked in the site's own accent rather than in the
-       same blue as every link around it */
-    background-color: #ef4e19;
+    /* the site's accent (see :root), so the current page is marked in it rather than in the same blue
+       as every link around it */
+    background-color: var(--atlas-accent);
     width: var(--navindicator-width, 0);
     transform: translateX(var(--navindicator-x, 0));
     opacity: var(--navindicator-opacity, 0);
@@ -1170,7 +1184,7 @@ point of having stopped flooding rows with colour.
 */
 @keyframes task-flash {
   from {
-    background-color: rgba(239, 78, 25, 0.16);
+    background-color: rgba(var(--atlas-accent-rgb), 0.16);
   }
 
   to {
@@ -1218,5 +1232,159 @@ ul.tasks li.task.task-collapsed > .taskinner {
   .placeholder-glow .placeholder,
   .taskprogress .progress-bar-animated {
     animation: none;
+  }
+}
+
+/* ============================ the queue page ============================ */
+
+/* Scoped to #taskpage, which is everything the queue page renders, so the display treatment does not
+   land on the prose pages that share .page-header. */
+#taskpage .page-header h1 {
+  color: var(--bs-emphasis-color);
+  font-size: clamp(2.1rem, 5vw, 2.8rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-bottom: 0.35em;
+}
+
+/* the accent as a short rule under the heading rather than through it: it marks the page without
+   competing with the words for legibility */
+#taskpage .page-header h1::after {
+  background-color: var(--atlas-accent);
+  border-radius: 2px;
+  content: "";
+  display: block;
+  height: 4px;
+  margin-top: 0.3em;
+  width: 2.2em;
+}
+
+/* ---- the filter tabs, as one segmented control ---- */
+
+/* They were two buttons side by side, one of which happened to be filled. As a single track with a
+   filled segment in it, which is what they are, the pair reads as a choice between two states. */
+#taskfilters {
+  background-color: var(--bs-tertiary-bg);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: 2em;
+  display: inline-flex;
+  gap: 0.15em;
+  margin-bottom: 1.2em;
+  padding: 0.25em;
+}
+
+#taskfilters>* {
+  display: inline-flex;
+}
+
+#taskfilters .btn {
+  border: none;
+  border-radius: 2em;
+  font-weight: 600;
+  padding: 0.35em 1.1em;
+  transition: background-color 150ms ease, color 150ms ease, transform 100ms ease;
+}
+
+/* the selected segment keeps the site's link blue, which .btn-primary already carries and which holds
+   white text at 4.6:1 */
+#taskfilters .btn-link {
+  color: var(--bs-secondary-color);
+  text-decoration: none;
+}
+
+#taskfilters .btn-link:hover {
+  background-color: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+}
+
+/* ---- the New request card ---- */
+
+/* An accent edge along the top, so the one panel on the page that makes something happen is marked as
+   such. The card clips it, or its corners would sit outside the radius. */
+div.newrequest .task {
+  border-top: 4px solid var(--atlas-accent);
+  overflow: hidden;
+}
+
+div.newrequest .task h2 {
+  font-size: 1.3em;
+  font-weight: 700;
+}
+
+/* the submit control keeps .btn-primary's blue and gains only the lift, which is the part that makes
+   it feel like a button rather than a rectangle */
+#submitrequest {
+  font-weight: 600;
+  transition: filter 150ms ease, transform 100ms ease, box-shadow 150ms ease;
+}
+
+#submitrequest:hover {
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+/* every control on the page acknowledges a press, which is the cheapest motion there is */
+#taskpage .btn:active,
+#submitrequest:active {
+  transform: translateY(1px);
+}
+
+/* ---- rows arriving ---- */
+
+/*
+A list that assembles itself rather than appearing all at once. The delay is capped at the first
+handful of rows: past that it stops reading as sequence and starts reading as lag.
+
+Only ever runs once per row. React keys rows by task id, so the poll every few seconds updates the
+nodes in place rather than replacing them, and a CSS animation runs on insertion -- so what animates
+is a genuinely new row, or the whole list after a filter or a page change, which is when it is wanted.
+*/
+@keyframes task-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.6em);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+ul.tasks li.task {
+  animation: task-arrive 260ms ease-out both;
+}
+
+ul.tasks li.task:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+ul.tasks li.task:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+ul.tasks li.task:nth-child(4) {
+  animation-delay: 120ms;
+}
+
+ul.tasks li.task:nth-child(n+5) {
+  animation-delay: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  ul.tasks li.task,
+  #taskfilters .btn,
+  #submitrequest {
+    animation: none;
+    transition: none;
+  }
+
+  #taskpage .btn:active,
+  #submitrequest:active,
+  #submitrequest:hover {
+    transform: none;
   }
 }
