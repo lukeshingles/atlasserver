@@ -299,3 +299,19 @@ site's Bootstrap version rather than freezing a copy of its numbers.
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
+
+/* ---- code blocks on the dark theme ---- */
+
+/* The request line and the response body sit in <pre class="prettyprint">, and what colours the
+   text inside them is not this project's: the syntax spans come from prettify.css, and the response
+   JSON is highlighted by pygments through DRF's own BrowsableAPIRenderer.code_style, which is a
+   server-side setting and so cannot answer to a preference held in the browser. Both palettes are
+   dark ink for a light card, so the card stays light in either theme.
+
+   The colour is the point of the rule. prettify.css already gives .prettyprint its light
+   background, but not a text colour, so on the dark theme the parts with no syntax span of their own
+   -- the method and path of the request line, and the HTTP status and headers above the body --
+   inherited a near-white --bs-body-color onto near-white and vanished. */
+.prettyprint {
+  color: #212529;
+}

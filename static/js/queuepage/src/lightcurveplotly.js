@@ -76,16 +76,14 @@
         "#FA8072", //Salmon
         "#000000"]; //Black
 
-    // Should feed the colors form the calling page - better still, the CSS
-    var plotColors = {
-        "backgroundColor": "#FFFFFF",
-        "axisColor": "#000000",
-        "tickColor": "#BFBFBF",
-        "shadingColor": "#DDDDDD",
-        "tooltipBackground": "#EEEEFF",
-        "tooltipBorder": "#FFDDDD",
-        "todaylineColor": "FF0000"
-    };
+    // Backgrounds, text and gridlines for the light or dark theme, from theme.js, which reads them
+    // off the same Bootstrap custom properties the page around the plot is coloured from. Plotly
+    // paints into a canvas, so these cannot come from the stylesheet the way the rest does. The
+    // series colours above are the data and are the same in either theme.
+    //
+    // The fallback is for a page without theme.js: Plotly then draws with its own defaults, which
+    // are a readable plot on a light background.
+    var theme = (window.atlasTheme && window.atlasTheme.plotlyColors()) || { axis: {} };
 
 
     // GLOBAL VARIABLES END
@@ -200,32 +198,36 @@
         var ylabel = 'AB Mag';
     }
 
+    // Object.assign merges the theme's axis colours in beside the ranges, formats and titles, which
+    // are what this file has to say about an axis; the two name no property in common.
     var layout = {
         showlegend: true,
-        yaxis: {
+        paper_bgcolor: theme.paper_bgcolor,
+        plot_bgcolor: theme.plot_bgcolor,
+        font: theme.font,
+        legend: theme.legend,
+        yaxis: Object.assign({
             range: [ymin, ymax],
             autorange: yautorange,
             tickformat: ".1f",
             hoverformat: ".2f",
             title: ylabel
-        },
-        xaxis: {
+        }, theme.axis),
+        xaxis: Object.assign({
             tickformat: ".0f",
             hoverformat: ".5f",
             range: [xmin, xmax],
             title: "mjd"
-        },
+        }, theme.axis),
         margin: { l: 70, r: 0, b: 30, t: 30 },
         //  width: w, //window.innerWidth,
         //  width: '100%',
         height: lcplotheight, //window.innerHeight
     }
-    //paper_bgcolor: 'rgba(0,0,0,0)'}
-    //plot_bgcolor: 'rgba(0,0,0,0)'}
 
     // 2018-10-11 KWS Add another x axis if not forced photometry
     if (!(locallcdivname.includes("forced"))) {
-        layout["xaxis2"] = {
+        layout["xaxis2"] = Object.assign({
             tickformat: ".0f",
             overlaying: "x",
             zeroline: false,
@@ -233,7 +235,7 @@
             hoverformat: ".5f",
             range: [x2min, x2max],
             title: "days since earliest detection"
-        }
+        }, theme.axis)
     }
 
     Plotly.react(locallcdivname.replace('#', ''), data, layout, { displayModeBar: false, responsive: true });

@@ -22,7 +22,9 @@
     the all-sky, frequent coverage, to o ~ 19.5 makes it treasure trove
     for time domain science. A full description is on the ATLAS homepage at <a href="https://fallingstar.com/">fallingstar.com</a></p>
 
-    <p style = "text-align: center"><img src="{% static 'images/example_supernova_small.png' %}" width="70%" alt="Example ATLAS forced photometry lightcurve of a supernova, showing a rise and decline in cyan and orange difference flux"/><br /><img src="{% static 'images/example_varstar_small.png' %}" width="70%" alt="Example ATLAS forced photometry lightcurve of a variable star, showing repeated brightness variations in cyan and orange"/></p>
+    {# the class is what main.css hangs the dark theme's light card on: these are matplotlib #}
+    {# renderings with a white background and black axes baked into the file #}
+    <p style = "text-align: center"><img class="examplelightcurve" src="{% static 'images/example_supernova_small.png' %}" width="70%" alt="Example ATLAS forced photometry lightcurve of a supernova, showing a rise and decline in cyan and orange difference flux"/><br /><img class="examplelightcurve" src="{% static 'images/example_varstar_small.png' %}" width="70%" alt="Example ATLAS forced photometry lightcurve of a variable star, showing repeated brightness variations in cyan and orange"/></p>
 
     <p>A forced photometry means that a point-spread-function is calculated
     for each image based on high signal to noise stars, and a profile fit
