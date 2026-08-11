@@ -60,12 +60,35 @@ function pollingPaused() {
  * response either, and counting it would fire a full fetch on every tick, which is worse than not
  * having the endpoint at all.
  *
- * One definition, because two pollers ask the question: fetchQueuePositions, to notice a task
- * leaving the queue while the page is being watched, and countFinishedWhileAway, to count the ones
- * that left while it was not.
+ * Used to decide whether the queuepositions poll is worth making at all: with none of the rows on
+ * screen trackable, its answer could not change anything.
  */
 function tracksQueuePosition(task) {
     return task.user_id == user_id && task.finishtimestamp == null && task.queuepos != null;
+}
+
+/**
+ * Put a number on the navbar's Queue badge, or take the badge away at zero.
+ *
+ * The badge is rendered by the server, which is right for every other page -- each navigation
+ * re-renders it -- but this page never navigates: submitting, cancelling and finishing all happen
+ * without a page load, so the badge it was drawn with goes stale the moment anything changes.
+ *
+ * A direct DOM call because the navbar is not React's, the same reason the row animations are; and
+ * from the queuepositions response because that is the user's whole queued set rather than the page
+ * of rows on screen, so it is the count the badge wants.
+ */
+function updateQueueBadge(count) {
+    const badge = document.querySelector('.queuecount');
+    if (!badge) {
+        return;
+    }
+
+    const number = badge.querySelector('.queuecount-number');
+    if (number) {
+        number.textContent = count;
+    }
+    badge.hidden = count == 0;
 }
 
 /**
@@ -770,6 +793,19 @@ export function TaskPage() {
     const stateRef = React.useRef(state);
 
     /*
+     * The ids of the user's queued tasks, as the queuepositions endpoint last reported them.
+     *
+     * That response is the user's whole queued set, which the rendered rows are not: the task list is
+     * paginated, and can be filtered or showing a single task, so anything counted from state.results
+     * would be counted from a slice. countFinishedWhileAway measures against this, and the navbar
+     * badge is drawn from its length.
+     *
+     * A ref rather than state because nothing renders from it -- the two readers are an interval and a
+     * DOM call -- and it must be readable from asynchronous code, like stateRef above.
+     */
+    const queuedIdsRef = React.useRef(null);
+
+    /*
      * The ref is the authority, and is updated before setStateRaw is called.
      *
      * The merge deliberately does not happen inside a setStateRaw(previous => ...) updater: React
@@ -847,6 +883,13 @@ export function TaskPage() {
                     return;
                 }
 
+                // The user's whole queued set, which is what this endpoint answers with -- not the
+                // page of rows on screen. Recorded for countFinishedWhileAway to measure against and
+                // used for the navbar badge, both of which want the total rather than the page.
+                const queuedids = Object.keys(data.queuepositions);
+                queuedIdsRef.current = queuedids;
+                updateQueueBadge(queuedids.length);
+
                 // tested against state as it stands rather than the committed state: a false
                 // positive costs one extra full fetch and a false negative is caught on the next
                 // tick, so it does not need to be exact
@@ -915,22 +958,21 @@ export function TaskPage() {
      * Runs only while hidden, which is exactly when nothing else runs, and asks the cheap endpoint
      * rather than re-fetching the list: what is wanted is a number, not the rows.
      *
+     * Measured against queuedIdsRef -- the user's whole queued set as last seen while the tab was
+     * being watched -- rather than the rows on screen, which are one page of a paginated list and
+     * could be a filtered one or a single task.
+     *
      * The count is recomputed from scratch each time rather than accumulated, and that is what makes
-     * it safe to repeat: the rows do not refresh while the tab is hidden, so the set of tasks that
-     * were queued when the user left is frozen, and "how many of those are no longer in the queue" is
-     * the same answer however many times it is asked. Accumulating would count each finished task
-     * again on every tick.
+     * it safe to repeat: nothing writes that set while the tab is hidden, so "how many of those are no
+     * longer in the queue" is the same answer however many times it is asked. Accumulating would
+     * count each finished task again on every tick.
      *
      * A deleted task would also count as finished, which cannot happen here: deleting one takes a
      * click on a page nobody is looking at.
      */
     const countFinishedWhileAway = React.useCallback(() => {
-        if (!document[hidden] || stateRef.current.results == null) {
-            return;
-        }
-
-        const waiting = stateRef.current.results.filter(tracksQueuePosition);
-        if (waiting.length == 0) {
+        const waiting = queuedIdsRef.current;
+        if (!document[hidden] || waiting == null || waiting.length == 0) {
             return;
         }
 
@@ -951,7 +993,7 @@ export function TaskPage() {
                     return;
                 }
 
-                const finished = waiting.filter(task => !(String(task.id) in data.queuepositions)).length;
+                const finished = waiting.filter(taskid => !(taskid in data.queuepositions)).length;
                 if (finished != stateRef.current.finishedwhileaway) {
                     setState({ finishedwhileaway: finished });
                 }
@@ -1271,7 +1313,7 @@ export function TaskPage() {
         const fetchinterval = pollInterval(() => fetchData(false), TASKLIST_POLL_MS);
         const queueposinterval = pollInterval(fetchQueuePositions, QUEUEPOS_POLL_MS);
         const awayinterval = setInterval(countFinishedWhileAway, AWAY_POLL_MS);
-        window.addEventListener('visibilitychange', handleVisibilityChange);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         window.addEventListener('popstate', handlePopState);
         fetchData(true);
 
@@ -1279,7 +1321,7 @@ export function TaskPage() {
             clearInterval(fetchinterval);
             clearInterval(queueposinterval);
             clearInterval(awayinterval);
-            window.removeEventListener('visibilitychange', handleVisibilityChange);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
             window.removeEventListener('popstate', handlePopState);
         };
         // mount only, like the componentDidMount this replaces: the callbacks are reached through

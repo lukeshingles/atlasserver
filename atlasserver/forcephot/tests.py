@@ -3805,6 +3805,21 @@ class NavbarQueueCountTests(TestCase):
     def navbar_of(self, name: str = "index") -> str:
         return self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
 
+    def badge_of(self, content: str) -> str | None:
+        """Return the badge's state: its number, "hidden", or None when there is no badge at all.
+
+        The element is always rendered for a signed-in user, hidden at zero rather than absent, so
+        that tasklist.jsx has something to put a number back into on a page that never navigates.
+        """
+        match = re.search(
+            r'<span class="badge rounded-pill queuecount"( hidden)?>'
+            r'<span class="queuecount-number">(\d*)</span>',
+            content,
+        )
+        if match is None:
+            return None
+        return "hidden" if match.group(1) else match.group(2)
+
     def test_anonymous_visitors_get_no_badge_and_no_query(self) -> None:
         """Nobody signed in means nothing to count, so the processor must not reach the database."""
         Task.objects.create(user=self.user, ra=1.0, dec=2.0)
@@ -3812,31 +3827,28 @@ class NavbarQueueCountTests(TestCase):
         with CaptureQueriesContext(connection) as queries:
             content = self.navbar_of()
 
-        assert "queuecount" not in content
+        assert self.badge_of(content) is None, "an anonymous visitor has no queue to badge"
         counting = [q["sql"] for q in queries.captured_queries if "COUNT" in q["sql"].upper() and "task" in q["sql"]]
         assert not counting, counting
 
     def test_a_user_with_nothing_queued_gets_no_badge(self) -> None:
-        """Absent rather than a zero: a badge that is always there stops being noticed."""
+        """Hidden rather than a visible zero: a badge that is always there stops being noticed."""
         self.client.force_login(self.user)
 
-        assert "queuecount" not in self.navbar_of()
+        assert self.badge_of(self.navbar_of()) == "hidden"
 
     def test_the_badge_counts_the_users_own_waiting_and_running_tasks(self) -> None:
         for _ in range(3):
             Task.objects.create(user=self.user, ra=1.0, dec=2.0)
         self.client.force_login(self.user)
 
-        content = self.navbar_of()
-
-        assert "queuecount" in content
-        assert re.search(r'class="badge rounded-pill queuecount">3<', content), "the badge does not show 3"
+        assert self.badge_of(self.navbar_of()) == "3"
 
     def test_another_users_queue_is_not_counted(self) -> None:
         Task.objects.create(user=self.other, ra=1.0, dec=2.0)
         self.client.force_login(self.user)
 
-        assert "queuecount" not in self.navbar_of()
+        assert self.badge_of(self.navbar_of()) == "hidden"
 
     def test_finished_and_archived_tasks_are_not_counted(self) -> None:
         """The badge follows Task.queued(), which is the same set the queue positions cover."""
@@ -3845,7 +3857,7 @@ class NavbarQueueCountTests(TestCase):
         Task.objects.create(user=self.user, ra=5.0, dec=6.0)
         self.client.force_login(self.user)
 
-        assert re.search(r'queuecount">1<', self.navbar_of()), "only the one waiting task should be counted"
+        assert self.badge_of(self.navbar_of()) == "1", "only the one waiting task should be counted"
 
     def test_the_count_is_not_spent_until_something_asks_for_it(self) -> None:
         """The processor runs for every render, including ones that draw no navbar.

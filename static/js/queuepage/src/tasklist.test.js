@@ -329,31 +329,72 @@ describe('TaskPage', () => {
         assert.equal(rowMeta(container)['RA Dec:'], '150 20');
     });
 
+    /**
+     * Answer the three endpoints, with the queuepositions body under the test's control.
+     *
+     * Returns a handle whose `positions` can be reassigned, so a test can let the queue empty.
+     */
+    const stubFetchWithPositions = (results, positions) => {
+        const control = { positions };
+        global.fetch = (url) => {
+            const href = url.toString();
+            requested.push(href);
+
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: control.positions }) });
+            }
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                headers: { get: () => null },
+                json: () => Promise.resolve({ results, taskcount: results.length, next: null, previous: null, pagefirsttaskposition: 0 }),
+            });
+        };
+        return control;
+    };
+
     test('the tab title counts tasks that left the queue while the tab was hidden', async () => {
         // the away poll runs on an interval an hour of test time would not reach
         mock.timers.enable({ apis: ['setInterval'] });
         const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
-        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => true });
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        // both tasks are in the queue to begin with, and neither is once the tab has been left
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 }), task(2, { queuepos: 2 })], { 1: 1, 2: 2 });
 
         try {
-            // queuepositions answers with nothing, so both of these have left the queue
-            const { container } = await renderPage([task(1, { queuepos: 1 }), task(2, { queuepos: 2 })]);
-            assert.doesNotMatch(window.document.title, /^\(/, 'counting before any poll');
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
 
+            // one queuepositions poll while the tab is still being watched, which is what records the
+            // set the count is later measured against
+            mock.timers.tick(2000);
+            await flush(60);
+            assert.doesNotMatch(window.document.title, /^\(/, 'counting before the tab was left');
+
+            hidden = true;
+            control.positions = {};
             mock.timers.tick(60000);
             await flush(60);
 
             assert.match(window.document.title, /^\(2\) Task Queue/);
 
             // asked again, the answer is the same rather than doubled: the count is recomputed from
-            // the rows as they stood when the tab was hidden, not accumulated
+            // the set as last seen, not accumulated
             mock.timers.tick(60000);
             await flush(60);
             assert.match(window.document.title, /^\(2\) Task Queue/);
 
-            // and looking at the tab again clears it
-            Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => false });
-            window.dispatchEvent(new window.Event('visibilitychange'));
+            // and looking at the tab again clears it. Dispatched at the document with bubbles, which
+            // is how a browser fires it -- dispatching straight at the window would pass whether or
+            // not the listener is reached the way the real event reaches it.
+            hidden = false;
+            window.document.dispatchEvent(new window.Event('visibilitychange', { bubbles: true }));
             await flush(60);
 
             assert.doesNotMatch(window.document.title, /^\(/);
@@ -362,6 +403,72 @@ describe('TaskPage', () => {
             if (wasHidden) {
                 Object.defineProperty(window.document, 'hidden', wasHidden);
             }
+        }
+    });
+
+    test('the count is measured against the whole queue, not the page of rows on screen', async () => {
+        // one row on screen, five tasks queued: the list is paginated, so the rendered page is a slice
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(60);
+
+            hidden = true;
+            control.positions = {};
+            mock.timers.tick(60000);
+            await flush(60);
+
+            // five, not the one row that was visible
+            assert.match(window.document.title, /^\(5\) Task Queue/);
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
+    test('the navbar queue badge follows the queue rather than the page it was drawn with', async () => {
+        // the badge as navbar.html renders it for a user with nothing queued
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.hidden = true;
+        badge.innerHTML = '<span class="queuecount-number">0</span>';
+        window.document.body.appendChild(badge);
+
+        mock.timers.enable({ apis: ['setInterval'] });
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2, 3: 3 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(60);
+
+            // three, the whole queue, though one row is on screen
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '3');
+            assert.equal(badge.hidden, false, 'the badge stayed hidden with three tasks queued');
+
+            // and it goes away again when the queue empties, which no navigation would have told it
+            control.positions = {};
+            mock.timers.tick(2000);
+            await flush(80);
+
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '0');
+            assert.equal(badge.hidden, true, 'the badge is still showing a count with nothing queued');
+        } finally {
+            mock.timers.reset();
+            badge.remove();
         }
     });
 

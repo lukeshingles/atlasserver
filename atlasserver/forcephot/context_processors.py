@@ -44,7 +44,12 @@ def queued_task_count(request: HttpRequest) -> dict[str, t.Any]:
     A template can use the result as it would the number -- truth, rendering and comparison are all
     proxied -- but int() on it raises, so Python callers should compare or add rather than coerce.
     """
-    if not request.user.is_authenticated:
+    # By id rather than filter(user=request.user): request.user is User | AnonymousUser, and
+    # is_authenticated is an ordinary property rather than a type guard, so it narrows the union for
+    # a reader but not for a type checker. Taking the pk and checking it does narrow it, and it is
+    # the id the query wants anyway. Closing over the id also keeps the request out of the lambda.
+    userid = request.user.pk
+    if not request.user.is_authenticated or userid is None:
         return {"queued_task_count": None}
 
-    return {"queued_task_count": SimpleLazyObject(lambda: Task.queued().filter(user=request.user).count())}
+    return {"queued_task_count": SimpleLazyObject(lambda: Task.queued().filter(user_id=userid).count())}
