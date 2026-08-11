@@ -1130,6 +1130,14 @@ export function TaskPage() {
      * Without that refresh the set still holds whatever finished during the absence just ended, so
      * leaving again before the two-second poll had replaced it counted those same tasks a second time
      * and reported a completion that had already been reported.
+     *
+     * The set is dropped rather than waited on, because the request that replaces it can be in flight
+     * when the tab is left again, and a late answer is only allowed to add to a set that exists -- so
+     * the tasks reported during the absence just ended would have stayed in it and been reported again.
+     * With no set there is nothing to measure against until an answer arrives, and the count says
+     * nothing; whichever answer lands first establishes it, hidden or not, for the same reason the
+     * write site takes a late one when there is no baseline at all. Silence for one absence is the
+     * right way to be wrong here -- the alternative repeats a completion the user has already seen.
      */
     const handleVisibilityChange = React.useCallback(() => {
         if (document[hidden]) {
@@ -1139,6 +1147,7 @@ export function TaskPage() {
         if (stateRef.current.finishedwhileaway != 0) {
             setState({ finishedwhileaway: 0 });
         }
+        queuedIdsRef.current = null;
         fetchQueuePositions();
     }, [setState, fetchQueuePositions]);
 

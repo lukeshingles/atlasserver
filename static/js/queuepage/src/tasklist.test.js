@@ -473,6 +473,59 @@ describe('TaskPage', () => {
         }
     });
 
+    test('a completion already reported is not reported again on the next absence', async () => {
+        // Returning to the tab asks for a fresh set for the next absence to be measured against. If the
+        // tab is left again before that answer lands, the set must not still be the one that already
+        // had these completions counted out of it, or the same ones are announced a second time.
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(60);
+
+            // the first absence: task 2 finishes and is reported
+            hidden = true;
+            control.positions = { 1: 1 };
+            mock.timers.tick(60000);
+            await flush(60);
+            assert.match(window.document.title, /^\(1\) Task Queue/);
+
+            // the user comes back, which clears the count and asks for a fresh set -- and leaves again
+            // before that answer lands
+            let land;
+            control.hold = new Promise((resolve) => {
+                land = resolve;
+            });
+            hidden = false;
+            window.document.dispatchEvent(new window.Event('visibilitychange', { bubbles: true }));
+            await flush(40);
+            assert.doesNotMatch(window.document.title, /^\(/);
+            hidden = true;
+            land();
+            await flush(80);
+
+            // nothing has finished since, so there is nothing to announce
+            mock.timers.tick(60000);
+            await flush(60);
+
+            assert.doesNotMatch(window.document.title, /^\(/,
+                'a completion counted during the previous absence was announced again');
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
     test('a submitted task joins the away baseline even if the tab goes before the answer lands', async () => {
         // The narrowest form of "submit, then leave": the request the new row asks for is itself still in
         // flight when the tab goes. It cannot be taken as the baseline wholesale -- a late answer already
