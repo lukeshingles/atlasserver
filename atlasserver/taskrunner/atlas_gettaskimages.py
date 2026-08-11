@@ -31,15 +31,11 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     firstfitsoutpath_c = None
     firstfitsoutpath_o = None
     rowcount = len(dfforcedphot)
-    # An abandoned feature wrote a wallpapers.txt alongside the images, recording which wallpaper
-    # (the sky reference a difference is made against) each observation used: read from the FITS
-    # header with `fitshdr WPDATE WPDIR`, and otherwise inferred from the generation changeovers at
-    # MJD 58417, then 58882 for c and 58884 for o. Removed 2026-08; it is in git if wanted.
     commands = []
 
     for index, row in dfforcedphot[:1000].iterrows():
         obs = row["Obs"]  # looks like '01a59309o0235c'
-        imgfolder = "red" if reduced else "diff"  # difference or reduced image
+        imgfolder = "red" if reduced else "diff"
         fitsext = "fits" if reduced else "diff"
         fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
         fitsoutpath = Path(tmpfolder / (f"{obs}.fits" if reduced else f"{obs}_diff.fits"))
