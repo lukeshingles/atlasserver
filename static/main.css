@@ -23,6 +23,29 @@ a {
   --bs-navbar-hover-color: var(--bs-link-hover-color);
   --bs-navbar-active-color: var(--bs-link-color);
   background: var(--bs-body-bg);
+  /* the queue page is a long scrolling list whose filter tabs and pager live at the top, and every
+     page spends the height of the logo before its content. The background above is opaque, which is
+     what a sticky bar needs; the z-index is Bootstrap's own for .sticky-top, so the bar sits over
+     page content but under modals and popovers. */
+  position: sticky;
+  top: 0;
+  z-index: 1020;
+}
+
+/* what navbar.js watches to know whether the bar has left its place in the page; the negative
+   margin takes back the one pixel it costs */
+.navbar-sentinel {
+  height: 1px;
+  margin-bottom: -1px;
+}
+
+/* Only once the bar has left the top of the page. .navbar has no edge of its own and takes the page
+   background, so scrolled over content it would otherwise have text sliding underneath it with
+   nothing to separate the two. navbar.js adds the class; without it the bar is still sticky, just
+   without the edge. */
+.navbar.navbar-stuck {
+  border-bottom: var(--bs-border-width) solid var(--bs-border-color);
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
 }
 
 .navbar-brand {
@@ -33,6 +56,14 @@ a {
    was an <img> */
 .navbar-brand .atlaslogo {
   height: 118px;
+  transition: height 200ms ease;
+}
+
+/* A 118px logo at the top of the window is most of a phone screen and a good deal of a laptop one,
+   so once the bar is stuck it gives up its height to the content behind it. The links stay put:
+   Bootstrap centres them against the brand, so the bar closes up around them. */
+.navbar-stuck .navbar-brand .atlaslogo {
+  height: 44px;
 }
 
 /* The mark carries no background of its own, so on the dark theme its one shape that touches the
@@ -117,10 +148,9 @@ form#newrequest li>*:nth-child(2) {
   width: 100%;
 }
 
-/* :not([type=submit]), because the submit button is a Bootstrap button and these are the field
-   styles: the grey border and the 0.3em padding here would otherwise land on it and undo the
-   padding, border and hover it gets from .btn-primary */
-form#newrequest input:not([type=submit]),
+/* the form's fields. Every input in the form is one: submit is a <button>, so the grey border and the
+   0.3em padding here cannot land on it and undo what .btn-primary gives it. */
+form#newrequest input,
 textarea {
   display: inline-block;
   padding: 0.3em 0.3em;
@@ -143,8 +173,14 @@ p.inputisodate {
   background: var(--bs-secondary-bg);
 }
 
-form#newrequest input[type=submit] {
+form#newrequest button[type=submit] {
   width: 100%;
+}
+
+/* the spinner inside the submit control while a request is in flight */
+#submitrequest .submitspinner {
+  margin-right: 0.5em;
+  vertical-align: -0.1em;
 }
 
 div#tasklist {
@@ -167,16 +203,219 @@ div#tasklist.singletaskdetail {
      too faint to carry that on its own */
   border: 0.1em solid var(--bs-secondary-color);
   background-color: var(--bs-body-bg);
+  /* a card rather than an outline, so a list of them reads as a stack of things */
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
 }
 
-ul.tasks li.queued {
+/*
+Status as the colour of the row's frame, thickened down its left side, with the word in the badge
+beside the task number.
+
+This replaces flooding the whole row: a queued task was filled with --bs-secondary-bg and a running
+one with half-opacity orange, which is a lot of colour to say one word, cost the text inside its
+contrast against a background it was not chosen for -- on the dark theme, body text over that orange
+blends to a muddy brown -- and meant the light curve in a finished row sat on a different surface
+from the one in the row above. The frame marks the same four states in a line no content has to be
+legible against, and the rows keep one background.
+*/
+ul.tasks li.task {
+  border-left-width: 0.4em;
+}
+
+/* The status colours the whole frame, with the left edge thickened above so the state is legible
+   down the margin of a long list as well as around each card. One colour per state rather than a
+   coloured edge on a grey box: the frame is the row's outline, and having it disagree with the edge
+   beside it read as two different signals. */
+ul.tasks li.queued.notstarted {
+  border-color: var(--bs-secondary-color);
+}
+
+ul.tasks li.queued.started {
+  border-color: #f0ad4e;
+}
+
+ul.tasks li.finished {
+  border-color: var(--bs-success);
+}
+
+/* after .finished, so a task that finished with an error is not reported as a success */
+ul.tasks li.finished.errored {
+  border-color: var(--bs-danger);
+}
+
+/* The row is a control surface -- a link, download buttons, a delete -- and was a flat outline that
+   said so only by having things in it. The lift is one pixel: enough to answer the pointer, small
+   enough not to reflow the light curve inside. */
+li.task:hover {
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
+  transform: translateY(-1px);
+}
+
+/* the task number and its status word, on one line */
+.taskheading {
+  align-items: baseline;
+  display: flex;
+  gap: 0.5em;
+}
+
+/* The four status words, as fills: the frame around the row already carries the state quietly, so the
+   badge is where it can be said loudly. Each takes the text colour that clears 4.5:1 against its own
+   fill, which for the amber is a dark one and for the other two is white.
+
+   Queued is the exception and stays a quiet chip. A waiting task is the least interesting row in the
+   list, and as a solid fill its badge was the brightest mark on the page -- the loud states are the
+   ones worth looking at. */
+.taskbadge {
+  font-weight: normal;
+}
+
+.taskbadge-queued {
   background-color: var(--bs-secondary-bg);
-  border: none;
+  border: var(--bs-border-width) solid var(--bs-border-color);
   color: var(--bs-secondary-color);
 }
 
-ul.tasks li.started {
-  background-color: rgb(255, 170, 50, 0.5);
+.taskbadge-running {
+  background-color: #f0ad4e;
+  color: #212529;
+}
+
+.taskbadge-finished {
+  background-color: var(--bs-success);
+  color: #fff;
+}
+
+.taskbadge-error {
+  background-color: var(--bs-danger);
+  color: #fff;
+}
+
+/* the queue position, on the waiting line. The same subtle pair as the Queued badge above, since it
+   is the same state said more precisely. */
+.taskposition {
+  background-color: var(--bs-secondary-bg-subtle);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
+  /* .taskstatus is italic, and a badge set in italic reads as emphasis rather than as a label */
+  font-style: normal;
+  font-weight: normal;
+}
+
+/*
+What the task is, as a two column grid: label, then value.
+
+The values were sentences, so the coordinates and MJD ranges of one row started at a different column
+from the next and could not be compared down the list. tabular-nums is the other half of that -- by
+default the digits in this font are proportional, so even aligned columns of numbers do not line up
+digit for digit.
+
+minmax(0, auto) on the label column so that a long value cannot push the labels out of the card: the
+column takes what it needs from the labels and no more, and the value wraps instead.
+*/
+dl.taskmeta {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr;
+  gap: 0.1em 0.6em;
+  margin: 0.6em 0;
+}
+
+dl.taskmeta dt {
+  color: var(--bs-secondary-color);
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+dl.taskmeta dd {
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  /* the values include coordinates and MJD ranges, which must be able to break rather than widen the
+     card past the column it sits in */
+  overflow-wrap: anywhere;
+}
+
+/*
+The copy control beside a coordinate or an object name.
+
+Faint until the row is hovered or the button itself is focused, so a list of rows is not a column of
+icons; never hidden outright, because a control that only exists on hover cannot be reached by touch
+at all. It stays at full strength while it is reporting, so the confirmation is not the one thing on
+the row that fades as you read it.
+*/
+.copyable {
+  align-items: baseline;
+  display: inline-flex;
+  gap: 0.35em;
+}
+
+.copybutton {
+  background: none;
+  border: none;
+  border-radius: var(--bs-border-radius-sm);
+  color: var(--bs-secondary-color);
+  cursor: pointer;
+  font-size: 0.8em;
+  line-height: 1;
+  opacity: 0.45;
+  padding: 0.15em 0.3em;
+  transition: opacity 150ms ease, color 150ms ease;
+}
+
+li.task:hover .copybutton,
+.copybutton:focus-visible,
+.copybutton:hover {
+  opacity: 1;
+}
+
+.copybutton:focus-visible,
+.copybutton:hover {
+  color: var(--bs-link-color);
+}
+
+/* The word replaces the icon rather than joining it, so the control does not grow by the width of
+   both. It does still widen while the word is there, which the row absorbs: the value beside it is
+   in a grid column that takes the space it is given. */
+.copyfeedback:not(:empty) {
+  font-variant-numeric: normal;
+  white-space: nowrap;
+}
+
+.copyable:has(.copyfeedback:not(:empty)) .copybutton {
+  color: var(--bs-success-text-emphasis);
+  opacity: 1;
+}
+
+/* the bar on a running task: full width, because what it reports is that work is happening and not
+   how much of it is done */
+.taskprogress {
+  height: 0.4em;
+  margin-top: 0.4em;
+  max-width: 20em;
+}
+
+/* the amber the row's left edge and its badge use, rather than Bootstrap's default primary blue,
+   so that everything saying "running" on the row says it in one colour */
+.taskprogress .progress-bar {
+  background-color: #f0ad4e;
+  width: 100%;
+}
+
+/* Placeholder rows while the first task list is on its way. The border-left of a status the list
+   does not know yet would be a guess, so the skeleton has the plain border every row starts from. */
+/* ul.tasks for the same reason as the collapsed rule below: the status edge is more specific than a
+   plain li.task.taskskeleton, so without it the placeholders wear a 0.4em edge of a status the list
+   does not know yet */
+ul.tasks li.task.taskskeleton {
+  border-left-width: 0.1em;
+}
+
+li.task.taskskeleton p {
+  margin-bottom: 0.5em;
+}
+
+li.task.taskskeleton:hover {
+  border-color: var(--bs-secondary-color);
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
+  transform: none;
 }
 
 ul.tasks div.rightside {
@@ -199,8 +438,11 @@ img.previewimage {
   margin-top: 1em;
 }
 
+/* Amber, matching the badge and the left edge of a running row. This line was red, which now sits on
+   a row whose other two marks of the same state are amber -- and red on a task that is running
+   perfectly well says failure, which is what the Error badge is for. */
 .taskstatus.running {
-  color: var(--bs-danger-text-emphasis);
+  color: var(--bs-warning-text-emphasis);
 }
 
 p.taskerror {
@@ -288,6 +530,20 @@ p.runnerstatus.stale {
   --bs-link-color-rgb: 51, 122, 183;
   --bs-link-hover-color: #23527c;
   --bs-link-hover-color-rgb: 35, 82, 124;
+
+  /*
+  The site's accent, and its one non-Bootstrap colour: the orange of the result buttons. It marks
+  the current thing -- the bar under the active navigation item, the rule under the queue page's
+  heading, the edge of the panel that submits a request, the tint on a row just created.
+
+  Deliberately one colour rather than a gradient. A sweep between two hues has to stay legible at both
+  ends against both themes and against anything on top of it, which for white button text came out at
+  1.9:1 at the pale end -- so it needed a second darker sweep beneath it for filled controls, two
+  palettes to say one thing. Held here as a variable so the four places that mark "current" cannot
+  drift apart.
+  */
+  --atlas-accent: #ef4e19;
+  --atlas-accent-rgb: 239, 78, 25;
 }
 
 /* Bootstrap 3's blue is a dark colour, chosen against a white page: on the dark theme's near-black
@@ -308,7 +564,8 @@ p.runnerstatus.stale {
    darkened by 15%, the step Bootstrap uses for its own variants. */
 .results {
   --bs-btn-color: #fff;
-  --bs-btn-bg: #ef4e19;
+  /* the same accent as :root defines, which is where this orange came from */
+  --bs-btn-bg: var(--atlas-accent);
   --bs-btn-border-color: #e59400;
   --bs-btn-hover-color: #fff;
   --bs-btn-hover-bg: #cb4215;
@@ -482,6 +739,60 @@ button.resetbutton {
   text-decoration: underline;
 }
 
+/*
+The bar that marks the current page and follows the pointer along the navigation.
+
+Only from the navbar's collapse breakpoint up: below it the links are a stacked column, where a
+horizontal bar sliding between them has nothing to say, so the underline above stays the marker
+there. .navindicator-host is added by navbar.js along with the bar itself, so a page without
+JavaScript keeps the underline too and never has a stray element to position.
+
+Its geometry comes from two custom properties the script measures onto the host, rather than the
+script writing left and width onto the bar: transform and width are what animate, and keeping them
+in the stylesheet keeps the duration and the easing here with the rest of the site's motion.
+*/
+
+/* Out of the layout entirely below the breakpoint, rather than left to be invisible by having no
+   size: in the stacked menu it is a block among the links, and a zero-height one still takes a row
+   and would take any gap the list is given. */
+.navindicator {
+  display: none;
+}
+
+@media (min-width: 992px) {
+  .navbar-nav.navindicator-host {
+    position: relative;
+  }
+
+  .navindicator {
+    display: block;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    border-radius: 3px;
+    /* the site's accent (see :root), so the current page is marked in it rather than in the same blue
+       as every link around it */
+    background-color: var(--atlas-accent);
+    width: var(--navindicator-width, 0);
+    transform: translateX(var(--navindicator-x, 0));
+    opacity: var(--navindicator-opacity, 0);
+    /* the bar is decoration for a state the links already carry, and sits under the pointer */
+    pointer-events: none;
+  }
+
+  /* Added a frame after the first measurement, so the bar appears already under the current page
+     instead of sliding in from the left edge on every page load. */
+  .navindicator-host.navindicator-animated .navindicator {
+    transition: transform 220ms ease, width 220ms ease, opacity 150ms ease;
+  }
+
+  /* with the bar present the underline would mark the same thing twice */
+  .navbar-nav.navindicator-host .nav-link.active {
+    text-decoration: none;
+  }
+}
+
 /* Queue and API need an account, and were greyed to say so before clicking. The rule used to live
    in a conditional <style> block in the vendored DRF base template, which went away with it; the
    class is now applied only to anonymous visitors, so this needs no condition of its own. After
@@ -490,6 +801,27 @@ button.resetbutton {
   /* the navbar's own disabled colour rather than a fixed light grey, which on the dark theme would
      be brighter than the links that do work and so read as emphasis instead of unavailability */
   color: var(--bs-navbar-disabled-color);
+}
+
+/* the padlock from navlock.html, which says what the greying above only implies. Nudged off the
+   word it follows and lifted onto the text's baseline, since it is text-sized. */
+.navbar-nav .nav-link.loginrequired .navlock {
+  margin-left: 0.35em;
+  vertical-align: -0.1em;
+}
+
+/* The count of the signed-in user's waiting and running tasks, on the Queue link.
+
+   The navbar's link colour carries it, so it is the same blue as the navigation it sits in and needs
+   no value of its own in either theme; --bs-body-bg for the text, because the page background is
+   what the link colour was chosen to be legible against, so using it here inverts the pair -- white
+   numerals on the light theme's blue, dark ones on the lighter blue the dark theme uses. */
+.navbar-nav .nav-link .queuecount {
+  background-color: var(--bs-link-color);
+  color: var(--bs-body-bg);
+  font-size: 0.7em;
+  margin-left: 0.4em;
+  vertical-align: 0.15em;
 }
 
 /* Two controls in the navbar menus are buttons rather than links: log out, because Django's
@@ -509,10 +841,33 @@ button.dropdown-item {
   margin: 0;
 }
 
-/* the icon in the theme control's toggle, which is text-sized and so sits above the text baseline
-   without this */
-.themeswitch .themeicon {
+/*
+The theme control's icon: three of them in one place, with the one in force faded and turned into
+view. theme.js marks it with .themeicon-shown.
+
+The stack is what carries the size and the baseline, since the icons inside it are taken out of the
+flow -- text-sized, and so above the text baseline without the nudge.
+*/
+.themeswitch .themeicon-stack {
+  display: inline-block;
+  height: 16px;
+  position: relative;
   vertical-align: -0.15em;
+  width: 16px;
+}
+
+.themeswitch .themeicon {
+  inset: 0;
+  opacity: 0;
+  position: absolute;
+  /* a quarter turn and slightly small, so the incoming icon arrives rather than simply appears */
+  transform: rotate(-90deg) scale(0.7);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.themeswitch .themeicon.themeicon-shown {
+  opacity: 1;
+  transform: none;
 }
 
 /* From the navbar's collapse breakpoint (navbar-expand-lg) upwards the control is an icon among
@@ -535,8 +890,9 @@ button.dropdown-item {
 }
 
 /* below that breakpoint the icon needs separating from the word beside it */
+/* on the stack rather than the icons, which are absolutely positioned and so have no margin to give */
 @media (max-width: 991.98px) {
-  .themeswitch .themeicon {
+  .themeswitch .themeicon-stack {
     margin-right: 0.4em;
   }
 }
@@ -620,6 +976,13 @@ ul.errorlist {
    #tasklistfetchstatus, so without this the message rendered in ordinary black body text. */
 .errors {
   color: var(--bs-danger-text-emphasis);
+}
+
+/* The two pager buttons sit at the outer edges of the list they page through, rather than side by
+   side in the middle of it. An auto margin on Older rather than space-between on the row, because
+   the newest page has no Newer button and space-between would leave Older on its own at the left. */
+#paginator ul.pagination .pagenext {
+  margin-left: auto;
 }
 
 ul#taskfilters>* {
@@ -754,27 +1117,290 @@ table.countrystats th[scope="row"] {
   .navbar-brand .atlaslogo {
     height: 56px;
   }
+
+  /* after the rule above, so it is this one that applies when both match */
+  .navbar-stuck .navbar-brand .atlaslogo {
+    height: 38px;
+  }
+
+  /* The collapsed menu opens inside the sticky bar, and it is a tall menu -- seven links, the
+     account entries and the theme control. Stuck at the top of a phone screen it would otherwise
+     run off the bottom with no way to reach the end of it. dvh rather than vh so that the mobile
+     browser's own retracting toolbars are counted; vh first for anything that does not know dvh. */
+  .navbar-collapse {
+    max-height: calc(100vh - 5rem);
+    max-height: calc(100dvh - 5rem);
+    overflow-y: auto;
+  }
 }
 
 /* Row show/hide for the task list, driven by tasklist.jsx adding and removing .task-collapsed.
    This replaced jQuery's slideUp/slideDown, which wrote inline styles onto nodes React owns: a
    re-render that reused such a node left it stuck at whatever height the animation had reached. */
+/*
+The row is a one-track grid, and the track is what animates: 1fr to 0fr interpolates over the row's
+own height, whatever that is.
+
+This was a max-height animated between 0 and 400em, a number picked to clear the tallest row, and the
+distance between that number and a real row's height was the whole problem. The rendered height is
+min(content, max-height), so for a 321px row max-height spent the first two thirds of its 200ms
+travelling from 6800px to somewhere still far above 321px -- nothing moved -- and then crossed it and
+snapped shut in the last 50ms. Expanding was worse: the row was back at full height in a single
+frame. Measured on this page, not deduced.
+
+A collapsed row also could not reach zero. max-height caps the border box, and padding and border are
+not compressible, so 0 left the 1em of padding and the border standing -- 11% of the row, once per
+deleted task. Here the padding is on the inner element, inside the track that shrinks, and the border
+and the bottom margin animate away with it.
+*/
 li.task {
-  overflow: hidden;
-  transition: max-height 200ms ease, opacity 200ms ease;
-  /* large enough for the tallest row (one with a light curve plot expanded); max-height cannot
-     transition to or from `auto`, so it has to be a number */
-  max-height: 400em;
+  display: grid;
+  grid-template-rows: 1fr;
   opacity: 1;
+  /* the padding belongs to .taskinner below. .task keeps its own, for the New request card, which is
+     the other user of the class and has no reason to be a grid. */
+  padding: 0;
+  /* the first four are this rule's own show and hide; the last two are the hover lift */
+  transition: grid-template-rows 200ms ease, opacity 200ms ease, border-width 200ms ease,
+    margin-bottom 200ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
-li.task.task-collapsed {
-  max-height: 0;
+/* min-height, because a grid item's automatic minimum size is its content, which would stop the
+   track ever being shorter than the row and leave nothing to animate */
+li.task > .taskinner {
+  min-height: 0;
+  overflow: hidden;
+  padding: 1em;
+  transition: padding-top 200ms ease, padding-bottom 200ms ease;
+}
+
+/*
+The tint on a row a submission has just created, fading out over its own keyframes rather than a
+transition: this runs once on arrival and has nothing to transition back to.
+
+The colour is the site's accent, at the low alpha of a wash rather than a fill, so it reads on either
+theme without a value per theme -- and the row underneath keeps its own background, which is the
+point of having stopped flooding rows with colour.
+*/
+@keyframes task-flash {
+  from {
+    background-color: rgba(var(--atlas-accent-rgb), 0.16);
+  }
+
+  to {
+    background-color: transparent;
+  }
+}
+
+/*
+A row that was just created runs both: the arrival stays first in the list, and the flash is added
+after it.
+
+Both names, rather than the flash alone, because the list is matched by position -- so keeping
+task-arrive at index 0 on every row means adding and removing .task-flash never introduces or removes
+it. Naming only the flash here made the two rules mutually exclusive, which stopped them overriding
+each other but meant task-arrive began the moment revealRow took .task-flash off again, 1.6 seconds
+after the row appeared, and the row faded in a second time.
+*/
+ul.tasks li.task.task-flash {
+  animation: task-arrive 260ms ease-out backwards, task-flash 1600ms ease-out;
+}
+
+/* ul.tasks, only to outrank the status edge above, which is one element more specific than a plain
+   li.task.task-collapsed would be and would otherwise hold the left border open at 0.4em */
+ul.tasks li.task.task-collapsed {
+  border-width: 0;
+  grid-template-rows: 0fr;
+  margin-bottom: 0;
   opacity: 0;
 }
 
+/* min-height: 0 frees the item's content box but not its padding, and a track cannot be shorter than
+   the item's border box -- so with the padding left standing a collapsed row rested at 34px, which is
+   what the max-height version left behind too. It goes over the same 200ms, so the row still shuts
+   smoothly, and reaches nothing. */
+ul.tasks li.task.task-collapsed > .taskinner {
+  padding-bottom: 0;
+  padding-top: 0;
+}
+
+/* The navbar's two moving parts are here as well: the logo's height as the bar becomes stuck, and
+   the indicator travelling between links. Both still end up where they belong -- what goes is the
+   travel, which is the part that is decoration. */
 @media (prefers-reduced-motion: reduce) {
-  li.task {
+
+  li.task,
+  .navbar-brand .atlaslogo,
+  .navindicator-host.navindicator-animated .navindicator,
+  li.task>.taskinner,
+  .themeswitch .themeicon {
     transition: none;
+  }
+
+  /* the shimmer on the placeholder rows and the travelling stripes on a running task. Both are
+     indefinite -- they do not run once and stop -- which is the kind this setting is mostly about. */
+  .placeholder-glow .placeholder,
+  .taskprogress .progress-bar-animated {
+    animation: none;
+  }
+}
+
+/* ============================ the queue page ============================ */
+
+/* Scoped to #taskpage, which is everything the queue page renders, so the display treatment does not
+   land on the prose pages that share .page-header. */
+#taskpage .page-header h1 {
+  color: var(--bs-emphasis-color);
+  font-size: clamp(2.1rem, 5vw, 2.8rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-bottom: 0.35em;
+}
+
+/* the accent as a short rule under the heading rather than through it: it marks the page without
+   competing with the words for legibility */
+#taskpage .page-header h1::after {
+  background-color: var(--atlas-accent);
+  border-radius: 2px;
+  content: "";
+  display: block;
+  height: 4px;
+  margin-top: 0.3em;
+  width: 2.2em;
+}
+
+/* ---- the filter tabs, as one segmented control ---- */
+
+/* They were two buttons side by side, one of which happened to be filled. As a single track with a
+   filled segment in it, which is what they are, the pair reads as a choice between two states. */
+#taskfilters {
+  background-color: var(--bs-tertiary-bg);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: 2em;
+  display: inline-flex;
+  gap: 0.15em;
+  margin-bottom: 1.2em;
+  padding: 0.25em;
+}
+
+#taskfilters>* {
+  display: inline-flex;
+}
+
+#taskfilters .btn {
+  border: none;
+  border-radius: 2em;
+  font-weight: 600;
+  padding: 0.35em 1.1em;
+  transition: background-color 150ms ease, color 150ms ease, transform 100ms ease;
+}
+
+/* the selected segment keeps the site's link blue, which .btn-primary already carries and which holds
+   white text at 4.6:1 */
+#taskfilters .btn-link {
+  color: var(--bs-secondary-color);
+  text-decoration: none;
+}
+
+#taskfilters .btn-link:hover {
+  background-color: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+}
+
+/* ---- the New request card ---- */
+
+/* An accent edge along the top, so the one panel on the page that makes something happen is marked as
+   such. The card clips it, or its corners would sit outside the radius. */
+div.newrequest .task {
+  border-top: 4px solid var(--atlas-accent);
+  overflow: hidden;
+}
+
+div.newrequest .task h2 {
+  font-size: 1.3em;
+  font-weight: 700;
+}
+
+/* the submit control keeps .btn-primary's blue and gains only the lift, which is the part that makes
+   it feel like a button rather than a rectangle */
+#submitrequest {
+  font-weight: 600;
+  transition: filter 150ms ease, transform 100ms ease, box-shadow 150ms ease;
+}
+
+#submitrequest:hover {
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+/* every control on the page acknowledges a press, which is the cheapest motion there is */
+#taskpage .btn:active,
+#submitrequest:active {
+  transform: translateY(1px);
+}
+
+/* ---- rows arriving ---- */
+
+/*
+A list that assembles itself rather than appearing all at once. The delay is capped at the first
+handful of rows: past that it stops reading as sequence and starts reading as lag.
+
+Only ever runs once per row. React keys rows by task id, so the poll every few seconds updates the
+nodes in place rather than replacing them, and a CSS animation runs on insertion -- so what animates
+is a genuinely new row, or the whole list after a filter or a page change, which is when it is wanted.
+*/
+@keyframes task-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.6em);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* backwards, not both: the fill is here for the staggered delays below, which would otherwise show a
+   row at full opacity and then drop it to zero when its turn came. A forwards fill would go on holding
+   the end of the animation -- opacity 1, transform none -- in the animation cascade origin, which
+   outranks every ordinary rule, so the hover lift and .task-collapsed's fade were both silently lost
+   once a row had arrived. The end state is the row's resting state anyway, so nothing needs to keep it. */
+ul.tasks li.task {
+  animation: task-arrive 260ms ease-out backwards;
+}
+
+ul.tasks li.task:nth-child(2) {
+  animation-delay: 40ms;
+}
+
+ul.tasks li.task:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+ul.tasks li.task:nth-child(4) {
+  animation-delay: 120ms;
+}
+
+ul.tasks li.task:nth-child(n+5) {
+  animation-delay: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  ul.tasks li.task,
+  ul.tasks li.task.task-flash,
+  #taskfilters .btn,
+  #submitrequest {
+    animation: none;
+    transition: none;
+  }
+
+  #taskpage .btn:active,
+  #submitrequest:active,
+  #submitrequest:hover {
+    transform: none;
   }
 }

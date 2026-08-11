@@ -83,7 +83,7 @@
     //
     // The fallback is for a page without theme.js: Plotly then draws with its own defaults, which
     // are a readable plot on a light background.
-    var theme = (window.atlasTheme && window.atlasTheme.plotlyColors()) || { axis: {} };
+    var theme = (window.atlasTheme && window.atlasTheme.plotlyColors()) || { axis: {}, hoverlabel: {} };
 
 
     // GLOBAL VARIABLES END
@@ -202,10 +202,16 @@
     // are what this file has to say about an axis; the two name no property in common.
     var layout = {
         showlegend: true,
+        // Every filter at the epoch under the pointer, in one label, instead of whichever marker the
+        // pointer happens to be over. The two filters are observed within about an hour of each other,
+        // so their points sit close enough together that reading one without the other is the harder
+        // way to use this plot.
+        hovermode: 'x unified',
         paper_bgcolor: theme.paper_bgcolor,
         plot_bgcolor: theme.plot_bgcolor,
         font: theme.font,
         legend: theme.legend,
+        hoverlabel: theme.hoverlabel,
         yaxis: Object.assign({
             range: [ymin, ymax],
             autorange: yautorange,

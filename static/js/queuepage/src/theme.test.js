@@ -21,9 +21,11 @@ const THEME_JS = join(SRC, '..', '..', 'theme.js');
 const NAVBAR = `
   <li class="nav-item dropdown themeswitch d-none">
     <button class="nav-link dropdown-toggle" type="button">
-      <svg class="themeicon themeicon-light d-none"></svg>
-      <svg class="themeicon themeicon-dark d-none"></svg>
-      <svg class="themeicon themeicon-auto d-none"></svg>
+      <span class="themeicon-stack">
+        <svg class="themeicon themeicon-light"></svg>
+        <svg class="themeicon themeicon-dark"></svg>
+        <svg class="themeicon themeicon-auto"></svg>
+      </span>
     </button>
     <ul class="dropdown-menu">
       <li><button type="button" class="dropdown-item" data-theme-value="light" aria-checked="false">Light</button></li>
@@ -131,8 +133,12 @@ async function load({
       return active && active.getAttribute('data-theme-value');
     },
     visibleIcon: () => {
-      const icon = window.document.querySelector('.themeicon:not(.d-none)');
-      return icon && icon.getAttribute('class').replace('themeicon themeicon-', '');
+      const shown = window.document.querySelectorAll('.themeicon.themeicon-shown');
+      // one at a time, or the stack would show two icons over each other
+      if (shown.length !== 1) {
+        return shown.length + ' icons shown';
+      }
+      return shown[0].getAttribute('class').replace('themeicon themeicon-', '').replace(' themeicon-shown', '');
     },
     // what would be waiting at the next page load: jsdom's own localStorage when it is working,
     // and the stub's backing map when it is not

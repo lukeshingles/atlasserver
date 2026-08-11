@@ -30,6 +30,7 @@ from django.db import connection
 from django.db import IntegrityError
 from django.db import models
 from django.test import override_settings
+from django.test import RequestFactory
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import TransactionTestCase
@@ -43,6 +44,7 @@ from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
+from atlasserver.forcephot.context_processors import queued_task_count
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
@@ -3787,3 +3789,214 @@ class TaskRunnerResultFileTests(TestCase):
 
             assert not list(resultsdir.glob("job00042.*"))
             assert (resultsdir / "job00420.txt").exists()
+
+
+class NavbarQueueCountTests(TestCase):
+    """The badge on the Queue link, from the queued_task_count context processor.
+
+    The count is a database query added to the context of every render, so what it counts and when it
+    is spent are both worth pinning.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="counter", email="counter@example.com", password=None)
+        self.other = User.objects.create_user(username="somebodyelse", email="else@example.com", password=None)
+
+    def navbar_of(self, name: str = "index") -> str:
+        return self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+
+    def badge_of(self, content: str) -> str | None:
+        """Return the badge's state: its number, "hidden", or None when there is no badge at all.
+
+        The element is always rendered for a signed-in user, hidden at zero rather than absent, so
+        that tasklist.jsx has something to put a number back into on a page that never navigates.
+        """
+        match = re.search(
+            r'<span class="badge rounded-pill queuecount"( hidden)?>'
+            r'<span class="queuecount-number">(\d*)</span>',
+            content,
+        )
+        if match is None:
+            return None
+        return "hidden" if match.group(1) else match.group(2)
+
+    def test_anonymous_visitors_get_no_badge_and_no_query(self) -> None:
+        """Nobody signed in means nothing to count, so the processor must not reach the database."""
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        with CaptureQueriesContext(connection) as queries:
+            content = self.navbar_of()
+
+        assert self.badge_of(content) is None, "an anonymous visitor has no queue to badge"
+        counting = [q["sql"] for q in queries.captured_queries if "COUNT" in q["sql"].upper() and "task" in q["sql"]]
+        assert not counting, counting
+
+    def test_a_user_with_nothing_queued_gets_no_badge(self) -> None:
+        """Hidden rather than a visible zero: a badge that is always there stops being noticed."""
+        self.client.force_login(self.user)
+
+        assert self.badge_of(self.navbar_of()) == "hidden"
+
+    def test_the_badge_counts_the_users_own_waiting_and_running_tasks(self) -> None:
+        for _ in range(3):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+
+        assert self.badge_of(self.navbar_of()) == "3"
+
+    def test_another_users_queue_is_not_counted(self) -> None:
+        Task.objects.create(user=self.other, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+
+        assert self.badge_of(self.navbar_of()) == "hidden"
+
+    def test_finished_and_archived_tasks_are_not_counted(self) -> None:
+        """The badge follows Task.queued(), which is the same set the queue positions cover."""
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        Task.objects.create(user=self.user, ra=3.0, dec=4.0, is_archived=True)
+        Task.objects.create(user=self.user, ra=5.0, dec=6.0)
+        self.client.force_login(self.user)
+
+        assert self.badge_of(self.navbar_of()) == "1", "only the one waiting task should be counted"
+
+    def test_the_count_is_not_spent_until_something_asks_for_it(self) -> None:
+        """The processor runs for every render, including ones that draw no navbar.
+
+        statsshortterm and statslongterm are HTML fragments the stats page fetches, and
+        password_reset_email is an email body; none of them has a navbar to put a badge in, so none
+        of them should pay for a count. Hence the SimpleLazyObject, which this pins.
+        """
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        request = RequestFactory().get("/")
+        request.user = self.user
+
+        with CaptureQueriesContext(connection) as untouched:
+            context = queued_task_count(request)
+
+        assert not untouched.captured_queries, untouched.captured_queries
+        # and it is a real count once read, not merely deferred into never working. Compared rather
+        # than passed to int(), which is the one thing SimpleLazyObject does not proxy.
+        assert context["queued_task_count"] == 1
+
+    def test_the_badge_is_on_every_page_including_the_browsable_api(self) -> None:
+        """It is in the shared navbar, so a page that draws the navbar differently would lose it."""
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+
+        for name in ("index", "faq", "apiguide", "stats"):
+            assert "queuecount" in self.navbar_of(name), name
+
+        api = self.client.get(reverse("task-list"), {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+        assert "queuecount" in api, "the browsable API's navbar has no badge"
+
+
+class NavbarSignInCueTests(TestCase):
+    """The padlock on Queue and API while nobody is signed in.
+
+    Those two links were greyed and nothing else, which reads as "broken" as readily as "not yet".
+    """
+
+    def test_anonymous_visitors_get_a_padlock_and_a_reason(self) -> None:
+        content = self.client.get(reverse("index"), HTTP_ACCEPT="text/html").content.decode()
+
+        assert content.count("navlock") == 2, "expected a padlock on each of Queue and API"
+        assert content.count("(sign in required)") == 2, "the padlock has no text alternative"
+        assert "Sign in to use the task queue" in content
+        assert "Sign in to use the browsable API" in content
+
+    def test_a_signed_in_user_gets_neither(self) -> None:
+        user = User.objects.create_user(username="signedin", email="s@example.com", password=None)
+        self.client.force_login(user)
+
+        content = self.client.get(reverse("index"), HTTP_ACCEPT="text/html").content.decode()
+
+        assert "navlock" not in content
+        assert "sign in required" not in content
+        assert "loginrequired" not in content, "the links are no longer greyed, so the class should be gone too"
+
+
+class TemplateCommentTests(TestCase):
+    """No page serves its own template syntax to the reader.
+
+    {# #} is a single-line comment, so a multi-line one is not a comment at all: Django serves it as
+    text. Two of them sat in apiguide.html's script block, below the last code block, where they were
+    visible on the page. The templates in this project carry long explanatory comments, so the mistake
+    is an easy one to repeat -- hence a test over every page rather than a fix to those two.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="templates", email="t@example.com", password=None)
+
+    def test_no_page_leaks_template_syntax(self) -> None:
+        self.client.force_login(self.user)
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        pages = [
+            "index",
+            "faq",
+            "apiguide",
+            "resultdesc",
+            "stats",
+            "apitoken",
+            "email_change",
+            "password_change",
+            "task-list",
+        ]
+        for name in pages:
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            for leaked in ("{#", "#}", "{% comment", "{% endcomment", "{% if ", "{% block "):
+                assert leaked not in content, f"{name} serves {leaked!r} to the page"
+
+    def test_the_anonymous_pages_too(self) -> None:
+        """The signed-out navbar and the account forms are different markup from the pages above."""
+        for name in ("index", "login", "register", "password_reset"):
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            for leaked in ("{#", "#}", "{% comment", "{% endcomment"):
+                assert leaked not in content, f"{name} serves {leaked!r} to the page"
+
+    def test_multiline_hash_comments_are_not_used_in_any_template(self) -> None:
+        """Caught at the source as well, since a page has to be requested for the test above to see it.
+
+        A {# whose #} is on a later line is the mistake; this finds it in templates no test renders.
+        """
+        templatedir = Path(__file__).resolve().parent / "templates"
+        offenders = [
+            f"{path.relative_to(templatedir)}:{lineno}"
+            for path in sorted(templatedir.rglob("*.html"))
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1)
+            for match in re.finditer(r"\{#", line)
+            if "#}" not in line[match.end() :]
+        ]
+
+        assert not offenders, f"multi-line {{# #}} comments are served as text: {offenders}"
+
+
+class BrowsableApiBreadcrumbTests(TestCase):
+    """The browsable API does not print its own heading twice.
+
+    DRF builds a breadcrumb trail from the URL. On a list endpoint that trail is a single entry, which
+    is the page's <h1> repeated immediately above itself; on a detail endpoint it is a real trail whose
+    first entry links back to the list.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="breadcrumbs", email="b@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def api_html(self, url: str) -> str:
+        return self.client.get(url, {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+
+    def test_the_list_page_names_itself_once(self) -> None:
+        content = self.api_html(reverse("task-list"))
+
+        assert "<h1>Force Phot Task List" in content
+        assert 'class="breadcrumb"' not in content, "a one-entry trail is the heading a second time"
+
+    def test_a_detail_page_keeps_its_trail(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        content = self.api_html(reverse("task-detail", args=[task.id]))
+
+        assert 'class="breadcrumb"' in content, "the way back to the list was removed with it"
+        assert f'<a href="{reverse("task-list")}?format=api">Force Phot Task List</a>' in content
+        assert "<h1>Force Phot Task Instance" in content

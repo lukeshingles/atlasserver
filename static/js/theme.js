@@ -88,7 +88,15 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
       plot_bgcolor: 'rgba(0,0,0,0)',
       font: { color: textcolor },
       legend: { bgcolor: 'rgba(0,0,0,0)' },
-      axis: { gridcolor: gridcolor, zerolinecolor: gridcolor, linecolor: gridcolor }
+      axis: { gridcolor: gridcolor, zerolinecolor: gridcolor, linecolor: gridcolor },
+      // The hover label is the one part that cannot be transparent: it sits over the plot and has to
+      // be read against whatever is behind it. --bs-body-bg rather than the tertiary surface, because
+      // the plot itself is transparent, so the label's background is what separates it from the row.
+      hoverlabel: {
+        bgcolor: styles.getPropertyValue('--bs-body-bg').trim() || '#ffffff',
+        bordercolor: gridcolor,
+        font: { color: textcolor }
+      }
     };
   }
 
@@ -117,7 +125,10 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
         paper_bgcolor: colors.paper_bgcolor,
         plot_bgcolor: colors.plot_bgcolor,
         'font.color': colors.font.color,
-        'legend.bgcolor': colors.legend.bgcolor
+        'legend.bgcolor': colors.legend.bgcolor,
+        'hoverlabel.bgcolor': colors.hoverlabel.bgcolor,
+        'hoverlabel.bordercolor': colors.hoverlabel.bordercolor,
+        'hoverlabel.font.color': colors.hoverlabel.font.color
       };
 
       ['xaxis', 'xaxis2', 'yaxis'].forEach(function (axisname) {
@@ -145,8 +156,10 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
       item.setAttribute('aria-checked', chosen ? 'true' : 'false');
     });
 
+    // a class the stylesheet can transition, rather than d-none: the three icons are stacked, and
+    // display: none cannot cross-fade into anything
     document.querySelectorAll('.themeicon').forEach(function (icon) {
-      icon.classList.toggle('d-none', !icon.classList.contains('themeicon-' + mode));
+      icon.classList.toggle('themeicon-shown', icon.classList.contains('themeicon-' + mode));
     });
   }
 
