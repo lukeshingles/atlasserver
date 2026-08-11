@@ -205,7 +205,8 @@ p.runnerstatus.stale {
    blue and is now cyan. The class names on the queue page never changed, only what they render as.
    Given as Bootstrap 5's own button custom properties, so the variants keep every other behaviour
    (focus ring, disabled, active) that the framework gives them. Values are Bootstrap 3.4.1's, read
-   off the copy DRF still ships. :active takes Bootstrap 3's :hover shade, which is what it used. */
+   off the copy DRF still ships. :active takes Bootstrap 3's :hover shade, which is what it used.
+   .btn-danger is deliberately absent: the Delete and Cancel buttons keep Bootstrap 5's red. */
 .btn-primary {
   --bs-btn-bg: #337ab7;
   --bs-btn-border-color: #2e6da4;
@@ -245,17 +246,6 @@ p.runnerstatus.stale {
   --bs-btn-disabled-color: #fff;
   --bs-btn-disabled-bg: #f0ad4e;
   --bs-btn-disabled-border-color: #eea236;
-}
-
-.btn-danger {
-  --bs-btn-bg: #d9534f;
-  --bs-btn-border-color: #d43f3a;
-  --bs-btn-hover-bg: #c9302c;
-  --bs-btn-hover-border-color: #ac2925;
-  --bs-btn-active-bg: #c9302c;
-  --bs-btn-active-border-color: #ac2925;
-  --bs-btn-disabled-bg: #d9534f;
-  --bs-btn-disabled-border-color: #d43f3a;
 }
 
 /* Bootstrap 3's link colour, for the same reason as the buttons above: Bootstrap 5's is a brighter

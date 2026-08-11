@@ -345,6 +345,25 @@ class EmailChangeTests(TestCase):
         self.user.refresh_from_db()
         assert self.user.email == "second@example.com", self.user.email
 
+    def test_the_confirmation_url_sends_no_referrer(self) -> None:
+        # as for the verification link: the token is in the URL, so it must not travel as a Referer
+        # to a page that runs analytics. See RegistrationVerificationTests for the reasoning.
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        offered = self.client.get(link)
+        assert offered.status_code == 200, offered.status_code
+        assert offered["Referrer-Policy"] == "no-referrer"
+
+        applied = self.client.post(link)
+        assert applied.status_code == 200, applied.status_code
+        assert applied["Referrer-Policy"] == "no-referrer"
+
+        replayed = self.client.post(link)
+        assert replayed.status_code == 400, replayed.status_code
+        assert replayed["Referrer-Policy"] == "no-referrer"
+
     def test_a_password_reset_landing_during_confirmation_wins(self) -> None:
         """The token is checked again, under a row lock, immediately before the address is written.
 
@@ -689,6 +708,23 @@ class TaskListEtagTests(TestCase):
         etag = self.get_list()["ETag"]
         assert etag.startswith('"'), etag
         assert etag.endswith('"'), etag
+
+    def test_etag_holds_only_the_characters_an_entity_tag_may(self) -> None:
+        """RFC 7232 allows %x21 and %x23-7E between the quotes: no space, and no double quote.
+
+        The parts this is built from carry both. Every timestamp in it stringifies with a space in
+        the middle, and the request path is whatever the caller asked for -- so a caller could
+        otherwise put a quote in the middle of the header and end the entity-tag early.
+        """
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("task-list"), {"anything": 'a " and a space'})
+        etag = response["ETag"]
+
+        assert etag.startswith('"'), etag
+        assert etag.endswith('"'), etag
+        assert all(c == "\x21" or "\x23" <= c <= "\x7e" for c in etag[1:-1]), etag
 
     def test_another_users_activity_does_not_invalidate_the_etag(self) -> None:
         Task.objects.create(user=self.user, ra=1.0, dec=2.0)
@@ -1728,6 +1764,9 @@ class ResultPlotDataTests(TestCase):
 
         assert etag.startswith('"'), etag
         assert etag.endswith('"'), etag
+        # and nothing an entity-tag may not hold: the task timestamp it is built from stringifies
+        # as "2026-08-11 12:34:56+00:00", with a space in the middle
+        assert all(c == "\x21" or "\x23" <= c <= "\x7e" for c in etag[1:-1]), etag
 
 
 class TaskRunnerEmailTests(TestCase):
@@ -3157,6 +3196,30 @@ class RegistrationVerificationTests(TestCase):
         user = User.objects.get(username="newcomer")
         assert user.is_active is True
         assert not PendingEmailVerification.objects.filter(user=user).exists()
+
+    def test_the_token_url_sends_no_referrer(self) -> None:
+        """Every response at a verification URL, whatever it turns out to be.
+
+        Opting the page out of analytics stops it reporting its own location, but the page still
+        carries the site navigation, and following any of it would send this URL as the Referer
+        under the default same-origin policy -- to a page that does run analytics, where
+        document.referrer would hand the token to somebody who could replay it.
+        """
+        self.register()
+        link = self.verification_link()
+
+        offered = self.client.get(link)
+        assert offered.status_code == 200, offered.status_code
+        assert offered["Referrer-Policy"] == "no-referrer"
+
+        confirmed = self.client.post(link)
+        assert confirmed.status_code == 302, confirmed.status_code
+        assert confirmed["Referrer-Policy"] == "no-referrer"
+
+        # and the invalid-link page, which is served at the same URL once the link is spent
+        spent = self.client.post(link)
+        assert spent.status_code == 400, spent.status_code
+        assert spent["Referrer-Policy"] == "no-referrer"
 
     def test_a_link_consumed_by_a_parallel_request_is_refused(self) -> None:
         """Two POSTs carrying the same link cannot both activate the account and log in.

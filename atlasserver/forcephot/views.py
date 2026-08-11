@@ -114,6 +114,46 @@ REGISTRATION_WINDOW_LIMIT: t.Final = 3
 logger = logging.getLogger(__name__)
 
 
+def entity_tag(*parts: object) -> str:
+    """Return the parts as one strong entity-tag, valid whatever they contain.
+
+    RFC 7232 allows only %x21 and %x23-7E between the quotes, so an entity-tag may hold neither a
+    space nor a double quote -- and the parts handed to this hold both. str() of a datetime is
+    "2026-08-11 12:34:56+00:00", and one caller mixes in request.get_full_path(), which is whatever
+    the client asked for. An intermediary is entitled to drop a malformed header, which would cost
+    the revalidation these exist for.
+
+    Hashed rather than escaped, because that also bounds the header: the task list's tag grew with
+    the query string, and nothing reads the parts back out -- an entity-tag is compared, not parsed.
+    """
+    # \x1f between them, so that ("a", "bc") and ("ab", "c") cannot produce the same tag
+    joined = "\x1f".join(str(part) for part in parts)
+
+    return f'"{hashlib.blake2b(joined.encode(), digest_size=16).hexdigest()}"'
+
+
+def no_referrer(view):
+    """Serve every response of a view with Referrer-Policy: no-referrer.
+
+    For the pages whose own URL carries a token. Those pages already opt out of analytics, which
+    stops the token being reported for the page itself, but they still carry the site's navigation:
+    following any of it sends the token-bearing URL as the Referer under the default same-origin
+    policy, and the destination page does run analytics, where document.referrer would hand the
+    token to a third party who could then replay it.
+
+    Applied to the view rather than to the pages it renders, so that it covers the invalid-link and
+    success responses too -- the token is in the URL whatever the answer turns out to be.
+    """
+
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        response["Referrer-Policy"] = "no-referrer"
+        return response
+
+    return wrapper
+
+
 def get_tasklist_etag(request, user_id: int) -> str:
     """Return an etag that changes whenever anything the given user's task pages show changes.
 
@@ -139,13 +179,17 @@ def get_tasklist_etag(request, user_id: int) -> str:
         Max("task_modified_datetime"),
     )
 
-    return (
-        f'"{request.accepted_renderer.format}.user{user_id}.path{request.get_full_path()}'
-        f".count{usertasks['id__count']}.lastqueue{usertasks['timestamp__max']}"
-        f".laststart{usertasks['starttimestamp__max']}.lastfinish{usertasks['finishtimestamp__max']}"
-        f".lastmod{usertasks['task_modified_datetime__max']}"
+    return entity_tag(
+        request.accepted_renderer.format,
+        user_id,
+        request.get_full_path(),
+        usertasks["id__count"],
+        usertasks["timestamp__max"],
+        usertasks["starttimestamp__max"],
+        usertasks["finishtimestamp__max"],
+        usertasks["task_modified_datetime__max"],
         # the queue position rendered for a task is relative to the front of the global queue
-        f'.queueoffset{Task.min_queuepos_relative()}"'
+        Task.min_queuepos_relative(),
     )
 
 
@@ -1071,6 +1115,7 @@ def unverified_account_for(email: str):
     )
 
 
+@no_referrer
 def verify_email(request, uidb64: str, token: str):
     """Activate an account from the link in its verification email, once its owner confirms.
 
@@ -1243,6 +1288,7 @@ def change_email(request):
     )
 
 
+@no_referrer
 def confirm_email_change(request, token: str):
     """Apply an email change once the link sent to the new address has been confirmed.
 
@@ -1400,7 +1446,7 @@ def resultplotdatajs(request, taskid):
     # that had loaded a plot earlier the same day was told 304 and went on running the previous
     # script -- which, across the jQuery removal, meant a page of blank plots and "Can't find
     # variable: $" until midnight. Quoted, because a bare token is not a valid entity-tag.
-    etag = None if settings.DEBUG else f'"{settings.STATIC_VERSION}.{task.task_modified_datetime}"'
+    etag = None if settings.DEBUG else entity_tag(settings.STATIC_VERSION, task.task_modified_datetime)
 
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()
