@@ -200,6 +200,76 @@ p.runnerstatus.stale {
   padding: 0.7em 1em;
 }
 
+/* Bootstrap 3's button palette, which the two frameworks disagree about: .btn-warning was orange
+   and is now yellow, .btn-primary was a muted blue and is now a brighter one, .btn-info was pale
+   blue and is now cyan. The class names on the queue page never changed, only what they render as.
+   Given as Bootstrap 5's own button custom properties, so the variants keep every other behaviour
+   (focus ring, disabled, active) that the framework gives them. Values are Bootstrap 3.4.1's, read
+   off the copy DRF still ships. :active takes Bootstrap 3's :hover shade, which is what it used. */
+.btn-primary {
+  --bs-btn-bg: #337ab7;
+  --bs-btn-border-color: #2e6da4;
+  --bs-btn-hover-bg: #286090;
+  --bs-btn-hover-border-color: #204d74;
+  --bs-btn-active-bg: #286090;
+  --bs-btn-active-border-color: #204d74;
+  --bs-btn-disabled-bg: #337ab7;
+  --bs-btn-disabled-border-color: #2e6da4;
+}
+
+.btn-info {
+  --bs-btn-color: #fff;
+  --bs-btn-bg: #5bc0de;
+  --bs-btn-border-color: #46b8da;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #31b0d5;
+  --bs-btn-hover-border-color: #269abc;
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: #31b0d5;
+  --bs-btn-active-border-color: #269abc;
+  --bs-btn-disabled-color: #fff;
+  --bs-btn-disabled-bg: #5bc0de;
+  --bs-btn-disabled-border-color: #46b8da;
+}
+
+.btn-warning {
+  --bs-btn-color: #fff;
+  --bs-btn-bg: #f0ad4e;
+  --bs-btn-border-color: #eea236;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #ec971f;
+  --bs-btn-hover-border-color: #d58512;
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: #ec971f;
+  --bs-btn-active-border-color: #d58512;
+  --bs-btn-disabled-color: #fff;
+  --bs-btn-disabled-bg: #f0ad4e;
+  --bs-btn-disabled-border-color: #eea236;
+}
+
+.btn-danger {
+  --bs-btn-bg: #d9534f;
+  --bs-btn-border-color: #d43f3a;
+  --bs-btn-hover-bg: #c9302c;
+  --bs-btn-hover-border-color: #ac2925;
+  --bs-btn-active-bg: #c9302c;
+  --bs-btn-active-border-color: #ac2925;
+  --bs-btn-disabled-bg: #d9534f;
+  --bs-btn-disabled-border-color: #d43f3a;
+}
+
+/* Bootstrap 3's link colour, for the same reason as the buttons above: Bootstrap 5's is a brighter
+   blue, so every link on the site shifted. Both the plain and the -rgb forms, because that is what
+   Bootstrap reads -- `a` resolves rgba(var(--bs-link-color-rgb), ...) while .btn-link and
+   .page-link read the plain one, so setting only one leaves the two disagreeing. */
+:root {
+  --bs-link-color: #337ab7;
+  --bs-link-color-rgb: 51, 122, 183;
+  --bs-link-hover-color: #23527c;
+  --bs-link-hover-color-rgb: 35, 82, 124;
+}
+
+/* the orange the result links have always had, over whichever .btn variant carries them */
 .results {
   background-color: #ef4e19;
   border-color: #e59400;
