@@ -1346,8 +1346,16 @@ def resultplotdatajs(request, taskid):
     if not task.finishtimestamp:
         return HttpResponseNotFound("Page not found")
 
-    # disable etag for debugging
-    etag = None if settings.DEBUG else datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
+    # Two things vary in this response and the tag has to cover both: the generated plot data,
+    # which changes with the task, and the plotting script appended below, which changes when the
+    # built asset is redeployed. STATIC_VERSION is derived from the mtimes of those built assets,
+    # lightcurveplotly.min.js among them.
+    #
+    # It used to be the UTC date alone. That is the same before and after a deploy, so a browser
+    # that had loaded a plot earlier the same day was told 304 and went on running the previous
+    # script -- which, across the jQuery removal, meant a page of blank plots and "Can't find
+    # variable: $" until midnight. Quoted, because a bare token is not a valid entity-tag.
+    etag = None if settings.DEBUG else f'"{settings.STATIC_VERSION}.{task.task_modified_datetime}"'
 
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()

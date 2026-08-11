@@ -1635,6 +1635,59 @@ class ResultPlotDataTests(TestCase):
             assert response.status_code == 200
             assert b"jslcdata.push" in response.content, response.content[:200]
 
+    @override_settings(DEBUG=False)
+    def test_a_redeployed_plot_script_invalidates_the_cached_response(self) -> None:
+        """The ETag has to change when the appended script does.
+
+        It was the UTC date alone, which is the same before and after a deploy, so a browser that
+        had loaded a plot earlier the same day was told 304 and kept running the old script. Across
+        the jQuery removal that meant blank plots and "Can't find variable: $" until midnight.
+        """
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "js").mkdir()
+            script = Path(tmpdir, "js", "lightcurveplotly.min.js")
+            script.write_text("// the deployed plot script\n")
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
+
+            with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN="", STATIC_VERSION="before-deploy"):
+                first = self.client.get(reverse("resultplotdatajs", args=[task.id]))
+                assert first.status_code == 200
+                # the browser holding that tag is told there is nothing new
+                unchanged = self.client.get(
+                    reverse("resultplotdatajs", args=[task.id]), HTTP_IF_NONE_MATCH=first["ETag"]
+                )
+                assert unchanged.status_code == 304
+
+            # a deploy rebuilds the bundle, which moves STATIC_VERSION
+            with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN="", STATIC_VERSION="after-deploy"):
+                revalidated = self.client.get(
+                    reverse("resultplotdatajs", args=[task.id]), HTTP_IF_NONE_MATCH=first["ETag"]
+                )
+
+            assert revalidated.status_code == 200, "the stale script would still be served"
+            assert revalidated["ETag"] != first["ETag"]
+
+    @override_settings(DEBUG=False)
+    def test_the_etag_is_a_quoted_entity_tag(self) -> None:
+        # a bare token is not a valid entity-tag, and intermediaries may reject or rewrite it
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "js").mkdir()
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// the deployed plot script\n")
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n")
+            with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN=""):
+                etag = self.client.get(reverse("resultplotdatajs", args=[task.id]))["ETag"]
+
+        assert etag.startswith('"'), etag
+        assert etag.endswith('"'), etag
+
 
 class TaskRunnerEmailTests(TestCase):
     """Tests for the batch result email.
