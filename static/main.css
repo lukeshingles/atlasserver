@@ -964,6 +964,13 @@ ul.errorlist {
   color: var(--bs-danger-text-emphasis);
 }
 
+/* The two pager buttons sit at the outer edges of the list they page through, rather than side by
+   side in the middle of it. An auto margin on Older rather than space-between on the row, because
+   the newest page has no Newer button and space-between would leave Older on its own at the left. */
+#paginator ul.pagination .pagenext {
+  margin-left: auto;
+}
+
 ul#taskfilters>* {
   display: inline;
 }

@@ -166,6 +166,7 @@ const COPY_LABEL_RESET_MS = 2000;
 function CopyableValue({ text, label, children }) {
     const [state, setState] = React.useState('idle');
     const timer = React.useRef(null);
+    const value = React.useRef(null);
 
     React.useEffect(() => () => clearTimeout(timer.current), []);
 
@@ -179,13 +180,39 @@ function CopyableValue({ text, label, children }) {
         timer.current = setTimeout(() => setState('idle'), COPY_LABEL_RESET_MS);
     };
 
+    /*
+     * Put the value under the selection, so that the "Press Ctrl-C" the failure path offers has
+     * something to copy.
+     *
+     * Without this the focus is on the button and nothing is selected, so following the instruction
+     * copies whatever the user had selected before -- or nothing at all, which is worse than saying
+     * nothing. The span below wraps exactly the text the button would have written, so what a
+     * keyboard copy produces is what a successful click would have.
+     */
+    const selectValue = () => {
+        const selection = window.getSelection();
+        if (!selection || !value.current) {
+            return;
+        }
+
+        const range = document.createRange();
+        range.selectNodeContents(value.current);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    };
+
     const copy = () => {
-        navigator.clipboard.writeText(text).then(() => announce('copied'), () => announce('failed'));
+        navigator.clipboard.writeText(text).then(
+            () => announce('copied'),
+            () => {
+                selectValue();
+                announce('failed');
+            });
     };
 
     return (
         <span className="copyable">
-            {children}
+            <span className="copyvalue" ref={value}>{children}</span>
             {/* aria-live, so the change of state is announced rather than read over whatever has
                 focus; the title is what the pointer gets, where the live text is not shown */}
             <button type="button" className="copybutton" onClick={copy}
@@ -507,12 +534,11 @@ export const Task = React.memo(function Task(props) {
         if (task.radec_epoch_year != null) {
             radecepoch = <span>(epoch {task.radec_epoch_year}) </span>;
         }
-        // the pair on its own, without the epoch, because what this is for is pasting the position
-        // into something else
+        // the epoch stays outside the copyable part: what this is for is pasting the position into
+        // something else, and the copy control's failure path selects its own contents, so those
+        // contents have to be exactly the text the button would otherwise have written
         meta.push(['target', 'RA Dec:',
-            <CopyableValue text={task.ra + ' ' + task.dec} label="coordinates">
-                {radecepoch}{task.ra} {task.dec}
-            </CopyableValue>]);
+            <span>{radecepoch}<CopyableValue text={task.ra + ' ' + task.dec} label="coordinates">{task.ra} {task.dec}</CopyableValue></span>]);
         // proper motion components are signed, so testing for > 0 hides half of all real values
         if ((task.propermotion_ra != null && task.propermotion_ra != 0)
             || (task.propermotion_dec != null && task.propermotion_dec != 0)) {
@@ -750,8 +776,8 @@ const Pager = React.memo(function Pager({ previous, next, taskcount, pagefirstta
                 styles a <button> as readily as a link, so the hand-written rules that used to
                 stand in for the missing component are gone from main.css. */}
             <ul key="prevnext" className="pagination">
-                {previous != null ? <li key="previous" className="page-item"><button type="button" className="page-link" onClick={() => updateCursor(cursorFrom(previous))}>&laquo; Newer</button></li> : null}
-                {next != null ? <li key="next" className="page-item"><button type="button" className="page-link" onClick={() => updateCursor(cursorFrom(next))}>Older &raquo;</button></li> : null}
+                {previous != null ? <li key="previous" className="page-item pageprev"><button type="button" className="page-link" onClick={() => updateCursor(cursorFrom(previous))}>&laquo; Newer</button></li> : null}
+                {next != null ? <li key="next" className="page-item pagenext"><button type="button" className="page-link" onClick={() => updateCursor(cursorFrom(next))}>Older &raquo;</button></li> : null}
             </ul>
         </div>
     );

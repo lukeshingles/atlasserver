@@ -47,7 +47,7 @@ function task(id, overrides = {}) {
 }
 
 /** Answer the three endpoints the page polls, recording every URL asked for. */
-function stubFetch(results) {
+function stubFetch(results, pagination = {}) {
     global.fetch = (url) => {
         const href = url.toString();
         requested.push(href);
@@ -70,7 +70,7 @@ function stubFetch(results) {
             ok: true,
             status: 200,
             headers: { get: () => null },
-            json: () => Promise.resolve({ results: shown, taskcount: shown.length, next: null, previous: null, pagefirsttaskposition: 0 }),
+            json: () => Promise.resolve({ results: shown, taskcount: shown.length, next: null, previous: null, pagefirsttaskposition: 0, ...pagination }),
         });
     };
 }
@@ -98,8 +98,8 @@ describe('TaskPage', () => {
         }
     });
 
-    const renderPage = async (results) => {
-        stubFetch(results);
+    const renderPage = async (results, pagination = {}) => {
+        stubFetch(results, pagination);
         const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
         mounted.push(rendered.root);
         await flush(120);
@@ -470,6 +470,46 @@ describe('TaskPage', () => {
             mock.timers.reset();
             badge.remove();
         }
+    });
+
+    test('a refused clipboard write selects the value, so Ctrl-C has something to copy', async () => {
+        // what a browser does when clipboard permission is denied, or the document is not focused
+        Object.defineProperty(global.navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: () => Promise.reject(new Error('NotAllowedError')) },
+        });
+
+        try {
+            const { container } = await renderPage([task(1, { ra: 150.25, dec: -20.5 })]);
+            container.querySelector('li.task .copybutton').click();
+            await flush(40);
+
+            assert.match(container.querySelector('li.task .copyfeedback').textContent, /Ctrl-C/);
+
+            // the instruction is only useful if the value is under the selection
+            const selection = window.getSelection();
+            assert.equal(selection.rangeCount, 1, 'nothing was selected to copy');
+            assert.equal(selection.toString(), '150.25 -20.5');
+            assert.ok(
+                container.querySelector('li.task .copyvalue').contains(selection.getRangeAt(0).commonAncestorContainer),
+                'the selection is not inside the value',
+            );
+        } finally {
+            delete global.navigator.clipboard;
+            window.getSelection().removeAllRanges();
+        }
+    });
+
+    test('the pager puts Newer and Older at opposite ends', async () => {
+        const { container } = await renderPage([task(1)], { next: 'http://testserver/queue/?cursor=older' });
+
+        // main.css pushes .pagenext right with an auto margin, so which item carries the class is what
+        // decides whether Older ends up at the correct edge
+        const items = [...container.querySelectorAll('#paginator .page-item')];
+        assert.ok(items.length > 0, 'no pager rendered');
+        const older = items.find((li) => li.textContent.includes('Older'));
+        assert.ok(older, 'no Older button');
+        assert.ok(older.classList.contains('pagenext'), 'Older is not the item that gets pushed right');
     });
 
     test('each row wraps its content in the element its show and hide animates over', async () => {
