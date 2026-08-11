@@ -1,0 +1,301 @@
+/*
+The Bootstrap 3 class names that Django REST framework's browsable API emits, expressed in
+Bootstrap 5.
+
+rest_framework/api.html loads the same Bootstrap 5 as the rest of the site in place of the
+Bootstrap 3 that DRF ships, so the API page and the site pages are finally one framework. DRF's
+templates are left untouched -- copying them into this project is what previously left the site a
+DRF release behind -- so the class names Bootstrap 5 dropped are given their Bootstrap 5 appearance
+here instead. rest_framework/base.html and the filters/ and horizontal/ template packs are the
+list of what has to appear below; nothing else in this file is needed by any page the site serves.
+
+Values come from Bootstrap 5's own custom properties wherever it defines them, so this tracks the
+site's Bootstrap version rather than freezing a copy of its numbers.
+*/
+
+/* ---- layout utilities Bootstrap 5 removed ---- */
+
+.pull-left {
+  float: left;
+}
+
+.pull-right {
+  float: right;
+}
+
+/* renamed .visually-hidden */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* the GET/OPTIONS/DELETE controls are floated, so the request line has to clear them */
+.request-info {
+  clear: both;
+}
+
+/* ---- components Bootstrap 5 removed ---- */
+
+/* .well, which held the form panel and is Bootstrap 5's .card in all but name */
+.well {
+  padding: 1rem;
+  background-color: var(--bs-tertiary-bg);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+}
+
+.well form {
+  margin-bottom: 0;
+}
+
+.form-actions {
+  padding-top: 0;
+  text-align: right;
+}
+
+/* .btn-default, Bootstrap 3's neutral button. Bootstrap 5 styles buttons entirely through these
+   custom properties, so naming them is the whole of the port. */
+.btn-default {
+  --bs-btn-color: var(--bs-body-color);
+  --bs-btn-bg: var(--bs-body-bg);
+  --bs-btn-border-color: var(--bs-border-color);
+  --bs-btn-hover-color: var(--bs-body-color);
+  --bs-btn-hover-bg: var(--bs-tertiary-bg);
+  --bs-btn-hover-border-color: var(--bs-border-color);
+  --bs-btn-focus-shadow-rgb: 211, 212, 213;
+  --bs-btn-active-color: var(--bs-body-color);
+  --bs-btn-active-bg: var(--bs-secondary-bg);
+  --bs-btn-active-border-color: var(--bs-border-color);
+  --bs-btn-disabled-color: var(--bs-secondary-color);
+  --bs-btn-disabled-bg: var(--bs-body-bg);
+  --bs-btn-disabled-border-color: var(--bs-border-color);
+}
+
+/* Bootstrap 5 wants .breadcrumb-item on each entry; DRF writes plain <li>. The separator is the
+   only thing the class carried. */
+.breadcrumb>li+li {
+  padding-left: var(--bs-breadcrumb-item-padding-x);
+}
+
+.breadcrumb>li+li::before {
+  float: left;
+  padding-right: var(--bs-breadcrumb-item-padding-x);
+  color: var(--bs-breadcrumb-divider-color);
+  content: var(--bs-breadcrumb-divider, "/");
+}
+
+.breadcrumb>li.active>a {
+  color: var(--bs-breadcrumb-item-active-color);
+  text-decoration: none;
+}
+
+/* Bootstrap 5 wants .dropdown-item on the link; DRF writes .dropdown-menu > li > a */
+.dropdown-menu>li>a {
+  display: block;
+  width: 100%;
+  padding: var(--bs-dropdown-item-padding-y) var(--bs-dropdown-item-padding-x);
+  clear: both;
+  color: var(--bs-dropdown-link-color);
+  text-align: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  background-color: transparent;
+  border: 0;
+}
+
+.dropdown-menu>li>a:hover,
+.dropdown-menu>li>a:focus {
+  color: var(--bs-dropdown-link-hover-color);
+  background-color: var(--bs-dropdown-link-hover-bg);
+}
+
+/* Bootstrap 5 draws the caret itself, from .dropdown-toggle::after */
+.caret {
+  display: none;
+}
+
+/* Bootstrap 5's modal close control is .btn-close, and its header is a flex row rather than
+   Bootstrap 3's floats, so the button DRF puts first has to be ordered last */
+.modal-header .close {
+  order: 1;
+  padding: 0;
+  margin-left: auto;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--bs-body-color);
+  background: transparent;
+  border: 0;
+  opacity: 0.5;
+}
+
+.modal-header .close:hover {
+  opacity: 1;
+}
+
+.modal-footer form {
+  margin: 0;
+}
+
+/* Bootstrap 5 ships no icon font. Two of the three glyphs DRF asks for label a button that already
+   has text beside them; the ordering tick is the only one carrying meaning on its own. */
+.glyphicon-wrench,
+.glyphicon-search {
+  display: none;
+}
+
+.glyphicon-ok::before {
+  font-style: normal;
+  content: "\2713";
+}
+
+/* ---- forms ---- */
+
+/* Bootstrap 3's .form-horizontal made every .form-group a grid row; in Bootstrap 5 a row is
+   explicit, so the row is restored here and the .col-sm-* on the label and the field work as they
+   always did. */
+.form-horizontal .form-group {
+  --bs-gutter-x: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  margin-right: calc(-0.5 * var(--bs-gutter-x));
+  margin-bottom: 1rem;
+  margin-left: calc(-0.5 * var(--bs-gutter-x));
+}
+
+/* :where(), so this weighs nothing: Bootstrap 5's own .row>* declares the same width and is
+   outranked by .col-sm-2 only because .col-sm-2 comes later in the same file. Written normally the
+   descendant selector here would outrank .col-sm-2 instead, and every label would take a full row
+   of its own with its field beneath it. */
+:where(.form-horizontal .form-group)>* {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 100%;
+  padding-right: calc(var(--bs-gutter-x) * 0.5);
+  padding-left: calc(var(--bs-gutter-x) * 0.5);
+}
+
+/* only once the label is actually beside its field: below the sm breakpoint .col-sm-2 has no width
+   of its own, so the two stack and a right-aligned label sits over the far end of the field it
+   belongs to */
+@media (min-width: 576px) {
+  .form-horizontal .control-label {
+    padding-top: calc(0.375rem + var(--bs-border-width));
+    text-align: right;
+  }
+}
+
+/* a <legend> is a heading element in Bootstrap 5's reboot; as a group label it should read as the
+   labels beside it do */
+.form-horizontal legend.control-label {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* DRF's default.css sizes fields at 90% of their container, which predates the field sitting in a
+   grid column of its own */
+.form-horizontal .form-control {
+  width: 100%;
+}
+
+.form-horizontal input[type="checkbox"],
+.form-horizontal input[type="radio"] {
+  width: auto;
+}
+
+.horizontal-checkbox input[type="checkbox"] {
+  margin-top: calc(0.375rem + var(--bs-border-width));
+}
+
+/* renamed .form-text */
+.help-block {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.875em;
+  color: var(--bs-secondary-color);
+}
+
+/* Bootstrap 5 marks invalid fields with .is-invalid on the control itself; DRF marks the group */
+.has-error .control-label,
+.has-error .help-block {
+  color: var(--bs-form-invalid-color);
+}
+
+.has-error .form-control {
+  border-color: var(--bs-form-invalid-border-color);
+}
+
+/* renamed .form-control-plaintext */
+.form-control-static {
+  display: block;
+  width: 100%;
+  padding: 0.375rem 0;
+  margin-bottom: 0;
+  line-height: 1.5;
+  color: var(--bs-body-color);
+  background-color: transparent;
+  border: solid transparent;
+  border-width: var(--bs-border-width) 0;
+}
+
+/* Bootstrap 5's .form-check, which needs classes on both the wrapper and the input that DRF's
+   template pack does not write */
+.checkbox,
+.radio {
+  margin-bottom: 0.25rem;
+}
+
+.checkbox label,
+.radio label,
+.checkbox-inline,
+.radio-inline {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.checkbox-inline,
+.radio-inline {
+  margin-right: 1rem;
+}
+
+/* .form-inline, on the filter search box */
+.form-inline {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
+}
+
+.input-group>.input-group-btn {
+  display: flex;
+}
+
+.input-group>.input-group-btn>.btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* ---- form tabs ---- */
+
+/* the HTML form / raw data switcher. drf-bootstrap5.js adds the .nav-item and .nav-link that
+   Bootstrap 5 needs, so only the join between the tabs and the panel below them is left. */
+.form-switcher {
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+
+.form-switcher .nav-link.active {
+  background-color: var(--bs-tertiary-bg);
+  border-bottom-color: var(--bs-tertiary-bg);
+}
+
+.tab-content.well {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}

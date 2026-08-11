@@ -11,7 +11,17 @@ a {
   cursor: pointer;
 }
 
-div.navbar {
+/* Bootstrap 3 was loaded here without a .navbar-default or .navbar-inverse variant, so the
+   navigation took its plain link colour rather than any navbar colour of its own. Bootstrap 5's
+   navbar does have one -- a translucent near-black -- so the blue has to be asked for. Through the
+   navbar's custom properties, which is where .nav-link, .navbar-brand and the toggler all read
+   their colour from, rather than a selector per element. #337ab7 and #23527c are Bootstrap 3's
+   link and link-hover; the active item is the same blue as the rest, distinguished by the
+   underline below, as it was before. */
+.navbar {
+  --bs-navbar-color: #337ab7;
+  --bs-navbar-hover-color: #23527c;
+  --bs-navbar-active-color: #337ab7;
   background: white;
 }
 
@@ -23,13 +33,18 @@ div.navbar {
   height: 118px;
 }
 
-ul.nav {
-  padding-top: 96px;
-}
+/* bootstrap 3 floated navbar items, so the links needed a padding-top to sit at the foot of the
+   118px logo. Bootstrap 5's navbar is flexbox and centres them against the brand on its own. */
 
 /* div#content {
   margin-top: 0em;
 } */
+
+.notices {
+  color: black;
+  font-size: small;
+  margin-bottom: 1em;
+}
 
 div.page-header {
   margin: 0;
@@ -43,10 +58,6 @@ h1 {
 
 input::placeholder {
   color: #d3d3d3;
-}
-
-.submit {
-  background-color: #6BA3E8;
 }
 
 div.newrequest {
@@ -90,7 +101,10 @@ form#newrequest li>*:nth-child(2) {
   width: 100%;
 }
 
-form#newrequest input,
+/* :not([type=submit]), because the submit button is a Bootstrap button and these are the field
+   styles: the grey border and the 0.3em padding here would otherwise land on it and undo the
+   padding, border and hover it gets from .btn-primary */
+form#newrequest input:not([type=submit]),
 textarea {
   display: inline-block;
   padding: 0.3em 0.3em;
@@ -125,7 +139,7 @@ div#tasklist.singletaskdetail {
   margin: 0 0 1.0em 0;
   padding: 1em;
   border-radius: 0.5em;
-  border: 0.1em solid rgb(0, 0, 0, 0.8);
+  border: 0.1em solid #495057;
   background-color: white;
 }
 
@@ -185,9 +199,105 @@ p.runnerstatus.stale {
   padding: 0.7em 1em;
 }
 
+/* Bootstrap 3's button palette, which the two frameworks disagree about: .btn-warning was orange
+   and is now yellow, .btn-primary was a muted blue and is now a brighter one, .btn-info was pale
+   blue and is now cyan. The class names on the queue page never changed, only what they render as.
+   Given as Bootstrap 5's own button custom properties, so the variants keep every other behaviour
+   (focus ring, disabled, active) that the framework gives them. Values are Bootstrap 3.4.1's, read
+   off the copy DRF still ships. :active takes Bootstrap 3's :hover shade, which is what it used.
+   .btn-danger is deliberately absent: the Delete and Cancel buttons keep Bootstrap 5's red. */
+.btn-primary {
+  --bs-btn-bg: #337ab7;
+  --bs-btn-border-color: #2e6da4;
+  --bs-btn-hover-bg: #286090;
+  --bs-btn-hover-border-color: #204d74;
+  --bs-btn-active-bg: #286090;
+  --bs-btn-active-border-color: #204d74;
+  --bs-btn-disabled-bg: #337ab7;
+  --bs-btn-disabled-border-color: #2e6da4;
+}
+
+.btn-info {
+  --bs-btn-color: #fff;
+  --bs-btn-bg: #5bc0de;
+  --bs-btn-border-color: #46b8da;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #31b0d5;
+  --bs-btn-hover-border-color: #269abc;
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: #31b0d5;
+  --bs-btn-active-border-color: #269abc;
+  --bs-btn-disabled-color: #fff;
+  --bs-btn-disabled-bg: #5bc0de;
+  --bs-btn-disabled-border-color: #46b8da;
+}
+
+.btn-warning {
+  --bs-btn-color: #fff;
+  --bs-btn-bg: #f0ad4e;
+  --bs-btn-border-color: #eea236;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #ec971f;
+  --bs-btn-hover-border-color: #d58512;
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: #ec971f;
+  --bs-btn-active-border-color: #d58512;
+  --bs-btn-disabled-color: #fff;
+  --bs-btn-disabled-bg: #f0ad4e;
+  --bs-btn-disabled-border-color: #eea236;
+}
+
+/* Bootstrap 3's link colour, for the same reason as the buttons above: Bootstrap 5's is a brighter
+   blue, so every link on the site shifted. Both the plain and the -rgb forms, because that is what
+   Bootstrap reads -- `a` resolves rgba(var(--bs-link-color-rgb), ...) while .btn-link and
+   .page-link read the plain one, so setting only one leaves the two disagreeing. */
+:root {
+  --bs-link-color: #337ab7;
+  --bs-link-color-rgb: 51, 122, 183;
+  --bs-link-hover-color: #23527c;
+  --bs-link-hover-color-rgb: 35, 82, 124;
+}
+
+/* The orange for the result links. Set through the button custom properties rather than as a plain
+   background-color so that it holds in every state: .btn:hover and .btn:active take their
+   background from these variables, and a bare background-color here is outranked by those rules,
+   leaving the underlying .btn-info colour to show through on hover. Hover and active are the base
+   darkened by 15%, the step Bootstrap uses for its own variants. */
 .results {
-  background-color: #ef4e19;
-  border-color: #e59400;
+  --bs-btn-color: #fff;
+  --bs-btn-bg: #ef4e19;
+  --bs-btn-border-color: #e59400;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #cb4215;
+  --bs-btn-hover-border-color: #c37e00;
+  --bs-btn-active-color: #fff;
+  --bs-btn-active-bg: #cb4215;
+  --bs-btn-active-border-color: #c37e00;
+}
+
+/* The code examples on the API guide. The frame is CSS alone, so it holds on a page where
+   copycode.js has not run; the script adds the .codeblock-wrap and the button inside it. */
+.codeblock {
+  padding: 1rem;
+  overflow-x: auto;
+  background-color: var(--bs-tertiary-bg);
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+}
+
+.codeblock-wrap {
+  position: relative;
+}
+
+/* over the block rather than in it: .codeblock scrolls sideways for a long line, and a button
+   inside that box travels with the code */
+.codeblock-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  /* opaque, because .btn-outline-* has a transparent background and a long line passes underneath
+     the button rather than wrapping */
+  background-color: var(--bs-body-bg);
 }
 
 li.task .btn:not(.btn-sm) {
@@ -208,34 +318,8 @@ ul {
 
 /* Controls that run JavaScript are <button>, not <a> without an href: a hrefless link is not
    focusable, so the filter tabs, the pager and the help toggle could not be reached by keyboard and
-   were invisible to assistive technology. These rules give the buttons the appearance the links
-   had; bootstrap's .btn classes already cover <button>, so only the pager and the inline text
-   toggle need anything here. */
-.pager li>button {
-  background-color: #fff;
-  border: 1px solid #ddd;
-  border-radius: 15px;
-  color: #337ab7;
-  display: inline-block;
-  padding: 5px 14px;
-}
-
-/* bootstrap puts these floats on `.pager .previous>a`, so a <button> gets neither and the two
-   opposite directions end up side by side in the middle of a centred pager */
-.pager .previous>button {
-  float: left;
-}
-
-.pager .next>button {
-  float: right;
-}
-
-.pager li>button:hover,
-.pager li>button:focus {
-  background-color: #eee;
-  text-decoration: underline;
-}
-
+   were invisible to assistive technology. Bootstrap's .btn, .page-link and .nav-link classes all
+   style a <button> as readily as a link, so only the inline text toggle needs anything here. */
 button.linkbutton {
   background: none;
   border: none;
@@ -258,39 +342,32 @@ button.resetbutton {
 
 /* the active class is set in base.html: a CSS file is not rendered by the template engine, so
    the {{ request.get_full_path }} that used to be in this selector never matched anything */
-.navbar-nav>li.active>a {
+.navbar-nav .nav-link.active {
   text-decoration: underline;
 }
 
-/* the log out control has to be a POST form (Django's LogoutView rejects GET), but its button
-   should be indistinguishable from the sibling links: same colour, font, padding and pointer
-   cursor as bootstrap's .dropdown-menu>li>a rule */
-.dropdown-menu>li>form.logoutform {
+/* Queue and API need an account, and were greyed to say so before clicking. The rule used to live
+   in a conditional <style> block in the vendored DRF base template, which went away with it; the
+   class is now applied only to anonymous visitors, so this needs no condition of its own. After
+   .active deliberately: the two can coincide, and "you cannot use this" is the more useful cue. */
+.navbar-nav .nav-link.loginrequired {
+  color: lightgrey;
+}
+
+/* the log out control has to be a POST form (Django's LogoutView rejects GET). The button carries
+   .dropdown-item, so bootstrap 5 gives it the same colour, padding and hover as the sibling links;
+   only the form's own margin and the button's default chrome need clearing. */
+.dropdown-menu form.logoutform {
   margin: 0;
 }
 
-.dropdown-menu>li>form.logoutform>button {
+.dropdown-menu form.logoutform>button.dropdown-item {
   background: none;
   border: none;
-  clear: both;
-  color: #333;
   cursor: pointer;
-  display: block;
-  font-family: inherit;
-  font-size: inherit;
-  font-weight: normal;
-  line-height: 1.42857143;
-  padding: 3px 20px;
+  font: inherit;
   text-align: left;
-  white-space: nowrap;
   width: 100%;
-}
-
-.dropdown-menu>li>form.logoutform>button:hover,
-.dropdown-menu>li>form.logoutform>button:focus {
-  background-color: #f5f5f5;
-  color: #262626;
-  text-decoration: none;
 }
 
 span.helptext {
@@ -470,38 +547,35 @@ table.countrystats th[scope="row"] {
   }
 }
 
-/* 767px, not 640px: the layout being corrected here is bootstrap's, and bootstrap only floats
-   navbar items from min-width 768px. Below that it stacks them one per line, and this navbar has no
-   collapse toggle, so the eight links plus a floated 118px logo filled an entire screen before any
-   content. At 640px the 641-767px band — a narrowed desktop window, a tablet in split view — kept
-   the broken layout. Lay the brand out on its own line and let the links wrap inline. */
-@media (max-width: 767px) {
-  .navbar-brand {
-    display: block;
-    float: none;
-    height: auto;
-    padding: 5px 0;
-  }
-
+/* the collapse toggle appears below 992px (navbar-expand-lg), and a 118px logo beside it fills
+   too much of a phone screen. Bootstrap 5 handles the rest of the small-screen navbar itself: the
+   block that used to be here worked around bootstrap 3 having no toggle at all, so the eight links
+   plus a floated logo filled an entire screen before any content. */
+@media (max-width: 991.98px) {
   .navbar-brand img {
     height: 56px;
   }
+}
 
-  ul.nav {
-    margin: 0;
-    padding-top: 0;
-  }
+/* Row show/hide for the task list, driven by tasklist.jsx adding and removing .task-collapsed.
+   This replaced jQuery's slideUp/slideDown, which wrote inline styles onto nodes React owns: a
+   re-render that reused such a node left it stuck at whatever height the animation had reached. */
+li.task {
+  overflow: hidden;
+  transition: max-height 200ms ease, opacity 200ms ease;
+  /* large enough for the tallest row (one with a light curve plot expanded); max-height cannot
+     transition to or from `auto`, so it has to be a number */
+  max-height: 400em;
+  opacity: 1;
+}
 
-  .navbar-nav>li {
-    display: inline-block;
-    float: none;
-  }
+li.task.task-collapsed {
+  max-height: 0;
+  opacity: 0;
+}
 
-  .navbar-nav>li>a {
-    padding: 6px 8px;
-  }
-
-  .navbar-nav.pull-right {
-    float: none !important;
+@media (prefers-reduced-motion: reduce) {
+  li.task {
+    transition: none;
   }
 }

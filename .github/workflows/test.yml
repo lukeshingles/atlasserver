@@ -36,8 +36,9 @@ jobs:
             - name: Run mypy
               run: uv run -- mypy --install-types --non-interactive
 
-            - name: Run pylint
-              run: uv run -- pylint atlasserver
+            - name: Run pyrefly
+              if: always()
+              run: uv run -- pyrefly check
 
             - name: Run ty
               # skipped on pre-commit.ci (see .pre-commit-config.yaml), which has no network access
@@ -71,10 +72,12 @@ jobs:
 
             - name: Check the committed bundles are up to date
               # the built .min.js files are committed and served directly, so a source change that
-              # was never rebuilt would ship stale JavaScript
+              # was never rebuilt would ship stale JavaScript. ../vendor is covered too: it holds
+              # the self-hosted react that the queue page's import map points at, so a react bump
+              # in package.json that was never rebuilt would leave the page on the old copy.
               run: |
                   ./build.sh
-                  git diff --exit-code -- ../*.min.js
+                  git diff --exit-code -- ../*.min.js ../vendor
 
     test:
         name: Run tests
@@ -93,6 +96,10 @@ jobs:
             # below is only reachable over TCP on the mapped port
             ATLASSERVER_DJANGO_MYSQL_HOST: 127.0.0.1
             DJANGO_SETTINGS_MODULE: atlasserver.settings_test
+            # required whenever DEBUG is off, which the "Start and stop server" step below is: it
+            # runs the real production settings, so it has to supply the real production
+            # configuration. The suite itself never sees this -- settings_test forces DEBUG on.
+            ATLASSERVER_SITE_ORIGIN: https://fallingstar-data.com
 
         services:
             mysql:

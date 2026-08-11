@@ -1,7 +1,6 @@
-{% extends "rest_framework/base.html" %}
+{% extends "base.html" %}
 {% load static %}
 {% load i18n %}
-{% load rest_framework %}
 
 {% block head %}
     {{ block.super }}
@@ -11,7 +10,7 @@
     {# already cache-busted with a ?ver= query string, so a deployed change is picked up on the #}
     {# next ordinary page load without one. #}
 
-    <script language="javascript" type="text/javascript">
+    <script type="text/javascript">
         "use strict";
         // There is deliberately no prefetch here. One used to fire an XMLHttpRequest for
         // "?format=json" while React fetched this same page *without* that parameter and with
@@ -43,7 +42,7 @@
 {% block script %}
     {{ block.super }}
 
-    <script language="javascript" type="text/javascript">
+    <script type="text/javascript">
     "use strict";
 
     function mjdFromDate(dateObj) { // Decimal days
@@ -123,7 +122,7 @@
     {# or written anywhere — easily confused with the ?newids= query parameter, which is real #}
     var newtaskids = [];
 
-    $(document).ready(inactivityTimer);
+    document.addEventListener('DOMContentLoaded', inactivityTimer);
     </script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/3.1.1/plotly.min.js" integrity="sha512-QaIUFweb9pyRnQZEYIujSDTHndibSwqsTSb69aedsfAAUpJRUE5yyYfaNAJIbTDuNECyHR/Cc0N7lQJrp0IEpA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -132,21 +131,25 @@
         const jslabelsglobal = new Object();
         const jslimitsglobal = new Object();
     </script>
+    {# react and react-dom are served from here rather than from esm.sh. A third-party CDN on the #}
+    {# critical path of a signed-in page meant an outage took the page down and a compromise would #}
+    {# have run arbitrary script in every logged-in session, and an import map cannot carry an #}
+    {# integrity hash the way the <script> tags above do. build.sh generates these with esbuild, #}
+    {# because React 19 publishes CommonJS only; react.min.js and react-dom-client.min.js share #}
+    {# their React through a react-shared-<hash>.js chunk, which they import relatively, so it needs #}
+    {# no entry here -- and the hash in its name is what busts it, since a relative import does not #}
+    {# inherit the ?ver= below. #}
     <script type="importmap">
         {
             "imports": {
-    {% if debug %}
-                "react": "https://esm.sh/react@19/?dev",
-                "react-dom": "https://esm.sh/react-dom@19/client?dev",
-    {% else %}
-                "react": "https://esm.sh/react@19",
-                "react-dom": "https://esm.sh/react-dom@19/client",
-    {% endif %}
-                "newrequest": "{% static 'js/newrequest.min.js' %}?ver=20260806",
-                "pollcache": "{% static 'js/pollcache.min.js' %}?ver=20260806",
-                "agetext": "{% static 'js/agetext.min.js' %}?ver=20260806"
+                "react": "{% static 'js/vendor/react.min.js' %}?ver={{ static_version }}",
+                "react-dom": "{% static 'js/vendor/react-dom-client.min.js' %}?ver={{ static_version }}",
+                "newrequest": "{% static 'js/newrequest.min.js' %}?ver={{ static_version }}",
+                "pollcache": "{% static 'js/pollcache.min.js' %}?ver={{ static_version }}",
+                "agetext": "{% static 'js/agetext.min.js' %}?ver={{ static_version }}",
+                "csrftoken": "{% static 'js/csrftoken.min.js' %}?ver={{ static_version }}"
             }
         }
     </script>
-    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver=20260806"></script>
+    <script type="module" src="{% static 'js/tasklist.min.js' %}?ver={{ static_version }}"></script>
 {% endblock %}

@@ -3,13 +3,16 @@ import os
 import re
 import sys
 import time
-from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import requests
 
+# every request here carries one: a hung connection would otherwise block the script for ever,
+# and this file is what users copy as a starting point
+TIMEOUT_SECONDS = 60
+
 BASEURL = "https://fallingstar-data.com/forcedphot"
-# BASEURL = "http://127.0.0.1:8000"
 
 if os.environ.get("ATLASFORCED_SECRET_KEY"):
     token = os.environ.get("ATLASFORCED_SECRET_KEY")
@@ -17,7 +20,7 @@ if os.environ.get("ATLASFORCED_SECRET_KEY"):
 else:
     data = {"username": "USERNAME", "password": "PASSWORD"}
 
-    resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data)
+    resp = requests.post(url=f"{BASEURL}/api-token-auth/", data=data, timeout=TIMEOUT_SECONDS)
 
     if resp.status_code == 200:
         token = resp.json()["token"]
@@ -35,9 +38,13 @@ headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
 task_url = None
 while not task_url:
     with requests.Session() as s:
-        # alternative to token auth
-        # s.auth = ('USERNAME', 'PASSWORD')
-        resp = s.post(f"{BASEURL}/queue/", headers=headers, data={"ra": 110, "dec": 11, "mjd_min": 59248.0})
+        # HTTP basic auth works too, by setting s.auth to a (username, password) pair
+        resp = s.post(
+            f"{BASEURL}/queue/",
+            headers=headers,
+            data={"ra": 110, "dec": 11, "mjd_min": 59248.0},
+            timeout=TIMEOUT_SECONDS,
+        )
 
         if resp.status_code == 201:  # successfully queued
             task_url = resp.json()["url"]
@@ -65,7 +72,7 @@ result_url = None
 taskstarted_printed = False
 while not result_url:
     with requests.Session() as s:
-        resp = s.get(task_url, headers=headers)
+        resp = s.get(task_url, headers=headers, timeout=TIMEOUT_SECONDS)
 
         if resp.status_code == 200:  # HTTP OK
             if resp.json()["finishtimestamp"]:
@@ -89,11 +96,23 @@ while not result_url:
             sys.exit()
 
 with requests.Session() as s:
-    textdata = s.get(result_url, headers=headers).text
+    result = s.get(result_url, headers=headers, timeout=TIMEOUT_SECONDS)
+    # checked before the file is written, and before the task is deleted below: a transient error
+    # still has a body, which would otherwise be saved as the result and the only server-side copy
+    # then thrown away
+    result.raise_for_status()
+    textdata = result.text
 
-    # if we'll be making a lot of requests, keep the web queue from being
-    # cluttered (and reduce server storage usage) by sending a delete operation
-    # s.delete(task_url, headers=headers).json()
+    filename = f"result_{resp.json()['id']}.txt"
+    # save the data file to disk with a file containing the task id
+    with Path(filename).open("w", encoding="utf-8") as f:
+        f.write(textdata)
 
-dfresult = pd.read_csv(StringIO(textdata), sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
-print(dfresult)
+    # delete the task from the server, now that its results are safely on disk. No .json() on the
+    # reply: a successful delete is 204 with an empty body, which is not JSON.
+    deleted = s.delete(task_url, headers=headers, timeout=TIMEOUT_SECONDS)
+    if deleted.status_code != 204:
+        print(f"WARNING: could not delete {task_url}: HTTP {deleted.status_code}")
+
+    dfresult = pd.read_csv(filename, sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
+    print(dfresult)

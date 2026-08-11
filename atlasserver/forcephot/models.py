@@ -1,11 +1,18 @@
 import datetime
 import typing as t
 from pathlib import Path
+from typing import override
 
 from django.conf import settings
+
+# the project uses the default user model, and django-stubs types against the concrete class
+from django.contrib.auth.models import User
 from django.core.cache import caches
 from django.db import models
 from django.db.models import Min
+from django.db.models.functions import Replace
+from django.db.models.functions import Trim
+from django.db.models.lookups import Exact
 from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
@@ -13,13 +20,41 @@ from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 
 
-def get_mjd_min_default():
+def get_mjd_min_default() -> float:
     return round(datetime_to_mjd(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=30)), 5)
 
 
 # marks a memoised value that has not been computed yet. None is a meaningful result for every
 # value memoised below, so it cannot double as the "not computed" marker.
 UNSET: t.Final = object()
+
+# The whitespace a name may be made of and still count as no target. SQL and Python must agree on
+# it exactly -- TRIM() strips only spaces where str.strip() strips much more -- or the constraint
+# accepts a name the runner reads as absent and dispatches by coordinates the constraint let be
+# NULL. Not all of Unicode's whitespace: each character is another nested REPLACE in a stored
+# constraint, and what matters is that both sides derive from this one constant.
+MPC_NAME_WHITESPACE: t.Final = " \t\n\r\v\f\u00a0"
+
+
+def _space_normalised(field: str) -> Trim:
+    """Return the field with MPC_NAME_WHITESPACE collapsed to spaces and then trimmed."""
+    expression: t.Any = field
+    for character in MPC_NAME_WHITESPACE:
+        if character != " ":
+            expression = Replace(expression, models.Value(character), models.Value(" "))
+
+    return Trim(expression)
+
+
+# "the mpc_name column holds no target", for the check constraint below and for the callers that
+# have to draw the same line in a query. Not a bare == "": a name of nothing but whitespace is not
+# a target, but it is truthy, so it satisfied the plain test and then reached the runner, which
+# interpolates it into ssforce.sh.
+#
+# Migration 0006 spells this out again rather than importing it: a migration has to keep working
+# when the model moves on. The two must stay identical in deconstructed form, or makemigrations
+# reads the difference as model drift and asks for another migration.
+BLANK_MPC_NAME = models.Q(Exact(_space_normalised("mpc_name"), models.Value("")))
 
 
 class Task(models.Model):
@@ -54,7 +89,6 @@ class Task(models.Model):
     from_api = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
-    # city = models.CharField(default=None, null=True, blank=True, max_length=256)
     error_msg = models.CharField(
         null=True, blank=True, default=None, max_length=512, verbose_name="Error messages during execution"
     )
@@ -82,7 +116,8 @@ class Task(models.Model):
     parent_task = models.ForeignKey(
         "self",
         related_name="imagerequest",
-        # on_delete=models.SET_NULL,
+        # CASCADE rather than SET_NULL: an image request has no meaning without the task whose
+        # results it was made from, so it goes when that goes
         on_delete=models.CASCADE,
         null=True,
         default=None,
@@ -102,6 +137,30 @@ class Task(models.Model):
     _imagerequest_cache: t.Any = UNSET
 
     class Meta:
+        constraints = [
+            # Exactly one of the two forms: an MPC name with no coordinates, or both coordinates
+            # with no name. The serializer applies the same rule, but was the only thing that did,
+            # so the admin and the shell could create a task the runner would dispatch for nothing.
+            # NULL rather than falsiness, because RA 0 / Dec 0 are real coordinates.
+            models.CheckConstraint(
+                condition=(
+                    (models.Q(mpc_name__isnull=False) & ~BLANK_MPC_NAME & models.Q(ra__isnull=True, dec__isnull=True))
+                    | (
+                        (models.Q(mpc_name__isnull=True) | BLANK_MPC_NAME)
+                        & models.Q(ra__isnull=False, dec__isnull=False)
+                    )
+                ),
+                name="task_target_is_mpcname_or_radec",
+            ),
+            # And mpc_name is never whitespace alone: NULL, "" or a real name. save() normalises,
+            # but bulk_create, bulk_update and update() do not go through it, so the guarantee has
+            # to live here. It is what lets every reader test the field for truth rather than
+            # re-deriving what counts as blank -- which five of them were doing.
+            models.CheckConstraint(
+                condition=models.Q(mpc_name__isnull=True) | models.Q(mpc_name="") | ~BLANK_MPC_NAME,
+                name="task_mpc_name_not_blank",
+            ),
+        ]
         indexes = [
             # the task list: filter on (is_archived, user), order by (-timestamp, -id)
             models.Index(fields=["is_archived", "user", "-timestamp", "-id"], name="task_userlist_idx"),
@@ -149,6 +208,21 @@ class Task(models.Model):
         strtask += f" queuedtasks_on_submit: {self.userqueuedtasks_on_submit}"
 
         return strtask
+
+    @override
+    def save(self, *args: t.Any, **kwargs: t.Any) -> None:
+        """Normalise mpc_name, then save as usual.
+
+        Whitespace around a name is not part of it, and a name of nothing but whitespace is not a
+        name -- the check constraint refuses to store one. Doing it here means readers can test the
+        field for truth: it is falsy exactly when the task has no MPC target.
+
+        MPC_NAME_WHITESPACE rather than str.strip(), so this and the constraint agree on the set.
+        """
+        if self.mpc_name is not None:
+            self.mpc_name = self.mpc_name.strip(MPC_NAME_WHITESPACE)
+
+        super().save(*args, **kwargs)
 
     def localresultfileprefix(self, use_parent: bool = False) -> str:
         """Return the relative path prefix for the job (no file extension)."""
@@ -222,15 +296,26 @@ class Task(models.Model):
 
     @property
     def imagerequest_task_id(self) -> int | None:
-        """Return the task id of the image request task associated with this forced photometry task if it exists, otherwise None."""
+        """Return the image request task id associated with this forced photometry task, or None."""
         imagerequest = self._imagerequest_task()
         return imagerequest.id if imagerequest is not None else None
 
     @property
     def imagerequest_finished(self) -> bool | None:
-        """Return whether the image request task associated with this forced photometry task has finished, otherwise None."""
+        """Return whether this task's image request has finished, or None if it has none."""
         imagerequest = self._imagerequest_task()
         return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
+
+    @staticmethod
+    def queued() -> "models.QuerySet[Task]":
+        """Return the tasks that are waiting or running: everything the queue positions cover.
+
+        One definition, because both ends of the range are read together -- Task.queuepos subtracts
+        the minimum while forcephot.queue assigns from the maximum -- and the task runner scans the
+        same set. Changing what counts as queued in one place only would give a submitted task a
+        position measured against a differently scoped baseline.
+        """
+        return Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
 
     @staticmethod
     def min_queuepos_relative() -> int:
@@ -242,9 +327,7 @@ class Task(models.Model):
         This does not depend on any particular task, so a caller serialising many tasks should call
         it once rather than once per task (see ForcePhotTaskSerializer.min_queuepos_relative).
         """
-        minqueuepos = Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).aggregate(
-            Min("queuepos_relative")
-        )["queuepos_relative__min"]
+        minqueuepos = Task.queued().aggregate(Min("queuepos_relative"))["queuepos_relative__min"]
 
         return 0 if minqueuepos is None else int(minqueuepos)
 
@@ -277,7 +360,7 @@ class Task(models.Model):
         return self.user.username
 
     @staticmethod
-    def prefetch_imagerequests() -> models.Prefetch:
+    def prefetch_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
         """Return the prefetch that lets _imagerequest_task() answer without a query per task."""
         return models.Prefetch(
             "imagerequest",
@@ -285,7 +368,7 @@ class Task(models.Model):
             to_attr="live_imagerequests",
         )
 
-    def new_imagerequest(self, user) -> "Task":
+    def new_imagerequest(self, user: User) -> "Task":
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
 
         Here rather than in the view, so that the decision of which fields a child inherits sits
@@ -358,7 +441,11 @@ class Task(models.Model):
         """Drop the cached plot data generated from this task's result file."""
         caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
 
-    def delete(self, using: t.Any | None = None, keep_parents: bool = False):
+    # returns None rather than Model.delete's (count, per-type counts): a finished task is archived
+    # instead of deleted, so there is no honest count to report for that branch
+    def delete(  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        self, using: str | None = None, keep_parents: bool = False
+    ) -> None:
         # cleanup associated files when removing a task object from the database
         self.delete_result_files()
 
@@ -370,3 +457,27 @@ class Task(models.Model):
             self.forget_derived_cache()
         else:
             super().delete(using=using, keep_parents=keep_parents)
+
+
+class PendingEmailVerification(models.Model):
+    """Marks an account that registered and has not yet proved its address.
+
+    This exists because "inactive" alone cannot say why. Unchecking is_active is equally how an
+    administrator disables an account -- Django's own help text recommends it in place of deleting
+    -- so a resend path that treats every inactive account as unverified hands a disabled one a way
+    back in. The previous answer inferred the difference from a null last_login, which is wrong for
+    any account that was disabled before it ever logged in, or that only ever used an API token.
+
+    A table this project owns, rather than a column on auth_user: the user model is
+    django.contrib.auth's and adding to it means either a custom user model or a sidecar column
+    Django cannot query through. A row here is created with the account and deleted the moment the
+    address is confirmed, so its presence is the whole state -- and existing accounts have no row,
+    which is correct, because none of them came from the verification flow.
+    """
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="pending_verification")
+    created = models.DateTimeField(default=timezone.now)
+
+    def __str__(self) -> str:
+        """Return a description for the admin changelist."""
+        return f"awaiting verification since {self.created:%Y-%m-%d}: {self.user}"

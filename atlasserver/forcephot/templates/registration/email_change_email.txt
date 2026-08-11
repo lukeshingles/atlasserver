@@ -1,0 +1,10 @@
+{% autoescape off %}You're receiving this email because the account "{{ user.get_username }}" at {{ site_name }} asked to change its email address to this one.
+
+Please go to the following page to confirm the change:
+
+{{ confirmation_url }}
+
+Until you do, the account keeps its previous address. If you did not request this, you can ignore this email; nothing has changed, and the link expires.
+
+The {{ site_name }} team
+{% endautoescape %}

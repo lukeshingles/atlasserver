@@ -10,6 +10,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 import platform
 from pathlib import Path
+from typing import cast
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -29,15 +30,11 @@ if not SECRET_KEY:
 
 TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split(",") if x]
 
-# How many reverse proxies in front of this server append to X-Forwarded-For. Zero means the
-# header is ignored entirely, which is right for the current deployment: httpconf.txt sets
-# X-Forwarded-Proto but nothing sets X-Forwarded-For, so every value of it is client-supplied and
-# says only what the client chose to claim. Set this only if a proxy that *overwrites* the header
-# (or appends to a chain it controls) is actually in front, and count the proxies exactly: reading
-# one hop too far left takes the attacker's value again.
-#
-# Validated rather than passed straight to int(), for the same reason as ATLASSERVER_DEBUG below:
-# a typo here is a bare ValueError at import that names no variable, and the site does not start.
+# How many reverse proxies in front of this server append to X-Forwarded-For. Zero ignores the
+# header, which is right for the current deployment: nothing sets it, so any value is whatever the
+# client chose to claim. Set it only for a proxy that overwrites the header, and count the hops
+# exactly -- one too far left reads the attacker's value again. Validated rather than passed to
+# int(), so a typo names the variable instead of failing the whole import with a bare ValueError.
 _proxycount_env = os.environ.get("ATLASSERVER_TRUSTED_PROXY_COUNT", "0").strip() or "0"
 # isdecimal, not isdigit: isdigit also accepts superscripts, and "²" would pass the check and
 # then fail int() with the bare ValueError this exists to replace
@@ -74,6 +71,22 @@ ALLOWED_HOSTS = [
     ).split(",")
     if host.strip()
 ]
+
+# Absolute origin for links in verification and email-change mail. Not the request's Host header:
+# ALLOWED_HOSTS above holds wildcard entries, so any subdomain of qub.ac.uk or
+# fallingstar-data.com passes validation, and whoever can serve one could be sent a victim's token
+# by aiming the Host at their own server. Empty means "use the request", which is what development
+# wants; set it in production.
+_siteorigin = os.environ.get("ATLASSERVER_SITE_ORIGIN", "").strip().rstrip("/")
+if _siteorigin and not _siteorigin.startswith(("http://", "https://")):
+    _msg = f"ATLASSERVER_SITE_ORIGIN must start with http:// or https://, but is {_siteorigin!r}"
+    raise ImproperlyConfigured(_msg)
+if not _siteorigin and not DEBUG:
+    # required rather than optional in production, because the fallback is the exposure: an unset
+    # variable would leave the links built from the Host header and say nothing about it
+    _msg = "ATLASSERVER_SITE_ORIGIN must be set when DEBUG is off (e.g. https://fallingstar-data.com)"
+    raise ImproperlyConfigured(_msg)
+SITE_ORIGIN = _siteorigin
 
 ADMINS = [
     ("Luke Shingles", "luke.shingles@gmail.com"),
@@ -135,6 +148,17 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "usagestats",
     },
+    # Throttle counters, kept out of "default" on purpose. There is one entry per (client, scope)
+    # and they are not expired eagerly, so a few hundred distinct callers exceed the default
+    # MAX_ENTRIES of 300 -- after which every throttled request culls a third of the directory at
+    # random. Sharing that directory with the queue-recalc flag and the PDF render locks meant
+    # ordinary API traffic could evict them. Reads are throttled now, so this is also the hottest
+    # cache on the site: it gets its own directory rather than globbing over everything else's.
+    "throttle": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": filecacheroot / "throttle",
+        "OPTIONS": {"MAX_ENTRIES": 10000},
+    },
 }
 
 ROOT_URLCONF = "atlasserver.urls"
@@ -150,6 +174,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "atlasserver.forcephot.context_processors.static_version",
             ],
         },
     },
@@ -161,13 +186,10 @@ WSGI_APPLICATION = "atlasserver.wsgi.application"
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 DATABASES = {
+    # SQLite is not an alternative here: settings_test swaps the whole DATABASES entry for it, and
+    # migration 0005 writes different DDL per vendor
     "default": {
-        # 'ENGINE': 'django.db.backends.sqlite3',
-        # 'NAME': BASE_DIR / 'db.sqlite3',
         "ENGINE": "django.db.backends.mysql",
-        # 'OPTIONS': {
-        #     # 'read_default_file': '/usr/local/etc/my.cnf',
-        # },
         "NAME": os.environ.get("ATLASSERVER_DJANGO_MYSQL_DBNAME"),
         "USER": os.environ.get("ATLASSERVER_DJANGO_MYSQL_USER"),
         "PASSWORD": os.environ.get("ATLASSERVER_DJANGO_MYSQL_PASSWORD"),
@@ -229,17 +251,37 @@ STATIC_URL = f"{PATHPREFIX}/static/"
 STATIC_ROOT = Path(BASE_DIR, "static")
 RESULTS_DIR = Path(STATIC_ROOT, "results")
 
+
+def _static_version() -> str:
+    """Return a cache-busting suffix that changes whenever a served asset does.
+
+    Appended as ?ver= to the stylesheets and JS bundles, which are served under stable names, so a
+    browser holding an old copy alongside freshly deployed markup would otherwise keep using it.
+    This replaced six hand-edited date strings across two templates.
+
+    Taken from the files rather than from the package version: a deployment here is a git pull and
+    a restart, which need not reinstall the package, and setuptools_scm bakes its version in at
+    install time. The mtimes move whenever a deploy actually replaces an asset, and not otherwise,
+    so every worker computes the same value and a browser keeps its cached copy until it is stale.
+    """
+    # globs rather than a list of names: every hand-written asset served under a stable name lives
+    # at one of these three levels, so adding one does not mean remembering to add it here too
+    assets = [*Path(STATIC_ROOT).glob("*.css"), *Path(STATIC_ROOT, "js").glob("*.js")]
+    assets += list(Path(STATIC_ROOT, "js", "vendor").glob("*.js"))
+
+    mtimes = [path.stat().st_mtime_ns for path in assets if path.is_file()]
+
+    # nanoseconds, not seconds: two deploys landing within the same second would otherwise share
+    # a suffix and leave browsers on the earlier bundle
+    # no assets found means an unbuilt checkout; a constant is fine, there is nothing to bust
+    return str(max(mtimes)) if mtimes else "0"
+
+
+STATIC_VERSION = _static_version()
+
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
 
-# If your Django app is behind a proxy that sets a header to specify secure
-# connections, AND that proxy ensures that user-submitted headers with the
-# same name are ignored (so that people can't spoof it), set this value to
-# a tuple of (header_name, header_value). For any requests that come in with
-# that header/value, request.is_secure() will return True.
-# WARNING! Only set this if you fully understand what you're doing. Otherwise,
-# you may be opening yourself up to a security risk.
-# SECURE_PROXY_SSL_HEADER = ('X-FORWARDED-PROTO', 'https')
 if not DEBUG:
     # httpconf.txt sets this header unconditionally (so a client cannot spoof it). The previous
     # value keyed off SERVER_SOFTWARE, which Apache always populates with its own banner, so
@@ -248,14 +290,10 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 if not DEBUG:
-    # the four warnings that `manage.py check --deploy` raised. Guarded, because development runs
-    # over plain http on localhost and secure-only cookies would never be sent there.
-    #
-    # SECURE_SSL_REDIRECT never fires as things stand: httpconf.txt sets X-Forwarded-Proto to https
-    # unconditionally, so request.is_secure() is always true. It is here as a backstop for a
-    # deployment that stops setting that header, which would otherwise quietly serve plain http.
-    # annotated rather than left to inference: without a declared type these are literal types, and
-    # settings_test.py (which switches them back off, see the note there) would not type check
+    # the four warnings `manage.py check --deploy` raised, guarded because development runs over
+    # plain http and would never send secure-only cookies. SECURE_SSL_REDIRECT never fires today
+    # (httpconf.txt always sets X-Forwarded-Proto) and is a backstop for a deployment that stops.
+    # Annotated because otherwise these infer as literal types and settings_test cannot switch them.
     SECURE_SSL_REDIRECT: bool = True
     SESSION_COOKIE_SECURE: bool = True
     CSRF_COOKIE_SECURE: bool = True
@@ -300,6 +338,11 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "forcephottasks": "60/min",
+        # Reads. Deliberately loose: the queue page polls the task list every 6 seconds, so a user
+        # with several tabs open is legitimately in the tens per minute, and this only has to stop
+        # someone hammering it. Applied to GET/HEAD/OPTIONS, which used to bypass the throttle
+        # entirely -- see forcephot.throttles.
+        "forcephotread": "600/min",
     },
     # the same knob as TRUSTED_PROXY_COUNT above, so the throttle's idea of the client address
     # cannot drift from the GeoIP lookup's. Left unset, DRF's get_ident() trusts the whole
@@ -424,7 +467,7 @@ LOGGING = {
         # where sending failed silently without credentials; with MAILERS the reports would reach
         # the test outbox and real inboxes alike.
         "django.security.DisallowedHost": {
-            "handlers": [],
+            "handlers": cast("list[str]", []),
             "propagate": False,
         },
         "django.server": {

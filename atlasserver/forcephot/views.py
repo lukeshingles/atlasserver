@@ -1,22 +1,25 @@
 """Django views for the forcephot app."""
 
 import datetime
+import functools
+import hashlib
 import ipaddress
 import json
 import logging
-import operator
+import math
+import os
+import statistics
+import time
 import typing as t
+import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from typing import override
 
-import bokeh.layouts
-import bokeh.models
-import bokeh.plotting
-import numpy as np
-from bokeh.embed import components
 from django.conf import settings
-from django.contrib.auth import authenticate
+from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.gis.geoip2 import GeoIP2
@@ -24,20 +27,21 @@ from django.contrib.gis.geoip2 import GeoIP2Exception
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
-
-# from django.contrib.auth.models import User
+from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
 from django.db.models.functions import Trunc
 from django.http import FileResponse
 from django.http import HttpResponse
+from django.http import HttpResponseBadRequest
 from django.http import HttpResponseNotFound
 from django.http import HttpResponseNotModified
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views.decorators.cache import cache_page
+from django.views.decorators.cache import never_cache
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import OpenApiResponse
@@ -50,25 +54,39 @@ from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
+from rest_framework.authtoken.models import Token
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
+from rest_framework.serializers import BaseSerializer
 from rest_framework.utils.urls import replace_query_param
 from rest_framework.views import APIView
 
 from atlasserver.forcephot.filters import TaskFilter
+from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
+from atlasserver.forcephot.forms import ResendVerificationForm
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
+from atlasserver.forcephot.misc import PDF_PLOT_TIMEOUT_SECONDS
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
+from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_address
 from atlasserver.forcephot.pagination import TaskPagination
+from atlasserver.forcephot.queue import next_queuepos_relative
+from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+from atlasserver.forcephot.verification import load_email_change_token
+from atlasserver.forcephot.verification import send_email_change_confirmation
+from atlasserver.forcephot.verification import send_verification_email
+from atlasserver.forcephot.verification import token_generator as verification_token_generator
+from atlasserver.forcephot.verification import user_from_uidb64
 
 # not atlasserver.taskrunner.main: importing that module runs django.setup() and pulls pandas and
 # multiprocessing into every web worker, permanently, to read two constants
@@ -77,98 +95,63 @@ from atlasserver.taskrunner import status as runnerstatus
 MAX_USER_IMGZIP_TASKS = 5
 MAX_USER_TASKS = 500
 
+# Shortest gap between two verification emails to the same address, see resend_verification.
+RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
+
+# The same, for the address-change confirmations one account can ask for. See change_email.
+EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
+
+# None of the limiters below is a mutual exclusion. The production cache is file-based, where
+# add() is has_key() followed by set() and a read-modify-write is not atomic either, so two
+# simultaneous callers can both be admitted. They bound a sustained flood; all three are sized so.
+
+# Registrations allowed from one client address per window. A budget rather than a single slot,
+# because this service's users arrive from universities behind shared addresses and two colleagues
+# signing up together is ordinary; what it has to stop is a loop. See register.
+REGISTRATION_WINDOW_SECONDS: t.Final = 600
+REGISTRATION_WINDOW_LIMIT: t.Final = 3
+
 logger = logging.getLogger(__name__)
 
 
-def calculate_queue_positions() -> None:
-    """Calculate and assign the queue positions (determining the order of execution in the task runner) for all queued tasks."""
-    with transaction.atomic():
-        # Lock the queued rows and read them once. Without the lock, two concurrent
-        # recalculations can each renumber from a snapshot that is missing the other's changes
-        # and end up assigning duplicate queue positions.
-        queuedtasks = list(
-            Task.objects.select_for_update()
-            .filter(finishtimestamp__isnull=True, is_archived=False)
-            .order_by("user_id", "timestamp", "id")
-        )
+def entity_tag(*parts: object) -> str:
+    """Return the parts as one strong entity-tag, valid whatever they contain.
 
-        # to get position in current pass, check if job currently running (the one started last).
-        # attrgetter rather than a lambda: the generator's None filter cannot narrow the
-        # attribute type inside a lambda, so a lambda key would not type check
-        runningtask = max(
-            (tsk for tsk in queuedtasks if tsk.starttimestamp is not None),
-            key=operator.attrgetter("starttimestamp"),
-            default=None,
-        )
-        runningtaskid = runningtask.id if runningtask is not None else None
-        runningtask_userid = runningtask.user_id if runningtask is not None else None
+    RFC 7232 allows only %x21 and %x23-7E between the quotes, so an entity-tag may hold neither a
+    space nor a double quote -- and the parts handed to this hold both. str() of a datetime is
+    "2026-08-11 12:34:56+00:00", and one caller mixes in request.get_full_path(), which is whatever
+    the client asked for. An intermediary is entitled to drop a malformed header, which would cost
+    the revalidation these exist for.
 
-        queuedtaskcount = len(queuedtasks)
+    Hashed rather than escaped, because that also bounds the header: the task list's tag grew with
+    the query string, and nothing reads the parts back out -- an entity-tag is compared, not parsed.
+    """
+    # \x1f between them, so that ("a", "bc") and ("ab", "c") cannot produce the same tag
+    joined = "\x1f".join(str(part) for part in parts)
 
-        unassigned_taskids = [t.id for t in queuedtasks]
-        unassigned_task_userids = [t.user_id for t in queuedtasks]
+    return f'"{hashlib.blake2b(joined.encode(), digest_size=16).hexdigest()}"'
 
-        # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
-        queuepos: int = 0
-        passnum: int = 0
-        # collected and written in one statement at the end: issuing an UPDATE per task meant a
-        # round trip per task while holding a lock on every queued row, so a deep queue made every
-        # submission slow and serialised concurrent submitters behind it
-        queuepos_updates: dict[int, int] = {}
-        while unassigned_taskids:
-            useridsassigned_currentpass = set()
 
-            if passnum == 0 and runningtaskid is not None:
-                # currently running task will be assigned position 0
-                try:
-                    index = unassigned_taskids.index(runningtaskid)
-                    unassigned_taskids.pop(index)
-                    unassigned_task_userids.pop(index)
-                    useridsassigned_currentpass.add(runningtask_userid)
-                    queuepos_updates[runningtaskid] = 0
-                    queuepos = 1
-                except ValueError:  # the task disappeared between the two queries?
-                    runningtaskid = None
+def no_referrer(view):
+    """Serve every response of a view with Referrer-Policy: no-referrer.
 
-            # collect the tasks not assigned in this pass rather than popping from
-            # the lists during iteration (which would skip elements)
-            remaining_taskids: list[int] = []
-            remaining_task_userids: list[int] = []
-            for taskid, task_userid in zip(unassigned_taskids, unassigned_task_userids, strict=True):
-                if task_userid not in useridsassigned_currentpass and (
-                    passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
-                ):
-                    queuepos_updates[taskid] = queuepos
-                    useridsassigned_currentpass.add(task_userid)
-                    queuepos += 1
-                else:
-                    remaining_taskids.append(taskid)
-                    remaining_task_userids.append(task_userid)
+    For the pages whose own URL carries a token. Those pages already opt out of analytics, which
+    stops the token being reported for the page itself, but they still carry the site's navigation:
+    following any of it sends the token-bearing URL as the Referer under the default same-origin
+    policy, and the destination page does run analytics, where document.referrer would hand the
+    token to a third party who could then replay it.
 
-            unassigned_taskids = remaining_taskids
-            unassigned_task_userids = remaining_task_userids
+    Applied to the view rather than to the pages it renders, so that it covers the invalid-link and
+    success responses too -- the token is in the URL whatever the answer turns out to be.
+    """
 
-            # bail out rather than spin forever if a pass somehow assigns nothing. Not an assert:
-            # those are stripped under python -O, which is exactly when a hung request would be
-            # hardest to explain
-            if passnum >= (2 * queuedtaskcount + 1):
-                msg = f"queue position assignment made no progress after {passnum} passes over {queuedtaskcount} tasks"
-                raise RuntimeError(msg)
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        response["Referrer-Policy"] = "no-referrer"
+        return response
 
-            passnum += 1
-
-        if queuepos_updates:
-            # task_modified_datetime is written explicitly: it is an auto_now field, and auto_now
-            # is applied by Model.save(), not by a bulk write. Without it a reordering would be
-            # invisible to get_tasklist_etag() and a user could be served a stale queue position.
-            now = datetime.datetime.now(datetime.UTC)
-            Task.objects.bulk_update(
-                [
-                    Task(id=taskid, queuepos_relative=newpos, task_modified_datetime=now)
-                    for taskid, newpos in queuepos_updates.items()
-                ],
-                ["queuepos_relative", "task_modified_datetime"],
-            )
+    return wrapper
 
 
 def get_tasklist_etag(request, user_id: int) -> str:
@@ -196,13 +179,17 @@ def get_tasklist_etag(request, user_id: int) -> str:
         Max("task_modified_datetime"),
     )
 
-    return (
-        f'"{request.accepted_renderer.format}.user{user_id}.path{request.get_full_path()}'
-        f".count{usertasks['id__count']}.lastqueue{usertasks['timestamp__max']}"
-        f".laststart{usertasks['starttimestamp__max']}.lastfinish{usertasks['finishtimestamp__max']}"
-        f".lastmod{usertasks['task_modified_datetime__max']}"
+    return entity_tag(
+        request.accepted_renderer.format,
+        user_id,
+        request.get_full_path(),
+        usertasks["id__count"],
+        usertasks["timestamp__max"],
+        usertasks["starttimestamp__max"],
+        usertasks["finishtimestamp__max"],
+        usertasks["task_modified_datetime__max"],
         # the queue position rendered for a task is relative to the front of the global queue
-        f'.queueoffset{Task.min_queuepos_relative()}"'
+        Task.min_queuepos_relative(),
     )
 
 
@@ -340,9 +327,11 @@ class ForcePhotPermission(permissions.BasePermission):
 
     message = "You must be the owner of this object."
 
+    @override
     def has_permission(self, request, view) -> bool:
         return bool(request.method in permissions.SAFE_METHODS or request.user.is_authenticated)
 
+    @override
     def has_object_permission(self, request, view, obj) -> bool:
         # Reading a task is public, including to anonymous callers, and is meant to be: a task and
         # the results it produced describe measurements from a public survey, so a link to one can
@@ -355,11 +344,16 @@ class ForcePhotPermission(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        # staff and instance owner have all permissions
+        # staff and instance owner have all permissions.
+        #
+        # pyrefly: ignore [missing-attribute]
+        # is_staff is on the concrete User, and django-stubs types request.user as
+        # AbstractBaseUser because AUTH_USER_MODEL is swappable in principle. It is not swapped
+        # here -- verification.py carries the same note where the checkers disagree about it.
         return request.user.is_staff or obj.user_id == request.user.id
 
 
-class ForcePhotTaskViewSet(viewsets.ModelViewSet):
+class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
     """API endpoint that allows force.sh tasks to be created and deleted."""
 
     # the prefetch feeds Task._imagerequest_task(), so serialising a page of tasks costs one query
@@ -371,17 +365,16 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         .prefetch_related(Task.prefetch_imagerequests())
     )
     serializer_class = ForcePhotTaskSerializer
-    # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
     throttle_scope = "forcephottasks"
     ordering_fields = ["timestamp", "id"]
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     filterset_class = TaskFilter
     ordering = "-id"
-    # filterset_fields = ['finishtimestamp']
     template_name = "tasklist-react.html"
 
-    def create(self, request, *args, **kwargs) -> Response:
+    @override
+    def create(self, request: Request, *args: t.Any, **kwargs: t.Any) -> Response:
         """Create new tasks if the user is authenticated and the request is valid."""
         if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
@@ -413,7 +406,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def perform_create(self, serializer) -> None:
+    @override
+    def perform_create(self, serializer: BaseSerializer[Task]) -> None:
         """Create new task(s)."""
         usertaskcount_before = (
             Task.objects.filter(
@@ -437,39 +431,61 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         # take the ids from the saved objects rather than serializer.data: accessing .data here
         # would cache the response body before the updates below have been applied
-        newtasks = serializer.instance if isinstance(serializer.instance, list) else [serializer.instance]
+        # save() above populated this, so it is not None; many=True makes it a list. Narrowed
+        # rather than assumed, because everything below indexes into it.
+        created = serializer.instance
+        newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
+
+        # Provisional positions at the back of the queue. The real ordering is round-robin across
+        # users and is assigned by the task runner; this only stops a task submitted between two
+        # renumberings from showing no position at all, and costs one aggregate for the whole batch.
+        nextqueuepos = next_queuepos_relative()
 
         # one statement rather than an UPDATE per task: a radeclist can hold 100 targets, and that
         # was 100 round trips inside the request that the user is waiting on
         Task.objects.bulk_update(
-            [Task(id=task.id, userqueuedtasks_on_submit=usertaskcount_before + i) for i, task in enumerate(newtasks)],
-            ["userqueuedtasks_on_submit"],
+            [
+                Task(
+                    id=task.id,
+                    userqueuedtasks_on_submit=usertaskcount_before + i,
+                    queuepos_relative=nextqueuepos + i,
+                )
+                for i, task in enumerate(newtasks)
+            ],
+            ["userqueuedtasks_on_submit", "queuepos_relative"],
         )
 
-        calculate_queue_positions()
+        request_queue_recalc()
 
         # the updates above went straight to the database, so reload the in-memory objects that
         # will be serialised into the response
         for task in newtasks:
             task.refresh_from_db()
 
-    def perform_update(self, serializer) -> None:
+    @override
+    def perform_update(self, serializer: BaseSerializer[Task]) -> None:
         """Update a task."""
         # don't pass user=request.user here: a staff user editing someone else's task would
         # otherwise take ownership of it
         serializer.save()
 
-    def perform_destroy(self, instance) -> None:
+    @override
+    def perform_destroy(self, instance: Task) -> None:
         """Delete a task, and if the task is queued (not finished), then update queue positions."""
         update_queue_positions = not instance.finishtimestamp
         instance.delete()
         if update_queue_positions:
-            calculate_queue_positions()
+            request_queue_recalc()
 
-    def list(self, request, *args, **kwargs):
+    @override
+    # pyrefly: ignore [bad-override]
+    # returns HttpResponseNotModified/NotFound as well as Response, which the
+    # base's annotation does not allow but DRF supports: finalize_response passes
+    # anything that is not a Response straight through.
+    def list(self, request: Request, *args: t.Any, **kwargs: t.Any):
         """List tasks belonging to the current user."""
         if request.user.is_authenticated:
-            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user_id=request.user))
+            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user=request.user))
         else:
             listqueryset = Task.objects.none()
             raise PermissionDenied
@@ -478,7 +494,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
             return Response(
                 template_name=self.template_name,
                 data={
-                    # 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                     "name": "Task Queue",
                     "singletaskdetail": False,
                     "paginator": self.paginator,
@@ -489,18 +504,20 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         # answer a conditional request before paginating: an unchanged page then costs one
         # aggregate instead of a count, a page fetch, a prefetch and a full serialisation.
-        # request.user.pk is not None here: the anonymous case raised PermissionDenied above
-        etag = get_tasklist_etag(request, request.user.pk)
+        # the anonymous case raised PermissionDenied above, so this is set -- stated as a check
+        # rather than a comment, because get_tasklist_etag would otherwise take an Optional
+        userpk = request.user.pk
+        if userpk is None:
+            raise PermissionDenied
+
+        etag = get_tasklist_etag(request, userpk)
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
         page = self.paginate_queryset(listqueryset)
 
         if page is not None:
-            # if request.GET.get('cursor') and page[0].id == listqueryset[0].id:
-            #     return redirect(remove_query_param(request.get_full_path(), 'cursor'))
             serializer = self.get_serializer(page, many=True)
-            # return self.get_paginated_response(serializer.data)
             paginator = self.paginator
             if not isinstance(paginator, TaskPagination):
                 msg = f"expected TaskPagination, got {type(paginator).__name__}"
@@ -509,22 +526,20 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(listqueryset, many=True).data)
 
-    def retrieve(self, request, *args, **kwargs):
+    @override
+    # pyrefly: ignore [bad-override]
+    # returns HttpResponseNotModified/NotFound as well as Response, which the
+    # base's annotation does not allow but DRF supports: finalize_response passes
+    # anything that is not a Response straight through.
+    def retrieve(self, request: Request, *args: t.Any, **kwargs: t.Any):
         instance = self.get_object()
         if instance.is_archived:
             return HttpResponseNotFound("Page not found")
 
         if request.accepted_renderer.format == "html":
-            # return redirect('/')
-            # queryset = self.filter_queryset(self.get_queryset())
-            # serializer = self.get_serializer(queryset, many=True)
-
-            # tasks = [instance]
-            # form = TaskForm()
             return Response(
                 template_name=self.template_name,
                 data={
-                    # 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                     # self.get_object() again here would repeat the lookup query
                     "name": f"Task {instance.id}",
                     "singletaskdetail": True,
@@ -542,7 +557,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet):
 
 
 class RequestImages(APIView):
-    # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
 
     # this view takes no request body and redirects on success, so the schema generator cannot
@@ -581,7 +595,10 @@ class RequestImages(APIView):
                 user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
             ).count()
             if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
-                msg = f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS}). Delete some before making new requests."
+                msg = (
+                    f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
+                    " Delete some before making new requests."
+                )
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
@@ -589,8 +606,9 @@ class RequestImages(APIView):
             newtask = parent_task.new_imagerequest(user=request.user)
             for field, value in client_location_fields(self.request).items():
                 setattr(newtask, field, value)
+            newtask.queuepos_relative = next_queuepos_relative()
             newtask.save()
-            calculate_queue_positions()
+            request_queue_recalc()
 
             redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
 
@@ -599,6 +617,13 @@ class RequestImages(APIView):
 
 @cache_page(60 * 60 * 24, cache="usagestats")
 def statscoordchart(request):
+    # deferred for the same reason as atlasserver.taskrunner.main above: bokeh pulls in numpy and a
+    # good deal else, and a module-scope import puts all of it permanently in every web worker to
+    # serve this endpoint and statsusagechart, both of which are cached for a day
+    import bokeh.models
+    import bokeh.plotting
+    from bokeh.embed import components
+
     tasks = list(Task.objects.all().order_by("-timestamp")[:20000].select_related("user"))
 
     dictsource: dict[str, Any] = {
@@ -611,7 +636,6 @@ def statscoordchart(request):
 
     plot = bokeh.plotting.figure(
         tools="pan,wheel_zoom,box_zoom,reset",
-        # match_aspect=True,
         aspect_ratio=2,
         background_fill_color="#040154",
         active_scroll="wheel_zoom",
@@ -620,7 +644,6 @@ def statscoordchart(request):
         y_axis_label="Declination (deg)",
         x_range=bokeh.models.Range1d(start=0, end=360),
         y_range=bokeh.models.Range1d(start=-90.0, end=90.0),
-        # frame_width=600,
         sizing_mode="stretch_both",
         output_backend="webgl",
     )
@@ -650,6 +673,12 @@ def statscoordchart(request):
 # table for practically every visitor.
 @cache_page(60 * 15, cache="usagestats")
 def statsusagechart(request):
+    # deferred: see statscoordchart
+    import bokeh.layouts
+    import bokeh.models
+    import bokeh.plotting
+    from bokeh.embed import components
+
     days_back = 14
 
     def get_days_ago_counts(tasks) -> list[float]:
@@ -817,15 +846,17 @@ def statsshortterm(request):
     }
     dictparams["sevendaytaskrate"] = "{:.1f}/day".format(dictparams["sevendaytasks"] / 7.0)
 
-    dictparams["sevendaympctasks"] = int(sevendaytasks.filter(mpc_name__isnull=False).count())
+    # excluding "" as well as NULL: both mean no MPC target, and task_mpc_name_not_blank keeps
+    # anything else that would have meant it out of the column
+    dictparams["sevendaympctasks"] = int(sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count())
     dictparams["sevendayimgtasks"] = int(sevendaytasks.filter(request_type="IMGZIP").count())
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
     def mean_seconds_str(values: list[float]) -> str:
         """Format the mean of a list of second counts, ignoring NaNs and empty lists."""
-        finitevalues = [value for value in values if np.isfinite(value)]
-        return f"{np.mean(finitevalues):.1f}s" if finitevalues else "-"
+        finitevalues = [value for value in values if math.isfinite(value)]
+        return f"{statistics.fmean(finitevalues):.1f}s" if finitevalues else "-"
 
     if sevendaytasks_finished.count() > 0:
         dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
@@ -836,10 +867,10 @@ def statsshortterm(request):
         )
 
         sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
-        sevenday_finite_runtimes = [runtime for runtime in sevenday_runtimes if np.isfinite(runtime)]
+        sevenday_finite_runtimes = [runtime for runtime in sevenday_runtimes if math.isfinite(runtime)]
         dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
         num_job_processors = 16
-        sevenday_mean_runtime = np.mean(sevenday_finite_runtimes) if sevenday_finite_runtimes else 0.0
+        sevenday_mean_runtime = statistics.fmean(sevenday_finite_runtimes) if sevenday_finite_runtimes else 0.0
         dictparams["sevendayloadpercent"] = (
             f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
         )
@@ -910,10 +941,49 @@ def taskrunnerstatus(request):
     )
 
 
+@functools.cache
+def bokeh_cdn_scripts() -> tuple[dict[str, str], ...]:
+    """Return the BokehJS CDN URLs to load on the stats page, each with its integrity hash.
+
+    Cached: the answer depends only on the installed bokeh, but get_sri_hashes_for_version reads
+    and parses a JSON file from site-packages on every call, and the stats page is not cached.
+
+    Both come from the installed bokeh package. The template used to hardcode the version in the
+    URL, which had to be kept in step with the pin in pyproject.toml by hand: the charts are built
+    server-side by that package and rendered by this script, so a mismatch breaks the page. Taking
+    the version from bokeh itself means the pin is the only place it is written.
+
+    bokeh ships the hashes for its own release (verified against the files served by the CDN), so
+    the integrity attribute costs nothing to keep correct across upgrades -- unlike a hash pasted
+    into the template, which an upgrade would silently invalidate.
+    """
+    from bokeh import __version__ as bokeh_version
+    from bokeh.resources import get_sri_hashes_for_version
+
+    hashes = get_sri_hashes_for_version(bokeh_version)
+
+    scripts = []
+    for component in ("bokeh", "bokeh-widgets"):
+        filename = f"{component}-{bokeh_version}.min.js"
+        scripts.append(
+            {
+                "src": f"https://cdn.pydata.org/bokeh/release/{filename}",
+                # a release that bokeh has no hash for would otherwise render integrity="", which
+                # browsers treat as no integrity at all rather than as a failure
+                "integrity": f"sha384-{hashes[filename]}",
+            }
+        )
+
+    # a tuple, not the list: functools.cache hands the same object to every request for the life of
+    # the worker, so a mutable one is a shared object waiting for someone to append to it
+    return tuple(scripts)
+
+
 def stats(request):
     dictparams = {
         "name": "Usage Statistics",
         "queuedtaskcount": Task.objects.filter(finishtimestamp__isnull=True).count(),
+        "bokehscripts": bokeh_cdn_scripts(),
     }
 
     lastfinishedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last()
@@ -929,12 +999,92 @@ def register(request):
     if request.method == "POST":
         form = RegistrationForm(request.POST)
         if form.is_valid():
-            form.save()
-            username = form.cleaned_data.get("username")
-            raw_password = form.cleaned_data.get("password1")
-            user = authenticate(username=username, password=raw_password)
-            login(request, user)
-            return redirect(reverse("task-list"))
+            # Bounded per client address: every valid submission sends mail synchronously, so a
+            # loop of distinct addresses is an open relay as far as the SMTP quota is concerned,
+            # and plus-addressing aims them all at one inbox without tripping the unique index.
+            # The window start is stored with the count so that it stays fixed. incr() cannot be
+            # used: it rewrites the value with the cache's *default* timeout rather than the
+            # remaining one, which both shortened the window and restarted it on every attempt --
+            # so a client that kept trying kept renewing its own block indefinitely.
+            clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
+            throttlecache = caches["throttle"]
+            # time.time(), not monotonic(): this value is written to a file-based cache that
+            # outlives the process and the host, and monotonic() is measured from an epoch that
+            # does not survive a reboot -- a stored value from the previous boot reads as being in
+            # the future here.
+            #
+            # An elapsed time outside the window is therefore treated as no window at all, which
+            # covers an expiry, a clock stepped by NTP, and any stale epoch. Without that the
+            # arithmetic below could compute a timeout of the machine's former uptime and lock a
+            # shared address out for weeks.
+            now = time.time()
+            window = throttlecache.get(clientkey)
+            elapsed = now - window[1] if window is not None else None
+
+            if elapsed is None or not (0 <= elapsed < REGISTRATION_WINDOW_SECONDS):
+                registrations, started = 1, now
+            else:
+                registrations, started = window[0] + 1, window[1]
+
+            throttlecache.set(
+                clientkey, (registrations, started), timeout=REGISTRATION_WINDOW_SECONDS - (now - started)
+            )
+
+            if registrations > REGISTRATION_WINDOW_LIMIT:
+                form.add_error(
+                    None,
+                    "Several accounts have just been registered from this address. Please wait a "
+                    "few minutes before registering another.",
+                )
+                return render(request, "registration/register.html", {"form": form, "name": "Register"})
+
+            # Account and send in one transaction: a row created without its link is worse than
+            # none, because it holds the username and address while being unable to log in, verify
+            # (nothing was sent) or recover (password reset skips inactive users).
+            try:
+                with transaction.atomic():
+                    user = form.save(commit=False)
+                    user.is_active = False
+                    user.save()
+
+                    # in the same transaction as the account: the marker is what later tells this
+                    # inactive row apart from one an administrator switched off, so an account
+                    # without it would be unable to verify and unable to be recovered
+                    PendingEmailVerification.objects.create(user=user)
+
+                    send_verification_email(request, user)
+            except IntegrityError:
+                # Separate from the send failure below, whose "try again shortly" is a dead end
+                # here: username and address are both checked before this save and either can be
+                # taken in between. Which one is asked rather than read off the exception, whose
+                # text varies by backend -- naming the wrong field is what this exists to stop.
+                username = form.cleaned_data.get("username")
+                email = form.cleaned_data.get("email")
+
+                if username and get_user_model().objects.filter(username=username).exists():
+                    logger.info("registration lost the race for a username")
+                    form.add_error("username", "An account with this username already exists.")
+                elif email and email_is_taken(email):
+                    logger.info("registration lost the race for an email address")
+                    form.add_error("email", "An account with this email address already exists.")
+                else:
+                    # neither is taken now, so the collision was with a row that has since gone,
+                    # or with something this does not model. Retrying is genuinely the right advice
+                    logger.exception("registration failed on an integrity error it could not attribute")
+                    form.add_error(None, "We could not create your account just now. Please try again.")
+            except Exception:
+                logger.exception("Could not send the verification email for a new registration")
+                form.add_error(
+                    None,
+                    "We could not send the verification email just now, so your account has not "
+                    "been created. Please try again in a few minutes.",
+                )
+            else:
+                return render(
+                    request,
+                    "registration/verification_sent.html",
+                    {"name": "Check your email", "email": user.email},
+                )
     else:
         form = RegistrationForm()
 
@@ -943,22 +1093,318 @@ def register(request):
     return render(request, "registration/register.html", {"form": form, "name": "Register"})
 
 
+def awaiting_verification(user) -> bool:
+    """Whether this inactive account is one that registered and has not confirmed its address.
+
+    Asked of the PendingEmailVerification row rather than inferred. is_active alone cannot answer
+    it -- unchecking that is equally how an administrator disables an account -- and the previous
+    answer, "has never logged in", is wrong for an account disabled before its first login, or one
+    that only ever used an API token.
+    """
+    return not user.is_active and PendingEmailVerification.objects.filter(user=user).exists()
+
+
+def unverified_account_for(email: str):
+    """Return the account awaiting verification at this address, or None."""
+    return (
+        # the queryset spelling of awaiting_verification()
+        get_user_model()
+        .objects.filter(email__iexact=email, is_active=False, pending_verification__isnull=False)
+        .order_by("pk")
+        .first()
+    )
+
+
+@no_referrer
+def verify_email(request, uidb64: str, token: str):
+    """Activate an account from the link in its verification email, once its owner confirms.
+
+    The link is not self-acting. Mail security gateways, link scanners and some clients fetch every
+    URL in an incoming message, so anything a GET here performs is performed by that machinery
+    rather than by the recipient -- and this endpoint decides whether someone owns an address and
+    then logs the caller in. Registering with a victim's address and letting their own gateway
+    follow the link would otherwise hand the attacker a verified, active account.
+    """
+    user = user_from_uidb64(uidb64)
+
+    # the same test the resend path applies, repeated here so that the rule guards the flag itself
+    # rather than only the one door that hands out links
+    if user is None or not awaiting_verification(user) or not verification_token_generator.check_token(user, token):
+        # deliberately the same page for an unknown id, a bad token and an expired one: which of
+        # those it was is not something the person following the link can act on differently, and
+        # distinguishing them tells an attacker which user ids exist
+        return render(
+            request,
+            "registration/verification_invalid.html",
+            {"name": "Verification link is not valid"},
+            status=400,
+        )
+
+    if request.method != "POST":
+        return render(
+            request,
+            "registration/verify_email_confirm.html",
+            {"name": "Confirm your email address", "email": user.email},
+        )
+
+    # The checks above are repeated here against a locked row, because on their own they only make
+    # the link single-use in sequence. What retires the token is the write -- the hash covers
+    # is_active -- so two POSTs carrying the same link can both pass the checks before either
+    # activates, and both reach login(). That is the case where someone else has a copy of the
+    # link: a burst of parallel requests would keep them a session that the first use was supposed
+    # to have closed off.
+    with transaction.atomic():
+        # t.Any for the reason verification.py spells out: the type checkers disagree about whether
+        # get_user_model() yields the concrete User or AbstractBaseUser, and only one of them
+        # believes it has is_active and email
+        locked: t.Any = get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+        consumed = (
+            locked is not None
+            and awaiting_verification(locked)
+            and verification_token_generator.check_token(locked, token)
+        )
+
+        if consumed:
+            locked.is_active = True
+            locked.save(update_fields=["is_active"])
+
+            # the address is proved, so the account is an ordinary one from here on
+            PendingEmailVerification.objects.filter(user=locked).delete()
+
+    if not consumed:
+        return render(
+            request,
+            "registration/verification_invalid.html",
+            {"name": "Verification link is not valid"},
+            status=400,
+        )
+
+    # the token hashes is_active, so following the link a second time lands on the invalid page
+    # rather than here. Log in anyway on the first pass: the user has just proved they hold the
+    # address, and making them type the password again immediately serves nothing.
+    login(request, locked, backend="django.contrib.auth.backends.ModelBackend")
+
+    return redirect(reverse("task-list"))
+
+
+def resend_verification(request):
+    """Send a fresh verification link to an address that has an unverified account.
+
+    Without this, an account whose link expired is stranded: it cannot log in, and it cannot use
+    password reset either, because PasswordResetForm only considers active users. The address is
+    also taken as far as registration is concerned, so the person cannot simply sign up again.
+    """
+    sent = False
+    form = ResendVerificationForm(request.POST or None)
+
+    if request.method == "POST" and form.is_valid():
+        email = form.cleaned_data["email"]
+
+        # One send per address per interval; without it this endpoint floods any inbox with an
+        # unverified account. The address is hashed because cache keys appear in filenames, and the
+        # throttle cache is used because an unauthenticated caller can create one key per address
+        # it posts -- "default" holds the queue signal and PDF locks behind a 300-entry cap.
+        emailkey = hashlib.sha256(email.lower().encode()).hexdigest()
+        may_send = caches["throttle"].add(
+            f"resendverification-{emailkey}", True, timeout=RESEND_VERIFICATION_INTERVAL_SECONDS
+        )
+
+        if may_send:
+            user = unverified_account_for(email)
+            if user is not None:
+                # guarded like the send in register(), and for the same reason: an unreachable mail
+                # relay is a temporary condition, and letting it out of a plain Django view answers
+                # with a 500 rather than the page below. Nothing has been written to undo.
+                try:
+                    send_verification_email(request, user)
+                except Exception:
+                    logger.exception("Could not resend a verification email")
+
+        # reported as sent either way, whether or not an account exists and whether or not the
+        # rate limit allowed this one: neither is something a stranger should be able to probe for
+        sent = True
+
+    return render(
+        request,
+        "registration/resend_verification.html",
+        {"form": form if not sent else ResendVerificationForm(), "sent": sent, "name": "Resend verification email"},
+    )
+
+
 @login_required
 def change_email(request):
-    success = False
     if request.method == "POST":
         form = EmailChangeForm(request.user, request.POST)
         if form.is_valid():
-            form.save()
-            success = True
-            form = EmailChangeForm(request.user)
+            # not saved here. The new address has to be confirmed at the new address, or the
+            # verification done at registration could be undone just by changing the address
+            # afterwards.
+            new_email = form.cleaned_data["new_email"]
+
+            # Rate limited like the resend path, and for the same reason. Nothing is stored until
+            # the link is followed, so there is no pending-change record to make a second attempt a
+            # no-op: without this, one logged-in account can post this form in a loop and have the
+            # server mail an arbitrary address as fast as it will go. Keyed on the account rather
+            # than the target, so changing the address each time does not buy another send.
+            limitkey = f"emailchange-{request.user.pk}"
+            may_send = caches["throttle"].add(limitkey, True, timeout=EMAIL_CHANGE_INTERVAL_SECONDS)
+
+            if may_send:
+                # guarded like register()'s send: an unreachable relay would otherwise leave a
+                # plain Django view raising, and answer a routine form post with a 500
+                try:
+                    send_email_change_confirmation(request, request.user, new_email)
+                except Exception:
+                    logger.exception("Could not send an email change confirmation")
+                    # and release the slot, or the retry this advises would be met by the
+                    # "just sent" message below for the next minute -- telling the user their mail
+                    # is on its way when the send is exactly what failed
+                    caches["throttle"].delete(limitkey)
+                    form.add_error(
+                        None,
+                        "We could not send the confirmation email just now. Please try again in a "
+                        "few minutes. Your address has not been changed.",
+                    )
+                else:
+                    return render(
+                        request,
+                        "registration/verification_sent.html",
+                        {"name": "Check your email", "email": new_email, "emailchange": True},
+                    )
+            else:
+                # said plainly: this is the user's own account and their own action, so unlike the
+                # resend page there is nothing to conceal by pretending it was sent
+                form.add_error(
+                    None,
+                    "A confirmation email was just sent. Please wait a minute before requesting another.",
+                )
     else:
         form = EmailChangeForm(request.user)
 
     return render(
         request,
         "registration/email_change_form.html",
-        {"form": form, "success": success, "name": "Email address change"},
+        {"form": form, "name": "Email address change"},
+    )
+
+
+@no_referrer
+def confirm_email_change(request, token: str):
+    """Apply an email change once the link sent to the new address has been confirmed.
+
+    Posted, not applied on GET, for the reason spelled out in verify_email: a scanner fetching the
+    link out of the recipient's mailbox would otherwise make the change before they had read it.
+    """
+    loaded = load_email_change_token(token, max_age=settings.PASSWORD_RESET_TIMEOUT)
+
+    if loaded is not None:
+        user, new_email = loaded
+
+        if request.method != "POST":
+            return render(
+                request,
+                "registration/email_change_confirm.html",
+                {"name": "Confirm your new email address", "email": new_email},
+            )
+
+        # re-checked at use, not only when the link was sent: somebody else may have taken the
+        # address in between, and the database index would turn that into a 500 rather than a
+        # message the user can act on.
+        #
+        # The check cannot close the window on its own, though -- two people confirming the same
+        # free address at once both pass it, and the loser's save() raises. Catching that turns the
+        # race into the same answer the check gives, instead of a 500.
+        if not email_is_taken(new_email, exclude_user=user):
+            changed = False
+            try:
+                with transaction.atomic():
+                    # The token is checked a second time here, from inside the transaction and
+                    # with the row locked. load_email_change_token() above read the credentials the
+                    # token is bound to before this began, so a password reset or an administrative
+                    # deactivation landing in between would be overtaken by this write -- and the
+                    # address it hands over is where the next password reset would be sent.
+                    # Re-running the same loader (it re-reads the user) rather than repeating its
+                    # rules keeps one statement of what makes a link valid.
+                    locked: t.Any = get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+                    revalidated = load_email_change_token(token, max_age=settings.PASSWORD_RESET_TIMEOUT)
+
+                    if (
+                        locked is not None
+                        and revalidated is not None
+                        and revalidated[0].pk == locked.pk
+                        and revalidated[1] == new_email
+                    ):
+                        locked.email = new_email
+                        locked.save(update_fields=["email"])
+                        changed = True
+            except IntegrityError:
+                logger.info("email change to an address claimed concurrently was refused")
+            else:
+                if changed:
+                    return render(
+                        request,
+                        "registration/email_change_done.html",
+                        {"name": "Email address changed", "email": new_email},
+                    )
+
+    # emailchange picks the copy for this flow: the shared page otherwise offers a verification
+    # resend, which does nothing for an account that is already active
+    return render(
+        request,
+        "registration/verification_invalid.html",
+        {"name": "Confirmation link is not valid", "emailchange": True},
+        status=400,
+    )
+
+
+# never_cache, because the response body carries the token in the clear -- it is the one page here
+# that does. Without it a shared browser keeps a history snapshot that Back reaches after logout,
+# with no login_required in the way.
+@never_cache
+@login_required
+def api_token(request):
+    """Let a user see, create, replace and delete their own API token.
+
+    Tokens never expire, and until this page existed there was no way to rotate one: a user whose
+    token had leaked (into a shell history, a notebook, a pasted traceback) could only ask an
+    administrator to intervene. /api-token-auth/ hands one out but will not replace one.
+
+    A plain Django view rather than a DRF endpoint. It is reached from a browser with a session, it
+    is a destructive action guarded by CSRF, and routing it through DRF would mean a token-holder
+    could authenticate with the very token they are replacing.
+    """
+    token = Token.objects.filter(user=request.user).first()
+    justcreated = False
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+
+        if action in {"create", "regenerate"}:
+            # The key is the primary key, so rotating means delete-then-create; one transaction so
+            # a failure between them cannot leave the user with none. Locked because Token.user is
+            # one-to-one: two rotations arriving together would both delete nothing, both insert,
+            # and one would raise.
+            with transaction.atomic():
+                get_user_model().objects.select_for_update().filter(pk=request.user.pk).first()
+                Token.objects.filter(user=request.user).delete()
+                token = Token.objects.create(user=request.user)
+            justcreated = True
+
+        elif action == "delete":
+            Token.objects.filter(user=request.user).delete()
+            # post/redirect/get, so a reload does not repeat a destructive action. The create and
+            # regenerate paths above deliberately fall through and render instead: the key is only
+            # recoverable from this response, so a redirect would show a page that cannot display
+            # what the user just asked for.
+            return redirect(reverse("apitoken"))
+
+        else:
+            return HttpResponseBadRequest("Unknown action")
+
+    return render(
+        request,
+        "apitoken.html",
+        {"name": "API Token", "token": token, "justcreated": justcreated},
     )
 
 
@@ -991,8 +1437,16 @@ def resultplotdatajs(request, taskid):
     if not task.finishtimestamp:
         return HttpResponseNotFound("Page not found")
 
-    # disable etag for debugging
-    etag = None if settings.DEBUG else datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
+    # Two things vary in this response and the tag has to cover both: the generated plot data,
+    # which changes with the task, and the plotting script appended below, which changes when the
+    # built asset is redeployed. STATIC_VERSION is derived from the mtimes of those built assets,
+    # lightcurveplotly.min.js among them.
+    #
+    # It used to be the UTC date alone. That is the same before and after a deploy, so a browser
+    # that had loaded a plot earlier the same day was told 304 and went on running the previous
+    # script -- which, across the jQuery removal, meant a page of blank plots and "Can't find
+    # variable: $" until midnight. Quoted, because a bare token is not a valid entity-tag.
+    etag = None if settings.DEBUG else entity_tag(settings.STATIC_VERSION, task.task_modified_datetime)
 
     if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
         return HttpResponseNotModified()
@@ -1018,8 +1472,15 @@ def resultplotdatajs(request, taskid):
                     resultfilepath,
                     sep=r"\s+",
                     escapechar="#",
-                    dtype=float,
-                    converters={"F": str, "Obs": str, "uJy": int, "duJy": int},
+                    # One dtype mapping rather than dtype=float plus converters for these four:
+                    # pandas warns for every column named in both -- four ParserWarnings per plot
+                    # request -- and then applies the converter and ignores the dtype anyway.
+                    #
+                    # A defaultdict, because the factory is what still types the columns that are
+                    # not named. With a plain dict they would be inferred instead, and a column of
+                    # whole numbers would come back as int64, a column with a stray non-numeric
+                    # token as object -- where dtype=float raises the ValueError caught below.
+                    dtype=defaultdict(lambda: float, {"F": str, "Obs": str, "uJy": int, "duJy": int}),
                 )
             except ValueError:
                 # an empty, truncated or ragged result file: EmptyDataError and ParserError are
@@ -1028,8 +1489,6 @@ def resultplotdatajs(request, taskid):
                 # a plain ValueError
                 dfforcedphot = None
             else:
-                # df.rename(columns={'#MJD': 'MJD'})
-
                 ujy_min = int(-1e10)
                 ujy_max = int(1e10)
                 dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
@@ -1045,15 +1504,16 @@ def resultplotdatajs(request, taskid):
             )
             divid = f"plotforcedflux-task-{taskid}"
 
-            for color, filter in [(11, "c"), (12, "o"), (8, "w")]:
-                dffilter = dfforcedphot.query("F == @filter", inplace=False)
+            for color, filterband in [(11, "c"), (12, "o"), (8, "w")]:
+                # @filterband is resolved by pandas from this scope, so the names must agree
+                dffilter = dfforcedphot.query("F == @filterband", inplace=False)
 
                 jsout.extend(
                     (
                         '\njslabels.push({"color": '
                         + str(color)
                         + ', "display": false, "label": "'
-                        + filter
+                        + filterband
                         + '"});\n',
                         "jslcdata.push(["
                         + ", ".join(
@@ -1086,9 +1546,6 @@ def resultplotdatajs(request, taskid):
             )
         strjs = "".join(jsout)
 
-        # with jsplotfile.open("w") as f:
-        #     f.writelines(jsout)
-
         # an empty result (e.g. a transiently unreadable file) must not be stored, or the plot
         # would stay blank until the entry expires even after the file is fixed
         if strjs:
@@ -1102,14 +1559,22 @@ def resultplotdatajs(request, taskid):
 
     # only set the header when there is one: Django stringifies whatever it is given, so passing the
     # DEBUG-mode None sent the literal header "ETag: None"
-    headers = {"ETag": etag} if etag is not None else {}
+    headers: dict[str, str] = {"ETag": etag} if etag is not None else {}
 
     return HttpResponse(strjs, content_type="text/javascript", headers=headers)
 
-    # if jsplotfile.exists():
-    #     return FileResponse(open(jsplotfile, "rb"), headers={"ETag": etag})
 
-    # return HttpResponseNotFound("ERROR: Could not create javascript file.")
+def _pdfplot_unavailable() -> HttpResponse:
+    """Tell the client the plot is not ready yet, rather than that it does not exist.
+
+    A 404 here would be wrong twice over: the task and its data do exist, and a browser (or the
+    queue page) has no reason to retry a 404, whereas this is very likely to succeed shortly.
+    """
+    return HttpResponse(
+        "The PDF plot for this task is still being generated. Please try again shortly.",
+        status=503,
+        headers={"Retry-After": "30"},
+    )
 
 
 def taskpdfplot(request, taskid):
@@ -1124,15 +1589,41 @@ def taskpdfplot(request, taskid):
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
         pdfpath = resultfilepath.with_suffix(".pdf")
 
-        # to force a refresh of all plots
-        # if os.path.exists(pdfpath):
-        #     os.remove(pdfpath)
-
+        # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
+        # refresh plots after a change to plot_atlas_fp
         if not pdfpath.is_file():
-            # matplotlib needs to run in its own process or it will crash
-            make_pdf_plot(
-                taskid=taskid, localresultfile=resultfilepath, taskcomment=item.comment, separate_process=True
-            )
+            # Herd control: the queue page links a PDF for every finished task, so a crawler or a
+            # reload would otherwise fork matplotlib once per concurrent request. Not a mutex (see
+            # the note by the limiter constants); losing the race costs one extra render, not the
+            # tenth. The timeout outlives the render so a killed worker cannot wedge the task.
+            lockkey = f"pdfplot-lock-{taskid}"
+            if not caches["default"].add(lockkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
+                return _pdfplot_unavailable()
+
+            # A private path published by rename, so a killed child leaves its wreckage there
+            # rather than at the final name, and two concurrent renders cannot damage each other.
+            # The uniqueness goes in the stem so .pdf stays the suffix: plot_atlas_fp calls
+            # savefig() with no explicit format, and matplotlib infers it from the extension.
+            renderpath = pdfpath.with_name(f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}")
+
+            try:
+                completed = make_pdf_plot(
+                    taskid=taskid,
+                    localresultfile=resultfilepath,
+                    taskcomment=item.comment,
+                    separate_process=True,
+                    outputpath=renderpath,
+                )
+
+                if completed and renderpath.is_file():
+                    renderpath.replace(pdfpath)
+            finally:
+                renderpath.unlink(missing_ok=True)
+                caches["default"].delete(lockkey)
+
+            if not completed:
+                logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
+                return _pdfplot_unavailable()
 
         if pdfpath.is_file():
             return FileResponse(pdfpath.open("rb"))

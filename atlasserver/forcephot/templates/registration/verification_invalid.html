@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{# no analytics: this page's own URL carries the token, and gtag would report it. See the #}
+{# analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    {# Both token flows land here, and until now the copy described only the first. An expired #}
+    {# email-change link sent the reader to the verification resend, which deliberately does #}
+    {# nothing for an account that is already active -- so the advice could not work. #}
+    {% if emailchange %}
+        <p class="alert alert-danger">This confirmation link is not valid. It may have expired, it
+        may already have been used, or the address may have been taken in the meantime.</p>
+
+        <p>Your account still has its current address. To try again,
+        <a href="{% url 'email_change' %}">request another change</a>.</p>
+    {% else %}
+        <p class="alert alert-danger">This verification link is not valid. It may have expired, or it
+        may already have been used.</p>
+
+        <p>A link can only be used once. If your account is already active, just
+        <a href="{% url 'login' %}">log in</a>.</p>
+
+        <p>Otherwise, <a href="{% url 'resend_verification' %}">request a new verification link</a>.</p>
+    {% endif %}
+</div>
+{% endblock %}

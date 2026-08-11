@@ -1,14 +1,21 @@
+import contextlib
 import datetime
+import hashlib
 import ipaddress
 import itertools
 import json
+import os
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
+import time
+import typing as t
 import urllib.error
 import urllib.parse
+from multiprocessing import Process
 from pathlib import Path
 from unittest import mock
 from unittest import skipUnless
@@ -16,24 +23,33 @@ from unittest import skipUnless
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
-from django.contrib.auth.models import User  # pylint: disable=imported-auth-user
+from django.contrib.auth.models import User
 from django.core import mail as django_mail
 from django.core.cache import caches
 from django.db import connection
+from django.db import IntegrityError
 from django.db import models
 from django.test import override_settings
+from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
+from atlasserver.forcephot import misc
+from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot import verification
+from atlasserver.forcephot import views
 from atlasserver.forcephot.misc import splitradeclist
+from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.queue import calculate_queue_positions
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import is_finite_float
-from atlasserver.forcephot.views import calculate_queue_positions
+from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.views import geoip_reader
 from atlasserver.forcephot.views import geoip_reader_forget
 from atlasserver.forcephot.webhooks import CallbackUrlError
@@ -76,20 +92,320 @@ class EmailChangeTests(TestCase):
         self.user = User.objects.create_user(
             username="emailchanger", email="old@example.com", password="testpassword123"
         )
+        # the confirmation send is rate limited per account, in a locmem cache that outlives the
+        # database rollback between tests -- and ids get reused, so one test's send would otherwise
+        # suppress the next one's
+        caches["throttle"].clear()
 
     def test_requires_login(self) -> None:
         response = self.client.get(reverse("email_change"))
         assert response.status_code == 302
         assert reverse("login") in response["Location"]
 
-    def test_change_email(self) -> None:
+    def request_email_change(self, new_email: str = "new@example.com") -> t.Any:
+        return self.client.post(reverse("email_change"), {"password": "testpassword123", "new_email": new_email})
+
+    def confirmation_link(self, index: int = 0) -> str:
+        """Return the confirmation URL from a sent email, like RegistrationVerificationTests.verification_link."""
+        match = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[index].body))
+        assert match is not None, django_mail.outbox[index].body
+        return match.group(0)
+
+    def test_change_email_requires_confirmation_at_the_new_address(self) -> None:
+        # verifying at registration would be pointless if the address could then be changed to an
+        # unproved one, so nothing is written until the emailed link is followed
         self.client.force_login(self.user)
-        response = self.client.post(
-            reverse("email_change"), {"password": "testpassword123", "new_email": "new@example.com"}
-        )
+
+        response = self.request_email_change()
+
         assert response.status_code == 200
         self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", "the address changed before it was confirmed"
+        assert len(django_mail.outbox) == 1
+        assert django_mail.outbox[0].to == ["new@example.com"], "the link must go to the new address"
+
+    def test_a_get_on_the_confirmation_link_changes_nothing(self) -> None:
+        # same reason as the verification link: a scanner in front of the new address would
+        # otherwise complete the change before the person had read the mail
+        self.client.force_login(self.user)
+        self.request_email_change()
+
+        response = self.client.get(self.confirmation_link())
+
+        assert response.status_code == 200, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", "a GET applied the change"
+
+    def test_the_confirmation_send_is_rate_limited(self) -> None:
+        """Nothing is stored until the link is followed, so nothing else makes a repeat a no-op.
+
+        Without a limit one logged-in account can post this form in a loop and have the server mail
+        an arbitrary address as fast as it will go.
+        """
+        self.client.force_login(self.user)
+
+        for _ in range(3):
+            self.request_email_change("victim@example.com")
+
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+
+    def test_the_limit_is_per_account_not_per_target_address(self) -> None:
+        # otherwise varying the address each time buys another send, which is the flooding case
+        self.client.force_login(self.user)
+
+        self.request_email_change("first@example.com")
+        response = self.request_email_change("second@example.com")
+
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+        assert "wait a minute" in response.content.decode().lower()
+
+    def test_following_the_confirmation_link_applies_the_change(self) -> None:
+        self.client.force_login(self.user)
+        self.request_email_change()
+
+        response = self.client.post(self.confirmation_link())
+
+        assert response.status_code == 200, response.status_code
+        self.user.refresh_from_db()
         assert self.user.email == "new@example.com"
+
+    def test_a_tampered_confirmation_token_is_rejected(self) -> None:
+        self.client.force_login(self.user)
+        self.request_email_change()
+
+        response = self.client.get(reverse("email_change_confirm", kwargs={"token": "not-a-real-token"}))
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
+
+    def test_a_failed_send_says_only_that_and_allows_a_retry(self) -> None:
+        # the two messages used to be added together, so the page said the mail could not be sent
+        # and that it had just been sent; the slot also stayed taken, so the advised retry met
+        # only the second one
+        self.client.force_login(self.user)
+
+        with (
+            mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")),
+            # the view logs the failure with a traceback. Captured rather than left to a handler,
+            # so a deliberately unreachable relay does not print a stack trace over the output of
+            # a passing test run -- and so the log line is asserted instead of being noise.
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
+            failed = self.client.post(
+                reverse("email_change"), {"password": "testpassword123", "new_email": "new@example.com"}
+            )
+
+        content = failed.content.decode().lower()
+        assert "could not send" in content
+        assert "just sent" not in content, "a failed send was also reported as a send"
+
+        # the retry it advises has to be possible
+        retried = self.request_email_change()
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+        assert retried.status_code == 200
+
+    def test_a_wrong_password_does_not_reveal_whether_an_address_is_registered(self) -> None:
+        """Django runs every clean_<field> independently and carries on past a failed one.
+
+        So this form used to answer "is this address registered here?" for anyone holding any
+        account, with no password at all -- an enumeration oracle over the whole user table.
+        """
+        User.objects.create_user(username="someone", email="known@example.com", password=None)
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("email_change"), {"password": "not-the-right-password", "new_email": "known@example.com"}
+        )
+
+        content = response.content.decode().lower()
+        assert "entered incorrectly" in content, content
+        assert "already exists" not in content, "a wrong password still learned the address was taken"
+
+    def test_the_taken_check_still_applies_with_the_right_password(self) -> None:
+        User.objects.create_user(username="someone", email="known@example.com", password=None)
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("email_change"), {"password": "testpassword123", "new_email": "known@example.com"}
+        )
+
+        assert "already exists" in response.content.decode().lower()
+        assert not django_mail.outbox, "a confirmation went to an address that is already taken"
+
+    @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
+    def test_the_confirmation_link_ignores_the_host_header_too(self) -> None:
+        # same exposure as the verification link, and the same fix
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("email_change"),
+            {"password": "testpassword123", "new_email": "new@example.com"},
+            HTTP_HOST="evil.qub.ac.uk",
+        )
+
+        body = str(django_mail.outbox[0].body)
+        assert "https://fallingstar-data.com/" in body, body
+        assert "evil.qub.ac.uk" not in body, "the link followed the Host header"
+
+    def test_no_analytics_on_any_page_served_at_the_confirmation_url(self) -> None:
+        """Every response at that URL, not just the ones that ask for confirmation.
+
+        The success page renders at the same location after the POST, and although applying the
+        change spends the token, its payload is signed rather than encrypted -- anyone reading it
+        gets the account id and both addresses.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        pages = {
+            "the confirmation prompt": self.client.get(link),
+            "the invalid-link page": self.client.get(link[:-6] + "beef/"),
+            "the success page": self.client.post(link),
+        }
+
+        for description, response in pages.items():
+            body = response.content.decode()
+            assert "gtag(" not in body, f"{description} reports the token to analytics"
+            assert "googletagmanager" not in body, f"{description} loads the analytics script"
+
+    def test_an_expired_change_link_points_back_at_the_change_form(self) -> None:
+        # the page is shared with account verification, whose advice -- request another
+        # verification link -- does nothing for an account that is already active
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        response = self.client.post(link[:-6] + "beef/")
+
+        body = response.content.decode()
+        assert reverse("email_change") in body, body
+        assert reverse("resend_verification") not in body, "sent to a resend that would do nothing"
+
+    def test_the_verification_page_keeps_its_own_advice(self) -> None:
+        # the branch must not have swapped the copy for both flows
+        response = self.client.get(reverse("verify_email", kwargs={"uidb64": "YWJj", "token": "aaa-bbb"}))
+
+        assert reverse("resend_verification") in response.content.decode()
+
+    def test_a_password_change_revokes_a_pending_email_change(self) -> None:
+        """A pending change has to die when the account is recovered.
+
+        Someone with temporary access could otherwise request a move to their own mailbox, wait for
+        the owner to notice and reset the password, and confirm afterwards -- taking the address,
+        and with it every future reset link.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change("attacker@example.com")
+        link = self.confirmation_link()
+
+        self.user.set_password("the-owner-recovers-the-account")
+        self.user.save()
+
+        response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", self.user.email
+
+    def test_deactivation_revokes_a_pending_email_change(self) -> None:
+        self.client.force_login(self.user)
+        self.request_email_change("attacker@example.com")
+        link = self.confirmation_link()
+
+        self.user.is_active = False
+        self.user.save()
+
+        assert self.client.post(link).status_code == 400
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
+
+    def test_a_confirmation_link_cannot_be_replayed(self) -> None:
+        """A link is good for one change, or an old one can undo a later one.
+
+        It is delivered to a mailbox and scanners and forwarding rules keep copies, so anyone
+        holding it could otherwise point result mail and password resets back at that address for
+        as long as the signature stayed fresh.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change("first@example.com")
+        firstlink = self.confirmation_link()
+        assert self.client.post(firstlink).status_code == 200
+        django_mail.outbox.clear()
+
+        # move on to a third address, then replay the first link. The limiter is cleared because
+        # this test is about token replay, not about the send rate -- two sends is the whole setup.
+        caches["throttle"].clear()
+        self.request_email_change("second@example.com")
+        self.client.post(self.confirmation_link())
+
+        replayed = self.client.post(firstlink)
+
+        assert replayed.status_code == 400, replayed.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "second@example.com", self.user.email
+
+    def test_the_confirmation_url_sends_no_referrer(self) -> None:
+        # as for the verification link: the token is in the URL, so it must not travel as a Referer
+        # to a page that runs analytics. See RegistrationVerificationTests for the reasoning.
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        offered = self.client.get(link)
+        assert offered.status_code == 200, offered.status_code
+        assert offered["Referrer-Policy"] == "no-referrer"
+
+        applied = self.client.post(link)
+        assert applied.status_code == 200, applied.status_code
+        assert applied["Referrer-Policy"] == "no-referrer"
+
+        replayed = self.client.post(link)
+        assert replayed.status_code == 400, replayed.status_code
+        assert replayed["Referrer-Policy"] == "no-referrer"
+
+    def test_a_password_reset_landing_during_confirmation_wins(self) -> None:
+        """The token is checked again, under a row lock, immediately before the address is written.
+
+        The first check reads credential state from before the transaction, so a reset or a
+        deactivation committing in that gap would be overtaken by this write -- handing the account
+        an address that the next password reset is then sent to.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        real = views.load_email_change_token
+        calls: list[None] = []
+
+        def reset_after_the_first_check(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            calls.append(None)
+            loaded = real(*args, **kwargs)
+            if len(calls) == 1:  # the owner's password reset commits before the view writes
+                self.user.set_password("a-completely-different-password")
+                self.user.save(update_fields=["password"])
+            return loaded
+
+        with mock.patch.object(views, "load_email_change_token", side_effect=reset_after_the_first_check):
+            response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", self.user.email
+        assert len(calls) == 2, calls  # and it was the second check that refused it
+
+    def test_an_address_taken_between_request_and_confirmation_is_refused(self) -> None:
+        # the database index would otherwise turn this into a 500 rather than something actionable
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+        User.objects.create_user(username="sniper", email="new@example.com", password=None)
+
+        response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com"
 
     def test_wrong_password_rejected(self) -> None:
         self.client.force_login(self.user)
@@ -393,6 +709,23 @@ class TaskListEtagTests(TestCase):
         assert etag.startswith('"'), etag
         assert etag.endswith('"'), etag
 
+    def test_etag_holds_only_the_characters_an_entity_tag_may(self) -> None:
+        """RFC 7232 allows %x21 and %x23-7E between the quotes: no space, and no double quote.
+
+        The parts this is built from carry both. Every timestamp in it stringifies with a space in
+        the middle, and the request path is whatever the caller asked for -- so a caller could
+        otherwise put a quote in the middle of the header and end the entity-tag early.
+        """
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("task-list"), {"anything": 'a " and a space'})
+        etag = response["ETag"]
+
+        assert etag.startswith('"'), etag
+        assert etag.endswith('"'), etag
+        assert all(c == "\x21" or "\x23" <= c <= "\x7e" for c in etag[1:-1]), etag
+
     def test_another_users_activity_does_not_invalidate_the_etag(self) -> None:
         Task.objects.create(user=self.user, ra=1.0, dec=2.0)
         etag = self.get_list()["ETag"]
@@ -484,19 +817,160 @@ class TaskListEtagTests(TestCase):
         assert conditional.status_code == 304
 
 
+class SiteOriginSettingTests(SimpleTestCase):
+    """The links in security email are built from this, so an unset value is the exposure."""
+
+    @staticmethod
+    def load_settings(module: str, **env: str) -> "subprocess.CompletedProcess[str]":
+        """Import a settings module in a fresh interpreter with the given environment."""
+        # cleared from the inherited environment before the overrides, not after: a developer's
+        # own .env would otherwise decide the result of these tests
+        environment: dict[str, str] = dict(os.environ)
+        environment.pop("ATLASSERVER_SITE_ORIGIN", None)
+        environment |= {"DJANGO_SETTINGS_MODULE": module, **env}
+        return subprocess.run(
+            [sys.executable, "-c", "import django; django.setup()"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+
+    def test_production_refuses_to_start_without_an_origin(self) -> None:
+        # failing closed, because the fallback is the vulnerability: an unset variable would leave
+        # the links built from the Host header and say nothing about it
+        result = self.load_settings("atlasserver.settings", ATLASSERVER_DEBUG="0")
+
+        assert result.returncode != 0
+        assert "ATLASSERVER_SITE_ORIGIN must be set" in result.stderr, result.stderr
+
+    def test_production_starts_once_it_is_set(self) -> None:
+        result = self.load_settings(
+            "atlasserver.settings", ATLASSERVER_DEBUG="0", ATLASSERVER_SITE_ORIGIN="https://example.org"
+        )
+
+        assert result.returncode == 0, result.stderr
+
+    def test_development_and_the_tests_are_unaffected(self) -> None:
+        # settings_test presets ATLASSERVER_DEBUG=1 before star-importing the production settings,
+        # so this check never fires under test -- including on CI, where DEBUG would otherwise be
+        # off because the default follows the platform
+        result = self.load_settings("atlasserver.settings_test", ATLASSERVER_DEBUG="0")
+
+        assert result.returncode == 0, result.stderr
+
+
+class CountryCodeTests(SimpleTestCase):
+    """The hand-maintained country table was replaced by pycountry, which knows only ISO codes."""
+
+    def test_iso_codes_resolve(self) -> None:
+        assert misc.country_code_to_name("DE") == "Germany"
+
+    def test_the_geoip_only_codes_still_resolve(self) -> None:
+        # GeoIP emits these and pycountry has never heard of them, so dropping the old table
+        # silently turned every row recorded with one into "Unknown"
+        assert misc.country_code_to_name("A2") == "Satellite Provider"
+        assert misc.country_code_to_name("O1") == "Other Country"
+        assert misc.country_code_to_name("AP") == "Asia/Pacific Region"
+        assert misc.country_code_to_name("EU") == "Europe"
+
+    def test_unknown_and_blank_codes(self) -> None:
+        assert misc.country_code_to_name("XX") == "Unknown"
+        assert misc.country_code_to_name("") == "Unknown"
+        assert misc.country_code_to_name(None) == "Unknown"
+
+
 class TaskStrTests(TestCase):
     def test_str_without_a_target(self) -> None:
-        # a task with no mpc_name, ra or dec can be created in the admin panel, and formatting
-        # None with a float format spec used to raise TypeError
+        # formatting None with a float format spec used to raise TypeError. Such a row can no
+        # longer be saved -- task_target_is_mpcname_or_radec rejects it -- so this builds the
+        # instance in memory, with an id because __str__ formats that too. The branch is kept
+        # rather than deleted along with the possibility: it costs nothing, and it is what stops a
+        # targetless row from being unprintable (and so unfixable in the admin) if the constraint
+        # is ever dropped, or if one predates it.
         user = User.objects.create_user(username="nocoords", email="n@example.com", password=None)
-        assert "RA Dec" in str(Task.objects.create(user=user))
+        assert "RA Dec" in str(Task(id=1, user=user))
+
+    def test_a_targetless_task_cannot_be_saved(self) -> None:
+        # the serializer rejected these, but it was the only thing that did, so the admin and the
+        # shell could both create a task the runner would dispatch a job for with nothing to point at
+        user = User.objects.create_user(username="notarget", email="nt@example.com", password=None)
+
+        try:
+            Task.objects.create(user=user)
+        except IntegrityError:
+            return
+        msg = "a task with neither an mpc_name nor coordinates was accepted"
+        raise AssertionError(msg)
+
+    def test_a_tab_only_mpc_name_is_not_a_target_either(self) -> None:
+        """SQL TRIM() removes spaces and nothing else; Python str.strip() removes far more.
+
+        The two definitions have to be one definition, or a name blank to the reader is a target to
+        the database and the runner dispatches by coordinates the constraint let be NULL.
+        """
+        user = User.objects.create_user(username="tabtarget", email="tt@example.com", password=None)
+
+        try:
+            Task.objects.create(user=user, mpc_name="\t")
+        except IntegrityError:
+            return
+        msg = "a task whose only target was a tab was accepted"
+        raise AssertionError(msg)
+
+    def test_save_normalises_the_name_so_readers_can_trust_it(self) -> None:
+        """The point of normalising on write: mpc_name is falsy exactly when there is no target.
+
+        Five readers were each re-deriving what counts as blank -- the target constraint, the task
+        runner, __str__, the usage stats and the queue page. They test the field directly now, which
+        is only sound because nothing whitespace-only can reach the column.
+        """
+        user = User.objects.create_user(username="normalised", email="n@example.com", password=None)
+
+        for name in ("\t", "\n", " ", " \t\n ", "\u00a0", "\v\f"):
+            task = Task.objects.create(user=user, mpc_name=name, ra=100.0, dec=-20.0)
+            assert task.mpc_name == "", repr(name)
+            assert not Task.objects.get(pk=task.pk).mpc_name, repr(name)
+            task.delete()
+
+        # and the padding comes off a real name without touching the name itself
+        padded = Task.objects.create(user=user, mpc_name="  Makemake\t")
+        assert padded.mpc_name == "Makemake"
+
+        # whitespace the set deliberately omits is part of the name, to both sides
+        exotic = Task.objects.create(user=user, mpc_name="\u2007")
+        assert exotic.mpc_name == "\u2007"
+
+    def test_the_database_refuses_a_blank_name_from_a_bulk_writer(self) -> None:
+        # bulk_create does not call save(), which is why the guarantee is a constraint and not only
+        # a normalisation -- without it the readers above could not test the field directly
+        user = User.objects.create_user(username="bulkwriter", email="bw@example.com", password=None)
+
+        try:
+            Task.objects.bulk_create([Task(user=user, mpc_name="   ")])
+        except IntegrityError:
+            return
+        msg = "bulk_create stored a whitespace-only mpc_name"
+        raise AssertionError(msg)
+
+    def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
+        # it is truthy, so it satisfied a bare != "" and then reached the runner, which would have
+        # asked ssforce.sh for an object named nothing
+        user = User.objects.create_user(username="blanktarget", email="bt@example.com", password=None)
+
+        try:
+            Task.objects.create(user=user, mpc_name="   ")
+        except IntegrityError:
+            return
+        msg = "a task whose only target was whitespace was accepted"
+        raise AssertionError(msg)
 
 
 class TaskDeleteFileTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="deleter", email="d@example.com", password=None)
 
-    def make_finished_task(self, staticroot: Path, **kwargs) -> Task:
+    def make_finished_task(self, staticroot: Path, **kwargs: t.Any) -> Task:
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), **kwargs)
         resultfile = Path(staticroot, f"{task.localresultfileprefix()}.txt")
         resultfile.parent.mkdir(parents=True, exist_ok=True)
@@ -667,12 +1141,13 @@ class PermissionResponseTests(TestCase):
         # follow. Nothing navigates on the page's behalf any more, so the polling code has to
         # recognise the status itself or the page sits showing pre-logout tasks forever.
         frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text()
-        # matched on the method declaration rather than on its exact parameter list, which this
-        # used to pin: adding a second parameter to fetchData broke the split and failed the test
-        # with an IndexError that said nothing about session handling
-        methoddecl = re.search(r"^    fetchData\(", frontendpath, re.MULTILINE)
-        assert methoddecl is not None, "could not find the fetchData method declaration"
-        pollbody = frontendpath[methoddecl.end() :]
+        # matched on the name rather than on the exact declaration, which this has now pinned twice:
+        # once on the parameter list (a second parameter broke it) and once on it being a class
+        # method (converting the component to hooks broke it). Both failed with a message about the
+        # match rather than about session handling.
+        decl = re.search(r"^\s*(?:const\s+)?fetchData\b", frontendpath, re.MULTILINE)
+        assert decl is not None, "could not find the fetchData declaration"
+        pollbody = frontendpath[decl.end() :]
 
         assert "response.status == 401 || response.status == 403" in pollbody, (
             "fetchData must handle an expired session; a 401/403 is no longer a redirect"
@@ -759,7 +1234,7 @@ class ClientLocationTests(TestCase):
             **extra,
         )
 
-    def created_task(self, response) -> Task:
+    def created_task(self, response: t.Any) -> Task:
         assert response.status_code == 201, response.content
         return Task.objects.get(id=response.json()["id"])
 
@@ -1027,6 +1502,29 @@ class RequestImagesTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
 
+    def test_clearing_the_target_of_an_image_request_is_a_400(self) -> None:
+        """An IMGZIP task needs a target like any other, and the database says so.
+
+        The image request carries the parent's own coordinates and the runner dispatches on them,
+        so there is no targetless one to accommodate. task_target_is_mpcname_or_radec requires a
+        target of every row, and the serializer has to refuse one before the insert does, or the
+        answer is an IntegrityError rather than a validation error.
+        """
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user)
+        child.save()
+
+        self.client.force_login(self.user)
+        response = self.client.patch(
+            reverse("task-detail", args=[child.id]),
+            json.dumps({"ra": None, "dec": None}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400, response.status_code
+        child.refresh_from_db()
+        assert (child.ra, child.dec) == (1.0, 2.0), (child.ra, child.dec)
+
     def test_get_is_not_allowed(self) -> None:
         # creating a task from a GET handler is not CSRF protected
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
@@ -1230,7 +1728,68 @@ class ResultPlotDataTests(TestCase):
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200
-            assert b"jslcdata.push" in response.content, response.content[:200]
+            # the rendered values, not merely that some were emitted: how the result file is
+            # parsed decides whether these reach the plotting script as `100` or `100.0`, and the
+            # column dtypes are the only thing that says which
+            content = response.content.decode()
+            assert "jslcdata.push([[59000.0,100.0,10.0], [59001.0,101.0,10.0]]);" in content, content[:400]
+            assert '"ymin": 100, "ymax": 101,' in content, content[:400]
+
+    @override_settings(DEBUG=False)
+    def test_a_redeployed_plot_script_invalidates_the_cached_response(self) -> None:
+        """The ETag has to change when the appended script does.
+
+        It was the UTC date alone, which is the same before and after a deploy, so a browser that
+        had loaded a plot earlier the same day was told 304 and kept running the old script. Across
+        the jQuery removal that meant blank plots and "Can't find variable: $" until midnight.
+        """
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "js").mkdir()
+            script = Path(tmpdir, "js", "lightcurveplotly.min.js")
+            script.write_text("// the deployed plot script\n")
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
+
+            with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN="", STATIC_VERSION="before-deploy"):
+                first = self.client.get(reverse("resultplotdatajs", args=[task.id]))
+                assert first.status_code == 200
+                # the browser holding that tag is told there is nothing new
+                unchanged = self.client.get(
+                    reverse("resultplotdatajs", args=[task.id]), HTTP_IF_NONE_MATCH=first["ETag"]
+                )
+                assert unchanged.status_code == 304
+
+            # a deploy rebuilds the bundle, which moves STATIC_VERSION
+            with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN="", STATIC_VERSION="after-deploy"):
+                revalidated = self.client.get(
+                    reverse("resultplotdatajs", args=[task.id]), HTTP_IF_NONE_MATCH=first["ETag"]
+                )
+
+            assert revalidated.status_code == 200, "the stale script would still be served"
+            assert revalidated["ETag"] != first["ETag"]
+
+    @override_settings(DEBUG=False)
+    def test_the_etag_is_a_quoted_entity_tag(self) -> None:
+        # a bare token is not a valid entity-tag, and intermediaries may reject or rewrite it
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "js").mkdir()
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// the deployed plot script\n")
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n")
+            with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN=""):
+                etag = self.client.get(reverse("resultplotdatajs", args=[task.id]))["ETag"]
+
+        assert etag.startswith('"'), etag
+        assert etag.endswith('"'), etag
+        # and nothing an entity-tag may not hold: the task timestamp it is built from stringifies
+        # as "2026-08-11 12:34:56+00:00", with a space in the middle
+        assert all(c == "\x21" or "\x23" <= c <= "\x7e" for c in etag[1:-1]), etag
 
 
 class TaskRunnerEmailTests(TestCase):
@@ -1328,7 +1887,8 @@ class ApiGuideTests(TestCase):
         import re
 
         page = Path(settings.BASE_DIR, "atlasserver/forcephot/templates/apiguide.html").read_text()
-        blocks = re.findall(r"<pre><code>(.*?)</code></pre>", page, flags=re.DOTALL)
+        # <pre[^>]*>, because the blocks carry a class that copycode.js and main.css key off
+        blocks = re.findall(r"<pre[^>]*><code>(.*?)</code></pre>", page, flags=re.DOTALL)
         assert blocks, "no code blocks found in the API guide"
 
         for index, block in enumerate(blocks):
@@ -1376,9 +1936,12 @@ class AllowedHostsTests(TestCase):
         # the Host header: accepting any host hands an attacker the reset link
         User.objects.create_user(username="victim", email="victim@example.com", password="pw12345678")
 
-        response = self.client.post(
-            reverse("password_reset"), {"email": "victim@example.com"}, HTTP_HOST="evil.example.com"
-        )
+        # Django logs a rejected Host with a traceback, through a logger of its own; captured for
+        # the same reason as the failed sends above
+        with self.assertLogs("django.security.DisallowedHost", level="ERROR"):
+            response = self.client.post(
+                reverse("password_reset"), {"email": "victim@example.com"}, HTTP_HOST="evil.example.com"
+            )
 
         assert response.status_code == 400, response.status_code
         assert not django_mail.outbox
@@ -1550,7 +2113,7 @@ class CallbackSendingTests(TestCase):
         opener.assert_not_called()
         assert any("public address" in line for line in logged), logged
 
-    def capture_callback_payload(self, task) -> dict:
+    def capture_callback_payload(self, task: Task) -> dict:
         """Run notify_finished() against a stubbed endpoint and return the JSON it posted."""
         captured: dict = {}
 
@@ -1789,12 +2352,12 @@ class AtlasCommandTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="cmd", email="cmd@example.com", password=None)
 
-    def make_task(self, **kwargs) -> Task:
+    def make_task(self, **kwargs: t.Any) -> Task:
         kwargs.setdefault("ra", 100.0)
         kwargs.setdefault("dec", -20.0)
         return Task.objects.create(user=self.user, **kwargs)
 
-    def fp_command(self, task) -> str:
+    def fp_command(self, task: Task) -> str:
         return taskrunner_main.build_fp_command(task, remoteresultfile=Path("~/atlasserver/results/job00001.txt"))
 
     def test_coordinates_are_passed_as_floats(self) -> None:
@@ -1806,6 +2369,18 @@ class AtlasCommandTests(TestCase):
         command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=None))
         assert "/atlas/bin/ssforce.sh 'Makemake'" in command
         assert "force.sh" not in command.replace("ssforce.sh", "")
+
+    def test_a_padded_mpc_name_is_stripped_before_the_shell_sees_it(self) -> None:
+        # the constraint permits a padded name; what it must not become is ssforce.sh '  Makemake '
+        command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="  Makemake  ", mjd_min=None))
+        assert "/atlas/bin/ssforce.sh 'Makemake'" in command
+
+    def test_a_blank_mpc_name_takes_the_coordinate_path(self) -> None:
+        # such a row is a coordinate request: the constraint reads a whitespace-only name as absent
+        # and therefore required ra and dec, so dispatching it to ssforce.sh would drop the target
+        command = self.fp_command(self.make_task(mpc_name="   ", mjd_min=None))
+        assert "/atlas/bin/force.sh 100.0 -20.0" in command
+        assert "ssforce.sh" not in command
 
     def test_zero_mjd_min_is_still_passed(self) -> None:
         # a falsy-but-present bound used to be dropped, silently widening the request
@@ -1847,7 +2422,7 @@ class AtlasCommandTests(TestCase):
         with mock.patch.object(taskrunner_main.settings, "TEST_USERS", [self.user.pk]):
             assert " tdo=1" in self.fp_command(task)
 
-    def ssostack_command(self, task) -> str:
+    def ssostack_command(self, task: Task) -> str:
         return taskrunner_main.build_ssostack_command(
             task,
             remoteresultfile=Path("~/atlasserver/results/job00001.fits"),
@@ -1926,7 +2501,7 @@ class RemoveOldTasksTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="sweeper", email="sw@example.com", password=None)
 
-    def make_old_task(self, days: int, **kwargs) -> Task:
+    def make_old_task(self, days: int, **kwargs: t.Any) -> Task:
         return Task.objects.create(
             user=self.user,
             ra=1.0,
@@ -2047,7 +2622,8 @@ class QueuePositionConcurrencyTests(TransactionTestCase):
         def recalculate() -> None:
             try:
                 calculate_queue_positions()
-            except BaseException as ex:
+            except BaseException as ex:  # noqa: BLE001 (this runs in a thread; anything it raises
+                # has to reach the assertions rather than vanish into the thread's stack)
                 errors.append(ex)
             finally:
                 connection.close()  # each thread holds its own connection
@@ -2070,6 +2646,1116 @@ class QueuePositionConcurrencyTests(TransactionTestCase):
         positions = [pos for pos in rawpositions if pos is not None]
         assert len(set(positions)) == len(positions), f"duplicate queue positions: {sorted(positions)}"
         assert sorted(positions) == list(range(len(positions))), sorted(positions)
+
+
+class ProcessTimeoutTests(TestCase):
+    # time.sleep as the target rather than a helper defined here: the default start method on this
+    # platform is spawn, and a child that re-imports this module dies on AppRegistryNotReady before
+    # it can overrun, which would make the timeout test pass for the wrong reason
+
+    def test_the_render_process_is_spawned_not_forked(self) -> None:
+        """The live caller is a view inside a mod_wsgi worker thread.
+
+        fork() there copies only the calling thread but all of the memory, so a lock another
+        thread held at that instant is held forever in the child -- which then deadlocks on first
+        touching whatever it guards, and for an import-heavy child that is the import machinery.
+        The platform default hid this: macOS spawns, Linux forks on 3.13 and forkserver on 3.14+.
+        """
+        captured = []
+
+        with mock.patch.object(
+            misc, "run_process_with_timeout", side_effect=lambda proc, _timeout: captured.append(proc)
+        ):
+            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1, separate_process=True)
+
+        assert len(captured) == 1, captured
+        # the class, not the constant: this is what was actually handed to the runner
+        assert type(captured[0]).__name__ == "SpawnProcess", type(captured[0]).__name__
+
+    def test_a_process_that_finishes_reports_success(self) -> None:
+        assert misc.run_process_with_timeout(Process(target=time.sleep, args=(0,)), timeout=30.0) is True
+
+    def test_an_overrunning_process_is_killed_and_reports_failure(self) -> None:
+        """The whole point: taskpdfplot forks matplotlib and used to join() it without a deadline.
+
+        A result file that made plot_atlas_fp hang therefore held a mod_wsgi worker thread for as
+        long as the process lived, and enough of them exhausted the pool.
+        """
+        proc = Process(target=time.sleep, args=(300,))
+
+        started = time.monotonic()
+        completed = misc.run_process_with_timeout(proc, timeout=0.5)
+        elapsed = time.monotonic() - started
+
+        assert completed is False
+        assert elapsed < 30.0, f"took {elapsed:.1f}s, so it waited for the child rather than killing it"
+
+        # run_process_with_timeout closed the handle, which Process.close() only permits once the
+        # process has actually exited -- so a closed handle is the proof that the child was reaped
+        try:
+            proc.is_alive()
+        except ValueError:
+            return
+        msg = "the process handle is still open, so the child was never reaped"
+        raise AssertionError(msg)
+
+
+def matplotlib_accepts(path: Path) -> bool:
+    """Whether matplotlib would infer a usable format from this filename.
+
+    plot_atlas_fp reaches savefig with whatever path it is handed, so the check that matters is
+    the one matplotlib itself performs on the extension.
+    """
+    import matplotlib as mpl
+
+    mpl.use("Agg")
+    from matplotlib.figure import Figure
+
+    return path.suffix.lstrip(".").lower() in Figure().canvas.get_supported_filetypes()
+
+
+class PdfPlotViewTests(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="pdfuser", email="pdf@example.com", password=None)
+        self.task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+    @contextlib.contextmanager
+    def result_file(self):
+        """Give the task a result file but no PDF, so the view has to generate one."""
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{self.task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.touch()
+            yield
+
+    def test_the_render_path_is_still_named_as_a_pdf(self) -> None:
+        """plot_atlas_fp calls plt.savefig(path) with no explicit format.
+
+        Matplotlib infers the format from the extension, so a private render path whose final
+        suffix was not .pdf made it infer an unsupported one. The worker caught the resulting
+        ValueError, the child exited cleanly, and the view answered 404 having rendered nothing --
+        which no mocked test noticed, because the mock never reaches matplotlib.
+        """
+        captured = {}
+
+        def capture(**kwargs):
+            captured.update(kwargs)
+            return False
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=capture):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        outputpath = captured.get("outputpath")
+        assert outputpath is not None, captured
+        assert outputpath.suffix == ".pdf", outputpath
+        # and matplotlib itself has to accept it, which is the property that actually broke
+        assert matplotlib_accepts(outputpath), outputpath
+
+    def test_the_render_path_is_unique_per_request(self) -> None:
+        # two concurrent renders must not share a path, or one truncates the other's output
+        seen = []
+
+        def capture(**kwargs):
+            seen.append(kwargs["outputpath"])
+            return False
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=capture):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+            caches["default"].delete(f"pdfplot-lock-{self.task.id}")
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert len(seen) == 2, seen
+        assert seen[0] != seen[1], seen
+
+    def test_a_timed_out_render_returns_503_rather_than_404(self) -> None:
+        # 404 would tell the client the plot does not exist, when in fact it is only slow, and
+        # nothing retries a 404
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
+            response = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert response.status_code == 503, response.status_code
+        assert response["Retry-After"] == "30"
+
+    def test_only_one_render_runs_at_a_time_for_a_task(self) -> None:
+        """The queue page links a PDF for every finished task, so concurrent hits are routine.
+
+        Without the lock each one forks its own matplotlib for the same missing file.
+        """
+        concurrent: list[int] = []
+
+        def render_while_reentering(*_args: t.Any, **_kwargs: t.Any) -> bool:
+            # a second request arriving while this one is rendering must not start its own
+            concurrent.append(self.client.get(reverse("taskpdfplot", args=[self.task.id])).status_code)
+            return False
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=render_while_reentering):
+            response = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert response.status_code == 503, response.status_code
+        assert concurrent == [503], concurrent
+
+    def test_the_lock_is_released_when_a_render_finishes(self) -> None:
+        # a lock left behind would make the task's plot unavailable until the cache entry expired
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None
+
+
+class RegistrationVerificationTests(TestCase):
+    """Registration used to log the new account straight in without proving the address."""
+
+    credentials = {"username": "newcomer", "password1": "a-long-test-password", "password2": "a-long-test-password"}
+
+    def setUp(self) -> None:
+        # the resend endpoint rate-limits per address through the throttle cache, and locmem is not
+        # reset between tests, so without this one test's resend silently suppresses the next one's
+        caches["throttle"].clear()
+
+    def register(self, email: str = "newcomer@example.com") -> t.Any:
+        return self.client.post(reverse("register"), {**self.credentials, "email": email})
+
+    def verification_link(self) -> str:
+        assert len(django_mail.outbox) == 1, django_mail.outbox
+        match = re.search(r"https?://\S+/verify/\S+", str(django_mail.outbox[0].body))
+        assert match is not None, django_mail.outbox[0].body
+        return match.group(0)
+
+    def test_registering_creates_an_inactive_account_and_sends_a_link(self) -> None:
+        response = self.register()
+
+        assert response.status_code == 200, response.status_code
+        user = User.objects.get(username="newcomer")
+        assert user.is_active is False
+        assert django_mail.outbox[0].to == ["newcomer@example.com"]
+
+    def test_registering_no_longer_logs_you_straight_in(self) -> None:
+        self.register()
+        assert "_auth_user_id" not in self.client.session
+
+    def test_an_unverified_account_cannot_log_in(self) -> None:
+        self.register()
+
+        loggedin = self.client.login(username="newcomer", password=self.credentials["password1"])
+
+        assert loggedin is False
+
+    def test_following_the_link_activates_and_logs_in(self) -> None:
+        self.register()
+
+        response = self.client.post(self.verification_link())
+
+        assert response.status_code == 302, response.status_code
+        assert User.objects.get(username="newcomer").is_active is True
+        assert "_auth_user_id" in self.client.session
+
+    def test_a_link_cannot_be_used_twice(self) -> None:
+        # is_active is part of the token hash, so activation invalidates the link with no state kept
+        self.register()
+        link = self.verification_link()
+        self.client.post(link)
+        self.client.logout()
+
+        response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+
+    def test_a_decodable_but_non_numeric_uid_is_an_invalid_link_not_a_500(self) -> None:
+        # "YWJj" is valid base64 and decodes cleanly to "abc"; it was the integer primary-key
+        # lookup that then raised, outside the block guarding the decode
+        response = self.client.post(reverse("verify_email", kwargs={"uidb64": "YWJj", "token": "aaa-bbb"}))
+
+        assert response.status_code == 400, response.status_code
+
+    def test_a_tampered_token_is_rejected(self) -> None:
+        self.register()
+        link = self.verification_link()
+
+        response = self.client.post(link[:-4] + "beef/")
+
+        assert response.status_code == 400, response.status_code
+        assert User.objects.get(username="newcomer").is_active is False
+
+    def test_a_verification_link_is_not_a_password_reset_link(self) -> None:
+        # separate key salts, so a token issued for one purpose cannot be replayed for the other
+        from django.contrib.auth.tokens import default_token_generator
+
+        self.register()
+        user = User.objects.get(username="newcomer")
+        token = verification.token_generator.make_token(user)
+
+        assert not default_token_generator.check_token(user, token)
+
+    def test_resend_issues_a_fresh_link(self) -> None:
+        self.register()
+        django_mail.outbox.clear()
+
+        response = self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert response.status_code == 200
+        assert len(django_mail.outbox) == 1
+        assert self.client.post(self.verification_link()).status_code == 302
+
+    def test_resend_says_the_same_thing_whether_or_not_the_account_exists(self) -> None:
+        # whether an address has an account here is not something a stranger should be able to probe
+        self.register()
+        django_mail.outbox.clear()
+
+        withaccount = self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+        sentforknown = len(django_mail.outbox)
+        django_mail.outbox.clear()
+
+        noaccount = self.client.post(reverse("resend_verification"), {"email": "nobody@example.com"})
+
+        assert withaccount.status_code == noaccount.status_code == 200
+        assert "on its way" in withaccount.content.decode()
+        assert "on its way" in noaccount.content.decode(), "the two responses must be indistinguishable"
+        assert sentforknown == 1, "no link was sent to the address that does have an unverified account"
+        assert not django_mail.outbox, "mail was sent for an address with no unverified account"
+
+    def test_resend_is_rate_limited_per_address(self) -> None:
+        # otherwise this endpoint mails any address with an unverified account as fast as it is
+        # asked to, which makes the server an amplifier for flooding that inbox
+        self.register()
+        django_mail.outbox.clear()
+
+        for _ in range(3):
+            self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+
+    def test_a_rate_limited_resend_still_looks_the_same(self) -> None:
+        self.register()
+        self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        response = self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert response.status_code == 200
+        assert "on its way" in response.content.decode()
+
+    def test_the_registration_window_does_not_restart_on_each_attempt(self) -> None:
+        """A fixed window, not a rolling one.
+
+        cache.incr() rewrites the value with the cache's *default* timeout rather than the
+        remaining one, so counting with it both shortened the window and renewed it on every
+        attempt -- a client that kept trying kept extending its own block indefinitely.
+        """
+        # distinct usernames, because the limiter counts submissions that pass validation and a
+        # repeated username fails on the second one
+        for n in range(views.REGISTRATION_WINDOW_LIMIT):
+            self.client.post(
+                reverse("register"), {**self.credentials, "username": f"newcomer{n}", "email": f"a{n}@example.com"}
+            )
+
+        # the same key the view derives, so this reads what the view actually wrote
+        clientkey = f"registration-{hashlib.sha256(b'127.0.0.1').hexdigest()}"
+        count, started = caches["throttle"].get(clientkey)
+        assert count == views.REGISTRATION_WINDOW_LIMIT, count
+
+        # a further attempt counts, but must not move the window's start
+        self.client.post(
+            reverse("register"), {**self.credentials, "username": "another", "email": "another@example.com"}
+        )
+        count_after, started_after = caches["throttle"].get(clientkey)
+
+        assert count_after == count + 1
+        assert started_after == started, "the window restarted, so a persistent caller renews it"
+
+    def test_a_window_from_another_boot_does_not_lock_the_client_out(self) -> None:
+        """The stored start is a wall clock, and an impossible elapsed time restarts the window.
+
+        It was time.monotonic(), whose epoch does not survive a reboot -- and the value goes into a
+        file-based cache that does. A start from the previous boot reads as being in the future, so
+        the timeout below was computed as the machine's former uptime and a shared address stayed
+        blocked for as long as the host had been up.
+        """
+        clientkey = f"registration-{hashlib.sha256(b'127.0.0.1').hexdigest()}"
+        # as a pre-reboot entry looks: a start far in the future, at the limit
+        caches["throttle"].set(
+            clientkey,
+            (views.REGISTRATION_WINDOW_LIMIT, time.time() + 3_000_000),
+            timeout=views.REGISTRATION_WINDOW_SECONDS,
+        )
+
+        response = self.client.post(reverse("register"), {**self.credentials, "email": "afterreboot@example.com"})
+
+        assert "wait a few minutes" not in response.content.decode().lower(), "a stale window blocked a new client"
+        count, started = caches["throttle"].get(clientkey)
+        assert count == 1, count
+        assert started <= time.time(), "the window still starts in the future"
+
+    def test_losing_the_race_for_a_username_says_so(self) -> None:
+        # username is unique too, and the handler used to report every integrity error as an email
+        # collision -- telling the user an address they can still have is taken
+        User.objects.create_user(username="newcomer", email="someoneelse@example.com", password=None)
+
+        with mock.patch.object(views, "email_is_taken", return_value=False):
+            response = self.client.post(reverse("register"), {**self.credentials, "email": "mine@example.com"})
+
+        content = response.content.decode().lower()
+        assert "username already exists" in content, content
+        assert "email address already exists" not in content, "a username clash was blamed on the address"
+
+    def test_a_failed_verification_email_creates_no_account(self) -> None:
+        # the address and username would otherwise be taken by a row nobody can log into, verify
+        # or recover, leaving the person unable even to register again
+        # patched on views, not on verification: views imports the name directly, so patching it
+        # at the definition site leaves the already-bound reference in place and the test passes
+        # for the wrong reason
+        with (
+            mock.patch.object(views, "send_verification_email", side_effect=OSError("smtp down")),
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
+            response = self.client.post(reverse("register"), {**self.credentials, "email": "doomed@example.com"})
+
+        assert response.status_code == 200, response.status_code
+        assert not User.objects.filter(username="newcomer").exists(), "the account survived a failed send"
+        assert "could not send the verification email" in response.content.decode().lower()
+
+    def test_losing_the_race_for_an_address_says_so(self) -> None:
+        """The race migration 0005 exists for, reported as what it is.
+
+        clean_email() checks the address and the save happens later, so the loser used to be told
+        the verification email could not be sent and to try again in a few minutes -- advice that
+        can never succeed, because the address is now permanently taken.
+        """
+        User.objects.create_user(username="incumbent", email="contested@example.com", password=None)
+
+        with mock.patch.object(views, "email_is_taken", return_value=False):
+            response = self.client.post(reverse("register"), {**self.credentials, "email": "contested@example.com"})
+
+        assert response.status_code == 200, response.status_code
+        assert not User.objects.filter(username="newcomer").exists()
+        content = response.content.decode().lower()
+        assert "already exists" in content, content
+        assert "could not send" not in content, "the duplicate was reported as a mail failure"
+
+    def test_a_failed_confirmation_send_does_not_500(self) -> None:
+        # an unreachable relay is temporary; it should not take a plain form post out as a 500
+        user = User.objects.create_user(username="changer", email="changer@example.com", password="pw-for-the-test")
+        self.client.force_login(user)
+
+        with (
+            mock.patch.object(views, "send_email_change_confirmation", side_effect=OSError("smtp down")),
+            self.assertLogs("atlasserver.forcephot.views", level="ERROR"),
+        ):
+            response = self.client.post(
+                reverse("email_change"), {"password": "pw-for-the-test", "new_email": "fresh@example.com"}
+            )
+
+        assert response.status_code == 200, response.status_code
+        assert "could not send the confirmation email" in response.content.decode().lower()
+
+    def test_resend_does_nothing_for_an_already_active_account(self) -> None:
+        User.objects.create_user(username="active", email="active@example.com", password=None)
+        django_mail.outbox.clear()
+
+        self.client.post(reverse("resend_verification"), {"email": "active@example.com"})
+
+        assert not django_mail.outbox
+
+    @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
+    def test_the_link_ignores_the_host_header_when_an_origin_is_configured(self) -> None:
+        """A link in this mail must not be built from the Host header.
+
+        Pinning ALLOWED_HOSTS is not the protection it looks like: it holds wildcard entries, so
+        every subdomain of qub.ac.uk and fallingstar-data.com passes validation. Anyone able to
+        serve one of those could register with a victim's address, aim the Host at their own
+        server, and be handed the victim's token when the victim opened the link.
+        """
+        self.client.post(
+            reverse("register"),
+            {**self.credentials, "email": "newcomer@example.com"},
+            HTTP_HOST="evil.fallingstar-data.com",
+        )
+
+        body = str(django_mail.outbox[0].body)
+        assert "https://fallingstar-data.com/" in body, body
+        assert "evil.fallingstar-data.com" not in body, "the link followed the Host header"
+        assert "evil.fallingstar-data.com" not in django_mail.outbox[0].subject
+
+    @override_settings(SITE_ORIGIN="")
+    def test_the_link_falls_back_to_the_request_without_a_configured_origin(self) -> None:
+        # development runs without one and must keep working. Overridden rather than read from the
+        # ambient settings: CI sets ATLASSERVER_SITE_ORIGIN for the deploy smoke test, so asserting
+        # on what happens to be configured made this test depend on the environment running it.
+        self.register()
+
+        assert "http://testserver/" in str(django_mail.outbox[0].body)
+
+    def test_no_analytics_on_pages_whose_url_carries_a_token(self) -> None:
+        """gtag('config') reports a page view at the current location.
+
+        On these pages that location is the link itself, so the bearer token would be handed to
+        Google Analytics -- and anyone able to read that data could fetch the same URL, pick up a
+        CSRF cookie and post the confirmation. Django's own password reset sidesteps this by moving
+        its token out of the URL; these pages keep it there and opt out of analytics instead.
+        """
+        self.register()
+        link = self.verification_link()
+
+        for response, description in (
+            (self.client.get(link), "the confirmation page"),
+            (self.client.get(link[:-4] + "beef/"), "the invalid-link page"),
+            (self.client.post(link[:-4] + "beef/"), "the invalid-link page on POST"),
+        ):
+            body = response.content.decode()
+            assert "gtag(" not in body, f"{description} reports the token to analytics"
+            assert "googletagmanager" not in body, f"{description} loads the analytics script"
+
+    def test_ordinary_pages_still_report_analytics(self) -> None:
+        # the opt-out has to be confined to the token pages, or it silently disables analytics
+        body = self.client.get(reverse("index")).content.decode()
+
+        assert "gtag(" in body
+        assert "googletagmanager" in body
+
+    def test_a_get_on_the_verification_link_activates_nothing(self) -> None:
+        """Link scanners fetch every URL in an incoming message.
+
+        If a GET activated the account, an attacker could register with someone else's address and
+        have that person's own mail gateway complete the ownership proof for them -- then log in
+        with the password the attacker chose.
+        """
+        self.register()
+        link = self.verification_link()
+
+        response = self.client.get(link)
+
+        assert response.status_code == 200, response.status_code
+        assert User.objects.get(username="newcomer").is_active is False, "a GET activated the account"
+        assert "_auth_user_id" not in self.client.session, "a GET logged the fetcher in"
+
+    def test_the_get_offers_a_form_that_completes_the_verification(self) -> None:
+        # the page a scanner cannot use has to be one the person can
+        self.register()
+        link = self.verification_link()
+
+        self.client.get(link)
+        response = self.client.post(link)
+
+        assert response.status_code == 302, response.status_code
+        assert User.objects.get(username="newcomer").is_active is True
+
+    def test_resend_will_not_reactivate_an_account_an_admin_disabled(self) -> None:
+        """Unchecking is_active is how an account is disabled, not only how one awaits verification.
+
+        Treating the two as one state would make verification a way back in for a disabled account.
+        A PendingEmailVerification row is what tells them apart.
+        """
+        disabled = User.objects.create_user(username="banned", email="banned@example.com", password=None)
+        disabled.last_login = timezone.now()
+        disabled.is_active = False
+        disabled.save()
+        django_mail.outbox.clear()
+
+        self.client.post(reverse("resend_verification"), {"email": "banned@example.com"})
+
+        assert not django_mail.outbox, "a disabled account was sent a link that would reactivate it"
+
+    def test_resend_will_not_reactivate_an_account_disabled_before_its_first_login(self) -> None:
+        """The case the old last_login heuristic could not see.
+
+        An account created by createsuperuser or in the admin, or one that only ever used an API
+        token, has a null last_login while perfectly active. Disable it and the heuristic read it
+        as merely unverified, so anyone holding that mailbox could ask for a link and undo the
+        disable. It has no PendingEmailVerification row, because it never registered.
+        """
+        disabled = User.objects.create_user(username="madeinadmin", email="admin-made@example.com", password=None)
+        assert disabled.last_login is None
+        disabled.is_active = False
+        disabled.save()
+        django_mail.outbox.clear()
+
+        self.client.post(reverse("resend_verification"), {"email": "admin-made@example.com"})
+
+        assert not django_mail.outbox, "an account disabled before its first login was sent a link"
+
+    def test_registering_records_that_the_account_is_awaiting_verification(self) -> None:
+        # the marker is the whole state, so it has to exist for the flow to work at all
+        self.register()
+
+        user = User.objects.get(username="newcomer")
+        assert PendingEmailVerification.objects.filter(user=user).exists()
+
+    def test_activating_in_the_admin_also_clears_the_marker(self) -> None:
+        """verify_email is not the only way an account becomes active.
+
+        An administrator ticking is_active is the usual answer to "I never got the email". If that
+        left the marker behind, disabling the account later would classify it as unverified again
+        and the resend path would hand out a link that undoes the disable.
+        """
+        self.register()
+        user = User.objects.get(username="newcomer")
+
+        user.is_active = True
+        user.save()
+
+        assert not PendingEmailVerification.objects.filter(user=user).exists()
+
+        # and the disable that follows must stick
+        user.is_active = False
+        user.save()
+        django_mail.outbox.clear()
+        self.client.post(reverse("resend_verification"), {"email": "newcomer@example.com"})
+
+        assert not django_mail.outbox, "an admin-activated then disabled account was sent a link"
+
+    def test_logging_in_does_not_disturb_the_marker(self) -> None:
+        # login() saves with update_fields=["last_login"], and the handler skips those; an
+        # unverified account cannot log in anyway, so the marker must survive an unrelated save
+        self.register()
+        user = User.objects.get(username="newcomer")
+
+        user.save(update_fields=["last_login"])
+
+        assert PendingEmailVerification.objects.filter(user=user).exists()
+
+    def test_verifying_clears_the_marker(self) -> None:
+        # leaving it behind would let a later resend issue links for an account that is already
+        # active and verified
+        self.register()
+        self.client.post(self.verification_link())
+
+        user = User.objects.get(username="newcomer")
+        assert user.is_active is True
+        assert not PendingEmailVerification.objects.filter(user=user).exists()
+
+    def test_the_token_url_sends_no_referrer(self) -> None:
+        """Every response at a verification URL, whatever it turns out to be.
+
+        Opting the page out of analytics stops it reporting its own location, but the page still
+        carries the site navigation, and following any of it would send this URL as the Referer
+        under the default same-origin policy -- to a page that does run analytics, where
+        document.referrer would hand the token to somebody who could replay it.
+        """
+        self.register()
+        link = self.verification_link()
+
+        offered = self.client.get(link)
+        assert offered.status_code == 200, offered.status_code
+        assert offered["Referrer-Policy"] == "no-referrer"
+
+        confirmed = self.client.post(link)
+        assert confirmed.status_code == 302, confirmed.status_code
+        assert confirmed["Referrer-Policy"] == "no-referrer"
+
+        # and the invalid-link page, which is served at the same URL once the link is spent
+        spent = self.client.post(link)
+        assert spent.status_code == 400, spent.status_code
+        assert spent["Referrer-Policy"] == "no-referrer"
+
+    def test_a_link_consumed_by_a_parallel_request_is_refused(self) -> None:
+        """Two POSTs carrying the same link cannot both activate the account and log in.
+
+        What retires the token is the write, because the hash covers is_active, so the checks
+        before the transaction only order sequential uses. The view repeats them against a locked
+        row; this is that repeat, with the competing request landing in the gap.
+        """
+        self.register()
+        link = self.verification_link()
+
+        real = views.awaiting_verification
+        calls: list[None] = []
+
+        def consumed_after_the_first_check(candidate: t.Any) -> bool:
+            calls.append(None)
+            pending = real(candidate)
+            if len(calls) == 1:
+                # the competing request activates the account through its own instance, before
+                # this one reaches its write. Its own instance, not this one: the token hashes
+                # is_active, so mutating the object the view is holding would make the view's
+                # first check refuse the link and there would be no race left to test.
+                competitor = User.objects.get(pk=candidate.pk)
+                competitor.is_active = True
+                competitor.save(update_fields=["is_active"])
+            return pending
+
+        with mock.patch.object(views, "awaiting_verification", side_effect=consumed_after_the_first_check):
+            response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        assert "_auth_user_id" not in self.client.session
+        assert len(calls) == 2, calls  # and it was the second check that refused it
+
+    def test_a_disabled_account_cannot_be_reactivated_by_an_old_link(self) -> None:
+        # belt and braces for the check above: the activation view applies the same rule, so a link
+        # obtained by any other route is refused too
+        self.register()
+        link = self.verification_link()
+        user = User.objects.get(username="newcomer")
+        user.last_login = timezone.now()
+        user.save()
+
+        response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        assert User.objects.get(pk=user.pk).is_active is False
+
+
+class EmailUniquenessConstraintTests(TransactionTestCase):
+    """New accounts may not share an address; ones that already did when the index was added may.
+
+    The form check is not enough on its own: it is bypassed by the admin, the shell and a race.
+
+    TransactionTestCase because an IntegrityError aborts the surrounding transaction, which a
+    TestCase would not be able to roll back cleanly.
+    """
+
+    @staticmethod
+    def grandfathered_pair(address: str = "shared@example.com") -> tuple[User, User]:
+        """Build the state migration 0005 leaves behind: two accounts on one address, the later exempt.
+
+        The index already exists by the time these tests run, so the pair cannot simply be created
+        sharing the address. The second account is made on a placeholder, licensed for the shared
+        address, and only then moved onto it -- which is also why the licence is passed in rather
+        than read off the row.
+        """
+        first = User.objects.create_user(username="old1", email=address, password=None)
+        second = User.objects.create_user(username="old2", email="old2@example.com", password=None)
+
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE auth_user SET email_unique_exempt = %s WHERE id = %s", [address.lower(), second.pk])
+
+        second.email = address
+        second.save()
+
+        return first, second
+
+    def test_the_database_rejects_a_duplicate_created_outside_the_form(self) -> None:
+        User.objects.create_user(username="first", email="dupe@example.com", password=None)
+
+        try:
+            User.objects.create_user(username="second", email="dupe@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "a second account with the same email address was accepted"
+        raise AssertionError(msg)
+
+    def test_the_check_ignores_case(self) -> None:
+        # email_is_taken() has always compared case-insensitively; the index has to agree, or the
+        # form and the database disagree about what counts as a duplicate
+        User.objects.create_user(username="lower", email="Mixed@Example.com", password=None)
+
+        try:
+            User.objects.create_user(username="upper", email="mixed@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "an address differing only in case was accepted"
+        raise AssertionError(msg)
+
+    def test_blank_addresses_are_still_allowed_to_repeat(self) -> None:
+        # User.email is blank=True, and accounts without one are not ambiguous for password reset
+        User.objects.create_user(username="blank1", email="", password=None)
+        User.objects.create_user(username="blank2", email="", password=None)
+
+        assert User.objects.filter(email="").count() == 2
+
+    def test_a_user_can_still_be_updated_without_changing_their_email(self) -> None:
+        # a unique index on an expression can trip on an UPDATE that rewrites the same value
+        user = User.objects.create_user(username="stable", email="stable@example.com", password=None)
+        user.first_name = "Changed"
+        user.save()
+
+        assert User.objects.get(pk=user.pk).first_name == "Changed"
+
+    def test_an_account_grandfathered_by_the_migration_keeps_its_shared_address(self) -> None:
+        # the pairs that already existed when 0005 ran are kept, not merged or renamed
+        first, _second = self.grandfathered_pair()
+
+        assert User.objects.filter(email="shared@example.com").count() == 2
+        assert User.objects.get(pk=first.pk).email == "shared@example.com"
+
+    def test_a_new_account_still_cannot_take_a_grandfathered_address(self) -> None:
+        """The oldest row of each set is left unexempt precisely so the address stays claimed.
+
+        Exempting every row would have handed the address back to the next person to register it.
+        """
+        self.grandfathered_pair()
+
+        try:
+            User.objects.create_user(username="newcomer", email="shared@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "a new account took an address that two grandfathered accounts already share"
+        raise AssertionError(msg)
+
+    def test_a_grandfathered_account_is_constrained_again_once_it_changes_address(self) -> None:
+        """The licence covers one address, not the row for ever.
+
+        Were it a flag, a grandfathered account that later moved -- through the confirmed
+        email-change flow, or from the shell -- would stay outside the index and claim nothing, so
+        its new address would still be free for a stranger to register.
+        """
+        _first, second = self.grandfathered_pair()
+
+        # moving off the address it was pardoned for puts it back under the ordinary rule
+        third = User.objects.create_user(username="other", email="elsewhere@example.com", password=None)
+        second.email = "elsewhere@example.com"
+
+        try:
+            second.save()
+        except IntegrityError:
+            assert User.objects.get(pk=third.pk).email == "elsewhere@example.com"
+            return
+        msg = "a grandfathered account took another account's address after moving off its own"
+        raise AssertionError(msg)
+
+    def test_new_accounts_cannot_collide_with_each_other(self) -> None:
+        # nothing created after the migration is ever exempt, so the ordinary rule applies to both
+        User.objects.create_user(username="new1", email="fresh@example.com", password=None)
+
+        try:
+            User.objects.create_user(username="new2", email="FRESH@example.com", password=None)
+        except IntegrityError:
+            return
+        msg = "two accounts created after the migration were allowed to share an address"
+        raise AssertionError(msg)
+
+
+class ApiTokenPageTests(TestCase):
+    """Tokens never expire, and before this page there was no way for a user to rotate one."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="tokenuser", email="token@example.com", password=None)
+        self.other = User.objects.create_user(username="tokenother", email="other@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_requires_login(self) -> None:
+        self.client.logout()
+        response = self.client.get(reverse("apitoken"))
+        assert response.status_code == 302, response.status_code
+        assert "/login" in response["Location"], response["Location"]
+
+    def test_a_user_with_no_token_is_offered_one(self) -> None:
+        content = self.client.get(reverse("apitoken")).content.decode()
+        assert "do not currently have an API token" in content
+
+    def test_the_page_reports_nothing_to_analytics(self) -> None:
+        # the token is in this page's DOM, and third-party script served from another origin runs
+        # with this one's privileges, so a changed tag could read it
+        body = self.client.get(reverse("apitoken")).content.decode()
+
+        assert "gtag(" not in body
+        assert "googletagmanager" not in body
+
+    def test_the_page_is_not_cacheable(self) -> None:
+        # it prints the token in the clear, so a history snapshot outlives the session: on a shared
+        # browser, Back reaches it after logout without passing login_required
+        response = self.client.get(reverse("apitoken"))
+
+        assert "no-store" in response.headers.get("Cache-Control", ""), response.headers.get("Cache-Control")
+
+    def test_create_then_view(self) -> None:
+        response = self.client.post(reverse("apitoken"), data={"action": "create"})
+
+        token = Token.objects.get(user=self.user)
+        # the key is only recoverable from this response, so the create must render rather than
+        # redirect, and it must show the key in full
+        assert response.status_code == 200, response.status_code
+        assert token.key in response.content.decode()
+
+    def test_regenerate_replaces_the_key_and_invalidates_the_old_one(self) -> None:
+        oldkey = Token.objects.create(user=self.user).key
+
+        response = self.client.post(reverse("apitoken"), data={"action": "regenerate"})
+
+        newkey = Token.objects.get(user=self.user).key
+        assert newkey != oldkey
+        assert newkey in response.content.decode()
+        assert not Token.objects.filter(key=oldkey).exists(), "the old key still authenticates"
+
+    def test_the_old_key_stops_authenticating_after_a_regenerate(self) -> None:
+        oldkey = Token.objects.create(user=self.user).key
+        self.client.post(reverse("apitoken"), data={"action": "regenerate"})
+
+        self.client.logout()
+        response = self.client.get(
+            reverse("task-list"), HTTP_AUTHORIZATION=f"Token {oldkey}", HTTP_ACCEPT="application/json"
+        )
+
+        assert response.status_code == 401, response.status_code
+
+    def test_delete_removes_the_token(self) -> None:
+        Token.objects.create(user=self.user)
+
+        response = self.client.post(reverse("apitoken"), data={"action": "delete"})
+
+        # post/redirect/get, so that a reload does not repeat a destructive action
+        assert response.status_code == 302, response.status_code
+        assert not Token.objects.filter(user=self.user).exists()
+
+    def test_an_unknown_action_is_rejected(self) -> None:
+        response = self.client.post(reverse("apitoken"), data={"action": "elevate"})
+        assert response.status_code == 400, response.status_code
+
+    def test_a_user_only_ever_sees_and_touches_their_own_token(self) -> None:
+        otherkey = Token.objects.create(user=self.other).key
+
+        content = self.client.get(reverse("apitoken")).content.decode()
+        assert otherkey not in content
+
+        self.client.post(reverse("apitoken"), data={"action": "regenerate"})
+        assert Token.objects.get(user=self.other).key == otherkey, "another user's token was replaced"
+
+
+class ReadThrottleTests(TestCase):
+    """GET used to return True unconditionally, so reads were entirely unlimited.
+
+    That is the traffic most likely to be hammered: the queue page polls, and task detail reads are
+    public, so an anonymous caller could poll as fast as the server would answer.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="throttled", email="throttled@example.com", password=None)
+        # the counters live in their own cache, not "default" -- see the "throttle" alias in
+        # settings. locmem is not reset between tests, so one test's requests would otherwise
+        # spend the next one's budget.
+        caches["throttle"].clear()
+
+    def tearDown(self) -> None:
+        caches["throttle"].clear()
+
+    # SimpleRateThrottle binds THROTTLE_RATES to the settings dict at class-definition time, so
+    # override_settings(REST_FRAMEWORK=...) does not reach it and the tests silently see the real
+    # rates. Patch the class attribute the throttle actually reads.
+    @staticmethod
+    def rates(**overrides: str) -> t.Any:
+        return mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephottasks": "60/min", **overrides})
+
+    def test_the_read_scope_is_configured(self) -> None:
+        # a scope with no rate is not throttled at all, so a typo here would silently restore the
+        # old "GET is exempt" behaviour
+        assert "forcephotread" in ForcedPhotRateThrottle.THROTTLE_RATES
+
+    def test_reads_are_throttled(self) -> None:
+        self.client.force_login(self.user)
+
+        with self.rates(forcephotread="3/min"):
+            statuses = [
+                self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code for _ in range(5)
+            ]
+
+        assert statuses[:3] == [200, 200, 200], statuses
+        assert 429 in statuses, statuses
+
+    def test_reads_and_writes_are_counted_separately(self) -> None:
+        # a burst of polling must not use up the user's ability to submit
+        self.client.force_login(self.user)
+
+        with self.rates(forcephotread="1/min"):
+            assert self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code == 200
+            assert self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").status_code == 429
+
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"ra": 1.0, "dec": 2.0}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+
+
+class ThirdPartyScriptTests(TestCase):
+    """Every script the site loads from a CDN must carry an integrity hash.
+
+    The queue page's react/react-dom are no longer among them: they are served from
+    static/js/vendor, because an import map cannot express integrity and esm.sh was therefore
+    unverifiable script running in every signed-in session.
+    """
+
+    def test_the_stats_page_pins_bokeh_with_a_matching_hash(self) -> None:
+        from bokeh import __version__ as bokeh_version
+        from bokeh.resources import get_sri_hashes_for_version
+
+        content = self.client.get(reverse("stats")).content.decode()
+        hashes = get_sri_hashes_for_version(bokeh_version)
+
+        for component in ("bokeh", "bokeh-widgets"):
+            filename = f"{component}-{bokeh_version}.min.js"
+            assert f"https://cdn.pydata.org/bokeh/release/{filename}" in content, filename
+            assert f'integrity="sha384-{hashes[filename]}"' in content, filename
+
+    def test_the_bokeh_url_tracks_the_installed_version(self) -> None:
+        # the version used to be hardcoded in the template, so an upgrade of the pin in
+        # pyproject.toml left the page loading a BokehJS that did not match the server-rendered plots
+        from bokeh import __version__ as bokeh_version
+
+        for script in views.bokeh_cdn_scripts():
+            assert bokeh_version in script["src"], script
+            assert script["integrity"].startswith("sha384-")
+
+    def test_no_page_loads_jquery_or_bootstrap_3(self) -> None:
+        """The site's own layout no longer copies DRF's, so it carries neither.
+
+        jQuery came in through that copy (DRF's browsable-API scripts are written against it) and
+        kept Bootstrap 3, which has been end of life since 2019, with it.
+        """
+        user = User.objects.create_user(username="chrome", email="chrome@example.com", password=None)
+        self.client.force_login(user)
+
+        # a <script src=...jquery...>, not the word: the templates explain in comments what the
+        # jQuery they replaced used to do, and those comments are served to the browser
+        loads_jquery = re.compile(r'<script[^>]*\bsrc="[^"]*jquery[^"]*"', re.IGNORECASE)
+        # $(...) or $.ajax(...), but not a bare "$" in prose or a jQuery-free template literal
+        uses_dollar = re.compile(r"[^\w$]\$[.(]")
+
+        pages = ["index", "faq", "apiguide", "resultdesc", "stats", "apitoken", "login", "register"]
+        for name in pages:
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            assert not loads_jquery.search(content), f"{name} loads jQuery"
+            assert not uses_dollar.search(content), f"{name} calls jQuery"
+            assert "bootstrap@3" not in content, f"{name} loads Bootstrap 3"
+            assert "bootstrap@5" in content, f"{name} does not load Bootstrap 5"
+
+    def test_the_browsable_api_wears_the_site_chrome(self) -> None:
+        """DRF's own base template is used, with only the blocks it publishes overridden.
+
+        The 409-line vendored copy that used to provide this drifted from DRF's on every upgrade,
+        so the override is deliberately small -- which makes it worth pinning that the page really
+        does come out with the site's navigation rather than DRF's.
+        """
+        user = User.objects.create_user(username="browsable", email="b@example.com", password=None)
+        self.client.force_login(user)
+
+        content = self.client.get(reverse("task-list"), {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+
+        assert "django-rest-framework.org" not in content, "DRF's own branding is still in the navbar"
+        assert "main.css" in content, "the site stylesheet is not loaded"
+        for label in ("Home", "Output", "API Guide", "FAQ", "Stats &amp; Issues"):
+            assert label in content, label
+        # and DRF's own page is still there underneath, not replaced by ours
+        assert "Force Phot Task List" in content
+        assert "bootstrap.min.css" in content, "DRF's stylesheet was dropped, so its widgets are unstyled"
+
+    def test_every_cdn_script_carries_an_integrity_hash(self) -> None:
+        user = User.objects.create_user(username="sri", email="sri@example.com", password=None)
+        self.client.force_login(user)
+
+        # <script src="https://..."> with no integrity= before the tag closes
+        unpinned = re.compile(r'<script\b(?![^>]*\bintegrity=)[^>]*\bsrc="https://[^"]+"[^>]*>')
+
+        for name in ("index", "stats", "task-list"):
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            found = [
+                tag
+                for tag in unpinned.findall(content)
+                # Google Analytics is loaded from a URL whose contents google changes at will, so
+                # a hash would break the page rather than protect it
+                if "googletagmanager.com" not in tag
+            ]
+            assert not found, f"{name} has CDN scripts without integrity: {found}"
+
+    def test_the_queue_page_loads_react_from_this_site(self) -> None:
+        user = User.objects.create_user(username="importmap", email="importmap@example.com", password=None)
+        self.client.force_login(user)
+
+        # the viewset content-negotiates, and the default Accept gets the JSON representation
+        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
+        content = response.content.decode()
+
+        assert "esm.sh" not in content, "react is being fetched from a third-party CDN again"
+        assert "js/vendor/react.min.js" in content, content[:400]
+        assert "js/vendor/react-dom-client.min.js" in content
+
+
+class QueueRecalcHandoffTests(TestCase):
+    """Renumbering moved out of the request and into the task runner loop.
+
+    It used to run inline on every submit and delete, holding a lock on every queued row while the
+    user waited, which also serialised concurrent submitters behind one another.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="recalcuser", email="recalc@example.com", password=None)
+        caches["default"].delete(taskqueue.RECALC_GENERATION_CACHEKEY)
+        self.lastseen = taskqueue.recalc_generation()
+
+    def renumbering_requested(self) -> bool:
+        """Whether a request has arrived since this test last looked, as the runner asks it."""
+        generation = taskqueue.recalc_generation()
+        requested = generation != self.lastseen
+        self.lastseen = generation
+        return requested
+
+    def test_a_request_is_seen_once(self) -> None:
+        assert self.renumbering_requested() is False
+
+        taskqueue.request_recalc()
+
+        assert self.renumbering_requested() is True
+        assert self.renumbering_requested() is False, "the same request was seen twice"
+
+    def test_a_request_during_a_renumbering_is_not_swallowed(self) -> None:
+        """The lost update a clear-on-consume flag had.
+
+        The runner reads the counter, renumbers, and only then records what it read. A request
+        landing in between leaves a value it has not recorded, so the next pass still sees it --
+        where deleting the flag after reading it would have thrown that request away.
+        """
+        taskqueue.request_recalc()
+        seen = taskqueue.recalc_generation()
+
+        # arrives while the runner is renumbering
+        taskqueue.request_recalc()
+
+        # the runner records the value it read before renumbering, not the current one
+        self.lastseen = seen
+
+        assert self.renumbering_requested() is True
+
+    def test_submitting_asks_for_a_renumbering_without_doing_one(self) -> None:
+        self.client.force_login(self.user)
+
+        with mock.patch.object(taskqueue, "calculate_queue_positions") as recalc:
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"ra": 1.0, "dec": 2.0}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+        assert not recalc.called, "the renumbering must be left to the task runner"
+        assert self.renumbering_requested() is True
+
+    def test_a_submitted_task_gets_a_provisional_position(self) -> None:
+        # NULL would render as no queue position at all until the runner's next pass
+        self.client.force_login(self.user)
+        existing = Task.objects.create(user=self.user, ra=1.0, dec=2.0, queuepos_relative=4)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 3.0, "dec": 4.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        newtask = Task.objects.exclude(id=existing.id).get()
+        assert newtask.queuepos_relative == 5, newtask.queuepos_relative
+
+    def test_deleting_a_queued_task_asks_for_a_renumbering(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+        self.renumbering_requested()
+
+        response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 204, response.status_code
+        assert self.renumbering_requested() is True
+
+    def test_deleting_a_finished_task_does_not(self) -> None:
+        # a finished task holds no queue position, so nothing downstream of it moves
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+        self.renumbering_requested()
+
+        response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 204, response.status_code
+        assert self.renumbering_requested() is False
 
 
 class TaskRunnerResultFileTests(TestCase):

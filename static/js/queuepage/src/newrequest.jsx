@@ -1,6 +1,7 @@
 'use strict';
 
 import React from "react"
+import { csrfHeader } from "csrftoken";
 
 let submission_in_progress = false;
 
@@ -21,113 +22,120 @@ function errortext(value) {
     return String(value);
 }
 
-export class NewRequest extends React.Component {
-    get_defaultstate() {
-        // localStorage.getItem('') will be null if the key doesn't exist and null != false,
-        // so != false will default to true, and != true will default to false.
-        return {
-            showradechelp: false,
-            radeclist: localStorage.getItem('radeclist') != null ? localStorage.getItem('radeclist') : '',
-            mjd_min: localStorage.getItem('mjd_min') != null ? localStorage.getItem('mjd_min') : getDefaultMjdMin(),
-            mjd_max: localStorage.getItem('mjd_max') != null ? localStorage.getItem('mjd_max') : '',
-            comment: localStorage.getItem('comment') != null ? localStorage.getItem('comment') : '',
-            use_reduced: localStorage.getItem('use_reduced') == 'true',
-            send_email: localStorage.getItem('send_email') != 'false',
-            enable_stack_rock: localStorage.getItem('enable_stack_rock') == 'true',
-            enable_propermotion: localStorage.getItem('enable_propermotion') == 'true',
-            radec_epoch_year: localStorage.getItem('radec_epoch_year') != null ? localStorage.getItem('radec_epoch_year') : '',
-            propermotion_ra: localStorage.getItem('propermotion_ra') != null ? localStorage.getItem('propermotion_ra') : 0.,
-            propermotion_dec: localStorage.getItem('propermotion_dec') != null ? localStorage.getItem('propermotion_dec') : 0.,
-            errors: [],
-            httperror: '',
-            submission_in_progress: false,  // duplicated to trigger a render
-        };
+/*
+ * Fields whose value is remembered across page loads, and how to read one back.
+ *
+ * This was fifteen separate localStorage.getItem calls in get_defaultstate() and a matching setItem
+ * in all fifteen onChange handlers. One table, read here and written in setField.
+ *
+ * `clearedOnSubmit` marks the ones a successful submission forgets: they describe the request that
+ * was just made. use_reduced and send_email are not among them -- they are standing preferences,
+ * and clearing them turned "email me when completed" back on for someone who had turned it off.
+ */
+const STORED_FIELDS = {
+    radeclist: { fallback: '', clearedOnSubmit: true },
+    mjd_min: { fallback: getDefaultMjdMin, clearedOnSubmit: true },
+    mjd_max: { fallback: '', clearedOnSubmit: true },
+    comment: { fallback: '', clearedOnSubmit: true },
+    radec_epoch_year: { fallback: '', clearedOnSubmit: true },
+    propermotion_ra: { fallback: 0., clearedOnSubmit: true },
+    propermotion_dec: { fallback: 0., clearedOnSubmit: true },
+    enable_stack_rock: { fallback: false, clearedOnSubmit: true },
+    enable_propermotion: { fallback: false, clearedOnSubmit: true },
+    use_reduced: { fallback: false },
+    send_email: { fallback: true },
+};
+
+/** Remember a field's value for the next visit. localStorage stringifies whatever it is given. */
+function storeValue(name, value) {
+    localStorage.setItem(name, value);
+}
+
+function storedValue(name) {
+    const field = STORED_FIELDS[name];
+    const stored = localStorage.getItem(name);
+
+    // a checkbox round-trips as the string "true"/"false"; which fields those are is already said
+    // by the type of their fallback, so it does not need saying twice in the table
+    if (typeof field.fallback === 'boolean') {
+        return stored == null ? field.fallback : stored === 'true';
+    }
+    if (stored != null) {
+        return stored;
     }
 
-    constructor(props) {
-        super(props);
+    return typeof field.fallback === 'function' ? field.fallback() : field.fallback;
+}
 
-        this.state = this.get_defaultstate();
+function defaultFormValues() {
+    return Object.fromEntries(Object.keys(STORED_FIELDS).map((name) => [name, storedValue(name)]));
+}
 
-        this.handlechange_mjd_min = this.handlechange_mjd_min.bind(this);
-        this.update_mjd_min = this.update_mjd_min.bind(this);
-        this.handlechange_mjd_max = this.handlechange_mjd_max.bind(this);
-        this.update_mjd_max = this.update_mjd_max.bind(this);
-        this.submit = this.submit.bind(this);
+/** Render an MJD as the ISO timestamp shown under the input. */
+function mjdCaption(strmjd, blankcaption) {
+    if (strmjd === '') {
+        return blankcaption;
     }
 
-    componentDidMount() {
-        this.update_mjd_min(this.state.mjd_min);
-        this.update_mjd_max(this.state.mjd_max);
+    try {
+        const isostr = dateFromMJD(parseFloat(strmjd)).toISOString();
+        return isostr.includes('.') ? isostr.split('.')[0] + 'Z' : isostr;
+    } catch (err) {
+        console.log('error', err, err.message);
+        return 'error';
     }
+}
 
-    update_mjd_min(strmjdmin) {
-        let isostrmin = '';
-        if (strmjdmin == '') {
-            isostrmin = '(leave blank to fetch earliest)'
-        } else {
-            try {
-                const mjdmin = parseFloat(strmjdmin);
-                const isostr_withmilliseconds = dateFromMJD(mjdmin).toISOString();
-                isostrmin = (
-                    isostr_withmilliseconds.includes('.') ?
-                        isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
-            }
-            catch (err) {
-                isostrmin = 'error'
-                console.log('error', err, err.message);
+export function NewRequest({ allow_stack_rock, fetchData }) {
+    const [values, setValues] = React.useState(defaultFormValues);
+    const [showradechelp, setShowradechelp] = React.useState(false);
+    const [errors, setErrors] = React.useState({});
+    const [httperror, setHttperror] = React.useState('');
+    const [submitting, setSubmitting] = React.useState(false);
+
+    // was one binding per field, each duplicating the setState-then-setItem pair.
+    //
+    // Written here rather than from an effect on `values`: an effect also runs on mount, which
+    // persisted the *defaults* before the user had touched anything -- and mjd_min's default is
+    // "30 days ago", so once stored it was read back verbatim on every later visit and stopped
+    // moving. Only a field the user actually changed is remembered.
+    const setField = (name) => (event) => {
+        const input = event.target;
+        const value = input.type === 'checkbox' ? input.checked : input.value;
+        setValues((previous) => ({ ...previous, [name]: value }));
+        storeValue(name, value);
+    };
+
+    // the captions are derived from the MJD values, so they are computed during render rather than
+    // stored: as state they had to be recomputed by hand after a reset, and were forgotten once
+    const mjd_min_isoformat = mjdCaption(values.mjd_min, '(leave blank to fetch earliest)');
+    const mjd_max_isoformat = mjdCaption(values.mjd_max, '(leave blank to fetch latest)');
+
+    function resetForm() {
+        for (const [name, field] of Object.entries(STORED_FIELDS)) {
+            if (field.clearedOnSubmit) {
+                localStorage.removeItem(name);
             }
         }
-        this.setState({ 'mjd_min': strmjdmin, 'mjd_min_isoformat': isostrmin });
+        setValues(defaultFormValues());
     }
 
-    handlechange_mjd_min(event) {
-        this.update_mjd_min(event.target.value);
-        localStorage.setItem('mjd_min', event.target.value);
-    }
-
-    update_mjd_max(strmjdmax) {
-        let isostrmax = '';
-        if (strmjdmax == '') {
-            isostrmax = '(leave blank to fetch latest)'
-        } else {
-            try {
-                const mjdmax = parseFloat(strmjdmax);
-                const isostr_withmilliseconds = dateFromMJD(mjdmax).toISOString();
-                isostrmax = (
-                    isostr_withmilliseconds.includes('.') ?
-                        isostr_withmilliseconds.split('.')[0] + 'Z' : isostr_withmilliseconds);
-            }
-            catch (err) {
-                isostrmax = 'error'
-                console.log('error', err, err.message);
-            }
-        }
-        this.setState({ 'mjd_max': strmjdmax, 'mjd_max_isoformat': isostrmax });
-    }
-
-    handlechange_mjd_max(event) {
-        this.update_mjd_max(event.target.value);
-        localStorage.setItem('mjd_max', event.target.value);
-    }
-
-    async submit() {
+    async function submit() {
         const datadict = {
-            radeclist: this.state.radeclist,
-            mjd_min: this.state.mjd_min == '' ? null : this.state.mjd_min,
-            mjd_max: this.state.mjd_max == '' ? null : this.state.mjd_max,
-            use_reduced: this.state.use_reduced,
-            send_email: this.state.send_email,
-            comment: this.state.comment,
-            request_type: (this.props.allow_stack_rock && this.state.enable_stack_rock) ? 'SSOSTACK' : 'FP',
+            radeclist: values.radeclist,
+            mjd_min: values.mjd_min === '' ? null : values.mjd_min,
+            mjd_max: values.mjd_max === '' ? null : values.mjd_max,
+            use_reduced: values.use_reduced,
+            send_email: values.send_email,
+            comment: values.comment,
+            request_type: (allow_stack_rock && values.enable_stack_rock) ? 'SSOSTACK' : 'FP',
         };
 
-        if (this.state.enable_propermotion) {
-            datadict['radec_epoch_year'] = this.state.radec_epoch_year;
-            datadict['propermotion_ra'] = this.state.propermotion_ra;
-            datadict['propermotion_dec'] = this.state.propermotion_dec;
+        if (values.enable_propermotion) {
+            datadict['radec_epoch_year'] = values.radec_epoch_year;
+            datadict['propermotion_ra'] = values.propermotion_ra;
+            datadict['propermotion_dec'] = values.propermotion_dec;
         }
-        console.log(datadict)
 
         fetch(api_url_base,
             {
@@ -135,67 +143,50 @@ export class NewRequest extends React.Component {
                 method: "POST",
                 body: JSON.stringify(datadict),
                 headers: {
-                    "X-CSRFToken": getCookie("csrftoken"),
+                    ...csrfHeader(),
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
                 },
             })
             .then((response) => {
                 submission_in_progress = false;
-                this.setState({ 'httperror': '', 'submission_in_progress': false });
+                setSubmitting(false);
+                setHttperror('');
                 console.log('New task: HTTP response ', response.status);
 
                 if (response.status == 201) {
                     console.log("New task: successful creation", response.status);
-                    localStorage.removeItem('radeclist');
-                    localStorage.removeItem('enable_propermotion');
-                    localStorage.removeItem('enable_stack_rock');
-                    localStorage.removeItem('radec_epoch_year');
-                    localStorage.removeItem('propermotion_ra');
-                    localStorage.removeItem('propermotion_dec');
-                    localStorage.removeItem('mjd_min');
-                    localStorage.removeItem('mjd_max');
-                    localStorage.removeItem('comment');
-
-                    this.setState(this.get_defaultstate());
-                    // the ISO date captions are derived state, so recompute them or they keep
-                    // describing the values from the request that was just submitted
-                    this.update_mjd_min(getDefaultMjdMin());
-                    this.update_mjd_max('');
+                    setErrors({});
+                    resetForm();
                     response.json().then(data => {
-                        // console.log('Creation data', data);
-                        data.forEach((task, i) => {
+                        data.forEach((task) => {
                             console.log('Created new task', task.id);
                             newtaskids.push(task.id);
                         })
                     });
                     window.history.pushState({}, document.title, api_url_base);
-                    this.props.fetchData(true);
+                    fetchData(true);
                 }
                 else if (response.status == 400) {
                     response.json().then(data => {
                         console.log('New task: errors returned', data);
-                        this.setState({ 'errors': data });
+                        setErrors(data);
                     });
                 }
                 else {
                     console.log("New task: Error on submission: ", response.status);
-                    this.setState({
-                        'httperror': 'Request failed (HTTP ' + response.status + '). You may need to log in again.'
-                    });
+                    setHttperror('Request failed (HTTP ' + response.status + '). You may need to log in again.');
                 };
             })
             .catch(error => {
                 submission_in_progress = false;
                 console.log('New task HTTP request failed', error);
-                this.setState({
-                    'httperror': 'HTTP request failed. Check internet connection and server are online.',
-                    'submission_in_progress': false
-                });
+                setSubmitting(false);
+                setHttperror('HTTP request failed. Check internet connection and server are online.');
             });
     }
 
-    onSubmit(event) {
+    function onSubmit(event) {
         event.preventDefault();
         if (submission_in_progress) {
             console.log('New task: Submission already in progress');
@@ -204,119 +195,114 @@ export class NewRequest extends React.Component {
 
         console.log('New task: Submitting', api_url_base);
         submission_in_progress = true;
-        this.setState({ 'submission_in_progress': true });
-        this.submit();
+        setSubmitting(true);
+        submit();
     }
 
-    render() {
-        const formcontent = [];
+    const formcontent = [];
 
+    formcontent.push(
+        <ul key="ulradec">
+            <li><label htmlFor="id_radeclist">RA Dec / MPC names:</label>
+                <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={values.radeclist} onChange={setField('radeclist')}></textarea>
+                {/* a button, not an <a> without an href: this toggles a panel rather than
+                    navigating, and a hrefless link is not focusable, so it could not be reached
+                    by keyboard. type="button" matters here — inside a form, a button submits. */}
+                &nbsp;<button type="button" className="linkbutton" aria-expanded={showradechelp} aria-controls="radec_help" onClick={() => setShowradechelp(!showradechelp)}>Help</button>
+                {showradechelp ? <div id="radec_help" style={{ display: 'block', clear: 'right', fontSize: 'small' }} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
+            </li>
+            {'radeclist' in errors ? <ul className="errorlist"><li>{errortext(errors['radeclist'])}</li></ul> : ''}
+        </ul>
+    );
+
+    formcontent.push(
+        <div key="propermotion_checkbox" id="propermotion_checkboxdiv" style={{ width: '100%' }}>
+            <label style={{ width: '100%' }}>
+                <input type="checkbox" checked={values.enable_propermotion} onChange={setField('enable_propermotion')} style={{ position: 'static', display: 'inline', width: '5em' }} /> Proper motion
+            </label>
+        </div>);
+    if (values.enable_propermotion) {
         formcontent.push(
-            <ul key="ulradec">
-                <li><label htmlFor="id_radeclist">RA Dec / MPC names:</label>
-                    <textarea name="radeclist" cols="" rows="3" required id="id_radeclist" value={this.state.radeclist} onChange={e => { this.setState({ 'radeclist': e.target.value }); localStorage.setItem("radeclist", e.target.value); }}></textarea>
-                    {/* a button, not an <a> without an href: this toggles a panel rather than
-                        navigating, and a hrefless link is not focusable, so it could not be reached
-                        by keyboard. type="button" matters here — inside a form, a button submits. */}
-                    &nbsp;<button type="button" className="linkbutton" aria-expanded={this.state.showradechelp} aria-controls="radec_help" onClick={() => { this.setState({ 'showradechelp': !this.state.showradechelp }) }}>Help</button>
-                    {this.state.showradechelp ? <div id="radec_help" style={{ display: 'block', clear: 'right', fontSize: 'small' }} className="collapse">Each line should consist of a right ascension and a declination coordinate (J2000) in decimal or sexagesimal notation (RA/DEC separated by a space or a comma) or 'mpc ' and a Minor Planet Center object name (e.g. 'mpc Makemake'). Limit of 100 objects per submission. If requested, email notification will be sent only after all targets in the list have been processed.</div> : null}
-                </li>
-                {'radeclist' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['radeclist'])}</li></ul> : ''}
-            </ul>
+            <div key="propermotion_panel" id="propermotion_panel" style={{ background: 'rgb(235,235,235)' }}>
+                <p key="propermotiondesc" style={{ fontSize: 'small' }}>If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
+                <ul key="propermotion_inputs">
+                    <li key="radec_epoch_year"><label htmlFor="id_radec_epoch_year">Epoch year:</label><input type="number" name="radec_epoch_year" step="0.1" id="id_radec_epoch_year" value={values.radec_epoch_year} onChange={setField('radec_epoch_year')} /></li>
+                    <li key="propermotion_ra"><label htmlFor="id_propermotion_ra">PM RA [mas/yr]</label><input type="number" name="propermotion_ra" step="any" id="id_propermotion_ra" value={values.propermotion_ra} onChange={setField('propermotion_ra')} /></li>
+                    <li key="propermotion_dec"><label htmlFor="id_propermotion_dec">PM Dec [mas/yr]</label><input type="number" name="propermotion_dec" step="any" id="id_propermotion_dec" value={values.propermotion_dec} onChange={setField('propermotion_dec')} /></li>
+                </ul>
+            </div>
         );
+    }
 
+    if (allow_stack_rock) {
         formcontent.push(
-            <div key="propermotion_checkbox" id="propermotion_checkboxdiv" style={{ width: '100%' }}>
+            <div key="stack_rock" id="stack_rock" style={{ width: '100%' }}>
                 <label style={{ width: '100%' }}>
-                    <input type="checkbox" checked={this.state.enable_propermotion} onChange={e => { this.setState({ 'enable_propermotion': e.target.checked }); localStorage.setItem("enable_propermotion", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Proper motion
+                    <input type="checkbox" checked={values.enable_stack_rock} onChange={setField('enable_stack_rock')} style={{ position: 'static', display: 'inline', width: '5em' }} /> Get stack of SS object images
                 </label>
             </div>);
-        if (this.state.enable_propermotion) {
+
+        if (values.enable_stack_rock) {
             formcontent.push(
-                <div key="propermotion_panel" id="propermotion_panel" style={{ background: 'rgb(235,235,235)' }}>
-                    <p key="propermotiondesc" style={{ fontSize: 'small' }}>If the star is moving, the J2000 coordinates above are correct for a specified epoch along with proper motions in RA (angle) and Dec in milliarcseconds. The epoch of ATLAS observations varies from 2015.5 to the present. Note: these are angular velocities, not rates of coordinate change.</p>
-                    <ul key="propermotion_inputs">
-                        <li key="radec_epoch_year"><label htmlFor="id_radec_epoch_year">Epoch year:</label><input type="number" name="radec_epoch_year" step="0.1" id="id_radec_epoch_year" value={this.state.radec_epoch_year} onChange={e => { this.setState({ 'radec_epoch_year': e.target.value }); localStorage.setItem("radec_epoch_year", e.target.value); }} /></li>
-                        <li key="propermotion_ra"><label htmlFor="id_propermotion_ra">PM RA [mas/yr]</label><input type="number" name="propermotion_ra" step="any" id="id_propermotion_ra" value={this.state.propermotion_ra} onChange={e => { this.setState({ 'propermotion_ra': e.target.value }); localStorage.setItem("propermotion_ra", e.target.value); }} /></li>
-                        <li key="propermotion_dec"><label htmlFor="id_propermotion_dec">PM Dec [mas/yr]</label><input type="number" name="propermotion_dec" step="any" id="id_propermotion_dec" value={this.state.propermotion_dec} onChange={e => { this.setState({ 'propermotion_dec': e.target.value }); localStorage.setItem("propermotion_dec", e.target.value); }} /></li>
-                    </ul>
+                <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
+                    <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
                 </div>
             );
         }
+    }
 
-        if (this.props.allow_stack_rock) {
-            formcontent.push(
-                <div key="stack_rock" id="stack_rock" style={{ width: '100%' }}>
-                    <label style={{ width: '100%' }}>
-                        <input type="checkbox" checked={this.state.enable_stack_rock} onChange={e => { this.setState({ 'enable_stack_rock': e.target.checked }); localStorage.setItem("enable_stack_rock", e.target.checked); }} style={{ position: 'static', display: 'inline', width: '5em' }} /> Get stack of SS object images
-                    </label>
-                </div>);
+    formcontent.push(
+        <ul key="ulmjdoptions">
+            <li key="mjd_min">
+                <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={values.mjd_min} onChange={setField('mjd_min')} />
+                {/* the emoji is the whole of this control, so without a label there is nothing
+                    for a screen reader (or a hover) to say about it */}
+                <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { localStorage.removeItem('mjd_min'); setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() })); }}>↩️</button>
+                <p className="inputisodate" id='id_mjd_min_isoformat'>{mjd_min_isoformat}</p>
+            </li>
+            <li key="mjd_max">
+                <label htmlFor="id_mjd_max">MJD max:</label><input type="number" name="mjd_max" step="any" id="id_mjd_max" value={values.mjd_max} onChange={setField('mjd_max')} />
+                <p className="inputisodate" id='id_mjd_max_isoformat'>{mjd_max_isoformat}</p>
+                {'mjd_max' in errors ? <ul className="errorlist"><li>{errortext(errors['mjd_max'])}</li></ul> : ''}
+            </li>
+            <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={values.comment} onChange={setField('comment')} /></li>
 
-            if (this.state.enable_stack_rock) {
-                formcontent.push(
-                    <div key="stackrock_panel" id="stackrock_panel" style={{ background: 'rgb(235,235,235)' }}>
-                        <p key="stackrockdesc" style={{ fontSize: 'small' }}>Perform a shift &amp; stack operation for the MPC object entered above.</p>
-                    </div>
-                );
-            }
-        }
+            <li key="use_reduced"><input type="checkbox" name="use_reduced" id="id_use_reduced" checked={values.use_reduced} onChange={setField('use_reduced')} /><label htmlFor="id_use_reduced" >Use reduced (input) instead of difference images (<a href="../faq/">FAQ</a>)</label></li>
+            <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={values.send_email} onChange={setField('send_email')} /><label htmlFor="id_send_email">Email me when completed</label></li>
+        </ul>
+    );
 
+    // radeclist and mjd_max are shown next to their own inputs above. Everything else the API
+    // rejects (comment, mjd_min, radec_epoch_year, propermotion_*, ...) is shown here, so that
+    // a validation error can never leave the form looking like it simply did nothing.
+    const shownerrorkeys = ['radeclist', 'mjd_max'];
+    const remainingerrors = Object.entries(errors).filter(
+        ([key]) => !shownerrorkeys.includes(key));
+
+    if (remainingerrors.length > 0) {
         formcontent.push(
-            <ul key="ulmjdoptions">
-                <li key="mjd_min">
-                    <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={this.state.mjd_min} onChange={this.handlechange_mjd_min} />
-                    {/* the emoji is the whole of this control, so without a label there is nothing
-                        for a screen reader (or a hover) to say about it */}
-                    <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { this.setState({ 'mjd_min': getDefaultMjdMin() }); this.update_mjd_min(getDefaultMjdMin()); localStorage.removeItem('mjd_min'); }}>↩️</button>
-                    <p className="inputisodate" id='id_mjd_min_isoformat'>{this.state.mjd_min_isoformat}</p>
-                </li>
-                <li key="mjd_max">
-                    <label htmlFor="id_mjd_max">MJD max:</label><input type="number" name="mjd_max" step="any" id="id_mjd_max" value={this.state.mjd_max} onChange={this.handlechange_mjd_max} />
-                    <p className="inputisodate" id='id_mjd_max_isoformat'>{this.state.mjd_max_isoformat}</p>
-                    {'mjd_max' in this.state.errors ? <ul className="errorlist"><li>{errortext(this.state.errors['mjd_max'])}</li></ul> : ''}
-                </li>
-                <li key="comment"><label htmlFor="id_comment">Comment:</label><input type="text" name="comment" maxLength="300" id="id_comment" value={this.state.comment} onChange={e => { this.setState({ 'comment': e.target.value }); localStorage.setItem("comment", e.target.value); }} /></li>
-
-                <li key="use_reduced"><input type="checkbox" name="use_reduced" id="id_use_reduced" checked={this.state.use_reduced} onChange={e => { this.setState({ 'use_reduced': e.target.checked }); localStorage.setItem("use_reduced", e.target.checked); }} /><label htmlFor="id_use_reduced" >Use reduced (input) instead of difference images (<a href="../faq/">FAQ</a>)</label></li>
-                <li key="send_email"><input type="checkbox" name="send_email" id="id_send_email" checked={this.state.send_email} onChange={e => { this.setState({ 'send_email': e.target.checked }); localStorage.setItem("send_email", e.target.checked); }} /><label htmlFor="id_send_email">Email me when completed</label></li>
+            <ul key="othererrors" className="errorlist">
+                {remainingerrors.map(([key, value]) => (
+                    <li key={key}>{key == 'non_field_errors' ? '' : key + ': '}{errortext(value)}</li>
+                ))}
             </ul>
         );
-
-        // radeclist and mjd_max are shown next to their own inputs above. Everything else the API
-        // rejects (comment, mjd_min, radec_epoch_year, propermotion_*, ...) is shown here, so that
-        // a validation error can never leave the form looking like it simply did nothing.
-        const shownerrorkeys = ['radeclist', 'mjd_max'];
-        const remainingerrors = Object.entries(this.state.errors).filter(
-            ([key]) => !shownerrorkeys.includes(key));
-
-        if (remainingerrors.length > 0) {
-            formcontent.push(
-                <ul key="othererrors" className="errorlist">
-                    {remainingerrors.map(([key, value]) => (
-                        <li key={key}>{key == 'non_field_errors' ? '' : key + ': '}{errortext(value)}</li>
-                    ))}
-                </ul>
-            );
-        }
-
-        const submitclassname = submission_in_progress ? 'btn btn-info submitting' : 'btn btn-info';
-        const submitvalue = submission_in_progress ? 'Requesting...' : 'Request';
-
-        formcontent.push(<input key="submitbutton" className={submitclassname} id="submitrequest" type="submit" value={submitvalue} />);
-        if (this.state.httperror != '') {
-            formcontent.push(<p key="httperror" style={{ 'color': 'red' }}>{this.state.httperror}</p>);
-        }
-
-        return (
-            <div key="newrequestcontainer" id="newrequestcontainer">
-                <div key="newrequestsource" className="newrequest" id="newrequestsource">
-                    <div key="newtask" className="task">
-                        <h2 key="newtaskheader">New request</h2>
-                        <form key="newtaskform" id="newrequest" onSubmit={this.onSubmit.bind(this)}>
-                            {formcontent}
-                        </form>
-                    </div>
-                </div>
-            </div>);
     }
+
+    formcontent.push(<input key="submitbutton" className={submitting ? 'btn btn-primary submitting' : 'btn btn-primary'} id="submitrequest" type="submit" value={submitting ? 'Requesting...' : 'Request'} />);
+    if (httperror != '') {
+        formcontent.push(<p key="httperror" style={{ 'color': 'red' }}>{httperror}</p>);
+    }
+
+    return (
+        <div key="newrequestcontainer" id="newrequestcontainer">
+            <div key="newrequestsource" className="newrequest" id="newrequestsource">
+                <div key="newtask" className="task">
+                    <h2 key="newtaskheader">New request</h2>
+                    <form key="newtaskform" id="newrequest" onSubmit={onSubmit}>
+                        {formcontent}
+                    </form>
+                </div>
+            </div>
+        </div>);
 }

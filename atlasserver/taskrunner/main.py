@@ -29,11 +29,11 @@ REMOTE_SERVER = "atlas"
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
-# import atlasserver.wsgi
 django.setup()
 
 import sys
 
+from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import send_task_callback
 
@@ -61,9 +61,9 @@ def mjdnow() -> float:
     return datetime_to_mjd(datetime.datetime.now(datetime.UTC))
 
 
-def localresultfileprefix(id: int) -> str:
+def localresultfileprefix(taskid: int) -> str:
     """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / f"job{id:05d}"))
+    return str(Path(settings.RESULTS_DIR / f"job{taskid:05d}"))
 
 
 def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
@@ -188,6 +188,8 @@ def remote_result_filename(task) -> str | None:
 
 def build_fp_command(task, remoteresultfile: Path) -> str:
     """Return the remote shell command for a forced photometry task."""
+    # falsy exactly when there is no MPC target: task_mpc_name_not_blank keeps whitespace out of
+    # the column, so this needs no normalising of its own
     if task.mpc_name:
         atlascommand = f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
     else:
@@ -217,9 +219,6 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
     # 2026-06-03 KWS Temporary hack. Only specified users can request TDO data.
     if task.user_id in settings.TEST_USERS:
         atlascommand += " tdo=1"
-
-    # for debugging because force.sh takes a long time to run
-    # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
 
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}; "
@@ -352,23 +351,10 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     if stdout:
         stdoutlines = stdout.split("\n")
         logfunc(f"{REMOTE_SERVER} STDOUT: ({len(stdoutlines)} lines of output)")
-        # for line in stdoutlines:
-        #     log(logprefix + f"{remoteServer} STDOUT: {line}")
 
     if stderr:
         for line in stderr.split("\n"):
             logfunc(f"{REMOTE_SERVER} STDERR: {line}")
-
-    # output realtime ssh output line by line
-    # while True:
-    #     stdoutline = p.stdout.readline()
-    #     stderrline = p.stderr.readline()
-    #     if not stdoutline and not stderrline:
-    #         break
-    #     if stdoutline:
-    #         log(logprefix + f"{remoteServer} STDOUT >>> {stdoutline.rstrip()}")
-    #     if stderrline:
-    #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
     if not task_exists(taskid=task.id):  # check if job was cancelled
         return None, None
@@ -478,7 +464,8 @@ def notify_finished(task, logfunc) -> None:
     if task.callback_url:
         try:
             send_task_callback(task=task, logfunc=logfunc)
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001 (a callback is a courtesy; no failure of it
+            # may stop the task being marked finished)
             logfunc(f"ERROR: unexpected failure sending callback for task {task.id}: {ex}")
 
     send_email_if_needed(task=task, logfunc=logfunc)
@@ -577,12 +564,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     slot fields are frozen for that whole window (nothing is reaped or dispatched), so without the
     flag the file would confidently describe workers that may have already exited.
     """
-    oldest_queued = (
-        Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
-        .order_by("timestamp")
-        .values_list("timestamp", flat=True)
-        .first()
-    )
+    oldest_queued = Task.queued().order_by("timestamp").values_list("timestamp", flat=True).first()
 
     status = {
         "written": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -591,7 +573,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "slots_busy": len(procs_taskids),
         "running_taskids": sorted(procs_taskids.values()),
         "maintenance": maintenance,
-        "queued_task_count": Task.objects.filter(finishtimestamp__isnull=True, is_archived=False).count(),
+        "queued_task_count": Task.queued().count(),
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -660,7 +642,7 @@ def do_task(task, slotid: int) -> None:
             notify_finished(task=task, logfunc=logfunc)
 
         elif localresultfile and localresultfile.exists():
-            # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+            # the result file is served from disk; nothing parses it into the database
             mark_finished(task=task, error_msg=None)
 
             notify_finished(task=task, logfunc=logfunc)
@@ -680,7 +662,7 @@ def remove_old_tasks(
     logfunc=log_general,
     heartbeat: t.Callable[[], None] | None = None,
 ) -> None:
-    """Remove old tasks matching given criteria from the database and optionally delete their result files (if harddeleterecord).
+    """Remove old tasks matching given criteria, optionally deleting their result files.
 
     `heartbeat` is called after every batch so that a long sweep does not look like a dead runner
     to whatever is watching the status file.
@@ -692,7 +674,6 @@ def remove_old_tasks(
     }
 
     if request_type is not None:
-        # pyrefly: ignore [bad-assignment]
         filteropts["request_type"] = request_type
 
     if not harddeleterecord:
@@ -828,6 +809,12 @@ def main() -> None:
 
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
+    last_queuerecalctime: float = float("-inf")
+    last_queueflagchecktime: float = float("-inf")
+    # what the queue-recalc counter read the last time positions were renumbered; see
+    # forcephot.queue.recalc_generation. Starts below any real value so the first pass renumbers.
+    last_recalc_generation: int = -1
+    seen_generation: int = -1
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -861,6 +848,37 @@ def main() -> None:
             refresh_status()
             printedwaiting = False
 
+        # Renumbering belongs here rather than in the submitting request: this loop is the only
+        # thing that changes which task is running, it already reads the table twice a second, and
+        # doing it here keeps positions fresh as tasks finish. The counter is a file read in
+        # production, so it is consulted on its own interval rather than on every pass.
+        recalc_requested = False
+        if (time.perf_counter() - last_queueflagchecktime) > taskqueue.RECALC_CHECK_INTERVAL_SECONDS:
+            last_queueflagchecktime = time.perf_counter()
+            seen_generation = taskqueue.recalc_generation()
+            recalc_requested = seen_generation != last_recalc_generation
+
+        if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
+            # caught, because this loop is what dispatches every job: unguarded, a lock timeout or
+            # a bad queue state would take the exception out of main() and stop the runner, and the
+            # supervisor would restart it straight back into the same state. Queue positions going
+            # stale is a display problem; not dispatching anything is not.
+            try:
+                taskqueue.calculate_queue_positions()
+            except Exception as ex:  # noqa: BLE001 (this loop dispatches every job; stale
+                # queue positions are a display problem, not dispatching is not)
+                logfunc(f"ERROR: could not update queue positions: {ex}")
+            else:
+                # only on success, and the value read *before* renumbering: a request that arrived
+                # during the pass is still new next time, and a pass that failed leaves its request
+                # outstanding so the next check retries it. Recording it either way would drop the
+                # request and leave dispatch ordering by stale positions until the backstop.
+                last_recalc_generation = seen_generation
+
+            # stamped even on failure, so a persistent one is retried on an interval rather than on
+            # every pass of the loop
+            last_queuerecalctime = time.perf_counter()
+
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
                 proc.join()
@@ -872,9 +890,7 @@ def main() -> None:
                 numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
-        queuedtasks = (
-            Task.objects.all().filter(finishtimestamp__isnull=True, is_archived=False).order_by("queuepos_relative")
-        )
+        queuedtasks = Task.queued().order_by("queuepos_relative")
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()

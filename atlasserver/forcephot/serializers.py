@@ -1,6 +1,6 @@
-# from django.contrib.auth.models import User
 import math
 import typing as t
+from typing import override
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.exceptions import ObjectDoesNotExist
@@ -8,6 +8,7 @@ from rest_framework import serializers
 from rest_framework.reverse import reverse
 
 from atlasserver.forcephot.models import get_mjd_min_default
+from atlasserver.forcephot.models import MPC_NAME_WHITESPACE
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.models import UNSET
 from atlasserver.forcephot.webhooks import CallbackUrlError
@@ -27,7 +28,7 @@ def is_finite_float(val):
     return bool(math.isfinite(f_val))
 
 
-class ForcePhotTaskSerializer(serializers.ModelSerializer):
+class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     # memoised queue offset. 0 is a normal value, so it cannot double as "not computed yet".
     _min_queuepos_cache: t.Any = UNSET
 
@@ -35,7 +36,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         localresultfile = obj.localresultfile()
         if localresultfile and not obj.error_msg and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(localresultfile))
-            # return request.build_absolute_uri(reverse("taskresultdata", args=[obj.id]))
 
         return None
 
@@ -62,7 +62,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
     def get_previewimage_url(self, obj) -> str | None:
         if obj.localresultpreviewimagefile and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultpreviewimagefile))
-            # return request.build_absolute_uri(reverse("taskpreviewimage", args=[obj.id]))
 
         return None
 
@@ -127,12 +126,19 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
     @staticmethod
     def validate_mpc_name(value, prefix="", field="mpc_name"):
-        # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        # if any([c not in dict.fromkeys(okchars) for c in value]):
-        #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
-
+        # rejects the characters that would break the shell command the runner builds, rather than
+        # allowing a fixed alphabet: MPC designations contain punctuation this cannot predict
+        #
         # mpc_name is nullable, and DRF calls validate_<field> even when the value is None
-        if value is None or value == "":
+        if value is None:
+            return value
+
+        # MPC_NAME_WHITESPACE, not str.strip(): the model, both constraints and both migrations
+        # use that set, and stripping more here would make the API call an em-space blank while
+        # the database still called it a name. Task.save() does this too; doing it here as well is
+        # what turns a whitespace-only name into a 400 rather than an unexplained 500.
+        value = value.strip(MPC_NAME_WHITESPACE)
+        if value == "":
             return value
 
         badchars = "'\";"
@@ -200,6 +206,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
 
         return default
 
+    @override
     def validate(self, attrs):
         mpc_name = self.submitted(attrs, "mpc_name")
         request_type = self.submitted(attrs, "request_type")
@@ -217,25 +224,31 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer):
         elif request_type == "SSOSTACK":
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
-        elif request_type == "IMGZIP":
-            parent_task_id = self.submitted(attrs, "parent_task_id")
-            if not parent_task_id:
-                msg = "IMGZIP requests must have a parent_task_id set to an FP task."
-                raise serializers.ValidationError(msg)
+        else:
+            if request_type == "IMGZIP":
+                parent_task_id = self.submitted(attrs, "parent_task_id")
+                if not parent_task_id:
+                    msg = "IMGZIP requests must have a parent_task_id set to an FP task."
+                    raise serializers.ValidationError(msg)
 
-            try:
-                Task.objects.all().get(id=parent_task_id, request_type="FP")
-            except (ObjectDoesNotExist, IndexError):
-                msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
-                raise serializers.ValidationError(msg) from None
+                try:
+                    Task.objects.all().get(id=parent_task_id, request_type="FP")
+                except (ObjectDoesNotExist, IndexError):
+                    msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
+                    raise serializers.ValidationError(msg) from None
 
-        elif ra_missing and dec_missing:
-            msg = "Either an mpc_name or (ra, dec) must be specified."
-            raise serializers.ValidationError({"non_field_errors": msg})
-        elif dec_missing:
-            raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
-        elif ra_missing:
-            raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
+            # The target rules, which apply to an IMGZIP task as much as to any other: an image
+            # request carries the parent's own coordinates (see Task.new_imagerequest) and the
+            # runner dispatches on them, and task_target_is_mpcname_or_radec requires a target of
+            # every row. Checking here is what makes a request that clears ra and dec a 400 rather
+            # than an IntegrityError raised by the constraint.
+            if ra_missing and dec_missing:
+                msg = "Either an mpc_name or (ra, dec) must be specified."
+                raise serializers.ValidationError({"non_field_errors": msg})
+            if dec_missing:
+                raise serializers.ValidationError({"dec": "ra was set but dec is missing."})
+            if ra_missing:
+                raise serializers.ValidationError({"ra": "dec was set but ra is missing."})
 
         if "mjd_min" in attrs and attrs["mjd_min"] is not None and not is_finite_float(attrs["mjd_min"]):
             raise serializers.ValidationError(

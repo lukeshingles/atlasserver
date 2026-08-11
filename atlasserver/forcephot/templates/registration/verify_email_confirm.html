@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{# The link itself does not activate the account: a GET on it only gets this page. Mail security #}
+{# gateways and link scanners fetch every URL in an incoming message, and an activation that #}
+{# happened on GET would be performed by the scanner rather than by the recipient -- which is #}
+{# exactly the ownership proof the link exists to obtain. The button below posts. #}
+{# no analytics: this page's own URL carries the token, and gtag would report it. See the #}
+{# analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p>Press the button to confirm that <b>{{ email }}</b> is your address and activate your account.</p>
+
+    <form method="post">{% csrf_token %}
+        <button type="submit" class="btn btn-primary">Activate my account</button>
+    </form>
+</div>
+{% endblock %}

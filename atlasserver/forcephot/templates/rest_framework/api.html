@@ -1,4 +1,59 @@
 {% extends "rest_framework/base.html" %}
-{% load i18n %}
-{% load rest_framework %}
+{% load static %}
 
+{# The browsable API on the site's Bootstrap 5, without vendoring DRF's base template again. That #}
+{# copy was 409 lines and drifted from DRF's own on every upgrade, which is why it was deleted;    #}
+{# these are the blocks DRF publishes for the purpose, so an upgrade carries the rest of the page  #}
+{# forward on its own.                                                                             #}
+{#                                                                                                 #}
+{# DRF's markup is Bootstrap 3 and it ships Bootstrap 3 to style it. Loading that alongside the    #}
+{# site's Bootstrap 5 was the last thing keeping two frameworks in the project, so the two blocks  #}
+{# that name stylesheets and scripts are replaced outright: drf-bootstrap5.css gives the class     #}
+{# names Bootstrap 5 dropped their Bootstrap 5 appearance, and drf-bootstrap5.js replaces the      #}
+{# jQuery plugin calls in DRF's default.js. DRF's own templates stay untouched.                    #}
+
+{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}
+
+{% block meta %}
+  {{ block.super }}
+  {# DRF's base template sets no viewport, so a phone laid this page out at 980px and zoomed out, #}
+  {# leaving the text unreadable and none of Bootstrap's responsive rules applying. base.html has #}
+  {# had this since the navbar stopped being usable on a phone; the API page never did.           #}
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
+{% endblock %}
+
+{% block style %}
+  {# DRF's own block, with rest_framework/css/bootstrap.min.css and bootstrap-tweaks.css (Bootstrap #}
+  {# 3, and a theme written against it) replaced by the site's stylesheets. prettify.css and        #}
+  {# default.css are DRF's browsable-API styling and are framework-neutral, so they stay.           #}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/prettify.css" %}"/>
+  <link rel="stylesheet" type="text/css" href="{% static "rest_framework/css/default.css" %}"/>
+  <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver={{ static_version }}"/>
+  {# last, so it can correct the two above where Bootstrap 3 is assumed #}
+  <link rel="stylesheet" type="text/css" href="{% static "drf-bootstrap5.css" %}?ver={{ static_version }}"/>
+  {% if code_style %}<style>{{ code_style }}</style>{% endif %}
+{% endblock %}
+
+{% block navbar %}{% include "navbar.html" %}{% endblock %}
+
+{% block script %}
+  {# DRF's own block, with rest_framework/js/bootstrap.min.js (Bootstrap 3, and jQuery-dependent) #}
+  {# replaced by the bundle the rest of the site loads, and default.js by the port of it that     #}
+  {# calls Bootstrap 5 instead of Bootstrap 3's jQuery plugins. The rest are DRF's own and use    #}
+  {# only jQuery, so they are unchanged.                                                          #}
+  <script type="application/json" id="drf_csrf">
+    {
+      "csrfHeaderName": "{{ csrf_header_name|default:'X-CSRFToken' }}",
+      "csrfToken": "{% if request %}{{ csrf_token }}{% endif %}"
+    }
+  </script>
+  <script src="{% static "rest_framework/js/jquery-3.7.1.min.js" %}"></script>
+  <script src="{% static "rest_framework/js/ajax-form.js" %}"></script>
+  <script src="{% static "rest_framework/js/csrf.js" %}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+  <script src="{% static "rest_framework/js/prettify-min.js" %}"></script>
+  <script src="{% static "js/drf-bootstrap5.js" %}?ver={{ static_version }}"></script>
+  <script src="{% static "rest_framework/js/load-ajax-form.js" %}"></script>
+{% endblock %}

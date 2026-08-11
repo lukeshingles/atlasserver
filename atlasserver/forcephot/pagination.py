@@ -1,9 +1,15 @@
+import typing as t
 from collections import OrderedDict
+from typing import override
 
+from django.db.models import QuerySet
 from rest_framework.pagination import _reverse_ordering
 from rest_framework.pagination import CursorPagination
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.utils.urls import remove_query_param
+
+from atlasserver.forcephot.models import Task
 
 
 class TaskPagination(CursorPagination):
@@ -17,7 +23,8 @@ class TaskPagination(CursorPagination):
     pagefirsttaskposition: int | None = None  # with ordered tasks, the position of the first page time
     previous_is_top = False
 
-    def get_ordering(self, request, queryset, view):
+    @override
+    def get_ordering(self, request: Request, queryset: QuerySet[Task], view: t.Any) -> tuple[str, ...]:
         """Return the requested ordering with the primary key appended as a tiebreaker.
 
         Rows sharing an ordering value (every task from one radeclist submission has the same
@@ -30,7 +37,11 @@ class TaskPagination(CursorPagination):
             ordering = (*ordering, "-id" if ordering[0].startswith("-") else "id")
         return ordering
 
-    def paginate_queryset(self, queryset, request, view=None):
+    # narrower than the base signature, which also accepts a plain Sequence: the body filters and
+    # orders, and this paginator is only ever given the task queryset
+    def paginate_queryset(  # type: ignore[override]  # ty: ignore[invalid-method-override]
+        self, queryset: QuerySet[Task], request: Request, view: t.Any = None
+    ) -> list[Task] | None:
         queryset_full = queryset
 
         self.page_size = self.get_page_size(request)
@@ -42,7 +53,8 @@ class TaskPagination(CursorPagination):
         self.querysetcount = queryset.count()
 
         self.base_url = request.build_absolute_uri()
-        self.ordering = self.get_ordering(request, queryset, view)
+        # list(): get_ordering returns a tuple, and the attribute is declared as a list
+        self.ordering = list(self.get_ordering(request, queryset, view))
 
         self.cursor = self.decode_cursor(request)
         current_position: str | None
@@ -155,14 +167,16 @@ class TaskPagination(CursorPagination):
 
         return self.page
 
-    def get_previous_link(self):
+    @override
+    def get_previous_link(self) -> str | None:
         # has_previous must be checked too, otherwise the first page can advertise a link to itself
         if self.previous_is_top and self.has_previous:
             assert self.base_url is not None
             return remove_query_param(self.base_url, "cursor")
         return super().get_previous_link()
 
-    def get_paginated_response(self, data, headers=None):
+    @override
+    def get_paginated_response(self, data: t.Any, headers: dict[str, str] | None = None) -> Response:
         return Response(
             OrderedDict(
                 [

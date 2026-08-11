@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    {% if emailchange %}
+        <p class="alert alert-success">We've sent a confirmation link to <b>{{ email }}</b>.</p>
+
+        <p>Follow the link in that email to complete the change. Until you do, your account keeps
+        its current address.</p>
+
+        <p>If it doesn't arrive, check your spam folder, or
+        <a href="{% url 'email_change' %}">try again</a>.</p>
+    {% else %}
+        <p class="alert alert-success">Your account has been created. We've sent a verification link
+        to <b>{{ email }}</b>.</p>
+
+        <p>Follow the link in that email to activate the account. You won't be able to log in or
+        submit tasks until you do.</p>
+
+        <p>If it doesn't arrive, check your spam folder, or
+        <a href="{% url 'resend_verification' %}">request another link</a>.</p>
+    {% endif %}
+</div>
+{% endblock %}

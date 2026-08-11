@@ -1,4 +1,4 @@
-{% extends "rest_framework/base.html" %}
+{% extends "base.html" %}
 
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
@@ -21,41 +21,54 @@
 
 {% block script %}
   {{ block.super }}
-  <script src="https://cdn.pydata.org/bokeh/release/bokeh-3.9.2.min.js"></script>
-  <script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-3.9.2.min.js"></script>
-  <script language="javascript" type="text/javascript">
+  {# URL and hash both come from the installed bokeh package; see views.bokeh_cdn_scripts. These #}
+  {# were the only CDN tags on the site without an integrity attribute. #}
+  {% for script in bokehscripts %}
+  <script src="{{ script.src }}" integrity="{{ script.integrity }}" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  {% endfor %}
+  <script type="text/javascript">
+    "use strict";
+
     // when no task has ever finished the view renders "N/A", which new Date() turns into an
     // Invalid Date; leave whatever the server wrote in place unless it actually parses
     const lastfinish = new Date('{{ lastfinishtime|escapejs }}'.replace(/-/g, "/"));
     if (!isNaN(lastfinish)) {
-      $('#lastfinishtime').text(lastfinish.toLocaleString());
+      document.getElementById('lastfinishtime').textContent = lastfinish.toLocaleString();
     }
-    $('#pagetime').text(new Date({% now "U" %} * 1000).toLocaleString());
+    document.getElementById('pagetime').textContent = new Date({% now "U" %} * 1000).toLocaleString();
 
-    $.ajax({
-        url: "{% url 'statsshortterm'|escapejs %}",
-        success: function(result){
-          $('#statsshortterm').html(result);
-    }});
+    // These four were jQuery ajax calls, the last of the site's jQuery.
+    function loadHtmlInto(url, elementid) {
+      fetch(url, { credentials: 'same-origin' })
+        .then((response) => response.ok ? response.text() : Promise.reject(response.status))
+        .then((html) => { document.getElementById(elementid).innerHTML = html; })
+        .catch((err) => { document.getElementById(elementid).textContent = 'Could not load this section.'; console.log(url, err); });
+    }
 
-    $.ajax({
-      url: "{% url 'statslongterm'|escapejs %}",
-      success: function(result){
-        $('#statslongterm').html(result);
-    }});
+    function loadBokehChartInto(url, elementid) {
+      fetch(url, { credentials: 'same-origin' })
+        .then((response) => response.ok ? response.json() : Promise.reject(response.status))
+        .then((result) => {
+          document.getElementById(elementid).innerHTML = result.div;
+          // The payload's script tag has to be rebuilt rather than assigned as innerHTML: a
+          // <script> inserted that way is inert, so the chart would never draw. jQuery did this
+          // rebuilding internally, which is why the version this replaced could just pass a string.
+          const parsed = new DOMParser().parseFromString(result.script, 'text/html');
+          for (const source of parsed.querySelectorAll('script')) {
+            const script = document.createElement('script');
+            for (const attr of source.attributes) {
+              script.setAttribute(attr.name, attr.value);
+            }
+            script.textContent = source.textContent;
+            document.head.appendChild(script);
+          }
+        })
+        .catch((err) => { document.getElementById(elementid).textContent = 'Could not load this chart.'; console.log(url, err); });
+    }
 
-    $.ajax({
-        url: "{% url 'statsusagechart'|escapejs %}",
-        success: function(result){
-          $('#statsusagechart').html(result.div);
-          $("head").append(result.script);
-    }});
-
-    $.ajax({
-        url: "{% url 'statscoordchart'|escapejs %}",
-        success: function(result){
-          $('#statscoordchart').html(result.div);
-          $("head").append(result.script);
-    }});
+    loadHtmlInto("{% url 'statsshortterm'|escapejs %}", 'statsshortterm');
+    loadHtmlInto("{% url 'statslongterm'|escapejs %}", 'statslongterm');
+    loadBokehChartInto("{% url 'statsusagechart'|escapejs %}", 'statsusagechart');
+    loadBokehChartInto("{% url 'statscoordchart'|escapejs %}", 'statscoordchart');
   </script>
 {% endblock %}

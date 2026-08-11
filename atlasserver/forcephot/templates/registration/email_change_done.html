@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{# no analytics: this renders at the confirmation URL, so the token is still in the location. #}
+{# Applying the change spends the token, but its payload is signed rather than encrypted and #}
+{# anyone reading it gets the account id and both addresses. See the analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p class="alert alert-success">Your account's email address is now <b>{{ email }}</b>.</p>
+
+    <p>Result notifications and password resets will go there from now on.</p>
+
+    <p><a href="{% url 'task-list' %}">Back to the task queue</a></p>
+</div>
+{% endblock %}

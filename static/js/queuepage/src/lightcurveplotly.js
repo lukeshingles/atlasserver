@@ -186,7 +186,9 @@
         var w = lcplotwidth;
     }
     else {
-        var w = $(locallcdivname).innerWidth();
+        // was jQuery's .innerWidth(), which is the content box plus padding -- clientWidth is
+        // the same measurement without the dependency
+        var w = document.querySelector(locallcdivname).clientWidth;
     }
 
     if (locallcdivname.includes("flux")) {

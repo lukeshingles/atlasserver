@@ -1,0 +1,76 @@
+{% load static %}
+{% load i18n %}
+
+{# The site's own layout. This used to be a 409-line copy of DRF's rest_framework/base.html, which #}
+{# coupled every public page to the browsable API's internals: a DRF upgrade drifted silently from #}
+{# the copy, and it was the reason the site was stuck on the Bootstrap 3 that DRF 3 targets. The #}
+{# browsable API now extends DRF's own base template and is styled with the same Bootstrap 5 as #}
+{# this file, so this one only has to serve the pages this project actually writes. #}
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {% block head %}
+
+      {% block meta %}
+        <meta charset="utf-8" />
+        {# without this a phone lays the page out at 980px and then zooms out, so the text is #}
+        {# unreadable and none of the responsive rules in main.css ever apply #}
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="robots" content="NONE,NOARCHIVE" />
+      {% endblock %}
+
+      <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
+
+      <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
+
+      {# Overridden as empty by the pages whose own URL carries a bearer token. gtag('config') #}
+      {# reports a page view at the current location, so on those pages it would hand the token #}
+      {# to Google Analytics -- and anyone who can read that data could replay the link. Django's #}
+      {# own password reset avoids the same problem by moving its token out of the URL into the #}
+      {# session; these pages keep it in the path, so they opt out of analytics instead. #}
+      {% block analytics %}
+      <!-- Global site tag (gtag.js) - Google Analytics -->
+      <script async src="https://www.googletagmanager.com/gtag/js?id=G-CK29QMXSZ9"></script>
+      <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-CK29QMXSZ9');
+      </script>
+      {% endblock %}
+
+      {% block style %}
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+
+        {# versioned like the JS bundles: the queue page's styling lives here, so a browser holding #}
+        {# a cached copy alongside a freshly deployed bundle renders the new class names unstyled #}
+        <link rel="stylesheet" type="text/css" href="{% static "main.css" %}?ver={{ static_version }}"/>
+      {% endblock %}
+
+    {% endblock %}
+  </head>
+
+  {% block body %}
+  <body>
+
+    <div class="wrapper">
+      {% block navbar %}{% include "navbar.html" %}{% endblock %}
+
+      <div class="container">
+        <div class="notices">{% include "notice.txt" %}</div>
+
+        <div id="content" role="main" aria-label="{% translate "content" %}">
+          {% block content %}{% endblock %}
+        </div><!-- /.content -->
+      </div><!-- /.container -->
+    </div><!-- ./wrapper -->
+
+    {% block script %}
+      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+    {% endblock %}
+
+  </body>
+  {% endblock %}
+</html>

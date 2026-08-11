@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.models import User
 from django.utils.translation import gettext_lazy as _
 
 
@@ -35,6 +36,7 @@ class EmailChangeForm(forms.Form):
     )
 
     def __init__(self, user, *args, **kwargs) -> None:
+        """Bind the form to the account whose address is being changed."""
         self.user = user
         super().__init__(*args, **kwargs)
 
@@ -46,17 +48,37 @@ class EmailChangeForm(forms.Form):
 
     def clean_new_email(self):
         new_email = self.cleaned_data["new_email"]
+
+        # Only once the password has been proved. Django runs every clean_<field> independently and
+        # carries on past a failed one, so this used to answer "is this address registered here?"
+        # for anyone with any account and no password at all -- an enumeration oracle over the
+        # whole user table, rendered right next to the field.
+        #
+        # password is declared above new_email, so it has already been cleaned by now; its absence
+        # from cleaned_data is exactly the case where clean_password rejected it.
+        if "password" not in self.cleaned_data:
+            return new_email
+
         if email_is_taken(new_email, exclude_user=self.user):
             raise forms.ValidationError(self.error_messages["email_taken"], code="email_taken")
         return new_email
 
-    def save(self):
-        self.user.email = self.cleaned_data["new_email"]
-        self.user.save(update_fields=["email"])
-        return self.user
+
+class ResendVerificationForm(forms.Form):
+    """Asks only for the address, so that someone locked out of an unverified account can recover.
+
+    No password field: the point is to reach a user who cannot log in, and the link goes to the
+    address itself, so knowing the address is not enough to take anything over.
+    """
+
+    email = forms.EmailField(
+        label=_("Email address"),
+        max_length=254,
+        help_text=_("The address you registered with. We'll send a fresh verification link."),
+    )
 
 
-class RegistrationForm(UserCreationForm):
+class RegistrationForm(UserCreationForm[User]):
     """A form that creates a user, with no privileges, from the given username and password."""
 
     error_messages = {

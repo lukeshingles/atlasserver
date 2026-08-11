@@ -12,17 +12,42 @@ import psutil
 from dotenv import load_dotenv
 
 APACHEPATH = Path("/tmp/atlasforced")
-ATLASSERVERPATH = Path(
-    str(Path(__file__).resolve().parent.parent).replace(
-        # the space in the path causes an issue with apachectl script,
-        # so use a symlink with no space
-        "/Users/luke/Library/Mobile Documents/com~apple~CloudDocs/GitHub",
-        "/Users/luke/GitHub",
-    )
-)
+
+# where this file actually lives. Fine to read .env through, even with a space in it: only the
+# apachectl script below cannot cope with one.
+SOURCEPATH = Path(__file__).resolve().parent.parent
+
+load_dotenv(dotenv_path=SOURCEPATH / ".env", override=True)
 
 
-load_dotenv(dotenv_path=ATLASSERVERPATH / ".env", override=True)
+def _atlasserverpath() -> Path:
+    """Return the project root to hand to mod_wsgi-express, or fail explaining why it cannot.
+
+    The apachectl that mod_wsgi-express generates is a shell script that interpolates these paths
+    unquoted, so a space anywhere in the project path breaks it later, with an error that says
+    nothing about the cause. ATLASSERVER_PATH overrides the location for exactly that case: point
+    it at a symlink whose path has no space.
+    """
+    if override := os.environ.get("ATLASSERVER_PATH"):
+        # not resolve(): resolving a symlink here would put the space straight back
+        path = Path(override).absolute()
+        if " " in str(path):
+            msg = f"ATLASSERVER_PATH must not contain a space, but is {path}"
+            raise ValueError(msg)
+        return path
+
+    if " " in str(SOURCEPATH):
+        msg = (
+            f"The project path {SOURCEPATH} contains a space, which the apachectl script generated"
+            f" by mod_wsgi-express cannot handle. Create a symlink whose path has no space"
+            f" (ln -s '{SOURCEPATH}' ~/atlasserver) and set ATLASSERVER_PATH to it in .env."
+        )
+        raise ValueError(msg)
+
+    return SOURCEPATH
+
+
+ATLASSERVERPATH = _atlasserverpath()
 
 
 def get_httpd_pid() -> int | None:
@@ -91,7 +116,7 @@ def start() -> None:
     if platform.system() == "Darwin":
         print("Detected macOS, so using testing configuration for http://localhost/")
         port = 80
-        includefile = []
+        includefile: list[str] = []
     else:
         port = 8086
         includefile = ["--include-file", str(ATLASSERVERPATH / "httpconf.txt")]

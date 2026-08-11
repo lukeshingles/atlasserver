@@ -1,7 +1,10 @@
 import datetime
+import logging
+import multiprocessing
 import typing as t
-from multiprocessing import Process
+from multiprocessing.process import BaseProcess
 from pathlib import Path
+from typing import override
 
 import fundamentals.logs
 import julian
@@ -10,264 +13,18 @@ from astrocalc.coords.unit_conversion import unit_conversion
 from django.http import Http404
 from django.utils.log import AdminEmailHandler
 
-from atlasserver import plot_atlas_fp
+# How long a forked PDF render may run before it is killed. Generous: a large result file
+# legitimately takes a while, and the point is to bound a hang, not to police slow plots.
+PDF_PLOT_TIMEOUT_SECONDS: t.Final = 120.0
 
-dictcountrycodes = {
-    "A2": "Satellite Provider",
-    "O1": "Other Country",
-    "AD": "Andorra",
-    "AE": "United Arab Emirates",
-    "AF": "Afghanistan",
-    "AG": "Antigua and Barbuda",
-    "AI": "Anguilla",
-    "AL": "Albania",
-    "AM": "Armenia",
-    "AO": "Angola",
-    "AP": "Asia/Pacific Region",
-    "AQ": "Antarctica",
-    "AR": "Argentina",
-    "AS": "American Samoa",
-    "AT": "Austria",
-    "AU": "Australia",
-    "AW": "Aruba",
-    "AX": "Aland Islands",
-    "AZ": "Azerbaijan",
-    "BA": "Bosnia and Herzegovina",
-    "BB": "Barbados",
-    "BD": "Bangladesh",
-    "BE": "Belgium",
-    "BF": "Burkina Faso",
-    "BG": "Bulgaria",
-    "BH": "Bahrain",
-    "BI": "Burundi",
-    "BJ": "Benin",
-    "BL": "Saint Barthelemey",
-    "BM": "Bermuda",
-    "BN": "Brunei Darussalam",
-    "BO": "Bolivia",
-    "BQ": "Bonaire, Saint Eustatius and Saba",
-    "BR": "Brazil",
-    "BS": "Bahamas",
-    "BT": "Bhutan",
-    "BV": "Bouvet Island",
-    "BW": "Botswana",
-    "BY": "Belarus",
-    "BZ": "Belize",
-    "CA": "Canada",
-    "CC": "Cocos (Keeling) Islands",
-    "CD": "Congo, The Democratic Republic of the",
-    "CF": "Central African Republic",
-    "CG": "Congo",
-    "CH": "Switzerland",
-    "CI": "Cote d'Ivoire",
-    "CK": "Cook Islands",
-    "CL": "Chile",
-    "CM": "Cameroon",
-    "CN": "China",
-    "CO": "Colombia",
-    "CR": "Costa Rica",
-    "CU": "Cuba",
-    "CV": "Cape Verde",
-    "CW": "Curacao",
-    "CX": "Christmas Island",
-    "CY": "Cyprus",
-    "CZ": "Czech Republic",
-    "DE": "Germany",
-    "DJ": "Djibouti",
-    "DK": "Denmark",
-    "DM": "Dominica",
-    "DO": "Dominican Republic",
-    "DZ": "Algeria",
-    "EC": "Ecuador",
-    "EE": "Estonia",
-    "EG": "Egypt",
-    "EH": "Western Sahara",
-    "ER": "Eritrea",
-    "ES": "Spain",
-    "ET": "Ethiopia",
-    "EU": "Europe",
-    "FI": "Finland",
-    "FJ": "Fiji",
-    "FK": "Falkland Islands (Malvinas)",
-    "FM": "Micronesia, Federated States of",
-    "FO": "Faroe Islands",
-    "FR": "France",
-    "GA": "Gabon",
-    "GB": "United Kingdom",
-    "GD": "Grenada",
-    "GE": "Georgia",
-    "GF": "French Guiana",
-    "GG": "Guernsey",
-    "GH": "Ghana",
-    "GI": "Gibraltar",
-    "GL": "Greenland",
-    "GM": "Gambia",
-    "GN": "Guinea",
-    "GP": "Guadeloupe",
-    "GQ": "Equatorial Guinea",
-    "GR": "Greece",
-    "GS": "South Georgia and the South Sandwich Islands",
-    "GT": "Guatemala",
-    "GU": "Guam",
-    "GW": "Guinea-Bissau",
-    "GY": "Guyana",
-    "HK": "Hong Kong",
-    "HM": "Heard Island and McDonald Islands",
-    "HN": "Honduras",
-    "HR": "Croatia",
-    "HT": "Haiti",
-    "HU": "Hungary",
-    "ID": "Indonesia",
-    "IE": "Ireland",
-    "IL": "Israel",
-    "IM": "Isle of Man",
-    "IN": "India",
-    "IO": "British Indian Ocean Territory",
-    "IQ": "Iraq",
-    "IR": "Iran, Islamic Republic of",
-    "IS": "Iceland",
-    "IT": "Italy",
-    "JE": "Jersey",
-    "JM": "Jamaica",
-    "JO": "Jordan",
-    "JP": "Japan",
-    "KE": "Kenya",
-    "KG": "Kyrgyzstan",
-    "KH": "Cambodia",
-    "KI": "Kiribati",
-    "KM": "Comoros",
-    "KN": "Saint Kitts and Nevis",
-    "KP": "Korea, Democratic People's Republic of",
-    "KR": "Korea, Republic of",
-    "KW": "Kuwait",
-    "KY": "Cayman Islands",
-    "KZ": "Kazakhstan",
-    "LA": "Lao People's Democratic Republic",
-    "LB": "Lebanon",
-    "LC": "Saint Lucia",
-    "LI": "Liechtenstein",
-    "LK": "Sri Lanka",
-    "LR": "Liberia",
-    "LS": "Lesotho",
-    "LT": "Lithuania",
-    "LU": "Luxembourg",
-    "LV": "Latvia",
-    "LY": "Libyan Arab Jamahiriya",
-    "MA": "Morocco",
-    "MC": "Monaco",
-    "MD": "Moldova, Republic of",
-    "ME": "Montenegro",
-    "MF": "Saint Martin",
-    "MG": "Madagascar",
-    "MH": "Marshall Islands",
-    "MK": "Macedonia",
-    "ML": "Mali",
-    "MM": "Myanmar",
-    "MN": "Mongolia",
-    "MO": "Macao",
-    "MP": "Northern Mariana Islands",
-    "MQ": "Martinique",
-    "MR": "Mauritania",
-    "MS": "Montserrat",
-    "MT": "Malta",
-    "MU": "Mauritius",
-    "MV": "Maldives",
-    "MW": "Malawi",
-    "MX": "Mexico",
-    "MY": "Malaysia",
-    "MZ": "Mozambique",
-    "NA": "Namibia",
-    "NC": "New Caledonia",
-    "NE": "Niger",
-    "NF": "Norfolk Island",
-    "NG": "Nigeria",
-    "NI": "Nicaragua",
-    "NL": "Netherlands",
-    "NO": "Norway",
-    "NP": "Nepal",
-    "NR": "Nauru",
-    "NU": "Niue",
-    "NZ": "New Zealand",
-    "OM": "Oman",
-    "PA": "Panama",
-    "PE": "Peru",
-    "PF": "French Polynesia",
-    "PG": "Papua New Guinea",
-    "PH": "Philippines",
-    "PK": "Pakistan",
-    "PL": "Poland",
-    "PM": "Saint Pierre and Miquelon",
-    "PN": "Pitcairn",
-    "PR": "Puerto Rico",
-    "PS": "Palestinian Territory",
-    "PT": "Portugal",
-    "PW": "Palau",
-    "PY": "Paraguay",
-    "QA": "Qatar",
-    "RE": "Reunion",
-    "RO": "Romania",
-    "RS": "Serbia",
-    "RU": "Russian Federation",
-    "RW": "Rwanda",
-    "SA": "Saudi Arabia",
-    "SB": "Solomon Islands",
-    "SC": "Seychelles",
-    "SD": "Sudan",
-    "SE": "Sweden",
-    "SG": "Singapore",
-    "SH": "Saint Helena",
-    "SI": "Slovenia",
-    "SJ": "Svalbard and Jan Mayen",
-    "SK": "Slovakia",
-    "SL": "Sierra Leone",
-    "SM": "San Marino",
-    "SN": "Senegal",
-    "SO": "Somalia",
-    "SR": "Suriname",
-    "SS": "South Sudan",
-    "ST": "Sao Tome and Principe",
-    "SV": "El Salvador",
-    "SX": "Sint Maarten",
-    "SY": "Syrian Arab Republic",
-    "SZ": "Swaziland",
-    "TC": "Turks and Caicos Islands",
-    "TD": "Chad",
-    "TF": "French Southern Territories",
-    "TG": "Togo",
-    "TH": "Thailand",
-    "TJ": "Tajikistan",
-    "TK": "Tokelau",
-    "TL": "Timor-Leste",
-    "TM": "Turkmenistan",
-    "TN": "Tunisia",
-    "TO": "Tonga",
-    "TR": "Turkey",
-    "TT": "Trinidad and Tobago",
-    "TV": "Tuvalu",
-    "TW": "Taiwan",
-    "TZ": "Tanzania, United Republic of",
-    "UA": "Ukraine",
-    "UG": "Uganda",
-    "UM": "United States Minor Outlying Islands",
-    "US": "United States",
-    "UY": "Uruguay",
-    "UZ": "Uzbekistan",
-    "VA": "Holy See (Vatican City State)",
-    "VC": "Saint Vincent and the Grenadines",
-    "VE": "Venezuela",
-    "VG": "Virgin Islands, British",
-    "VI": "Virgin Islands, U.S.",
-    "VN": "Vietnam",
-    "VU": "Vanuatu",
-    "WF": "Wallis and Futuna",
-    "WS": "Samoa",
-    "XX": "Unknown",
-    "YE": "Yemen",
-    "YT": "Mayotte",
-    "ZA": "South Africa",
-    "ZM": "Zambia",
-    "ZW": "Zimbabwe",
-}
+# grace between SIGTERM and SIGKILL for that process
+TERMINATE_GRACE_SECONDS: t.Final = 5.0
+
+# Spawn, not the platform default, because the live caller is a mod_wsgi worker thread: fork()
+# there copies locks held by threads that do not exist in the child, which then deadlocks on the
+# import machinery. Costs nothing, since matplotlib is deferred into the worker and so was never
+# in the parent to inherit.
+PLOT_PROCESS_CONTEXT: t.Final = multiprocessing.get_context("spawn")
 
 
 def splitradeclist(data, form=None):
@@ -308,7 +65,6 @@ def splitradeclist(data, form=None):
     linecount = sum(1 for line in lines if line)
     if linecount > 100:
         raise serializers.ValidationError({"radeclist": f"Number of lines ({linecount}) is above the limit of 100"})
-        # lines = lines[:1]
 
     for index, line in enumerate(lines, 1):
         if line[:4] in ["mpc_", "MPC_", "mpc ", "MPC "]:
@@ -387,14 +143,24 @@ def make_pdf_plot_worker(
     taskcomment: str = "",
     logprefix: str = "",
     logfunc: t.Callable[[t.Any], t.Any] | None = None,
+    outputpath: Path | None = None,
 ) -> Path | None:
+    # deferred: plot_atlas_fp imports matplotlib, and matplotlib imports numpy. This function only
+    # ever runs in the process forked by make_pdf_plot (or in the task runner's own per-task
+    # process), so a module-scope import would put both of them permanently in every web worker
+    # instead -- misc is imported by views for splitradeclist and the country helpers.
+    from atlasserver import plot_atlas_fp
+
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"
-    # if taskcomment:
-    #     pdftitle += ':' + taskcomment
 
     localresultfiles = [Path(localresultfile)]
-    plotfilepaths_requested = [f.with_suffix(".pdf") for f in localresultfiles]
+    # outputpath lets the caller render somewhere private and publish the result itself. The
+    # default -- the result file's own name with a .pdf suffix -- is what the task runner wants,
+    # since it is already the only writer for that task.
+    plotfilepaths_requested = (
+        [outputpath] if outputpath is not None else [f.with_suffix(".pdf") for f in localresultfiles]
+    )
 
     plotfilepaths = None
     try:
@@ -402,14 +168,15 @@ def make_pdf_plot_worker(
             log=fundamentals.logs.emptyLogger(),
             resultFilePaths=localresultfiles,
             outputPlotPaths=plotfilepaths_requested,
-            # outputDirectory=str(localresultdir),
             objectName=pdftitle,
             plotType="pdf",
         )
 
         plotfilepaths = myplotter.plot()
 
-    except Exception as ex:
+    except Exception as ex:  # noqa: BLE001 (plot_atlas_fp is vendored third-party code run
+        # against a user-supplied file: anything it raises has to become a failed render, not
+        # a failed request)
         if logfunc:
             logfunc(f"{logprefix}ERROR: plot_atlas_fp caused exception: {ex}")
         plotfilepaths = [None for _ in plotfilepaths_requested]
@@ -426,7 +193,8 @@ def make_pdf_plot_worker(
             logfunc(f"{logprefix}Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
         elif logfunc:
             logfunc(
-                f"{logprefix}plot_atlas_fp returned an error but the PDF file {plotfilepath_requested.relative_to(localresultdir)} exists"
+                f"{logprefix}plot_atlas_fp returned an error but the PDF file "
+                f"{plotfilepath_requested.relative_to(localresultdir)} exists"
             )
         return plotfilepath_requested
 
@@ -435,21 +203,63 @@ def make_pdf_plot_worker(
     return None
 
 
-def make_pdf_plot(*args, separate_process=False, **kwargs):
-    if separate_process:
-        proc = Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
+def run_process_with_timeout(proc: BaseProcess, timeout: float) -> bool:
+    """Start `proc` and wait for it, killing it if it overruns. Return False if it was killed."""
+    proc.start()
+    proc.join(timeout)
 
-        proc.start()
-        proc.join()
-    else:
+    timed_out = proc.is_alive()
+    if timed_out:
+        # SIGTERM first so the child can unwind; SIGKILL only for one that ignores it, which would
+        # otherwise leave this thread waiting on the join below exactly as an unbounded wait did
+        proc.terminate()
+        proc.join(TERMINATE_GRACE_SECONDS)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+
+    proc.close()
+    return not timed_out
+
+
+def make_pdf_plot(*args, separate_process: bool = False, timeout: float = PDF_PLOT_TIMEOUT_SECONDS, **kwargs) -> bool:
+    """Render a task's PDF plot. Return False if it had to be killed for exceeding `timeout`.
+
+    matplotlib has to run in its own process or it crashes the caller, and that process is also the
+    only place a time limit can be imposed: plot_atlas_fp is third-party code run against a
+    user-supplied result file, and an unbounded join() here holds a mod_wsgi worker thread for as
+    long as it takes, so enough slow plots exhaust the pool.
+
+    `timeout` is ignored without `separate_process`, because there is nothing to interrupt: the
+    task runner calls it that way from a process that is already per-task and already capped.
+    """
+    if not separate_process:
         make_pdf_plot_worker(*args, **kwargs)
+        return True
+
+    # every argument is pickled to reach the spawned child, which is why no caller passes a logfunc
+    # on this path: a bound method or a closure would not survive the trip.
+    proc = PLOT_PROCESS_CONTEXT.Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
+    return run_process_with_timeout(proc, timeout)
+
+
+# GeoIP codes that are not ISO country codes, so pycountry does not know them. They were the only
+# entries the hand-maintained country table held that pycountry does not supply, and rows recorded
+# with them are already in the database -- without these they would all read as "Unknown".
+GEOIP_NON_ISO_COUNTRIES: t.Final = {
+    "A2": "Satellite Provider",
+    "O1": "Other Country",
+    "AP": "Asia/Pacific Region",
+    "EU": "Europe",
+}
 
 
 def country_code_to_name(country_code):
-    # return dictcountrycodes.get(country_code, 'Unknown')
-
     if country_code == "XX" or not country_code:
         return "Unknown"
+
+    if name := GEOIP_NON_ISO_COUNTRIES.get(country_code):
+        return name
 
     if c := pycountry.countries.get(alpha_2=country_code):
         return c.name
@@ -462,7 +272,11 @@ def country_region_to_name(country_code, region_code):
 
     if region_code:
         fullcode = f"{country_code}-{region_code}"
+        # get() returns a list only on the country_code= lookup, where it substitutes [] for a
+        # country it knows to have no subdivisions. This asks by code=, which yields one
+        # subdivision or None -- and the walrus below would skip an empty list in any case.
         if subdiv := pycountry.subdivisions.get(code=fullcode):
+            # pyrefly: ignore [missing-attribute]
             region_name = subdiv.name
 
     return f"{region_name}, {country_code_to_name(country_code)}"
@@ -471,9 +285,16 @@ def country_region_to_name(country_code, region_code):
 class AdminEmailHandlerNo404(AdminEmailHandler):
     """Custom Handler that ignores 404 errors instead of sending them by email."""
 
-    def handle(self, record):
+    @override
+    def handle(self, record: logging.LogRecord) -> bool:
+        """Return whether the record was emitted, as Handler.handle does.
+
+        The base returns a bool and callers may read it; returning None said "not emitted" even
+        when it had been.
+        """
         if record.exc_info:
             _exc_type, exc_value, _tb = record.exc_info
             if isinstance(exc_value, Http404):
-                return
-        super().handle(record)
+                return False
+
+        return super().handle(record)

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{# no analytics: the token is in this page's DOM, and third-party script served from another #}
+{# origin runs with this one's privileges, so a changed or compromised tag could read it. The #}
+{# token-bearing URLs opt out for the same reason -- see the analytics block in base.html. #}
+{% block analytics %}{% endblock %}
+
+{% block content %}
+<div class="content-main" role="main" aria-label="main content">
+    <div class="page-header">
+        <h1>{{ name }}</h1>
+    </div>
+
+    <p>An API token lets a script authenticate without your password. Pass it as an
+    <code>Authorization</code> header, as described in the <a href="{% url 'apiguide' %}">API guide</a>.</p>
+
+    {% if justcreated %}
+        <p class="alert alert-success">
+            Your new API token is shown below. Any token you had before it has stopped working, so
+            update anything that was using it.
+        </p>
+    {% endif %}
+
+    {% if token %}
+        <p>Your API token, created {{ token.created }}:</p>
+
+        {# The key is not secret from its owner, and there is nowhere else to read it back from, #}
+        {# so it is shown in full. It stays out of the URL, which would put it in logs and history. #}
+        <pre style="user-select: all;">{{ token.key }}</pre>
+
+        <p>Treat it like a password: anyone holding it can submit and delete tasks as you. If it
+        has leaked, replace it below — the old one stops working immediately.</p>
+
+        <form method="post" style="display: inline;">{% csrf_token %}
+            <input type="hidden" name="action" value="regenerate">
+            <input type="submit" value="Replace this token" class="btn btn-primary">
+        </form>
+
+        <form method="post" style="display: inline;">{% csrf_token %}
+            <input type="hidden" name="action" value="delete">
+            <input type="submit" value="Delete this token" class="btn btn-danger">
+        </form>
+    {% else %}
+        <p>You do not currently have an API token.</p>
+
+        <form method="post">{% csrf_token %}
+            <input type="hidden" name="action" value="create">
+            <input type="submit" value="Create an API token" class="btn btn-primary">
+        </form>
+    {% endif %}
+</div>
+{% endblock %}

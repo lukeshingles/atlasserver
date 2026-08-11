@@ -27,7 +27,7 @@ dependencies = [
     "astrocalc>=0.4.2",
     "astropy>=6.1.0",
     "django>=6.1",
-    "bokeh~=3.9.2",
+    "bokeh>=3.9.2",
     "django-filter>=25.2",
     "djangorestframework>=3.18.0",
     "drf-spectacular>=0.28.0",
@@ -52,8 +52,7 @@ dev = [
     "mypy>=2.0",
     "pip>=26.1.2",
     "prek>=0.4.12",
-    "pylint>=4.0.6",
-    "pylint-django>=2.5.5",
+    "pyrefly>=1.2.0",
     "ruff>=0.16.0",
     "ty>=0.0.63",
     "types-pyyaml>=6.0.12.20240311",
@@ -91,10 +90,6 @@ exclude_also = [
     "raise NotImplementedError",
 ]
 
-[tool.black]
-line-length = 120
-force-exclude = "plot_atlas_fp.py"
-
 [tool.mypy]
 python_version = "3.13"
 exclude = "(build)|(tests)|(migrations)|(static)|plot_atlas_fp.py"
@@ -114,25 +109,38 @@ warn_return_any = false
 disallow_any_generics = false
 disallow_subclassing_any = false
 
+# A ratchet, not a global switch. The codebase is largely annotated already, so the modules that
+# are fully annotated turn the strict flags on here to keep them that way; the rest are listed in
+# the TODO below and get converted one at a time. Flipping disallow_untyped_defs on globally would
+# mean annotating views.py and serializers.py in one go, and their DRF hook methods (request, obj,
+# attrs, serializer) are exactly where a guessed annotation is worse than none.
+[[tool.mypy.overrides]]
+module = [
+    "atlasserver.forcephot.admin",
+    "atlasserver.forcephot.exception",
+    "atlasserver.forcephot.models",
+    "atlasserver.forcephot.netaddr",
+    "atlasserver.forcephot.pagination",
+    "atlasserver.forcephot.queue",
+    "atlasserver.forcephot.throttles",
+    "atlasserver.forcephot.verification",
+    "atlasserver.forcephot.webhooks",
+    "atlasserver.taskrunner.status",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+# TODO: the modules still to convert are the ones carrying an "ANN" per-file-ignore under
+# [tool.ruff.lint.per-file-ignores] below -- that list rather than a third copy here, which would
+# be the one that goes stale. Converting one means adding it to the list above and deleting its
+# ignore line, so the ratchet only ever tightens.
+
 [tool.django-stubs]
 # settings_test star-imports the production settings after presetting the env vars needed to
 # import them, so type checking works on machines with no .env or secrets (e.g. the CI lint job)
 django_settings_module = "atlasserver.settings_test"
 ignore_missing_model_attributes = true
-
-[tool.pylint]
-max-line-length = 120
-errors-only = true
-load-plugins = "pylint_django"
-# settings_test, for the same reason as tool.django-stubs below: it presets the env vars that
-# settings.py refuses to import without, so pylint works on machines with no .env or secrets
-django-settings-module = "atlasserver.settings_test"
-
-[tool.pylint.typecheck]
-ignored-modules = ["astropy", "extinction"]
-
-[tool.pylint.MASTER]
-ignore-paths = "atlasserver/plot_atlas_fp.py"
 
 [tool.pyrefly]
 project-includes = ["**/*.py"]
@@ -146,11 +154,52 @@ project-excludes = [
     "**/plot_atlas_fp.py",
 ]
 python-version = "3.13"
-preset = "legacy"
+preset = "strict"
 ignore-missing-imports = ["*"]
+
+# implicit-any-parameter is on everywhere except the modules that the annotation ratchet has not
+# reached yet -- the same five listed under [tool.ruff.lint.per-file-ignores] as "ANN" and named by
+# the mypy TODO above. Scoped rather than switched off globally, so the other forty-odd modules are
+# held to it and a module drops off this list the moment it is converted. Deleting an entry here,
+# its ANN ignore, and adding it to the mypy overrides is the one change that "converting a module"
+# means.
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/views.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/serializers.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/taskrunner/main.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/misc.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
+
+[[tool.pyrefly.sub-config]]
+matches = "atlasserver/forcephot/forms.py"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any-parameter = false
 
 [tool.pyrefly.errors]
 redundant-cast = "warn"
+missing-import = false
+unbound-name = false
+unsupported-operation = false
+implicit-any-empty-container = true
+implicit-any-lambda = false
 
 [tool.pyright]
 typeCheckingMode = "off"
@@ -177,37 +226,31 @@ show-fixes = true
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    "A001",
-    "A002",
-    "A003",
+    # the rest of ANN is on; Any is genuinely the right annotation at the DRF and Django hook
+    # boundaries (a paginator's `view`, a serialized response body), where the framework passes
+    # whatever the caller had
+    "ANN401",
     "ARG001",  # ignored because variables in df.eval() are not detected
-    "ARG002",
-    "ANN",
-    "BLE001",
     "C901",    # complex-structure
     "CPY001",
-    "COM812",  # missing-trailing-comma
+    "COM812",  # missing-trailing-comma (conflicts with the formatter)
     "D100",    # undocumented-public-module
     "D101",    # undocumented-public-class
     "D102",    # undocumented-public-method
     "D103",    # undocumented-public-function
-    "D104",    # undocumented-public-package
     "D106",
-    "D107",    # undocumented-public-init
     "D203",    # one-blank-line-before-class
-    "D204",
     "D213",    # multi-line-summary-second-line
-    "D417",    # undocumented-param
     "DJ001",
     "E402",
-    "E501",    # Line too long
-    "ERA001",  # commented-out-code
     "FBT",
     "FIX002",  # line contains TODO
     "INP001",
-    "ISC001",
-    "PGH003",
+    "ISC001",  # implicit string concat (conflicts with the formatter)
     "PLC0415", # import-outside-toplevel
+    # the complexity thresholds. The functions over them are the task runner's dispatch loop
+    # and maintenance sweep, which are long because they are sequential and documented, not
+    # because they are tangled; splitting them to satisfy a counter would not help a reader
     "PLR0911", # too-many-return-statements
     "PLR0912", # too-many-branches
     "PLR0913", # too-many-arguments
@@ -217,14 +260,12 @@ ignore = [
     "RUF012",
     "S101",    # Use of assert detected
     "S108",    # hardcoded-temp-file
-    "S113",
-    "S603",    # subprocess-without-shell-equals-true
-    "S605",    # start-process-with-a-shell
-    "S607",    # start-process-with-partial-path
-    "SIM115",  # use context handler for opening files
-    "T201",    # print found
-    "TD002",   # missing-todo-author
-    "TD003",   # missing-todo-link
+    # the subprocess rules: every call here is a fixed argv this code builds, and the
+    # executables (ssh, rsync, parallel) are resolved from PATH on purpose, because their
+    # location differs between the dev machines and sc01
+    "S603", # subprocess-without-shell-equals-true
+    "S607", # start-process-with-partial-path
+    "T201", # print found
 ]
 fixable = ["ALL"]
 unfixable = [
@@ -242,6 +283,17 @@ ignore-fully-untyped = true
 [tool.ruff.lint.per-file-ignores]
 "plot_atlas_fp.py" = ["ALL"]
 "**/tests.py" = ["S106"]
+
+# The ANN rules are on globally (they were in the blanket ignore list, so nothing stopped new code
+# from being unannotated). These are the modules not yet converted; the same list as the mypy
+# ratchet TODO, and it should only ever get shorter. ANN401 is ignored where it is: DRF hook
+# methods legitimately take Any.
+"**/migrations/*.py" = ["ANN"]
+"atlasserver/forcephot/forms.py" = ["ANN"]
+"atlasserver/forcephot/misc.py" = ["ANN"]
+"atlasserver/forcephot/serializers.py" = ["ANN"]
+"atlasserver/forcephot/views.py" = ["ANN"]
+"atlasserver/taskrunner/main.py" = ["ANN"]
 
 [tool.ruff.lint.isort]
 force-single-line = true
