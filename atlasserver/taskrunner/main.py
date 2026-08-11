@@ -868,12 +868,16 @@ def main() -> None:
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every job; stale
                 # queue positions are a display problem, not dispatching is not)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
-            # stamped even on failure, so a persistent one retries on the interval rather than on
+            else:
+                # only on success, and the value read *before* renumbering: a request that arrived
+                # during the pass is still new next time, and a pass that failed leaves its request
+                # outstanding so the next check retries it. Recording it either way would drop the
+                # request and leave dispatch ordering by stale positions until the backstop.
+                last_recalc_generation = seen_generation
+
+            # stamped even on failure, so a persistent one is retried on an interval rather than on
             # every pass of the loop
             last_queuerecalctime = time.perf_counter()
-            # the value read *before* renumbering, so a request that landed during it is still new
-            # next time round rather than being treated as already handled
-            last_recalc_generation = seen_generation
 
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
