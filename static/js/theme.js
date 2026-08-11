@@ -42,9 +42,19 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
         localStorage.setItem(STORAGE_KEY, mode);
       }
     } catch (err) {
-      // preference not remembered across page loads; the current page still switches
+      // the preference is not carried to the next page load; chosenMode still holds it for this one
     }
   }
+
+  /*
+  The mode in force on this page, and the authority for it.
+
+  Storage is only how the choice reaches the next page load: a browser set to refuse site data
+  rejects the write, so asking storage what the visitor chose would answer "auto" however they had
+  just set the control -- and the media query listener below would then take an explicit Light or
+  Dark to be Auto and recolour the page out from under them at the next change of system preference.
+  */
+  var chosenMode = storedMode();
 
   /** The mode as the two values Bootstrap understands, resolving "auto" against the system. */
   function resolve(mode) {
@@ -140,8 +150,16 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
     });
   }
 
+  /** Adopt `mode` for this page, remember it for the next, and bring the control into step. */
+  function setMode(mode) {
+    chosenMode = mode;
+    storeMode(mode);
+    applyMode(mode);
+    showActiveMode(mode);
+  }
+
   function init() {
-    showActiveMode(storedMode());
+    showActiveMode(chosenMode);
 
     // the control is hidden in the template, so it never appears on a page where this file did
     // not run and its buttons would do nothing
@@ -151,27 +169,24 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
 
     document.querySelectorAll('[data-theme-value]').forEach(function (item) {
       item.addEventListener('click', function () {
-        var mode = item.getAttribute('data-theme-value');
-        storeMode(mode);
-        applyMode(mode);
-        showActiveMode(mode);
+        setMode(item.getAttribute('data-theme-value'));
       });
     });
 
     document.addEventListener('atlas:theme', recolourPlots);
   }
 
-  // only while the stored mode is "auto": an explicit choice outranks the system, and a visitor
-  // who has picked light should not be switched when their desktop turns dark for the evening
+  // only while the mode is "auto": an explicit choice outranks the system, and a visitor who has
+  // picked light should not be switched when their desktop turns dark for the evening
   darkMediaQuery.addEventListener('change', function () {
-    if (storedMode() === 'auto') {
+    if (chosenMode === 'auto') {
       applyMode('auto');
     }
   });
 
   window.atlasTheme = { current: currentTheme, plotlyColors: plotlyColors };
 
-  applyMode(storedMode());
+  applyMode(chosenMode);
 
   // the control is further down the page than this script, so it cannot be wired up yet
   if (document.readyState === 'loading') {
