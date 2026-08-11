@@ -893,7 +893,21 @@ export function TaskPage() {
             return;
         }
 
-        if (!stateRef.current.results.some(tracksQueuePosition)) {
+        /*
+         * Worth asking if any row on screen could change from the answer, or if the last answer said
+         * the user still has a queue -- the response drives the navbar badge and the away count as
+         * well as the rows, and neither of those is about what is on screen.
+         *
+         * Without the second half, sitting on a view whose rows are all finished (a single task, the
+         * Running/Finished filter, an older page) stopped the poll, and with it the badge and the set
+         * the away count measures against, while the user still had tasks running.
+         *
+         * Both halves false means the user has nothing queued anywhere, and then there is nothing for
+         * the endpoint to tell anyone; the poll starts again from the rows as soon as a submission
+         * puts a trackable one on screen.
+         */
+        const queued = queuedIdsRef.current;
+        if (!stateRef.current.results.some(tracksQueuePosition) && !(queued != null && queued.length > 0)) {
             return;
         }
 

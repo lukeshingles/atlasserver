@@ -335,7 +335,7 @@ describe('TaskPage', () => {
      * Returns a handle whose `positions` can be reassigned, so a test can let the queue empty.
      */
     const stubFetchWithPositions = (results, positions) => {
-        const control = { positions };
+        const control = { positions, results };
         global.fetch = (url) => {
             const href = url.toString();
             requested.push(href);
@@ -350,7 +350,13 @@ describe('TaskPage', () => {
                 ok: true,
                 status: 200,
                 headers: { get: () => null },
-                json: () => Promise.resolve({ results, taskcount: results.length, next: null, previous: null, pagefirsttaskposition: 0 }),
+                json: () => Promise.resolve({
+                    results: control.results,
+                    taskcount: control.results.length,
+                    next: null,
+                    previous: null,
+                    pagefirsttaskposition: 0,
+                }),
             });
         };
         return control;
@@ -510,6 +516,44 @@ describe('TaskPage', () => {
         const older = items.find((li) => li.textContent.includes('Older'));
         assert.ok(older, 'no Older button');
         assert.ok(older.classList.contains('pagenext'), 'Older is not the item that gets pushed right');
+    });
+
+    test('the queue is still polled when every row on screen has finished', async () => {
+        // the case a single task view, the Running/Finished filter and an older page all produce: the
+        // user still has tasks running, but nothing visible could change from the answer
+        mock.timers.enable({ apis: ['setInterval'] });
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.innerHTML = '<span class="queuecount-number">2</span>';
+        window.document.body.appendChild(badge);
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(60);
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '2', 'the first poll did not run');
+
+            // the row on screen finishes, so no visible row tracks a position any more
+            control.results = [task(1, { finishtimestamp: '2026-01-01T00:05:00Z', queuepos: null })];
+            mock.timers.tick(6000);
+            await flush(80);
+
+            // meanwhile one of the user's other tasks finishes too
+            control.positions = { 2: 2 };
+            mock.timers.tick(2000);
+            await flush(80);
+
+            // the poll has to have run for this to have changed
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '1');
+            assert.equal(badge.hidden, false);
+        } finally {
+            mock.timers.reset();
+            badge.remove();
+        }
     });
 
     test('each row wraps its content in the element its show and hide animates over', async () => {
