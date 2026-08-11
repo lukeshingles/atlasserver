@@ -65,7 +65,6 @@ def splitradeclist(data, form=None):
     linecount = sum(1 for line in lines if line)
     if linecount > 100:
         raise serializers.ValidationError({"radeclist": f"Number of lines ({linecount}) is above the limit of 100"})
-        # lines = lines[:1]
 
     for index, line in enumerate(lines, 1):
         if line[:4] in ["mpc_", "MPC_", "mpc ", "MPC "]:
@@ -154,8 +153,6 @@ def make_pdf_plot_worker(
 
     localresultdir = localresultfile.parent
     pdftitle = f"Task {taskid}"
-    # if taskcomment:
-    #     pdftitle += ':' + taskcomment
 
     localresultfiles = [Path(localresultfile)]
     # outputpath lets the caller render somewhere private and publish the result itself. The
@@ -171,7 +168,6 @@ def make_pdf_plot_worker(
             log=fundamentals.logs.emptyLogger(),
             resultFilePaths=localresultfiles,
             outputPlotPaths=plotfilepaths_requested,
-            # outputDirectory=str(localresultdir),
             objectName=pdftitle,
             plotType="pdf",
         )

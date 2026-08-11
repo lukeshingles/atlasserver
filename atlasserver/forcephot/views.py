@@ -25,8 +25,6 @@ from django.contrib.gis.geoip2 import GeoIP2Exception
 from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
-
-# from django.contrib.auth.models import User
 from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
@@ -322,14 +320,12 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         .prefetch_related(Task.prefetch_imagerequests())
     )
     serializer_class = ForcePhotTaskSerializer
-    # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
     throttle_scope = "forcephottasks"
     ordering_fields = ["timestamp", "id"]
     filter_backends = [filters.OrderingFilter, DjangoFilterBackend]
     filterset_class = TaskFilter
     ordering = "-id"
-    # filterset_fields = ['finishtimestamp']
     template_name = "tasklist-react.html"
 
     @override
@@ -453,7 +449,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             return Response(
                 template_name=self.template_name,
                 data={
-                    # 'serializer': serializer, 'data': serializer.data, 'tasks': page,
                     "name": "Task Queue",
                     "singletaskdetail": False,
                     "paginator": self.paginator,
@@ -477,10 +472,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         page = self.paginate_queryset(listqueryset)
 
         if page is not None:
-            # if request.GET.get('cursor') and page[0].id == listqueryset[0].id:
-            #     return redirect(remove_query_param(request.get_full_path(), 'cursor'))
             serializer = self.get_serializer(page, many=True)
-            # return self.get_paginated_response(serializer.data)
             paginator = self.paginator
             if not isinstance(paginator, TaskPagination):
                 msg = f"expected TaskPagination, got {type(paginator).__name__}"
@@ -500,16 +492,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             return HttpResponseNotFound("Page not found")
 
         if request.accepted_renderer.format == "html":
-            # return redirect('/')
-            # queryset = self.filter_queryset(self.get_queryset())
-            # serializer = self.get_serializer(queryset, many=True)
-
-            # tasks = [instance]
-            # form = TaskForm()
             return Response(
                 template_name=self.template_name,
                 data={
-                    # 'serializer': serializer, 'data': serializer.data, 'tasks': tasks, 'form': form,
                     # self.get_object() again here would repeat the lookup query
                     "name": f"Task {instance.id}",
                     "singletaskdetail": True,
@@ -527,7 +512,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
 
 class RequestImages(APIView):
-    # permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     permission_classes = [ForcePhotPermission]
 
     # this view takes no request body and redirects on success, so the schema generator cannot
@@ -607,7 +591,6 @@ def statscoordchart(request):
 
     plot = bokeh.plotting.figure(
         tools="pan,wheel_zoom,box_zoom,reset",
-        # match_aspect=True,
         aspect_ratio=2,
         background_fill_color="#040154",
         active_scroll="wheel_zoom",
@@ -616,7 +599,6 @@ def statscoordchart(request):
         y_axis_label="Declination (deg)",
         x_range=bokeh.models.Range1d(start=0, end=360),
         y_range=bokeh.models.Range1d(start=-90.0, end=90.0),
-        # frame_width=600,
         sizing_mode="stretch_both",
         output_backend="webgl",
     )
@@ -1387,8 +1369,6 @@ def resultplotdatajs(request, taskid):
                 # a plain ValueError
                 dfforcedphot = None
             else:
-                # df.rename(columns={'#MJD': 'MJD'})
-
                 ujy_min = int(-1e10)
                 ujy_max = int(1e10)
                 dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
@@ -1446,9 +1426,6 @@ def resultplotdatajs(request, taskid):
             )
         strjs = "".join(jsout)
 
-        # with jsplotfile.open("w") as f:
-        #     f.writelines(jsout)
-
         # an empty result (e.g. a transiently unreadable file) must not be stored, or the plot
         # would stay blank until the entry expires even after the file is fixed
         if strjs:
@@ -1465,11 +1442,6 @@ def resultplotdatajs(request, taskid):
     headers: dict[str, str] = {"ETag": etag} if etag is not None else {}
 
     return HttpResponse(strjs, content_type="text/javascript", headers=headers)
-
-    # if jsplotfile.exists():
-    #     return FileResponse(open(jsplotfile, "rb"), headers={"ETag": etag})
-
-    # return HttpResponseNotFound("ERROR: Could not create javascript file.")
 
 
 def _pdfplot_unavailable() -> HttpResponse:
@@ -1497,10 +1469,8 @@ def taskpdfplot(request, taskid):
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
         pdfpath = resultfilepath.with_suffix(".pdf")
 
-        # to force a refresh of all plots
-        # if os.path.exists(pdfpath):
-        #     os.remove(pdfpath)
-
+        # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
+        # refresh plots after a change to plot_atlas_fp
         if not pdfpath.is_file():
             # Herd control: the queue page links a PDF for every finished task, so a crawler or a
             # reload would otherwise fork matplotlib once per concurrent request. Not a mutex (see

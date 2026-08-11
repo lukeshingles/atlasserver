@@ -181,13 +181,10 @@ WSGI_APPLICATION = "atlasserver.wsgi.application"
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 DATABASES = {
+    # SQLite is not an alternative here: settings_test swaps the whole DATABASES entry for it, and
+    # migration 0005 writes different DDL per vendor
     "default": {
-        # 'ENGINE': 'django.db.backends.sqlite3',
-        # 'NAME': BASE_DIR / 'db.sqlite3',
         "ENGINE": "django.db.backends.mysql",
-        # 'OPTIONS': {
-        #     # 'read_default_file': '/usr/local/etc/my.cnf',
-        # },
         "NAME": os.environ.get("ATLASSERVER_DJANGO_MYSQL_DBNAME"),
         "USER": os.environ.get("ATLASSERVER_DJANGO_MYSQL_USER"),
         "PASSWORD": os.environ.get("ATLASSERVER_DJANGO_MYSQL_PASSWORD"),

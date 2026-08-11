@@ -29,7 +29,6 @@ REMOTE_SERVER = "atlas"
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
-# import atlasserver.wsgi
 django.setup()
 
 import sys
@@ -221,8 +220,8 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
     if task.user_id in settings.TEST_USERS:
         atlascommand += " tdo=1"
 
-    # for debugging because force.sh takes a long time to run
-    # atlascommand = "echo '(DEBUG MODE: force.sh output will be here)'"
+    # force.sh takes minutes, so replacing atlascommand with an echo is the usual way to exercise
+    # the surrounding dispatch and result handling quickly
 
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}; "
@@ -354,24 +353,12 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
 
     if stdout:
         stdoutlines = stdout.split("\n")
+        # counted rather than echoed: force.sh is chatty and the per-slot logs were unreadable
         logfunc(f"{REMOTE_SERVER} STDOUT: ({len(stdoutlines)} lines of output)")
-        # for line in stdoutlines:
-        #     log(logprefix + f"{remoteServer} STDOUT: {line}")
 
     if stderr:
         for line in stderr.split("\n"):
             logfunc(f"{REMOTE_SERVER} STDERR: {line}")
-
-    # output realtime ssh output line by line
-    # while True:
-    #     stdoutline = p.stdout.readline()
-    #     stderrline = p.stderr.readline()
-    #     if not stdoutline and not stderrline:
-    #         break
-    #     if stdoutline:
-    #         log(logprefix + f"{remoteServer} STDOUT >>> {stdoutline.rstrip()}")
-    #     if stderrline:
-    #         log(logprefix + f"{remoteServer} STDERR >>> {stderrline.rstrip()}")
 
     if not task_exists(taskid=task.id):  # check if job was cancelled
         return None, None
@@ -659,7 +646,7 @@ def do_task(task, slotid: int) -> None:
             notify_finished(task=task, logfunc=logfunc)
 
         elif localresultfile and localresultfile.exists():
-            # ingest_results(localresultfile, conn, use_reduced=task["use_reduced"])
+            # the result file is served from disk; nothing parses it into the database
             mark_finished(task=task, error_msg=None)
 
             notify_finished(task=task, logfunc=logfunc)

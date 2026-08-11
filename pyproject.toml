@@ -243,7 +243,6 @@ ignore = [
     "D213",    # multi-line-summary-second-line
     "DJ001",
     "E402",
-    "ERA001",  # commented-out-code
     "FBT",
     "FIX002",  # line contains TODO
     "INP001",
@@ -264,9 +263,9 @@ ignore = [
     # the subprocess rules: every call here is a fixed argv this code builds, and the
     # executables (ssh, rsync, parallel) are resolved from PATH on purpose, because their
     # location differs between the dev machines and sc01
-    "S603",    # subprocess-without-shell-equals-true
-    "S607",    # start-process-with-partial-path
-    "T201",    # print found
+    "S603", # subprocess-without-shell-equals-true
+    "S607", # start-process-with-partial-path
+    "T201", # print found
 ]
 fixable = ["ALL"]
 unfixable = [

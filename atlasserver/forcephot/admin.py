@@ -18,8 +18,6 @@ class CustomAdmin(admin.ModelAdmin):
     # foreign-key detection cannot see, costing one User query per row without this
     list_select_related = ["user"]
 
-    # readonly_fields = ('parent_task',)
-
     # make all fields read-only
     @override
     def has_change_permission(self, request: HttpRequest, obj: Model | None = None) -> bool:

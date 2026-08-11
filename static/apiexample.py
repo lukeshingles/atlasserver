@@ -12,8 +12,8 @@ import requests
 # and this file is what users copy as a starting point
 TIMEOUT_SECONDS = 60
 
+# against a local development server this is http://127.0.0.1:8000
 BASEURL = "https://fallingstar-data.com/forcedphot"
-# BASEURL = "http://127.0.0.1:8000"
 
 if os.environ.get("ATLASFORCED_SECRET_KEY"):
     token = os.environ.get("ATLASFORCED_SECRET_KEY")
@@ -39,8 +39,7 @@ headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
 task_url = None
 while not task_url:
     with requests.Session() as s:
-        # alternative to token auth
-        # s.auth = ('USERNAME', 'PASSWORD')
+        # HTTP basic auth works too, by setting s.auth to a (username, password) pair
         resp = s.post(f"{BASEURL}/queue/", headers=headers, data={"ra": 110, "dec": 11, "mjd_min": 59248.0})
 
         if resp.status_code == 201:  # successfully queued
@@ -95,9 +94,8 @@ while not result_url:
 with requests.Session() as s:
     textdata = s.get(result_url, headers=headers).text
 
-    # if we'll be making a lot of requests, keep the web queue from being
-    # cluttered (and reduce server storage usage) by sending a delete operation
-    # s.delete(task_url, headers=headers).json()
+    # if you make a lot of requests, DELETE each task_url when you are done with it: it keeps the
+    # web queue readable and reduces storage on the server
 
 dfresult = pd.read_csv(StringIO(textdata), sep=r"\s+").rename({"###MJD": "MJD"}, axis="columns")
 print(dfresult)

@@ -1,4 +1,3 @@
-# from django.contrib.auth.models import User
 import math
 import typing as t
 from typing import override
@@ -36,7 +35,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         localresultfile = obj.localresultfile()
         if localresultfile and not obj.error_msg and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(localresultfile))
-            # return request.build_absolute_uri(reverse("taskresultdata", args=[obj.id]))
 
         return None
 
@@ -63,7 +61,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     def get_previewimage_url(self, obj) -> str | None:
         if obj.localresultpreviewimagefile and (request := self.context.get("request")):
             return request.build_absolute_uri(staticfiles_storage.url(obj.localresultpreviewimagefile))
-            # return request.build_absolute_uri(reverse("taskpreviewimage", args=[obj.id]))
 
         return None
 
@@ -128,10 +125,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
     @staticmethod
     def validate_mpc_name(value, prefix="", field="mpc_name"):
-        # okchars = "0123456789 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        # if any([c not in dict.fromkeys(okchars) for c in value]):
-        #     raise serializers.ValidationError('Invalid an mpc_name. May contain only: 0-9a-z[space]')
-
+        # rejects the characters that would break the shell command the runner builds, rather than
+        # allowing a fixed alphabet: MPC designations contain punctuation this cannot predict
+        #
         # mpc_name is nullable, and DRF calls validate_<field> even when the value is None
         if value is None:
             return value

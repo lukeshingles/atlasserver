@@ -88,7 +88,6 @@ class Task(models.Model):
     from_api = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
     region = models.CharField(default=None, null=True, blank=True, max_length=256)
-    # city = models.CharField(default=None, null=True, blank=True, max_length=256)
     error_msg = models.CharField(
         null=True, blank=True, default=None, max_length=512, verbose_name="Error messages during execution"
     )
@@ -116,7 +115,8 @@ class Task(models.Model):
     parent_task = models.ForeignKey(
         "self",
         related_name="imagerequest",
-        # on_delete=models.SET_NULL,
+        # CASCADE rather than SET_NULL: an image request has no meaning without the task whose
+        # results it was made from, so it goes when that goes
         on_delete=models.CASCADE,
         null=True,
         default=None,
