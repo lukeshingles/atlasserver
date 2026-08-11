@@ -347,15 +347,17 @@ towards white drains the colour out of it, leaving keywords a grey that recedes 
 they are supposed to stand out from. Raising its lightness and holding its saturation keeps them the
 most prominent thing in the block, which is what they are on the light theme.
 
-.com and .pun -- with .opn and .clo, which share its colour -- keep one mid grey for both themes,
-already near 5:1 on each. .pln is the plain text between tokens, so on the dark theme it is simply
-the body colour.
+.com and .pun -- with .opn and .clo, which share its colour -- are the two ends of one grey rather
+than a single value: prettify.css's #93a1a1 reads at about 5:1 on the dark card but only 2.5:1 on the
+light one, which is too little for a comment and far too little for the punctuation and operators
+.pun covers. The light value is the darker grey from the same family, at about 5:1. .pln is the plain
+text between tokens, so on the dark theme it is simply the body colour.
 */
 .com,
 .pun,
 .opn,
 .clo {
-  color: #93a1a1;
+  color: #586e75;
 }
 
 .pln {
@@ -385,6 +387,13 @@ the body colour.
 .dec,
 .var {
   color: teal;
+}
+
+[data-bs-theme="dark"] .com,
+[data-bs-theme="dark"] .pun,
+[data-bs-theme="dark"] .opn,
+[data-bs-theme="dark"] .clo {
+  color: #93a1a1;
 }
 
 [data-bs-theme="dark"] .pln {

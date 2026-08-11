@@ -305,7 +305,9 @@ site's Bootstrap version rather than freezing a copy of its numbers.
 /*
 The request line and the response body sit in <pre class="prettyprint">: prettify.css gives that a
 light card and a palette of dark ink to suit it, and prettify-min.js marks the contents up in the
-browser, adding the .pln, .str, .kwd, .lit and .pun spans styled below.
+browser, adding the .pln, .str, .kwd, .lit and .pun spans. Their colours are in main.css, which the
+API guide loads too, so one palette serves both pages; only the card is here, since only this page
+has one. main.css is loaded after prettify.css, so it is the palette that applies.
 
 Nothing about this is server-side -- DRF's BrowsableAPIRenderer.code_style feeds a pygments
 stylesheet for the {% code %} tag in its docs templates, which is not a tag rest_framework/base.html
