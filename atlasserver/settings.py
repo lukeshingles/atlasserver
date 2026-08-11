@@ -75,6 +75,23 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# Absolute origin for links in security-sensitive email -- account verification and email change.
+# Built from configuration rather than from the request's Host header, because pinning
+# ALLOWED_HOSTS is not the protection it looks like: the list above legitimately contains wildcard
+# entries, so any subdomain of qub.ac.uk or fallingstar-data.com passes host validation. An
+# attacker able to serve one of those (a dangling DNS record is the usual way) can register with a
+# victim's address, aim the Host header at their own server, and be sent the victim's token when
+# the victim opens the link -- then replay it here.
+#
+# Empty means "use the request", which is what development and the tests want. Set it in
+# production. django.contrib.sites would be the other way to do this, but it is not installed and
+# adding it for one string is not worth a migration.
+_siteorigin = os.environ.get("ATLASSERVER_SITE_ORIGIN", "").strip().rstrip("/")
+if _siteorigin and not _siteorigin.startswith(("http://", "https://")):
+    _msg = f"ATLASSERVER_SITE_ORIGIN must start with http:// or https://, but is {_siteorigin!r}"
+    raise ImproperlyConfigured(_msg)
+SITE_ORIGIN = _siteorigin
+
 ADMINS = [
     ("Luke Shingles", "luke.shingles@gmail.com"),
 ]  # send server error notifications to this person

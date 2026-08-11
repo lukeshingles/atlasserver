@@ -33,6 +33,13 @@ address is not ambiguous for password reset.
 
 Deploy note: on MySQL/MariaDB this adds a stored generated column, which rebuilds the table, so
 give it a maintenance window.
+
+Upgrade note: because this reaches past the ORM, Django's migration state does not know the column
+or the index exist. Anything that rebuilds auth_user from state therefore drops them. The
+dependency below orders this after every auth migration Django ships today, which covers the case
+that can happen now; a *future* Django adding another auth migration that alters auth_user would
+reintroduce the risk on SQLite (MySQL alters in place and is unaffected). If that happens, the
+answer is a follow-up migration that re-adds the column and index rather than a change here.
 """
 
 from django.conf import settings
@@ -155,6 +162,13 @@ class Migration(migrations.Migration):
     dependencies = [
         ("forcephot", "0004_alter_task_id"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+        # after every auth migration that exists, not merely after the user model was created.
+        # The swappable dependency alone only orders this after auth.0001, which leaves the rest
+        # of contrib.auth free to run afterwards -- and on SQLite an ALTER is a table remake built
+        # from migration *state*, which knows nothing of the column and index added below, so a
+        # later auth migration would copy the table without them and silently take the constraint
+        # with it.
+        ("auth", "0012_alter_user_first_name_max_length"),
     ]
 
     operations = [migrations.RunPython(create_index, drop_index)]

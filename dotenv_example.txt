@@ -27,3 +27,11 @@ export ATLASSERVER_NTHREADPERPROC='1'
 # the connection, which is what stops a caller choosing the country their submissions are filed
 # under. Count the proxies exactly — one hop too many reads a value the client wrote.
 export ATLASSERVER_TRUSTED_PROXY_COUNT='0'
+
+# Origin used to build the links in account-verification and email-change mail. Set this in
+# production: without it the links are built from the request's Host header, and ALLOWED_HOSTS
+# holds wildcard entries (.qub.ac.uk, .fallingstar-data.com), so anyone able to serve one of those
+# subdomains could have the server mail a victim a link pointing at them — and be handed the
+# victim's token when it is opened. Leave it unset in development, where the request is what you
+# want. Must include the scheme.
+export ATLASSERVER_SITE_ORIGIN='https://fallingstar-data.com'

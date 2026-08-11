@@ -46,6 +46,36 @@ class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
 token_generator = EmailVerificationTokenGenerator()
 
 
+def absolute_url(request: HttpRequest, path: str) -> str:
+    """Return `path` as an absolute URL, preferring the configured origin to the request's host.
+
+    A link in security-sensitive mail must not be built from the Host header. Pinning ALLOWED_HOSTS
+    is not enough on its own: it legitimately holds wildcard entries, so every subdomain of
+    qub.ac.uk and fallingstar-data.com passes validation, and anyone who can serve one of those can
+    have this send a victim a link to their own server -- disclosing the token when it is opened.
+
+    Falls back to the request when SITE_ORIGIN is unset, which is what development and the tests
+    want; production sets it.
+    """
+    from urllib.parse import urljoin
+
+    from django.conf import settings
+
+    if settings.SITE_ORIGIN:
+        return urljoin(settings.SITE_ORIGIN, path)
+
+    return request.build_absolute_uri(path)
+
+
+def site_name(request: HttpRequest) -> str:
+    """Return the host to name in email, from the same source the links come from."""
+    from urllib.parse import urlsplit
+
+    from django.conf import settings
+
+    return urlsplit(settings.SITE_ORIGIN).netloc if settings.SITE_ORIGIN else request.get_host()
+
+
 def verification_url(request: HttpRequest, user: t.Any) -> str:
     """Return the absolute URL that verifies this user's current email address."""
     from django.urls import reverse
@@ -55,21 +85,18 @@ def verification_url(request: HttpRequest, user: t.Any) -> str:
         kwargs={"uidb64": urlsafe_base64_encode(force_bytes(user.pk)), "token": token_generator.make_token(user)},
     )
 
-    # built from the request rather than from a configured site name, like the password reset mail
-    # already is. ALLOWED_HOSTS is pinned (not "*") precisely so that a forged Host header cannot
-    # turn this into a link to somebody else's server.
-    return request.build_absolute_uri(path)
+    return absolute_url(request, path)
 
 
 def send_verification_email(request: HttpRequest, user: t.Any) -> None:
     """Mail the user a link that confirms their address."""
     body = render_to_string(
         "registration/verification_email.txt",
-        {"user": user, "verification_url": verification_url(request, user), "site_name": request.get_host()},
+        {"user": user, "verification_url": verification_url(request, user), "site_name": site_name(request)},
     )
 
     EmailMessage(
-        subject=f"Verify your email address for {request.get_host()}",
+        subject=f"Verify your email address for {site_name(request)}",
         body=body,
         to=[user.email],
     ).send(fail_silently=False)
@@ -118,15 +145,15 @@ def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email:
         {"user_pk": user.pk, "email": new_email, "from_email": user.email, "state": _credential_state(user)},
         salt=EMAIL_CHANGE_SALT,
     )
-    url = request.build_absolute_uri(reverse("email_change_confirm", kwargs={"token": token}))
+    url = absolute_url(request, reverse("email_change_confirm", kwargs={"token": token}))
 
     body = render_to_string(
         "registration/email_change_email.txt",
-        {"user": user, "confirmation_url": url, "new_email": new_email, "site_name": request.get_host()},
+        {"user": user, "confirmation_url": url, "new_email": new_email, "site_name": site_name(request)},
     )
 
     EmailMessage(
-        subject=f"Confirm your new email address for {request.get_host()}",
+        subject=f"Confirm your new email address for {site_name(request)}",
         body=body,
         to=[new_email],
     ).send(fail_silently=False)

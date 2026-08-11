@@ -224,6 +224,20 @@ class EmailChangeTests(TestCase):
         assert "already exists" in response.content.decode().lower()
         assert not django_mail.outbox, "a confirmation went to an address that is already taken"
 
+    @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
+    def test_the_confirmation_link_ignores_the_host_header_too(self) -> None:
+        # same exposure as the verification link, and the same fix
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("email_change"),
+            {"password": "testpassword123", "new_email": "new@example.com"},
+            HTTP_HOST="evil.qub.ac.uk",
+        )
+
+        body = str(django_mail.outbox[0].body)
+        assert "https://fallingstar-data.com/" in body, body
+        assert "evil.qub.ac.uk" not in body, "the link followed the Host header"
+
     def test_no_analytics_on_any_page_served_at_the_confirmation_url(self) -> None:
         """Every response at that URL, not just the ones that ask for confirmation.
 
@@ -2768,6 +2782,34 @@ class RegistrationVerificationTests(TestCase):
         self.client.post(reverse("resend_verification"), {"email": "active@example.com"})
 
         assert not django_mail.outbox
+
+    @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
+    def test_the_link_ignores_the_host_header_when_an_origin_is_configured(self) -> None:
+        """A link in this mail must not be built from the Host header.
+
+        Pinning ALLOWED_HOSTS is not the protection it looks like: it holds wildcard entries, so
+        every subdomain of qub.ac.uk and fallingstar-data.com passes validation. Anyone able to
+        serve one of those could register with a victim's address, aim the Host at their own
+        server, and be handed the victim's token when the victim opened the link.
+        """
+        self.client.post(
+            reverse("register"),
+            {**self.credentials, "email": "newcomer@example.com"},
+            HTTP_HOST="evil.fallingstar-data.com",
+        )
+
+        body = str(django_mail.outbox[0].body)
+        assert "https://fallingstar-data.com/" in body, body
+        assert "evil.fallingstar-data.com" not in body, "the link followed the Host header"
+        assert "evil.fallingstar-data.com" not in django_mail.outbox[0].subject
+
+    def test_the_link_falls_back_to_the_request_without_a_configured_origin(self) -> None:
+        # development and the tests run without one, and must keep working
+        assert settings.SITE_ORIGIN == ""
+
+        self.register()
+
+        assert "http://testserver/" in str(django_mail.outbox[0].body)
 
     def test_no_analytics_on_pages_whose_url_carries_a_token(self) -> None:
         """gtag('config') reports a page view at the current location.
