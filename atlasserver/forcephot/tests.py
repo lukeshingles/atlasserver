@@ -788,9 +788,8 @@ class TaskStrTests(TestCase):
     def test_a_tab_only_mpc_name_is_not_a_target_either(self) -> None:
         """SQL TRIM() removes spaces and nothing else; Python str.strip() removes far more.
 
-        A name of one tab therefore satisfied the constraint as a real MPC target while
-        Task.mpc_target reduced it to nothing, so the runner took the coordinate branch on a row
-        whose coordinates the constraint had just allowed to be NULL -- float(None).
+        The two definitions have to be one definition, or a name blank to the reader is a target to
+        the database and the runner dispatches by coordinates the constraint let be NULL.
         """
         user = User.objects.create_user(username="tabtarget", email="tt@example.com", password=None)
 
@@ -801,32 +800,40 @@ class TaskStrTests(TestCase):
         msg = "a task whose only target was a tab was accepted"
         raise AssertionError(msg)
 
-    def test_the_constraint_and_mpc_target_agree_on_what_is_blank(self) -> None:
-        # the two must draw the same line, or one of them sends a row down the wrong branch
-        user = User.objects.create_user(username="agreement", email="ag@example.com", password=None)
+    def test_save_normalises_the_name_so_readers_can_trust_it(self) -> None:
+        """The point of normalising on write: mpc_name is falsy exactly when there is no target.
+
+        Five readers were each re-deriving what counts as blank -- the target constraint, the task
+        runner, __str__, the usage stats and the queue page. They test the field directly now, which
+        is only sound because nothing whitespace-only can reach the column.
+        """
+        user = User.objects.create_user(username="normalised", email="n@example.com", password=None)
 
         for name in ("\t", "\n", " ", " \t\n ", "\u00a0", "\v\f"):
-            task = Task(user=user, mpc_name=name, ra=100.0, dec=-20.0)
-            task.save()  # blank by both readings, so it is a coordinate request and saves happily
-            assert task.mpc_target == "", repr(name)
+            task = Task.objects.create(user=user, mpc_name=name, ra=100.0, dec=-20.0)
+            assert task.mpc_name == "", repr(name)
+            assert not Task.objects.get(pk=task.pk).mpc_name, repr(name)
             task.delete()
 
-    def test_whatever_the_constraint_calls_a_name_mpc_target_also_does(self) -> None:
-        """The invariant that keeps the runner off float(None).
+        # and the padding comes off a real name without touching the name itself
+        padded = Task.objects.create(user=user, mpc_name="  Makemake\t")
+        assert padded.mpc_name == "Makemake"
 
-        The danger is one-directional: if the database accepts a name (and so lets ra/dec be NULL)
-        while mpc_target reads it as blank, the runner takes the coordinate branch on a row with no
-        coordinates. Both are derived from MPC_NAME_WHITESPACE, so they cannot disagree -- this
-        pins that, including for whitespace deliberately left out of the set.
-        """
-        user = User.objects.create_user(username="invariant", email="inv@example.com", password=None)
+        # whitespace the set deliberately omits is part of the name, to both sides
+        exotic = Task.objects.create(user=user, mpc_name="\u2007")
+        assert exotic.mpc_name == "\u2007"
 
-        # \u2007 is Unicode whitespace that the set does not cover: both sides must treat it as a
-        # name, not one side as a name and the other as blank
-        for name in ("\u2007", "\u2003", "x", " x "):
-            task = Task.objects.create(user=user, mpc_name=name)  # accepted, so it is a name
-            assert task.mpc_target, f"the constraint took {name!r} as a target but mpc_target did not"
-            task.delete()
+    def test_the_database_refuses_a_blank_name_from_a_bulk_writer(self) -> None:
+        # bulk_create does not call save(), which is why the guarantee is a constraint and not only
+        # a normalisation -- without it the readers above could not test the field directly
+        user = User.objects.create_user(username="bulkwriter", email="bw@example.com", password=None)
+
+        try:
+            Task.objects.bulk_create([Task(user=user, mpc_name="   ")])
+        except IntegrityError:
+            return
+        msg = "bulk_create stored a whitespace-only mpc_name"
+        raise AssertionError(msg)
 
     def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
         # it is truthy, so it satisfied a bare != "" and then reached the runner, which would have

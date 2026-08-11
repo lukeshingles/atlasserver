@@ -188,10 +188,10 @@ def remote_result_filename(task) -> str | None:
 
 def build_fp_command(task, remoteresultfile: Path) -> str:
     """Return the remote shell command for a forced photometry task."""
-    # mpc_target, not mpc_name: the constraint treats a name of nothing but spaces as no name at
-    # all, so such a row is a coordinate request and must not reach ssforce.sh with a blank object
-    if task.mpc_target:
-        atlascommand = f"/atlas/bin/ssforce.sh '{task.mpc_target}'"
+    # falsy exactly when there is no MPC target: task_mpc_name_not_blank keeps whitespace out of
+    # the column, so this needs no normalising of its own
+    if task.mpc_name:
+        atlascommand = f"/atlas/bin/ssforce.sh '{task.mpc_name}'"
     else:
         atlascommand = f"/atlas/bin/force.sh {float(task.ra)} {float(task.dec)}"
 
@@ -230,7 +230,7 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
 
 def build_ssostack_command(task, remoteresultfile: Path, remotedatafile: Path, remotetaskdir: Path) -> str:
     """Return the remote shell command for a solar system object image stack task."""
-    atlascommand = f"/atlas/bin/stack_rock.sh '{task.mpc_target}'"
+    atlascommand = f"/atlas/bin/stack_rock.sh '{task.mpc_name}'"
     atlascommand += (  # stack_rock.sh doesn't support float mjds
         f" {float(task.mjd_min) if task.mjd_min else 0:.0f}"
     )

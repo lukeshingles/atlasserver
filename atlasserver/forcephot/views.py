@@ -72,7 +72,6 @@ from atlasserver.forcephot.misc import make_pdf_plot
 from atlasserver.forcephot.misc import PDF_PLOT_TIMEOUT_SECONDS
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
-from atlasserver.forcephot.models import BLANK_MPC_NAME
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
@@ -801,9 +800,9 @@ def statsshortterm(request):
     }
     dictparams["sevendaytaskrate"] = "{:.1f}/day".format(dictparams["sevendaytasks"] / 7.0)
 
-    # isnull=False alone counts a blank name, which is a coordinate request. BLANK_MPC_NAME is the
-    # same test the check constraint applies, so the count cannot disagree with what was stored
-    dictparams["sevendaympctasks"] = int(sevendaytasks.filter(mpc_name__isnull=False).exclude(BLANK_MPC_NAME).count())
+    # excluding "" as well as NULL: both mean no MPC target, and task_mpc_name_not_blank keeps
+    # anything else that would have meant it out of the column
+    dictparams["sevendaympctasks"] = int(sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count())
     dictparams["sevendayimgtasks"] = int(sevendaytasks.filter(request_type="IMGZIP").count())
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)

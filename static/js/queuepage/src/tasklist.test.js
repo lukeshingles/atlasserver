@@ -206,10 +206,10 @@ describe('TaskPage', () => {
         assert.match(container.textContent, /Connection error/);
     });
 
-    test('a whitespace-only mpc_name is shown as the coordinate target it is', async () => {
-        // the database calls such a row a coordinate request and the runner dispatches it that
-        // way; showing an empty "MPC Object" would hide the target that was actually used
-        const { container } = await renderPage([task(1, { mpc_name: '  ', ra: 150.0, dec: 20.0 })]);
+    test('an empty mpc_name is shown as the coordinate target it is', async () => {
+        // task_mpc_name_not_blank means the server can only send "" or a real name here, so this
+        // is the whole blank case rather than one spelling of it
+        const { container } = await renderPage([task(1, { mpc_name: '', ra: 150.0, dec: 20.0 })]);
 
         assert.match(container.textContent, /RA Dec:/);
         assert.doesNotMatch(container.textContent, /MPC Object/);

@@ -1,6 +1,7 @@
 import datetime
 import typing as t
 from pathlib import Path
+from typing import override
 
 from django.conf import settings
 
@@ -150,7 +151,15 @@ class Task(models.Model):
                     )
                 ),
                 name="task_target_is_mpcname_or_radec",
-            )
+            ),
+            # And mpc_name is never whitespace alone: NULL, "" or a real name. save() normalises,
+            # but bulk_create, bulk_update and update() do not go through it, so the guarantee has
+            # to live here. It is what lets every reader test the field for truth rather than
+            # re-deriving what counts as blank -- which five of them were doing.
+            models.CheckConstraint(
+                condition=models.Q(mpc_name__isnull=True) | models.Q(mpc_name="") | ~BLANK_MPC_NAME,
+                name="task_mpc_name_not_blank",
+            ),
         ]
         indexes = [
             # the task list: filter on (is_archived, user), order by (-timestamp, -id)
@@ -169,11 +178,8 @@ class Task(models.Model):
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
         user = self.user
-        # mpc_target, so that a name of nothing but spaces -- which the constraint reads as no
-        # name, and which the runner therefore dispatches by coordinates -- is not described here
-        # as an MPC target the admin changelist would then misreport
-        if self.mpc_target:
-            targetstr = f" MPC[{self.mpc_target}]"
+        if self.mpc_name:
+            targetstr = f" MPC[{self.mpc_name}]"
         elif self.ra is not None and self.dec is not None:
             targetstr = f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
         else:  # a task with no target at all can be created in the admin panel
@@ -203,6 +209,21 @@ class Task(models.Model):
 
         return strtask
 
+    @override
+    def save(self, *args: t.Any, **kwargs: t.Any) -> None:
+        """Normalise mpc_name, then save as usual.
+
+        Whitespace around a name is not part of it, and a name of nothing but whitespace is not a
+        name -- the check constraint refuses to store one. Doing it here means readers can test the
+        field for truth: it is falsy exactly when the task has no MPC target.
+
+        MPC_NAME_WHITESPACE rather than str.strip(), so this and the constraint agree on the set.
+        """
+        if self.mpc_name is not None:
+            self.mpc_name = self.mpc_name.strip(MPC_NAME_WHITESPACE)
+
+        super().save(*args, **kwargs)
+
     def localresultfileprefix(self, use_parent: bool = False) -> str:
         """Return the relative path prefix for the job (no file extension)."""
         int_id = int(self.parent_task.id) if use_parent and self.parent_task else int(self.id)
@@ -223,20 +244,6 @@ class Task(models.Model):
             self._localresultfile_cache = resultfile
 
         return self._localresultfile_cache
-
-    @property
-    def mpc_target(self) -> str:
-        """Return the MPC object name without surrounding space, or "" if this is not an MPC task.
-
-        Callers should test this rather than mpc_name, which is truthy for a name of nothing but
-        whitespace -- a value BLANK_MPC_NAME reads as no target at all, so such a row carries
-        coordinates and belongs on the coordinate path.
-
-        Strips MPC_NAME_WHITESPACE rather than calling a bare strip(): str.strip() removes more
-        than the constraint does, and a name this reduced to nothing while the database still
-        counted it as a target would send a coordinate-less row down the coordinate branch.
-        """
-        return (self.mpc_name or "").strip(MPC_NAME_WHITESPACE)
 
     @property
     def localresultpreviewimagefile(self) -> str | None:
