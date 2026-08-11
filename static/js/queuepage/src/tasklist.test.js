@@ -205,4 +205,19 @@ describe('TaskPage', () => {
 
         assert.match(container.textContent, /Connection error/);
     });
+
+    test('a whitespace-only mpc_name is shown as the coordinate target it is', async () => {
+        // the database calls such a row a coordinate request and the runner dispatches it that
+        // way; showing an empty "MPC Object" would hide the target that was actually used
+        const { container } = await renderPage([task(1, { mpc_name: '  ', ra: 150.0, dec: 20.0 })]);
+
+        assert.match(container.textContent, /RA Dec:/);
+        assert.doesNotMatch(container.textContent, /MPC Object/);
+    });
+
+    test('a real mpc_name is still shown as one', async () => {
+        const { container } = await renderPage([task(1, { mpc_name: 'Makemake', ra: null, dec: null })]);
+
+        assert.match(container.textContent, /MPC Object: Makemake/);
+    });
 });

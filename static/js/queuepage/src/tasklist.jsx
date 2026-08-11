@@ -19,6 +19,12 @@ function debug_log(...args) {
 // hundred bytes instead of a page of serialised tasks, so that is what runs on the short interval.
 // A task dropping out of the queue positions response means it has finished, which triggers an
 // immediate full fetch, so "my task is done" still appears within one short interval.
+// The characters MPC_NAME_WHITESPACE covers in models.py. Spelled out rather than using trim(),
+// which strips every Unicode space: the database decides what counts as a target, and trim() would
+// disagree with it in both directions -- calling a "\u2007" name blank (so this would show a
+// coordinate pair the constraint allowed to be NULL) while the constraint still calls it a name.
+const MPC_NAME_BLANK = /^[ \t\n\r\v\f\u00a0]*$/;
+
 const TASKLIST_POLL_MS = 6000;
 const QUEUEPOS_POLL_MS = 2000;
 const RUNNERSTATUS_POLL_MS = 60000;
@@ -348,7 +354,9 @@ export const Task = React.memo(function Task(props) {
         taskbox.push(<div key="comment">Comment: <b>{task.comment}</b></div>);
     }
 
-    if (task.mpc_name != null && task.mpc_name != '') {
+    // a name of nothing but that whitespace is not a target: the row carries coordinates, and the
+    // task runner dispatches it by them, so showing an empty "MPC Object" would hide the real one
+    if (task.mpc_name != null && !MPC_NAME_BLANK.test(task.mpc_name)) {
         taskbox.push(<div key="target">MPC Object: {task.mpc_name}</div>);
     } else {
         let radecepoch = '';
