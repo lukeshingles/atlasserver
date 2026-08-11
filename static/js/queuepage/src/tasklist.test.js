@@ -473,6 +473,53 @@ describe('TaskPage', () => {
         }
     });
 
+    test('an away count response overtaken by a later one is discarded', async () => {
+        // The away poll asks the same endpoint on its own interval, so it has the same overlap hazard as
+        // the position poll: a request outliving its minute is answered after the next one.
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(60);
+
+            hidden = true;
+
+            // the first away poll goes out while both tasks are still queued, and is held open
+            let land;
+            control.hold = new Promise((resolve) => {
+                land = resolve;
+            });
+            mock.timers.tick(60000);
+            await flush(20);
+
+            // both finish, and the next away poll -- issued second, answered first -- reports them
+            control.positions = {};
+            mock.timers.tick(60000);
+            await flush(60);
+            assert.match(window.document.title, /^\(2\) Task Queue/);
+
+            // only now does the first land, from before either had finished
+            land();
+            await flush(80);
+
+            assert.match(window.document.title, /^\(2\) Task Queue/,
+                'an overtaken away response took the count back down');
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
     test('a completion already reported is not reported again on the next absence', async () => {
         // Returning to the tab asks for a fresh set for the next absence to be measured against. If the
         // tab is left again before that answer lands, the set must not still be the one that already

@@ -859,6 +859,16 @@ export function TaskPage() {
      */
     const queueposRequestRef = React.useRef(0);
 
+    /*
+     * The same for the away poll, which asks the same endpoint on its own interval and so has the same
+     * hazard: a request outliving the minute it was made in overlaps the next, and the older answer
+     * landing second would lower the count back to what the queue looked like before -- taking a
+     * completion out of the title that the newer answer had just put in, until the tick after. A
+     * separate counter, because these are a separate stream of requests: sharing one would have each
+     * poll discarding the other's answers.
+     */
+    const awayRequestRef = React.useRef(0);
+
     /* Ticks skipped since the queue was last reported empty; see EMPTY_QUEUE_TICKS. */
     const emptyticksRef = React.useRef(0);
 
@@ -1097,6 +1107,8 @@ export function TaskPage() {
             return;
         }
 
+        const requestnumber = ++awayRequestRef.current;
+
         fetch(queuepositions_url,
             {
                 credentials: "same-origin",
@@ -1105,6 +1117,12 @@ export function TaskPage() {
             })
             .then(response => response.status == 200 ? response.json() : null)
             .then(data => {
+                // overtaken by a later away poll, so this is the older of two answers about the same
+                // queue; see awayRequestRef
+                if (requestnumber != awayRequestRef.current) {
+                    debug_log('discarding an away count response overtaken by a later request');
+                    return;
+                }
                 // hidden is re-checked because the tab can have been looked at again during this
                 // request's round-trip, the same hazard fetchQueuePositions re-checks the pause for.
                 // Without it a response landing just after the user came back would put a count in
