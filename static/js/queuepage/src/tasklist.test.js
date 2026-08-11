@@ -639,6 +639,35 @@ describe('TaskPage', () => {
         }
     });
 
+    test('leaving the tab before the first poll still leaves the away count a baseline', async () => {
+        // submitting a task and immediately switching tabs, which is what waiting for one looks like:
+        // the two-second poll never gets a chance to run, and once hidden it is skipped
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => true });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(150);
+
+            // no tick(2000) here on purpose: the baseline can only exist if the arrival of the rows
+            // asked for it
+            control.positions = {};
+            mock.timers.tick(60000);
+            await flush(80);
+
+            assert.match(window.document.title, /^\(2\) Task Queue/);
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
     test('each row wraps its content in the element its show and hide animates over', async () => {
         const { container } = await renderPage([task(1)]);
         const row = container.querySelector('li.task');

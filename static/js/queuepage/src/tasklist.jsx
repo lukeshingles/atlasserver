@@ -931,11 +931,18 @@ export function TaskPage() {
                 // used for the navbar badge, both of which want the total rather than the page.
                 const queuedids = Object.keys(data.queuepositions);
 
-                // Not while hidden. This request can have been in flight as the tab was left, and a
-                // task that finished during that round trip is already missing from the answer -- so
-                // taking it as the baseline would hide exactly the completion the away count exists to
-                // report. The badge is written either way: nothing is lost by it being right early.
-                if (!document[hidden]) {
+                /*
+                 * Not while hidden, once there is a baseline to protect. This request can have been in
+                 * flight as the tab was left, and a task that finished during that round trip is
+                 * already missing from the answer -- so taking it would hide exactly the completion the
+                 * away count exists to report.
+                 *
+                 * Unless there is no baseline yet, which has nothing to lose: a slightly late answer is
+                 * the difference between counting and never counting at all.
+                 *
+                 * The badge is written either way; nothing is lost by it being right early.
+                 */
+                if (!document[hidden] || queuedIdsRef.current == null) {
                     queuedIdsRef.current = queuedids;
                 }
                 updateQueueBadge(queuedids.length);
@@ -1228,6 +1235,23 @@ export function TaskPage() {
                         // discarding the scroll position the browser has just restored.
                         setState(scrolltotop && navigationsatstart == historynavigations
                             ? { ...statechanges, scrollToTopAfterUpdate: true } : statechanges);
+
+                        /*
+                         * The rows have arrived, so ask what the whole queue is once, rather than
+                         * waiting for the two-second poll to come round.
+                         *
+                         * Somebody who submits a task and immediately switches tabs -- which is what
+                         * waiting for one looks like -- can leave before that first poll has run, and
+                         * from then on it is skipped because the tab is hidden. The away count then
+                         * has nothing to measure against and never reports anything for that visit.
+                         * fetchQueuePositions needs the rows to exist, which is why the call is here
+                         * and not beside the fetchData(true) on mount. Named directly rather than
+                         * through a ref, as updateCursor below has to be: it is declared above this
+                         * one, so it is initialised by the time this body runs.
+                         */
+                        if (queuedIdsRef.current == null) {
+                            fetchQueuePositions();
+                        }
                     } else {
                         debug_log('Not applying results from', get_url, 'location.href', window.location.href);
                         return;
