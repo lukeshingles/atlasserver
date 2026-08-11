@@ -339,6 +339,36 @@ class EmailChangeTests(TestCase):
         self.user.refresh_from_db()
         assert self.user.email == "second@example.com", self.user.email
 
+    def test_a_password_reset_landing_during_confirmation_wins(self) -> None:
+        """The token is checked again, under a row lock, immediately before the address is written.
+
+        The first check reads credential state from before the transaction, so a reset or a
+        deactivation committing in that gap would be overtaken by this write -- handing the account
+        an address that the next password reset is then sent to.
+        """
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+
+        real = views.load_email_change_token
+        calls = []
+
+        def reset_after_the_first_check(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            calls.append(None)
+            loaded = real(*args, **kwargs)
+            if len(calls) == 1:  # the owner's password reset commits before the view writes
+                self.user.set_password("a-completely-different-password")
+                self.user.save(update_fields=["password"])
+            return loaded
+
+        with mock.patch.object(views, "load_email_change_token", side_effect=reset_after_the_first_check):
+            response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.email == "old@example.com", self.user.email
+        assert len(calls) == 2, calls  # and it was the second check that refused it
+
     def test_an_address_taken_between_request_and_confirmation_is_refused(self) -> None:
         # the database index would otherwise turn this into a 500 rather than something actionable
         self.client.force_login(self.user)
@@ -3107,6 +3137,39 @@ class RegistrationVerificationTests(TestCase):
         user = User.objects.get(username="newcomer")
         assert user.is_active is True
         assert not PendingEmailVerification.objects.filter(user=user).exists()
+
+    def test_a_link_consumed_by_a_parallel_request_is_refused(self) -> None:
+        """Two POSTs carrying the same link cannot both activate the account and log in.
+
+        What retires the token is the write, because the hash covers is_active, so the checks
+        before the transaction only order sequential uses. The view repeats them against a locked
+        row; this is that repeat, with the competing request landing in the gap.
+        """
+        self.register()
+        link = self.verification_link()
+
+        real = views.awaiting_verification
+        calls = []
+
+        def consumed_after_the_first_check(candidate: t.Any) -> bool:
+            calls.append(None)
+            pending = real(candidate)
+            if len(calls) == 1:
+                # the competing request activates the account through its own instance, before
+                # this one reaches its write. Its own instance, not this one: the token hashes
+                # is_active, so mutating the object the view is holding would make the view's
+                # first check refuse the link and there would be no race left to test.
+                competitor = User.objects.get(pk=candidate.pk)
+                competitor.is_active = True
+                competitor.save(update_fields=["is_active"])
+            return pending
+
+        with mock.patch.object(views, "awaiting_verification", side_effect=consumed_after_the_first_check):
+            response = self.client.post(link)
+
+        assert response.status_code == 400, response.status_code
+        assert "_auth_user_id" not in self.client.session
+        assert len(calls) == 2, calls  # and it was the second check that refused it
 
     def test_a_disabled_account_cannot_be_reactivated_by_an_old_link(self) -> None:
         # belt and braces for the check above: the activation view applies the same rule, so a link

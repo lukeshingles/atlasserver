@@ -1101,17 +1101,42 @@ def verify_email(request, uidb64: str, token: str):
             {"name": "Confirm your email address", "email": user.email},
         )
 
-    if not user.is_active:
-        user.is_active = True
-        user.save(update_fields=["is_active"])
+    # The checks above are repeated here against a locked row, because on their own they only make
+    # the link single-use in sequence. What retires the token is the write -- the hash covers
+    # is_active -- so two POSTs carrying the same link can both pass the checks before either
+    # activates, and both reach login(). That is the case where someone else has a copy of the
+    # link: a burst of parallel requests would keep them a session that the first use was supposed
+    # to have closed off.
+    with transaction.atomic():
+        # t.Any for the reason verification.py spells out: the type checkers disagree about whether
+        # get_user_model() yields the concrete User or AbstractBaseUser, and only one of them
+        # believes it has is_active and email
+        locked: t.Any = get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+        consumed = (
+            locked is not None
+            and awaiting_verification(locked)
+            and verification_token_generator.check_token(locked, token)
+        )
 
-    # the address is proved, so the account is an ordinary one from here on
-    PendingEmailVerification.objects.filter(user=user).delete()
+        if consumed:
+            locked.is_active = True
+            locked.save(update_fields=["is_active"])
+
+            # the address is proved, so the account is an ordinary one from here on
+            PendingEmailVerification.objects.filter(user=locked).delete()
+
+    if not consumed:
+        return render(
+            request,
+            "registration/verification_invalid.html",
+            {"name": "Verification link is not valid"},
+            status=400,
+        )
 
     # the token hashes is_active, so following the link a second time lands on the invalid page
     # rather than here. Log in anyway on the first pass: the user has just proved they hold the
     # address, and making them type the password again immediately serves nothing.
-    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+    login(request, locked, backend="django.contrib.auth.backends.ModelBackend")
 
     return redirect(reverse("task-list"))
 
@@ -1243,18 +1268,37 @@ def confirm_email_change(request, token: str):
         # free address at once both pass it, and the loser's save() raises. Catching that turns the
         # race into the same answer the check gives, instead of a 500.
         if not email_is_taken(new_email, exclude_user=user):
+            changed = False
             try:
                 with transaction.atomic():
-                    user.email = new_email
-                    user.save(update_fields=["email"])
+                    # The token is checked a second time here, from inside the transaction and
+                    # with the row locked. load_email_change_token() above read the credentials the
+                    # token is bound to before this began, so a password reset or an administrative
+                    # deactivation landing in between would be overtaken by this write -- and the
+                    # address it hands over is where the next password reset would be sent.
+                    # Re-running the same loader (it re-reads the user) rather than repeating its
+                    # rules keeps one statement of what makes a link valid.
+                    locked: t.Any = get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+                    revalidated = load_email_change_token(token, max_age=settings.PASSWORD_RESET_TIMEOUT)
+
+                    if (
+                        locked is not None
+                        and revalidated is not None
+                        and revalidated[0].pk == locked.pk
+                        and revalidated[1] == new_email
+                    ):
+                        locked.email = new_email
+                        locked.save(update_fields=["email"])
+                        changed = True
             except IntegrityError:
                 logger.info("email change to an address claimed concurrently was refused")
             else:
-                return render(
-                    request,
-                    "registration/email_change_done.html",
-                    {"name": "Email address changed", "email": new_email},
-                )
+                if changed:
+                    return render(
+                        request,
+                        "registration/email_change_done.html",
+                        {"name": "Email address changed", "email": new_email},
+                    )
 
     # emailchange picks the copy for this flow: the shared page otherwise offers a verification
     # resend, which does nothing for an account that is already active
