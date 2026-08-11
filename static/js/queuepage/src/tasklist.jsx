@@ -39,6 +39,16 @@ enough that the count is right by the time they look back.
 */
 const AWAY_POLL_MS = 60000;
 
+/*
+How many queue positions ticks to let pass between requests once the answer is that nothing is queued.
+
+Stopping outright was wrong: work can appear from somewhere this page cannot see -- another tab, or
+the API -- and a view showing a finished task or the Running/Finished filter never gains a row that
+would start the poll again. But asking every two seconds on behalf of a user with an empty queue is
+the request this guard exists to avoid, so it slows to a fifth of the rate rather than stopping.
+*/
+const EMPTY_QUEUE_TICKS = 5;
+
 function pageTitle(taskid, finishedwhileaway) {
     // matches the server-rendered <title>, so a client-side navigation does not leave the tab
     // claiming to show something else
@@ -831,6 +841,9 @@ export function TaskPage() {
      */
     const queuedIdsRef = React.useRef(null);
 
+    /* Ticks skipped since the queue was last reported empty; see EMPTY_QUEUE_TICKS. */
+    const emptyticksRef = React.useRef(0);
+
     /*
      * The ref is the authority, and is updated before setStateRaw is called.
      *
@@ -911,7 +924,12 @@ export function TaskPage() {
         const queued = queuedIdsRef.current;
         const knownempty = queued != null && queued.length == 0;
         if (knownempty && !stateRef.current.results.some(tracksQueuePosition)) {
-            return;
+            emptyticksRef.current += 1;
+            if (emptyticksRef.current % EMPTY_QUEUE_TICKS != 0) {
+                return;
+            }
+        } else {
+            emptyticksRef.current = 0;
         }
 
         fetch(queuepositions_url,
@@ -1058,13 +1076,25 @@ export function TaskPage() {
             .catch(error => debug_log('Away queue positions request failed', error));
     }, [setState]);
 
-    /* Looking at the tab again clears the count: the polls resume on the same event and will put the
-       real state on screen, which is a better answer than a number in the title. */
+    /*
+     * Looking at the tab again clears the count -- the polls resume on the same event and will put the
+     * real state on screen, which is a better answer than a number in the title -- and takes a fresh
+     * set for the next absence to be measured against.
+     *
+     * Without that refresh the set still holds whatever finished during the absence just ended, so
+     * leaving again before the two-second poll had replaced it counted those same tasks a second time
+     * and reported a completion that had already been reported.
+     */
     const handleVisibilityChange = React.useCallback(() => {
-        if (!document[hidden] && stateRef.current.finishedwhileaway != 0) {
+        if (document[hidden]) {
+            return;
+        }
+
+        if (stateRef.current.finishedwhileaway != 0) {
             setState({ finishedwhileaway: 0 });
         }
-    }, [setState]);
+        fetchQueuePositions();
+    }, [setState, fetchQueuePositions]);
 
     const fetchData = React.useCallback((usertriggered, scrolltotop = usertriggered) => {
         // no pollingPaused() check here either, for the reason given on pollInterval().

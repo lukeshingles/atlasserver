@@ -668,6 +668,78 @@ describe('TaskPage', () => {
         }
     });
 
+    test('an empty queue slows the poll rather than stopping it', async () => {
+        // work can appear from another tab or the API, and a view showing a finished task never gains
+        // a row that would start the poll again
+        mock.timers.enable({ apis: ['setInterval'] });
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.hidden = true;
+        badge.innerHTML = '<span class="queuecount-number">0</span>';
+        window.document.body.appendChild(badge);
+
+        const control = stubFetchWithPositions([task(1, { finishtimestamp: '2026-01-01T00:05:00Z', queuepos: null })], {});
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(150);
+            assert.equal(badge.hidden, true, 'nothing is queued to begin with');
+
+            // something is submitted elsewhere; this page's rows cannot show it
+            control.positions = { 7: 0 };
+            // a few ticks pass at the slower rate
+            for (let tick = 0; tick < 5; tick += 1) {
+                mock.timers.tick(2000);
+                await flush(40);
+            }
+
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '1');
+            assert.equal(badge.hidden, false, 'the poll never asked again');
+        } finally {
+            mock.timers.reset();
+            badge.remove();
+        }
+    });
+
+    test('returning to the tab does not let the next absence recount what already finished', async () => {
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(150);
+
+            // away once, during which task 2 finishes
+            hidden = true;
+            control.positions = { 1: 1 };
+            mock.timers.tick(60000);
+            await flush(80);
+            assert.match(window.document.title, /^\(1\) Task Queue/, 'the first absence was not reported');
+
+            // back, then away again immediately -- before the two-second poll could refresh anything
+            hidden = false;
+            window.document.dispatchEvent(new window.Event('visibilitychange', { bubbles: true }));
+            await flush(80);
+            hidden = true;
+            mock.timers.tick(60000);
+            await flush(80);
+
+            // nothing has finished during this second absence, so there is nothing to report
+            assert.doesNotMatch(window.document.title, /^\(/, 'task 2 was counted a second time');
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
     test('each row wraps its content in the element its show and hide animates over', async () => {
         const { container } = await renderPage([task(1)]);
         const row = container.querySelector('li.task');
