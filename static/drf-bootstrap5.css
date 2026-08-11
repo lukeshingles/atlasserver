@@ -300,18 +300,61 @@ site's Bootstrap version rather than freezing a copy of its numbers.
   border-top-right-radius: 0;
 }
 
-/* ---- code blocks on the dark theme ---- */
+/* ---- code blocks ---- */
 
-/* The request line and the response body sit in <pre class="prettyprint">, and what colours the
-   text inside them is not this project's: the syntax spans come from prettify.css, and the response
-   JSON is highlighted by pygments through DRF's own BrowsableAPIRenderer.code_style, which is a
-   server-side setting and so cannot answer to a preference held in the browser. Both palettes are
-   dark ink for a light card, so the card stays light in either theme.
+/*
+The request line and the response body sit in <pre class="prettyprint">: prettify.css gives that a
+light card and a palette of dark ink to suit it, and prettify-min.js marks the contents up in the
+browser, adding the .pln, .str, .kwd, .lit and .pun spans styled below.
 
-   The colour is the point of the rule. prettify.css already gives .prettyprint its light
-   background, but not a text colour, so on the dark theme the parts with no syntax span of their own
-   -- the method and path of the request line, and the HTTP status and headers above the body --
-   inherited a near-white --bs-body-color onto near-white and vanished. */
-.prettyprint {
-  color: #212529;
+Nothing about this is server-side -- DRF's BrowsableAPIRenderer.code_style feeds a pygments
+stylesheet for the {% code %} tag in its docs templates, which is not a tag rest_framework/base.html
+uses and emits no .highlight markup on these pages -- so the whole block can follow the theme.
+
+.prettyprint deliberately sets no colour of its own: the HTTP status line and the header names are
+plain <b> inside the block, so they take --bs-body-color and follow the theme along with the page.
+
+Not covered: .linenums and ol.linenums, which prettify.css also styles. Nothing in
+rest_framework/base.html or the filters/ and horizontal/ template packs asks for line numbers.
+*/
+[data-bs-theme="dark"] .prettyprint {
+  /* the raised surface .well and main.css's .codeblock already use, so every code panel on the site
+     is one colour */
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-border-color);
+}
+
+/*
+Each token colour is prettify's own mixed with enough white to clear 4.5:1 against that surface, so
+the dark theme reads as the same scheme rather than a different one. .com and .pun (with .opn and
+.clo, which share its rule) are left alone: prettify picks a mid grey for them that already sits near
+5:1 on the dark card as well as on the light one.
+*/
+[data-bs-theme="dark"] .pln {
+  color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .str,
+[data-bs-theme="dark"] .atv {
+  color: #ec7c98;
+}
+
+[data-bs-theme="dark"] .kwd,
+[data-bs-theme="dark"] .prettyprint .tag {
+  color: #a5aeca;
+}
+
+[data-bs-theme="dark"] .lit {
+  color: #98b7ce;
+}
+
+[data-bs-theme="dark"] .fun {
+  color: #ea8482;
+}
+
+[data-bs-theme="dark"] .typ,
+[data-bs-theme="dark"] .atn,
+[data-bs-theme="dark"] .dec,
+[data-bs-theme="dark"] .var {
+  color: #73b9b9;
 }
