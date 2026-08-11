@@ -336,10 +336,14 @@ describe('TaskPage', () => {
      */
     const stubFetchWithPositions = (results, positions) => {
         const control = { positions, results };
-        global.fetch = (url) => {
+        global.fetch = (url, init = {}) => {
             const href = url.toString();
             requested.push(href);
 
+            // a submission, when the test has set control.created to the tasks the server makes
+            if (init.method == 'POST') {
+                return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve(control.created ?? []) });
+            }
             if (href.includes('taskrunnerstatus')) {
                 return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
             }
@@ -418,6 +422,69 @@ describe('TaskPage', () => {
                 Object.defineProperty(window.document, 'hidden', wasHidden);
             }
         }
+    });
+
+    test('a task submitted after the set was taken is still counted when the tab is left at once', async () => {
+        // The story the away count is for: submit, switch tabs, come back to the answer. The set the
+        // count measures against already exists by then, so a refresh gated on "no set yet" left the
+        // one task the user is actually waiting for out of it.
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            // the set is taken while the tab is being watched, and holds task 1 alone
+            mock.timers.tick(2000);
+            await flush(60);
+
+            // the submission creates task 2, and the fetch it triggers brings both rows back
+            control.created = [{ id: 2 }];
+            control.results = [task(1, { queuepos: 1 }), task(2, { queuepos: 2 })];
+            control.positions = { 1: 1, 2: 2 };
+            rendered.container.querySelector('#newrequest').dispatchEvent(
+                new window.Event('submit', { bubbles: true, cancelable: true }));
+            await flush(120);
+
+            // left immediately -- no two-second poll has come round since the submission, so the only
+            // thing that can have added task 2 to the set is the arrival of the rows
+            hidden = true;
+            control.positions = {};
+            mock.timers.tick(60000);
+            await flush(60);
+
+            assert.match(window.document.title, /^\(2\) Task Queue/,
+                'the task submitted just before the tab was left went uncounted');
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
+        }
+    });
+
+    test('a queued row the positions endpoint never mentions does not start a request loop', async () => {
+        // The positions poll fetches the whole list whenever a queued row is missing from the response.
+        // So if arriving rows asked for the positions again whenever one was missing from the set, the
+        // two would feed each other for as long as such a row was on screen -- two requests per round,
+        // as fast as the server answers. This stub answers with no positions at all, which is that row
+        // for good; no timers are ticked, so nothing here is the ordinary polling.
+        stubFetchWithPositions([task(1, { queuepos: 1 })], {});
+
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(300);
+
+        const positions = requested.filter((href) => href.includes('queuepositions')).length;
+        const lists = requested.filter((href) => href.includes('/queue/') && !href.includes('queuepositions')).length;
+        assert.ok(positions <= 3, `${positions} queuepositions requests for one unlisted row`);
+        assert.ok(lists <= 3, `${lists} task list requests for one unlisted row`);
     });
 
     test('the count is measured against the whole queue, not the page of rows on screen', async () => {

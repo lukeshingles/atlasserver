@@ -841,6 +841,14 @@ export function TaskPage() {
      */
     const queuedIdsRef = React.useRef(null);
 
+    /*
+     * Task ids a queuepositions request has already been made on behalf of, so that a row arriving with
+     * a queue position the set above has never heard of prompts exactly one -- see the call site in
+     * fetchData, where asking repeatedly would trade requests with the poll for as long as the row is
+     * on screen. Ids rather than a count, because which ones have been asked about is the whole point.
+     */
+    const askedQueuedIdsRef = React.useRef(new Set());
+
     /* Ticks skipped since the queue was last reported empty; see EMPTY_QUEUE_TICKS. */
     const emptyticksRef = React.useRef(0);
 
@@ -1042,8 +1050,12 @@ export function TaskPage() {
      * longer in the queue" is the same answer however many times it is asked. Accumulating would
      * count each finished task again on every tick.
      *
-     * A deleted task would also count as finished, which cannot happen here: deleting one takes a
-     * click on a page nobody is looking at.
+     * What is counted is "left the queue", which a cancelled task does as surely as a completed one:
+     * this endpoint answers with positions, so there is nothing in the response to tell the two apart.
+     * Cancelling from a second tab, or over the API, therefore shows up in the title as a completion.
+     * Accepted rather than fixed -- telling them apart means fetching the rows, which is the cost this
+     * whole path exists to avoid, to correct a hint that the tab is about to be told the truth by the
+     * poll that resumes the moment it is looked at again.
      */
     const countFinishedWhileAway = React.useCallback(() => {
         const waiting = queuedIdsRef.current;
@@ -1278,8 +1290,25 @@ export function TaskPage() {
                          * and not beside the fetchData(true) on mount. Named directly rather than
                          * through a ref, as updateCursor below has to be: it is declared above this
                          * one, so it is initialised by the time this body runs.
+                         *
+                         * Asked for whenever a queued row is one that has not been asked about yet, not
+                         * only when there is no set at all: the same "submit, then leave" gap opens on
+                         * every later submission, where the set exists but predates the new task, and
+                         * the task the user is waiting for is precisely the one missing from it.
+                         *
+                         * Counted per task id, and only ever once each, rather than by comparing the
+                         * rows against the set. Comparing loops: a trackable row the response does not
+                         * mention already makes the poll below call fetchData, so "ask again whenever a
+                         * queued row is missing from the set" and "fetch the list whenever a queued row
+                         * is missing from the response" feed each other for as long as such a row is on
+                         * screen -- two requests per round, as fast as the network allows. Asking once
+                         * per id cannot: the second round finds nothing new to ask about.
                          */
-                        if (queuedIdsRef.current == null) {
+                        const askedabout = askedQueuedIdsRef.current;
+                        const unasked = statechanges.results.filter(
+                            task => tracksQueuePosition(task) && !askedabout.has(String(task.id)));
+                        if (queuedIdsRef.current == null || unasked.length > 0) {
+                            unasked.forEach(task => askedabout.add(String(task.id)));
                             fetchQueuePositions();
                         }
                     } else {
