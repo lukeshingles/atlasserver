@@ -344,7 +344,15 @@ describe('TaskPage', () => {
                 return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
             }
             if (href.includes('queuepositions')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: control.positions }) });
+                // control.hold, when set, is a promise the test resolves: it keeps one response in
+                // flight so that something else can happen before it lands
+                const gate = control.hold ?? Promise.resolve();
+                control.hold = null;
+                return gate.then(() => ({
+                    ok: true,
+                    status: 200,
+                    json: () => Promise.resolve({ queuepositions: control.heldpositions ?? control.positions }),
+                }));
             }
             return Promise.resolve({
                 ok: true,
@@ -553,6 +561,81 @@ describe('TaskPage', () => {
         } finally {
             mock.timers.reset();
             badge.remove();
+        }
+    });
+
+    test('the queue is asked about once even when nothing on screen is queued', async () => {
+        // opening a finished task, a completed-only filter or an older page directly: no row tracks a
+        // position and nothing has been asked yet, so there is no answer to fall back on
+        mock.timers.enable({ apis: ['setInterval'] });
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.hidden = true;
+        badge.innerHTML = '<span class="queuecount-number">0</span>';
+        window.document.body.appendChild(badge);
+
+        // the one visible task has finished; two others of the user's are still queued
+        stubFetchWithPositions([task(1, { finishtimestamp: '2026-01-01T00:05:00Z', queuepos: null })], { 2: 2, 3: 3 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(80);
+
+            // the badge can only know this if the request was made at all
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '2');
+            assert.equal(badge.hidden, false);
+        } finally {
+            mock.timers.reset();
+            badge.remove();
+        }
+    });
+
+    test('a poll that lands after the tab is hidden does not become the away baseline', async () => {
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            // a first poll while visible records both tasks as the baseline
+            mock.timers.tick(2000);
+            await flush(80);
+
+            // a second poll starts, and is still in flight when the tab is left. Task 2 finishes during
+            // that round trip, so the answer it eventually gives already omits it.
+            let land;
+            control.hold = new Promise((resolve) => {
+                land = resolve;
+            });
+            control.heldpositions = { 1: 1 };
+            mock.timers.tick(2000);
+            hidden = true;
+            land();
+            await flush(80);
+            control.heldpositions = null;
+
+            // the queue has not changed again since
+            control.positions = { 1: 1 };
+            mock.timers.tick(60000);
+            await flush(80);
+
+            // task 2 left while the user was away, so the title has to say so. Taking the late
+            // response as the baseline would have lost it, because that response already omitted it.
+            assert.match(window.document.title, /^\(1\) Task Queue/);
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            }
         }
     });
 

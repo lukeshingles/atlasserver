@@ -894,20 +894,23 @@ export function TaskPage() {
         }
 
         /*
-         * Worth asking if any row on screen could change from the answer, or if the last answer said
-         * the user still has a queue -- the response drives the navbar badge and the away count as
-         * well as the rows, and neither of those is about what is on screen.
+         * Skipped only when the last answer said the queue is empty and no row on screen could change
+         * that. Anything else -- including not having asked yet -- is worth a request.
          *
-         * Without the second half, sitting on a view whose rows are all finished (a single task, the
-         * Running/Finished filter, an older page) stopped the poll, and with it the badge and the set
-         * the away count measures against, while the user still had tasks running.
+         * The response drives the navbar badge and the set the away count measures against, and
+         * neither of those is about what is on screen, so gating on the rows was wrong in two ways.
+         * Sitting on a view whose rows are all finished (a single task, the Running/Finished filter,
+         * an older page) stopped the poll while the user still had tasks running; and opening such a
+         * view directly stopped it before it had ever run, leaving the badge to go stale and the away
+         * count with no baseline at all.
          *
-         * Both halves false means the user has nothing queued anywhere, and then there is nothing for
-         * the endpoint to tell anyone; the poll starts again from the rows as soon as a submission
-         * puts a trackable one on screen.
+         * So an unknown queue is asked about once. That costs one cheap request per page load for a
+         * user with nothing queued, after which the answer is "empty" and the poll stops until a
+         * submission puts a trackable row on screen.
          */
         const queued = queuedIdsRef.current;
-        if (!stateRef.current.results.some(tracksQueuePosition) && !(queued != null && queued.length > 0)) {
+        const knownempty = queued != null && queued.length == 0;
+        if (knownempty && !stateRef.current.results.some(tracksQueuePosition)) {
             return;
         }
 
@@ -927,7 +930,14 @@ export function TaskPage() {
                 // page of rows on screen. Recorded for countFinishedWhileAway to measure against and
                 // used for the navbar badge, both of which want the total rather than the page.
                 const queuedids = Object.keys(data.queuepositions);
-                queuedIdsRef.current = queuedids;
+
+                // Not while hidden. This request can have been in flight as the tab was left, and a
+                // task that finished during that round trip is already missing from the answer -- so
+                // taking it as the baseline would hide exactly the completion the away count exists to
+                // report. The badge is written either way: nothing is lost by it being right early.
+                if (!document[hidden]) {
+                    queuedIdsRef.current = queuedids;
+                }
                 updateQueueBadge(queuedids.length);
 
                 // tested against state as it stands rather than the committed state: a false

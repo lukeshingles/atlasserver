@@ -3913,3 +3913,59 @@ class NavbarSignInCueTests(TestCase):
         assert "navlock" not in content
         assert "sign in required" not in content
         assert "loginrequired" not in content, "the links are no longer greyed, so the class should be gone too"
+
+
+class TemplateCommentTests(TestCase):
+    """No page serves its own template syntax to the reader.
+
+    {# #} is a single-line comment, so a multi-line one is not a comment at all: Django serves it as
+    text. Two of them sat in apiguide.html's script block, below the last code block, where they were
+    visible on the page. The templates in this project carry long explanatory comments, so the mistake
+    is an easy one to repeat -- hence a test over every page rather than a fix to those two.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="templates", email="t@example.com", password=None)
+
+    def test_no_page_leaks_template_syntax(self) -> None:
+        self.client.force_login(self.user)
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        pages = [
+            "index",
+            "faq",
+            "apiguide",
+            "resultdesc",
+            "stats",
+            "apitoken",
+            "email_change",
+            "password_change",
+            "task-list",
+        ]
+        for name in pages:
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            for leaked in ("{#", "#}", "{% comment", "{% endcomment", "{% if ", "{% block "):
+                assert leaked not in content, f"{name} serves {leaked!r} to the page"
+
+    def test_the_anonymous_pages_too(self) -> None:
+        """The signed-out navbar and the account forms are different markup from the pages above."""
+        for name in ("index", "login", "register", "password_reset"):
+            content = self.client.get(reverse(name), HTTP_ACCEPT="text/html").content.decode()
+            for leaked in ("{#", "#}", "{% comment", "{% endcomment"):
+                assert leaked not in content, f"{name} serves {leaked!r} to the page"
+
+    def test_multiline_hash_comments_are_not_used_in_any_template(self) -> None:
+        """Caught at the source as well, since a page has to be requested for the test above to see it.
+
+        A {# whose #} is on a later line is the mistake; this finds it in templates no test renders.
+        """
+        templatedir = Path(__file__).resolve().parent / "templates"
+        offenders = [
+            f"{path.relative_to(templatedir)}:{lineno}"
+            for path in sorted(templatedir.rglob("*.html"))
+            for lineno, line in enumerate(path.read_text().splitlines(), start=1)
+            for match in re.finditer(r"\{#", line)
+            if "#}" not in line[match.end() :]
+        ]
+
+        assert not offenders, f"multi-line {{# #}} comments are served as text: {offenders}"

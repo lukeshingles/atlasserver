@@ -129,18 +129,25 @@ print(dfresult)
 
 {% block script %}
   {{ block.super }}
-  {# Syntax colouring for the examples above, which carry prettify's .prettyprint and lang-py
+  {% comment %}
+     Syntax colouring for the examples above, which carry prettify's .prettyprint and lang-py
      classes. The script is the copy that comes with Django REST framework, which the browsable API
      already loads to mark up its request and response; the token colours both pages use are in
      main.css, so the Python here and the JSON there read as one scheme.
 
      Its own stylesheet is deliberately not loaded: prettify.css would bring a light card and 8px of
      padding for .prettyprint, and these blocks already have .codeblock's frame. Nothing here depends
-     on the script arriving -- without it the examples are the plain framed text they were. #}
+     on the script arriving -- without it the examples are the plain framed text they were.
+
+     {% comment %} rather than {# #}: the latter is a single-line comment, so a multi-line one is
+     served to the page as text.
+  {% endcomment %}
   <script src="{% static "rest_framework/js/prettify-min.js" %}"></script>
-  {# prettify-min.js only defines prettyPrint, it does not call it -- on the browsable API that call
+  {% comment %}
+     prettify-min.js only defines prettyPrint, it does not call it -- on the browsable API that call
      comes from drf-bootstrap5.js. Running here rather than on DOMContentLoaded is safe because every
-     code block is above this script, and guarded so that a failed download cannot throw. #}
+     code block is above this script, and guarded so that a failed download cannot throw.
+  {% endcomment %}
   <script>
     "use strict";
     if (window.prettyPrint) { window.prettyPrint(); }
