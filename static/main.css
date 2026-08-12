@@ -1331,9 +1331,24 @@ table.countrystats th[scope="row"] {
     width: 100%;
   }
 
+  /*
+  Two logos to a row on a phone, sized on the list item rather than on the image inside it.
+
+  A percentage on the image resolves against its containing block, which is the <li>. While the list
+  was an inline one that <li> was not a box worth measuring and the percentage effectively fell to
+  the list's width; as a flex item it shrink-wraps its image, so the same 45% resolved against a
+  different, per-logo width and took the narrowest mark (the 131px MAS logo) down to less than half
+  the size of the others. Sizing the item keeps one basis for all five, and the image simply fills
+  whatever it is given.
+  */
+  ul.logos li {
+    flex: 0 1 45%;
+    text-align: center;
+  }
+
   ul.logos img {
     height: auto;
-    max-width: 45%;
+    max-width: 100%;
   }
 
   table {

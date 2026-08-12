@@ -1592,11 +1592,22 @@ export function TaskPage() {
                 ))}
             </ul>);
     } else if (state.results.length == 0) {
-        // What to do next rather than only what is absent: an empty queue is what every new account
-        // sees first, and "There are no tasks" leaves that visitor with nowhere to go. The request
-        // form is beside this on a wide screen and below it on a narrow one, so the sentence names
-        // it rather than pointing at it.
-        tasklist = (
+        /*
+        Two different nothings, which an empty results array does not tell apart on its own.
+
+        Unfiltered, it means the account has no tasks at all: that is what every new account sees
+        first, so the message says what to do next rather than only what is absent. The request form
+        is beside this on a wide screen and below it on a narrow one, so the sentence names it rather
+        than pointing at it.
+
+        Under the Running/Finished filter it means only that nothing has started yet. The queued work
+        the user is waiting on is still there, so telling them they have no tasks would be false --
+        and inviting them to submit another position invites a duplicate.
+        */
+        tasklist = filterIsActive('started', state.dataurl) ? (
+            <p key="message" className="tasksempty">
+                Nothing running or finished yet. Queued tasks appear here once they start.
+            </p>) : (
             <p key="message" className="tasksempty">
                 No tasks yet. Request a position on the sky and its light curve will appear here.
             </p>);
