@@ -1536,13 +1536,21 @@ from transparent so that the comet reads as arriving rather than as a bar with a
   max-width: 34em;
 }
 
-/* The two example light curves, side by side down to the width where side by side stops fitting,
-   with their captions under them. auto-fit with a minimum of 22em is what does both: two tracks
-   while there is room for two, one when there is not, with no breakpoint to name. */
+/*
+The two example light curves, side by side down to the width where side by side stops fitting, with
+their captions under them. auto-fit with a minimum of 22em is what does both: two tracks while there
+is room for two, one when there is not, with no breakpoint to name.
+
+min(22em, 100%) rather than a bare 22em, because a grid track's minimum is a floor the track cannot go
+under -- including when the container itself is narrower than it. At the body's 17px, 22em is 374px,
+which is wider than the container on a 375px phone once its gutters are taken off, so the bare value
+pushed the grid and the full-width images inside it past the viewport and the whole page scrolled
+sideways. The 100% arm caps the floor at whatever width is actually available.
+*/
 .examplefigures {
   display: grid;
   gap: 1.6em;
-  grid-template-columns: repeat(auto-fit, minmax(22em, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(22em, 100%), 1fr));
   margin: 2em 0;
 }
 
