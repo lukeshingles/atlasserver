@@ -727,65 +727,12 @@ body::before {
   }
 }
 
-/*
-A shooting star, which is the survey's own subject matter crossing the page.
-
-Rare on purpose: the streak takes 1.4 seconds of a 23 second cycle and the rest of the keyframes hold
-it off-screen at zero opacity, so it is something a visitor catches rather than something that
-demands to be watched. The head is the bright end of a gradient the trail fades out of behind it, and
-the whole thing is rotated so it falls the way the comet in the logo does.
-*/
-[data-bs-theme="dark"] body::after {
-  animation: shooting-star 23s linear infinite;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 226, 199, 0.55) 65%, #fff);
-  border-radius: 999px;
-  content: "";
-  height: 2px;
-  left: -180px;
-  opacity: 0;
-  pointer-events: none;
-  position: fixed;
-  top: 12vh;
-  transform: rotate(14deg);
-  width: 160px;
-  z-index: -1;
-}
-
-@keyframes shooting-star {
-  0%,
-  92% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0) rotate(14deg);
-  }
-
-  93% {
-    opacity: 0;
-  }
-
-  95% {
-    opacity: 1;
-  }
-
-  99.9% {
-    opacity: 0;
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(calc(100vw + 360px), 26vh, 0) rotate(14deg);
-  }
-}
-
-/* The sky is decoration, and both of its motions are indefinite -- the kind this setting is mostly
-   about. The field itself stays: it is a background, not an animation. */
+/* The sky's one motion is indefinite -- it does not run once and stop -- which is the kind this
+   setting is mostly about. The field itself stays: it is a background, not an animation. */
 @media (prefers-reduced-motion: reduce) {
   [data-bs-theme="dark"] body::before {
     animation: none;
     opacity: 1;
-  }
-
-  [data-bs-theme="dark"] body::after {
-    display: none;
   }
 }
 
