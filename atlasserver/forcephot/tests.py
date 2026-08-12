@@ -29,6 +29,7 @@ from django.core.cache import caches
 from django.db import connection
 from django.db import IntegrityError
 from django.db import models
+from django.test import Client
 from django.test import override_settings
 from django.test import RequestFactory
 from django.test import SimpleTestCase
@@ -347,24 +348,26 @@ class EmailChangeTests(TestCase):
         self.user.refresh_from_db()
         assert self.user.email == "second@example.com", self.user.email
 
-    def test_the_confirmation_url_sends_no_referrer(self) -> None:
+    def test_the_confirmation_url_referrer_policy_hides_the_token_but_not_the_origin(self) -> None:
         # as for the verification link: the token is in the URL, so it must not travel as a Referer
-        # to a page that runs analytics. See RegistrationVerificationTests for the reasoning.
+        # to a page that runs analytics -- but the policy must not be no-referrer, which nulls the
+        # Origin header of the confirmation POST and fails CSRF in every real browser. See
+        # RegistrationVerificationTests for the full reasoning.
         self.client.force_login(self.user)
         self.request_email_change()
         link = self.confirmation_link()
 
         offered = self.client.get(link)
         assert offered.status_code == 200, offered.status_code
-        assert offered["Referrer-Policy"] == "no-referrer"
+        assert offered["Referrer-Policy"] == "strict-origin"
 
         applied = self.client.post(link)
         assert applied.status_code == 200, applied.status_code
-        assert applied["Referrer-Policy"] == "no-referrer"
+        assert applied["Referrer-Policy"] == "strict-origin"
 
         replayed = self.client.post(link)
         assert replayed.status_code == 400, replayed.status_code
-        assert replayed["Referrer-Policy"] == "no-referrer"
+        assert replayed["Referrer-Policy"] == "strict-origin"
 
     def test_a_password_reset_landing_during_confirmation_wins(self) -> None:
         """The token is checked again, under a row lock, immediately before the address is written.
@@ -3223,29 +3226,68 @@ class RegistrationVerificationTests(TestCase):
         assert user.is_active is True
         assert not PendingEmailVerification.objects.filter(user=user).exists()
 
-    def test_the_token_url_sends_no_referrer(self) -> None:
+    def test_the_token_url_referrer_policy_hides_the_token_but_not_the_origin(self) -> None:
         """Every response at a verification URL, whatever it turns out to be.
 
         Opting the page out of analytics stops it reporting its own location, but the page still
         carries the site navigation, and following any of it would send this URL as the Referer
         under the default same-origin policy -- to a page that does run analytics, where
-        document.referrer would hand the token to somebody who could replay it.
+        document.referrer would hand the token to somebody who could replay it. strict-origin trims
+        the Referer to scheme and host, which the token never appears in.
+
+        Exactly strict-origin, and in particular never no-referrer, which reads like a stronger
+        spelling of the same protection but broke activation for every real browser: the referrer
+        policy of the page hosting a form also governs the Origin header of its submission, and
+        under no-referrer the Fetch spec serialises Origin as "null" even for a same-origin POST.
+        Django's CSRF middleware matches a present Origin header against the trusted origins,
+        which "null" never is, so the activation button answered 403. The test client does not
+        emulate referrer policy -- it never sends the null Origin a browser would -- so this
+        assertion on the served header is what stands in for that browser behaviour.
         """
         self.register()
         link = self.verification_link()
 
         offered = self.client.get(link)
         assert offered.status_code == 200, offered.status_code
-        assert offered["Referrer-Policy"] == "no-referrer"
+        assert offered["Referrer-Policy"] == "strict-origin"
 
         confirmed = self.client.post(link)
         assert confirmed.status_code == 302, confirmed.status_code
-        assert confirmed["Referrer-Policy"] == "no-referrer"
+        assert confirmed["Referrer-Policy"] == "strict-origin"
 
         # and the invalid-link page, which is served at the same URL once the link is spent
         spent = self.client.post(link)
         assert spent.status_code == 400, spent.status_code
-        assert spent["Referrer-Policy"] == "no-referrer"
+        assert spent["Referrer-Policy"] == "strict-origin"
+
+    def test_activation_passes_csrf_with_what_a_browser_sends_under_the_served_policy(self) -> None:
+        """The confirmation POST survives CSRF middleware with the headers our own page dictates.
+
+        The referrer policy served with the confirmation page governs more than the Referer: the
+        Fetch spec derives the Origin header of the page's form submission from it too. This walks
+        the flow the way a browser does -- CSRF enforced, and the POST carrying the Origin that
+        the served policy makes a browser send -- so a policy that nulls the Origin, as
+        no-referrer does even for a same-origin POST, fails here the way it failed in every real
+        browser, instead of only in production.
+        """
+        self.register()
+        link = self.verification_link()
+
+        browser = Client(enforce_csrf_checks=True)
+        offered = browser.get(link)
+        assert offered.status_code == 200, offered.status_code
+
+        # what the Fetch spec has a browser attach to this same-origin, no-downgrade form POST
+        # under the policy the page arrived with: no-referrer serialises the origin as the
+        # literal string "null"; every policy this site would plausibly serve sends it intact
+        origin = "null" if offered["Referrer-Policy"] == "no-referrer" else "http://testserver"
+        csrfinput = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', offered.content)
+        assert csrfinput is not None, offered.content
+
+        confirmed = browser.post(link, {"csrfmiddlewaretoken": csrfinput.group(1).decode()}, HTTP_ORIGIN=origin)
+
+        assert confirmed.status_code == 302, confirmed.status_code
+        assert User.objects.get(username="newcomer").is_active is True
 
     def test_a_link_consumed_by_a_parallel_request_is_refused(self) -> None:
         """Two POSTs carrying the same link cannot both activate the account and log in.

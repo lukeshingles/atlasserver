@@ -132,14 +132,26 @@ def entity_tag(*parts: object) -> str:
     return f'"{hashlib.blake2b(joined.encode(), digest_size=16).hexdigest()}"'
 
 
-def no_referrer(view):
-    """Serve every response of a view with Referrer-Policy: no-referrer.
+def origin_only_referrer(view):
+    """Serve every response of a view with Referrer-Policy: strict-origin.
 
     For the pages whose own URL carries a token. Those pages already opt out of analytics, which
     stops the token being reported for the page itself, but they still carry the site's navigation:
     following any of it sends the token-bearing URL as the Referer under the default same-origin
     policy, and the destination page does run analytics, where document.referrer would hand the
-    token to a third party who could then replay it.
+    token to a third party who could then replay it. strict-origin trims the Referer to the bare
+    origin -- scheme and host, never the path the token lives in -- and sends nothing at all on an
+    HTTPS-to-HTTP downgrade.
+
+    strict-origin and not no-referrer, although no-referrer sounds like the stronger spelling of
+    the same intent: these pages confirm by POSTing to their own URL, and the referrer policy of
+    the page hosting a form also governs the Origin header its submission carries. Under
+    no-referrer the Fetch spec serialises Origin as "null" even for a same-origin POST, and
+    Django's CSRF middleware, finding an Origin header present, matches it against the trusted
+    origins -- which "null" never is. Every real browser was answered 403 on the activation
+    button (the test client does not emulate referrer policy, so only browsers saw it). Under
+    strict-origin the same-origin POST carries its true Origin, and the Referer fallback for
+    browsers that omit Origin is the bare origin, which passes too.
 
     Applied to the view rather than to the pages it renders, so that it covers the invalid-link and
     success responses too -- the token is in the URL whatever the answer turns out to be.
@@ -148,7 +160,7 @@ def no_referrer(view):
     @functools.wraps(view)
     def wrapper(request, *args, **kwargs):
         response = view(request, *args, **kwargs)
-        response["Referrer-Policy"] = "no-referrer"
+        response["Referrer-Policy"] = "strict-origin"
         return response
 
     return wrapper
@@ -1115,7 +1127,7 @@ def unverified_account_for(email: str):
     )
 
 
-@no_referrer
+@origin_only_referrer
 def verify_email(request, uidb64: str, token: str):
     """Activate an account from the link in its verification email, once its owner confirms.
 
@@ -1288,7 +1300,7 @@ def change_email(request):
     )
 
 
-@no_referrer
+@origin_only_referrer
 def confirm_email_change(request, token: str):
     """Apply an email change once the link sent to the new address has been confirmed.
 
