@@ -7,8 +7,11 @@ body {
   margin-bottom: 3em;
 }
 
+/* the underline clear of the descenders it otherwise cuts through, which on a page of links to
+   papers -- "Tonry", "Heinze", "fallingstar.com" -- is most of them */
 a {
   cursor: pointer;
+  text-underline-offset: 0.16em;
 }
 
 /* Bootstrap 3 was loaded here without a .navbar-default or .navbar-inverse variant, so the
@@ -46,6 +49,22 @@ a {
 .navbar.navbar-stuck {
   border-bottom: var(--bs-border-width) solid var(--bs-border-color);
   box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
+}
+
+/*
+Frosted rather than opaque once the bar is over content, so the sky and the page pass underneath it
+instead of being cut off at a hard edge.
+
+Inside @supports because the alpha and the blur are one thing: a browser that applies the translucent
+background but not the filter has page text legible straight through the navigation. Both are named
+in the query, the -webkit- form included, since that is the only form Safari has.
+*/
+@supports (backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px)) {
+  .navbar.navbar-stuck {
+    backdrop-filter: blur(12px) saturate(1.4);
+    -webkit-backdrop-filter: blur(12px) saturate(1.4);
+    background-color: rgba(var(--bs-body-bg-rgb), 0.8);
+  }
 }
 
 .navbar-brand {
@@ -86,9 +105,19 @@ a {
   margin-top: 0em;
 } */
 
+/* The standing note about the data, on every page above the content. As a panel rather than a line
+   of small grey text: what it carries is a caveat about the measurements themselves, which is worth
+   more than the smallest type on the page. The edge is the warm orange of the mark's trail, which is
+   the site's colour for "read this", and it is quiet enough at this width not to compete with the
+   heading below it. */
 .notices {
-  font-size: small;
-  margin-bottom: 1em;
+  background-color: var(--bs-tertiary-bg);
+  border-left: 3px solid var(--atlas-ember);
+  border-radius: 0.4em;
+  color: var(--bs-secondary-color);
+  font-size: 0.85em;
+  margin-bottom: 1.5em;
+  padding: 0.7em 1em;
 }
 
 div.page-header {
@@ -243,11 +272,13 @@ ul.tasks li.finished.errored {
   border-color: var(--bs-danger);
 }
 
-/* The row is a control surface -- a link, download buttons, a delete -- and was a flat outline that
-   said so only by having things in it. The lift is one pixel: enough to answer the pointer, small
-   enough not to reflow the light curve inside. */
+/* The row is a control surface -- a link, download buttons, a delete -- so it answers the pointer.
+   The lift is one pixel, small enough not to reflow the light curve inside; the second shadow is a
+   warm halo in the site's accent, spread wide and set well back by its negative spread so that it
+   reads as the card being lit rather than as an outline around it. */
 li.task:hover {
-  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15)),
+    0 0 1.6rem -0.3rem rgba(var(--atlas-accent-rgb), 0.35);
   transform: translateY(-1px);
 }
 
@@ -267,6 +298,43 @@ li.task:hover {
    ones worth looking at. */
 .taskbadge {
   font-weight: normal;
+}
+
+/*
+A dot in front of the word, so each state has a shape as well as a colour and the four are told apart
+down a long list at a glance rather than by reading.
+
+currentColor, so the dot is whatever text colour the badge below has already been given for contrast
+against its own fill, and no state needs a second value here.
+*/
+.taskbadge::before {
+  background-color: currentColor;
+  border-radius: 50%;
+  content: "";
+  display: inline-block;
+  height: 0.5em;
+  margin-right: 0.4em;
+  vertical-align: 0.04em;
+  width: 0.5em;
+}
+
+/* the one state that is still happening, so it is the one that moves */
+.taskbadge-running::before {
+  animation: taskbadge-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes taskbadge-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.3;
+    transform: scale(0.75);
+  }
 }
 
 .taskbadge-queued {
@@ -387,16 +455,47 @@ li.task:hover .copybutton,
 /* the bar on a running task: full width, because what it reports is that work is happening and not
    how much of it is done */
 .taskprogress {
+  border-radius: 999px;
   height: 0.4em;
   margin-top: 0.4em;
   max-width: 20em;
 }
 
-/* the amber the row's left edge and its badge use, rather than Bootstrap's default primary blue,
-   so that everything saying "running" on the row says it in one colour */
+/*
+A comet crossing the bar, in the amber the row's left edge and its badge use so that everything
+saying "running" on the row says it in one colour.
+
+The bar has nothing to measure -- the server reports that a task started and how long ago, not how
+far through it is -- so what travels is a gradient rather than a filled fraction: a bright head with
+the amber fading out behind it, over a bar that stays full width. Bootstrap's own striped animation
+moves a repeating pattern, which reads as a barber's pole; one thing crossing the bar reads as
+something being carried through.
+
+background-size is what makes the trail a third of the bar, and the animation runs its position from
+clear of one end to clear of the other, so the comet leaves before it returns.
+*/
 .taskprogress .progress-bar {
-  background-color: #f0ad4e;
+  animation: taskprogress-comet 1.9s linear infinite;
+  background-color: transparent;
+  background-image: linear-gradient(90deg,
+      rgba(240, 173, 78, 0) 0%,
+      rgba(240, 173, 78, 0.5) 55%,
+      #f0ad4e 82%,
+      #ffd79a 96%,
+      rgba(255, 215, 154, 0) 100%);
+  background-repeat: no-repeat;
+  background-size: 35% 100%;
   width: 100%;
+}
+
+@keyframes taskprogress-comet {
+  from {
+    background-position-x: -55%;
+  }
+
+  to {
+    background-position-x: 155%;
+  }
 }
 
 /* Placeholder rows while the first task list is on its way. The border-left of a status the list
@@ -544,6 +643,97 @@ p.runnerstatus.stale {
   */
   --atlas-accent: #ef4e19;
   --atlas-accent-rgb: 239, 78, 25;
+
+  /*
+  The other two colours the logo is drawn in: the warm orange of the comet's trail and the navy of
+  the disc. The accent above is the site's one signal colour and stays that way -- these two are for
+  decoration that has to look like it came from the same mark, which is the sky behind the page, the
+  trail under a heading and the sweep along a running task's bar.
+  */
+  --atlas-ember: #f08521;
+  --atlas-navy: #2f4b9f;
+}
+
+/*
+============================ the sky ============================
+
+Every page is a window onto the sky, so the page has one behind it: stars on the dark theme, daylight
+on the light one, in a fixed layer that the content scrolls over.
+
+body::before at a negative z-index rather than a background on <body>: body is position: static with
+no z-index of its own, so it opens no stacking context, and the pseudo-element paints into the root
+context's negative layer -- above the page's background colour and below every box and every line of
+text. Nothing needs a z-index in reply, and any element with a background of its own (a task card,
+the sticky navbar, a code block) covers the sky exactly as it covers the page.
+
+The stars are radial gradients on three tiles of different sizes. Three, because one tile repeated
+across a viewport is a visible grid; at 380, 290 and 550 pixels the pattern that would give the game
+away is longer than any screen. Sizes and alphas differ per layer so the field has depth rather than
+reading as one dusting of identical dots.
+*/
+body::before {
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: -1;
+}
+
+/* Pale blue overhead and a warm low sun at the right, both far too faint to sit under text as
+   anything but a tint: the page keeps its own background colour and this is a wash over it. */
+body::before {
+  background-image:
+    radial-gradient(120% 60% at 50% -10%, rgba(47, 75, 159, 0.07), transparent 70%),
+    radial-gradient(70% 50% at 100% 0%, rgba(240, 133, 33, 0.07), transparent 70%);
+}
+
+[data-bs-theme="dark"] body::before {
+  background-image:
+    /* two nebulae, in the brand navy and the comet's orange, which is what keeps the field from
+       being a flat black rectangle with dots on it */
+    radial-gradient(80% 50% at 15% 0%, rgba(47, 75, 159, 0.20), transparent 60%),
+    radial-gradient(60% 45% at 95% 12%, rgba(239, 78, 25, 0.09), transparent 65%),
+    /* the near stars: fewer, brighter, on the largest tile */
+    radial-gradient(1.6px 1.6px at 18% 22%, rgba(255, 255, 255, 0.85), transparent 55%),
+    radial-gradient(1.4px 1.4px at 73% 61%, rgba(255, 236, 214, 0.75), transparent 55%),
+    radial-gradient(1.5px 1.5px at 41% 84%, rgba(255, 255, 255, 0.70), transparent 55%),
+    /* the middle distance */
+    radial-gradient(1.1px 1.1px at 62% 14%, rgba(255, 255, 255, 0.55), transparent 55%),
+    radial-gradient(1px 1px at 9% 57%, rgba(200, 220, 255, 0.55), transparent 55%),
+    radial-gradient(1.1px 1.1px at 88% 38%, rgba(255, 255, 255, 0.50), transparent 55%),
+    radial-gradient(1px 1px at 33% 46%, rgba(255, 245, 235, 0.45), transparent 55%),
+    /* the far field: smallest and faintest, on the tightest tile, so it reads as depth */
+    radial-gradient(0.8px 0.8px at 52% 29%, rgba(255, 255, 255, 0.38), transparent 55%),
+    radial-gradient(0.8px 0.8px at 24% 71%, rgba(255, 255, 255, 0.32), transparent 55%),
+    radial-gradient(0.8px 0.8px at 79% 88%, rgba(190, 214, 255, 0.35), transparent 55%),
+    radial-gradient(0.8px 0.8px at 96% 66%, rgba(255, 255, 255, 0.30), transparent 55%);
+  background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, repeat, repeat, repeat, repeat,
+    repeat, repeat, repeat, repeat;
+  background-size: 100% 100%, 100% 100%, 550px 550px, 550px 550px, 550px 550px, 380px 380px,
+    380px 380px, 380px 380px, 380px 380px, 290px 290px, 290px 290px, 290px 290px, 290px 290px;
+  /* the whole field breathing, which is as much twinkle as one element can carry: the layers share
+     an opacity, so what varies is the brightness of the sky rather than of any one star */
+  animation: sky-breathe 9s ease-in-out infinite;
+}
+
+@keyframes sky-breathe {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The sky's one motion is indefinite -- it does not run once and stop -- which is the kind this
+   setting is mostly about. The field itself stays: it is a background, not an animation. */
+@media (prefers-reduced-motion: reduce) {
+  [data-bs-theme="dark"] body::before {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* Bootstrap 3's blue is a dark colour, chosen against a white page: on the dark theme's near-black
@@ -941,18 +1131,60 @@ table tr td:nth-child(1) {
   margin: 2em;
 }
 
+/* The partner logos, as a row that wraps and stays centred at any width. flex rather than the inline
+   list it replaces, so the gap is one value instead of a margin on each image, and so that logos of
+   different proportions sit on one line rather than on their text baselines. */
 ul.logos {
-  text-align: center;
-  margin-top: 2em;
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.4em;
+  justify-content: center;
+  margin-top: 2.5em;
 }
 
 ul.logos li {
   display: inline;
 }
 
+/* Held back a little until pointed at, so five logos of five different weights read as one row
+   rather than as five competing marks -- and so that looking at one is answered. */
 ul.logos img {
   height: 90px;
-  margin: 10px;
+  opacity: 0.85;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+ul.logos img:hover {
+  opacity: 1;
+  transform: translateY(-3px);
+}
+
+/* The two example light curves on the home page. Framed, because they are pictures of results rather
+   than diagrams in the prose, and lifted when pointed at like everything else here that is a thing
+   rather than a paragraph. The dark theme's light card for them is set further down. */
+img.examplelightcurve {
+  border-radius: 0.5em;
+  box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
+  transition: box-shadow 200ms ease, transform 200ms ease;
+}
+
+img.examplelightcurve:hover {
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15));
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  ul.logos img,
+  img.examplelightcurve {
+    transition: none;
+  }
+
+  ul.logos img:hover,
+  img.examplelightcurve:hover {
+    transform: none;
+  }
 }
 
 /* Images with a light background of their own: the partner logos, which are photographs and flat
@@ -1099,9 +1331,24 @@ table.countrystats th[scope="row"] {
     width: 100%;
   }
 
+  /*
+  Two logos to a row on a phone, sized on the list item rather than on the image inside it.
+
+  A percentage on the image resolves against its containing block, which is the <li>. While the list
+  was an inline one that <li> was not a box worth measuring and the percentage effectively fell to
+  the list's width; as a flex item it shrink-wraps its image, so the same 45% resolved against a
+  different, per-logo width and took the narrowest mark (the 131px MAS logo) down to less than half
+  the size of the others. Sizing the item keeps one basis for all five, and the image simply fills
+  whatever it is given.
+  */
+  ul.logos li {
+    flex: 0 1 45%;
+    text-align: center;
+  }
+
   ul.logos img {
     height: auto;
-    max-width: 45%;
+    max-width: 100%;
   }
 
   table {
@@ -1237,19 +1484,28 @@ ul.tasks li.task.task-collapsed > .taskinner {
     transition: none;
   }
 
-  /* the shimmer on the placeholder rows and the travelling stripes on a running task. Both are
-     indefinite -- they do not run once and stop -- which is the kind this setting is mostly about. */
+  /* the shimmer on the placeholder rows, the pulsing dot on a running task's badge and the comet
+     crossing its bar. All are indefinite -- they do not run once and stop -- which is the kind this
+     setting is mostly about. */
   .placeholder-glow .placeholder,
-  .taskprogress .progress-bar-animated {
+  .taskbadge-running::before,
+  .taskprogress .progress-bar {
     animation: none;
+  }
+
+  /* the comet is a gradient that stands still once its animation is gone, leaving a bar shaded from
+     nothing to amber, which reads as a fraction that is not being reported. Filled instead. */
+  .taskprogress .progress-bar {
+    background-color: #f0ad4e;
+    background-image: none;
   }
 }
 
-/* ============================ the queue page ============================ */
+/* ============================ page headings ============================ */
 
-/* Scoped to #taskpage, which is everything the queue page renders, so the display treatment does not
-   land on the prose pages that share .page-header. */
-#taskpage .page-header h1 {
+/* Every page that renders a .page-header, so the queue, the prose pages and the account forms all
+   open the same way. */
+.page-header h1 {
   color: var(--bs-emphasis-color);
   font-size: clamp(2.1rem, 5vw, 2.8rem);
   font-weight: 800;
@@ -1258,17 +1514,77 @@ ul.tasks li.task.task-collapsed > .taskinner {
   margin-bottom: 0.35em;
 }
 
-/* the accent as a short rule under the heading rather than through it: it marks the page without
-   competing with the words for legibility */
-#taskpage .page-header h1::after {
-  background-color: var(--atlas-accent);
-  border-radius: 2px;
+/*
+A comet crossing the page under its title: a short trail in the mark's two oranges with a round head
+at the leading end.
+
+Under the heading rather than through it, so it marks the page without competing with the words for
+legibility, and drawn entirely in backgrounds on one pseudo-element rather than in two -- an element
+has only the one ::after, and the head has to be able to be taller than the 4px trail it sits on.
+
+The head is the first layer because earlier layers paint over later ones, and the trail runs into it
+from transparent so that the comet reads as arriving rather than as a bar with a dot on the end.
+*/
+.page-header h1::after {
+  background-image:
+    radial-gradient(circle 4px at 50% 50%, var(--atlas-accent) 98%, transparent 100%),
+    linear-gradient(90deg, rgba(var(--atlas-accent-rgb), 0), var(--atlas-ember) 60%, var(--atlas-accent));
+  background-position: right center, left center;
+  background-repeat: no-repeat, no-repeat;
+  background-size: 8px 8px, 100% 4px;
   content: "";
   display: block;
-  height: 4px;
+  height: 8px;
   margin-top: 0.3em;
-  width: 2.2em;
+  width: 3.4em;
 }
+
+/* The line under the home page's title. Larger and lighter than the prose it introduces, and held to
+   a readable measure rather than running the full width of the container, so it reads as a subtitle
+   rather than as the first paragraph. */
+.page-header .tagline {
+  color: var(--bs-secondary-color);
+  font-size: 1.25em;
+  font-weight: 300;
+  line-height: 1.4;
+  margin: 0.8em 0 1.4em;
+  max-width: 34em;
+}
+
+/*
+The two example light curves, side by side down to the width where side by side stops fitting, with
+their captions under them. auto-fit with a minimum of 22em is what does both: two tracks while there
+is room for two, one when there is not, with no breakpoint to name.
+
+min(22em, 100%) rather than a bare 22em, because a grid track's minimum is a floor the track cannot go
+under -- including when the container itself is narrower than it. At the body's 17px, 22em is 374px,
+which is wider than the container on a 375px phone once its gutters are taken off, so the bare value
+pushed the grid and the full-width images inside it past the viewport and the whole page scrolled
+sideways. The 100% arm caps the floor at whatever width is actually available.
+*/
+.examplefigures {
+  display: grid;
+  gap: 1.6em;
+  grid-template-columns: repeat(auto-fit, minmax(min(22em, 100%), 1fr));
+  margin: 2em 0;
+}
+
+.examplefigures figure {
+  margin: 0;
+}
+
+.examplefigures img {
+  width: 100%;
+}
+
+.examplefigures figcaption {
+  color: var(--bs-secondary-color);
+  font-size: 0.9em;
+  margin-top: 0.6em;
+  text-align: center;
+}
+
+/* ============================ the queue page ============================ */
 
 /* ---- the filter tabs, as one segmented control ---- */
 
@@ -1308,13 +1624,65 @@ ul.tasks li.task.task-collapsed > .taskinner {
   color: var(--bs-body-color);
 }
 
+/* ---- an empty queue ---- */
+
+/*
+The message that stands where the list of tasks would be, given the shape of the thing that is
+missing: a card-width box on the same dashed outline a placeholder usually wears, rather than a
+sentence adrift at the top left of an empty column.
+
+The star is decoration and is drawn in the accent, so the one mark on an otherwise empty page is the
+site's own. As a mask rather than a glyph in `content`, because generated text is read out by
+browsers that expose it -- "black four pointed star" ahead of the sentence -- and a pseudo-element
+takes no aria-hidden to say otherwise. A mask has no text to read, and it keeps the colour as
+--atlas-accent instead of repeating the value inside an image.
+*/
+.tasksempty {
+  border: var(--bs-border-width) dashed var(--bs-border-color);
+  border-radius: 0.5em;
+  color: var(--bs-secondary-color);
+  margin: 0;
+  padding: 2.5em 1.5em;
+  text-align: center;
+}
+
+.tasksempty::before {
+  background-color: var(--atlas-accent);
+  content: "";
+  display: block;
+  height: 1.7em;
+  margin: 0 auto 0.5em;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 0c1 8 4 11 12 12-8 1-11 4-12 12-1-8-4-11-12-12 8-1 11-4 12-12z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 0c1 8 4 11 12 12-8 1-11 4-12 12-1-8-4-11-12-12 8-1 11-4 12-12z'/%3E%3C/svg%3E") center / contain no-repeat;
+  opacity: 0.85;
+  width: 1.7em;
+}
+
 /* ---- the New request card ---- */
 
-/* An accent edge along the top, so the one panel on the page that makes something happen is marked as
-   such. The card clips it, or its corners would sit outside the radius. */
+/*
+An accent edge along the top, so the one panel on the page that makes something happen is marked as
+such. The card clips it, or its corners would sit outside the radius.
+
+A border cannot be a gradient, so the edge is a background layer pinned to the top of the card and
+the border is only the 4px of space it sits in. The two oranges run the width of the panel, left to
+right, the same way the trail under a page heading does.
+*/
 div.newrequest .task {
-  border-top: 4px solid var(--atlas-accent);
+  background-image: linear-gradient(90deg, var(--atlas-accent), var(--atlas-ember));
+  background-position: top left;
+  background-repeat: no-repeat;
+  background-size: 100% 4px;
+  border-top: 4px solid transparent;
   overflow: hidden;
+  transition: box-shadow 200ms ease;
+}
+
+/* the panel answering the field being typed in, the way a row answers the pointer. Same warm halo as
+   li.task:hover, so being worked in and being pointed at look like the same kind of attention. */
+div.newrequest .task:focus-within {
+  box-shadow: var(--bs-box-shadow, 0 0.5rem 1rem rgba(0, 0, 0, 0.15)),
+    0 0 1.8rem -0.3rem rgba(var(--atlas-accent-rgb), 0.4);
 }
 
 div.newrequest .task h2 {
