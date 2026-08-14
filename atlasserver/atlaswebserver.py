@@ -3,6 +3,7 @@
 
 import os
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -164,13 +165,43 @@ def start() -> None:
     print(f"ATLAS Apache server is running with pid {get_httpd_pid()}")
 
 
+def signal_graceful_stop(pid: int) -> bool:
+    """Ask the running server to finish its requests and exit, without going through apachectl.
+
+    SIGWINCH is the signal `httpd -k graceful-stop` sends, so this is the same shutdown by a route
+    that touches nothing on disk.
+    """
+    try:
+        psutil.Process(pid).send_signal(signal.SIGWINCH)
+    except psutil.NoSuchProcess:
+        return True  # it exited between the pid check and the signal, which is the wanted end state
+    except psutil.AccessDenied:
+        print(f"Not allowed to signal pid {pid}. Stop it as the user that started it, or as root.")
+        return False
+
+    return True
+
+
 def stop() -> None:
     """Stop the ATLAS Apache server."""
-    if pid := get_httpd_pid():
-        print(f"Stopping ATLAS Apache server (pid {pid})")
-        run_command([f"{APACHEPATH / 'apachectl'}", "graceful-stop"])
-    else:
+    pid = get_httpd_pid()
+    if not pid:
         print("ATLAS Apache server was not running")
+        return
+
+    print(f"Stopping ATLAS Apache server (pid {pid})")
+    if run_command([f"{APACHEPATH / 'apachectl'}", "graceful-stop"]) == 0:
+        return
+
+    # apachectl stops the server by running httpd against the generated config, which loads
+    # mod_wsgi -- and that shared object names the interpreter it was built against by absolute
+    # path. Moving that interpreter (a uv patch upgrade collecting the old one, or switching the
+    # venv between Python installations) therefore breaks stopping a server that is running
+    # perfectly well, since the config cannot be parsed to reach the shutdown.
+    #
+    # The running process needs nothing from disk to shut down, so signal it instead.
+    print("apachectl could not stop the server, so signalling the process directly")
+    signal_graceful_stop(pid)
 
 
 def main() -> None:

@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 from unittest import skipUnless
 
+import psutil
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
@@ -2591,6 +2593,90 @@ class TaskTimingSerializerTests(TestCase):
         assert created["waittime"] is None
         assert created["runtime"] is None
         assert Task.objects.get(id=created["id"]).starttimestamp is None
+
+
+class WebserverStopTests(SimpleTestCase):
+    """Stopping the server when apachectl cannot run.
+
+    apachectl reaches the shutdown by parsing the generated config, which loads mod_wsgi, which
+    names its interpreter by absolute path -- so moving that interpreter leaves a running server
+    with no way to stop it through the normal route.
+    """
+
+    @staticmethod
+    def _atlaswebserver() -> t.Any:
+        """Import the CLI module with a project path its module body will accept.
+
+        That body rejects a path containing a space, which a checkout may well have; the override
+        exists for exactly that case and has to be in the environment before the first import.
+        """
+        os.environ.setdefault("ATLASSERVER_PATH", "/tmp/atlasserver-clitest")
+        from atlasserver import atlaswebserver
+
+        return atlaswebserver
+
+    def test_a_server_that_apachectl_stops_is_not_also_signalled(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=0) as runcommand,
+            mock.patch.object(atlaswebserver.psutil, "Process") as process,
+        ):
+            atlaswebserver.stop()
+
+        assert runcommand.call_count == 1
+        assert not process.called, "the normal route worked, so nothing should be signalled"
+
+    def test_a_server_apachectl_cannot_stop_is_signalled_instead(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver.psutil, "Process") as process,
+        ):
+            atlaswebserver.stop()
+
+        process.assert_called_once_with(4242)
+        # the signal httpd -k graceful-stop sends: finish the current requests, then exit
+        process.return_value.send_signal.assert_called_once_with(signal.SIGWINCH)
+
+    def test_a_server_that_is_not_running_is_neither_stopped_nor_signalled(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=None),
+            mock.patch.object(atlaswebserver, "run_command") as runcommand,
+            mock.patch.object(atlaswebserver.psutil, "Process") as process,
+        ):
+            atlaswebserver.stop()
+
+        assert not runcommand.called
+        assert not process.called
+
+    def test_a_process_that_exits_before_the_signal_is_not_an_error(self) -> None:
+        # the pid is read, then checked, then signalled, and the server can finish stopping in
+        # between -- which is the outcome being asked for, not a failure
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.NoSuchProcess(4242)),
+        ):
+            assert atlaswebserver.signal_graceful_stop(4242) is True
+            atlaswebserver.stop()
+
+    def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.AccessDenied(4242)),
+        ):
+            assert atlaswebserver.signal_graceful_stop(4242) is False
 
 
 class OpenApiSchemaTests(TestCase):
