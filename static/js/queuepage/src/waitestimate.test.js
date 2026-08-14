@@ -19,6 +19,8 @@ const status = (overrides = {}) => ({
     slots_busy: 0,
     distinct_queued_users: 1,
     typical_runtime_seconds: { FP: 60, IMGZIP: 900 },
+    // an all-FP queue unless a test says otherwise, which is what this server's queue mostly is
+    queued_by_request_type: { FP: 500 },
     ...overrides,
 });
 
@@ -89,9 +91,67 @@ describe('estimateWaitSeconds', () => {
         assert.equal(soleTaskAt(0), 0);
     });
 
-    test('the request type selects its own typical runtime', () => {
-        // two full passes ahead, against IMGZIP's 900s rather than FP's 60s
-        assert.equal(soleTaskAt(32, { distinct_queued_users: 20 }, 'IMGZIP'), 2 * 900);
+    test('the user\'s own tasks ahead are priced by their own type', () => {
+        // a radeclist submission is one request type, so the tasks this one is serialised behind
+        // are IMGZIP too
+        const seconds = estimateWaitSeconds({
+            queuepos: 3,
+            ownqueuepositions: ownqueue(4),
+            requesttype: 'IMGZIP',
+            runnerstatus: status({ distinct_queued_users: 1 }),
+        });
+
+        assert.equal(seconds, 3 * 900);
+    });
+
+    test('other users\' tasks ahead are priced by what is actually queued', () => {
+        // 32 tasks ahead, none of them this user's, and the queue is all IMGZIP. Dispatch orders
+        // one global queue, so this FP task waits on their 900s run times -- pricing the passes by
+        // its own 60s median would promise two minutes for most of an hour's wait.
+        const seconds = soleTaskAt(32, {
+            distinct_queued_users: 20,
+            queued_by_request_type: { IMGZIP: 32 },
+        });
+
+        assert.equal(seconds, 2 * 900);
+    });
+
+    test('a mixed queue is priced by the weighted mean of what is in it', () => {
+        // three quarters FP at 60s and one quarter IMGZIP at 900s: (3 x 60 + 900) / 4 = 270
+        const seconds = soleTaskAt(32, {
+            distinct_queued_users: 20,
+            queued_by_request_type: { FP: 300, IMGZIP: 100 },
+        });
+
+        assert.equal(seconds, 2 * 270);
+    });
+
+    test('nothing is estimated when a queued type has no runtime to price it', () => {
+        // an unpriced type is the one that would distort the answer most, being new or rare enough
+        // that nothing like it has finished recently
+        assert.equal(soleTaskAt(32, {
+            distinct_queued_users: 20,
+            queued_by_request_type: { FP: 300, SSOSTACK: 4 },
+        }), null);
+    });
+
+    test('a runner too old to report what is queued offers no estimate', () => {
+        assert.equal(soleTaskAt(32, {
+            distinct_queued_users: 20,
+            queued_by_request_type: undefined,
+        }), null);
+    });
+
+    test('the composition is not needed while nothing is ahead but the user\'s own tasks', () => {
+        // no full pass of other users' work to price, so an unpriceable queue cannot matter
+        const seconds = estimateWaitSeconds({
+            queuepos: 3,
+            ownqueuepositions: ownqueue(4),
+            requesttype: 'FP',
+            runnerstatus: status({ distinct_queued_users: 1, queued_by_request_type: undefined }),
+        });
+
+        assert.equal(seconds, 3 * 60);
     });
 
     test('nothing is estimated when the runner is stale', () => {

@@ -51,7 +51,8 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     //
     // Negated rather than tested for a positive, so an absent type and a NaN are turned away by
     // the same comparison.
-    const typicalruntime = runnerstatus.typical_runtime_seconds?.[requesttype];
+    const runtimes = runnerstatus.typical_runtime_seconds;
+    const typicalruntime = runtimes?.[requesttype];
     if (!(typicalruntime > 0)) {
         return null;
     }
@@ -80,19 +81,67 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     const ownahead = ownqueuepositions.filter((position) => position < queuepos).length;
     const otherahead = queuepos - ownahead;
 
-    // Whole dispatch passes, not a fraction of one. With fifteen other users' tasks ahead and
-    // sixteen ways of running them, all fifteen start in the same pass as this one, so it waits
-    // for none of them -- a fraction here would report most of a run time for a task about to
-    // start. The user's own tasks are serialised one per pass, so they count individually.
+    // The user's own tasks ahead are serialised one per pass, and they are this task's own type:
+    // a radeclist submission is one request type by construction, and it is that submission which
+    // makes this term large enough to matter.
+    const ownseconds = ownahead * typicalruntime;
+
+    // Everybody else's drain in whole passes, not fractions of one. With fifteen other users'
+    // tasks ahead and sixteen ways of running them, all fifteen start in the same pass as this
+    // one, so it waits for none of them -- a fraction here would report most of a run time for a
+    // task about to start.
     //
-    // A task in the first pass gets zero, which reads as "under a minute". That is optimistic when
-    // every slot is occupied, since it then waits for one to come free; the alternative of
-    // withholding the estimate whenever slots_busy equals numslots is worse in practice, because
+    // A task in the first pass therefore gets zero, which reads as "under a minute". That is
+    // optimistic when every slot is occupied, since it then waits for one to come free; the
+    // alternative of withholding whenever slots_busy equals numslots is worse in practice, because
     // slots_busy moves on its own and the figure would appear and vanish from one poll to the next
     // across the last `concurrency` positions -- the stretch a waiting user watches hardest.
-    const passesahead = Math.max(ownahead, Math.floor(otherahead / concurrency));
+    const otherpasses = Math.floor(otherahead / concurrency);
+    let otherseconds = 0;
+    if (otherpasses > 0) {
+        // Priced by what the queue is made of, not by this task's own type. Dispatch orders one
+        // global queue across every request type, so the work ahead is whatever was submitted --
+        // and an FP task behind a run of IMGZIP tasks waits on their run times, which are longer
+        // by orders of magnitude.
+        const meanpass = meanQueuedRuntimeSeconds(runnerstatus.queued_by_request_type, runtimes);
+        if (meanpass == null) {
+            return null;
+        }
+        otherseconds = otherpasses * meanpass;
+    }
 
-    return passesahead * typicalruntime;
+    // the two are worked through at the same time, so the wait is the longer of them
+    return Math.max(ownseconds, otherseconds);
+}
+
+/**
+ * How long a dispatch pass takes on average, given what is queued, or null if that cannot be said.
+ *
+ * Weighted by the number of queued tasks of each type, since a pass is filled from the queue. A
+ * type that is queued but has no median cannot be priced, and there is no honest figure to return
+ * without it -- an unpriced type is exactly the one that would distort the answer most, being new
+ * or rare enough that nothing like it has finished recently.
+ */
+function meanQueuedRuntimeSeconds(queuedbytype, runtimes) {
+    if (queuedbytype == null) {
+        return null;
+    }
+
+    let tasks = 0;
+    let seconds = 0;
+    for (const [requesttype, count] of Object.entries(queuedbytype)) {
+        if (!(count > 0)) {
+            continue;
+        }
+        const median = runtimes?.[requesttype];
+        if (!(median > 0)) {
+            return null;
+        }
+        tasks += count;
+        seconds += count * median;
+    }
+
+    return tasks > 0 ? seconds / tasks : null;
 }
 
 /**

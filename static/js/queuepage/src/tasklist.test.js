@@ -1126,6 +1126,7 @@ describe('TaskPage', () => {
             slots_busy: 5,
             distinct_queued_users: 5,
             typical_runtime_seconds: { FP: 600 },
+            queued_by_request_type: { FP: 21 },
         });
 
         const status = container.querySelector('.taskstatus.waiting');

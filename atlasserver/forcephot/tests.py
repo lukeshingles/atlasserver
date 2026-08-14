@@ -2315,6 +2315,24 @@ class TaskRunnerStatusTests(TestCase):
         assert body["queued_task_count"] == 4
         assert body["distinct_queued_users"] == 2
 
+    def test_the_queue_composition_the_wait_estimate_prices_passes_by(self) -> None:
+        # dispatch orders one global queue across every request type, so a wait is priced by what
+        # is actually ahead rather than by the type of the task doing the waiting
+        user = User.objects.create_user(username="mixedqueue", email="mq@example.com", password=None)
+        for _ in range(3):
+            Task.objects.create(user=user, ra=1.0, dec=2.0)
+        parent = Task.objects.create(user=user, ra=3.0, dec=4.0)
+        Task.objects.create(user=user, ra=3.0, dec=4.0, request_type="IMGZIP", parent_task=parent)
+
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["queued_by_request_type"] == {"FP": 4, "IMGZIP": 1}
+
+    def test_an_empty_queue_is_composed_of_nothing(self) -> None:
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["queued_by_request_type"] == {}
+
     def _finished_tasks(self, *runtimes: float) -> None:
         """Create one finished task per run time given, so the medians have something to report."""
         # one user for the whole test rather than one per call: auth_user.email carries a unique

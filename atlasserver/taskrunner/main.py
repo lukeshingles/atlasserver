@@ -580,6 +580,18 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     )
     oldest_queued = queuestats["oldest_queued"]
 
+    # What the queue is made of, so that a wait can be priced by the work actually ahead rather
+    # than by the type of the task doing the waiting. Dispatch orders one global queue across every
+    # request type, and an IMGZIP task fetching a thousand images takes orders of magnitude longer
+    # than an FP task fitting one light curve -- so an FP task behind a run of them waits on their
+    # run times, not on its own.
+    #
+    # A second query rather than another aggregate: this one groups, and the counts above do not.
+    queued_by_request_type = {
+        row["request_type"]: row["count"]
+        for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
+    }
+
     status = {
         "written": datetime.datetime.now(datetime.UTC).isoformat(),
         "pid": os.getpid(),
@@ -589,6 +601,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "maintenance": maintenance,
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
+        "queued_by_request_type": queued_by_request_type,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
