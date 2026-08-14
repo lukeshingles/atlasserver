@@ -42,6 +42,7 @@ function task(id, overrides = {}) {
         parent_task_id: null,
         parent_task_url: null,
         queuepos: 0,
+        attempt_count: 1,
         ...overrides,
     };
 }
@@ -1079,6 +1080,26 @@ describe('TaskPage', () => {
 
         assert.equal(rowMeta(container)['MPC Object:'], 'Makemake');
         assert.ok(!('RA Dec:' in rowMeta(container)), 'the coordinate row should be absent');
+    });
+
+    test('a task that needed several attempts says so', async () => {
+        // the timestamps show only the attempt that produced the result, so without this a result
+        // that took four goes looks exactly like one that took a single go
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            attempt_count: 4,
+        })]);
+
+        assert.equal(rowMeta(container)['Attempts:'], '4');
+    });
+
+    test('a task that ran first time does not mention attempts', async () => {
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            attempt_count: 1,
+        })]);
+
+        assert.ok(!('Attempts:' in rowMeta(container)), 'one attempt is the ordinary case and needs no line');
     });
 
     test('a finished task reports how long it waited and how long it ran', async () => {

@@ -51,15 +51,31 @@ def _atlasserverpath() -> Path:
 ATLASSERVERPATH = _atlasserverpath()
 
 
+def is_our_httpd(pid: int) -> bool:
+    """Whether the process is this server, rather than whatever inherited its pid.
+
+    A pid file outlives an unclean exit, and by the time it is read the number in it can belong to
+    something else entirely -- so existence alone is not identity. The generated config path is
+    unique to this instance and is on its command line.
+
+    A process that cannot be inspected is treated as not ours: the caller either signals it or
+    declines to start over it, and both are worse to get wrong than an unnecessary "not running".
+    """
+    try:
+        return any(str(APACHEPATH / "httpd.conf") in arg for arg in psutil.Process(pid).cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+
+
 def get_httpd_pid() -> int | None:
     """Return the pid of the httpd process if it is running, otherwise None."""
     pidfile = Path(APACHEPATH, "httpd.pid")
     if pidfile.is_file():
         pid = int(pidfile.open().read().strip())
-        if psutil.pid_exists(pid):
+        if psutil.pid_exists(pid) and is_our_httpd(pid):
             return pid
 
-        # process ended, so the pid file should be deleted
+        # the process ended, or its pid has since been handed to something else
         pidfile.unlink()
 
     return None

@@ -108,6 +108,13 @@ class Task(models.Model):
     )
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name="Proper motion RA (mas/yr)")
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name="Proper motion Dec (mas/yr)")
+    # How many times the runner has started this task. A task that fails without a definite error
+    # is left unfinished and dispatched again, and starttimestamp is overwritten each time so that
+    # the run time measures the attempt that produced the result -- so without this the retries
+    # leave no trace at all, and a result that took four goes to obtain looks like one that took
+    # one. Zero until the first attempt.
+    attempt_count = models.IntegerField(default=0, verbose_name="Execution attempts")
+
     queuepos_relative = models.IntegerField(null=True, blank=True, default=None, verbose_name="Queue position")
     userqueuedtasks_on_submit = models.IntegerField(
         null=True, blank=True, default=None, verbose_name="User queued tasks when submitted", editable=False

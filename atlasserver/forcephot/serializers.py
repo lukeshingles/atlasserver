@@ -331,6 +331,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             "userqueuedtasks_on_submit",
             "waittime",
             "runtime",
+            "attempt_count",
         ]
 
         read_only_fields = [
@@ -354,4 +355,5 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             "userqueuedtasks_on_submit",
             "waittime",
             "runtime",
+            "attempt_count",
         ]

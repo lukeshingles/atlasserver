@@ -437,6 +437,25 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     return localresultfile, None
 
 
+def mark_started(task) -> None:
+    """Record that an attempt at the task has started.
+
+    A task that fails without a definite error is left unfinished and picked up again by the
+    dispatch loop, so this runs once per attempt.
+
+    starttimestamp is overwritten each time, so that finish minus start measures the attempt which
+    actually produced the result -- which is what says how long a comparable task will take, and so
+    what the wait estimate is built on. What that leaves out is that the task needed more than one
+    go, which the timestamps cannot express, so the attempts are counted alongside them.
+
+    A queryset update rather than a save() for the reason given in mark_finished below.
+    """
+    Task.objects.filter(pk=task.id).update(
+        starttimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0),
+        attempt_count=models.F("attempt_count") + 1,
+    )
+
+
 def mark_finished(task, error_msg: str | None) -> None:
     """Record that a task has finished, in the database and on the in-memory instance.
 
@@ -634,9 +653,7 @@ def do_task(task, slotid: int) -> None:
         # also log to the main process
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
 
-    Task.objects.all().filter(pk=task.id).update(
-        starttimestamp=datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
-    )
+    mark_started(task)
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
