@@ -67,7 +67,9 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     // right answer anyway, since a queue with anything in it has at least one user.
     const numslots = runnerstatus.numslots;
     const queuedusers = runnerstatus.distinct_queued_users;
-    if (numslots == null || queuedusers == null) {
+    // A runner with no slots runs nothing at all, so there is no rate to divide by and no honest
+    // finite answer; a queued-user count of zero is only ever the lag described above.
+    if (!(numslots > 0) || queuedusers == null) {
         return null;
     }
     const concurrency = Math.max(1, Math.min(numslots, queuedusers));

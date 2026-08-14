@@ -148,6 +148,12 @@ describe('estimateWaitSeconds', () => {
         assert.equal(seconds, null);
     });
 
+    test('a runner reporting no slots offers no estimate', () => {
+        // nothing runs at all, so there is no rate to divide by -- unlike a zero user count, which
+        // is only ever a lagging snapshot
+        assert.equal(soleTaskAt(4, { numslots: 0 }), null);
+    });
+
     test('a queued-user count of zero is a lagging snapshot, not a missing field', () => {
         // the status file is written every 15s and read every 60, so it can still describe the
         // empty queue this task was submitted into. Refusing here would blank every row of a bulk

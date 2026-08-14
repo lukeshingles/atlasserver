@@ -2315,13 +2315,16 @@ class TaskRunnerStatusTests(TestCase):
 
     def _finished_tasks(self, *runtimes: float) -> None:
         """Create one finished task per run time given, so the medians have something to report."""
-        user = User.objects.create_user(username=f"ran{len(runtimes)}", email="rb@example.com", password=None)
+        # one user for the whole test rather than one per call: auth_user.email carries a unique
+        # index (migration 0005), so a second call with a fixed address is an IntegrityError
+        user, _ = User.objects.get_or_create(username="ranbefore", defaults={"email": "rb@example.com"})
         finished = timezone.now() - datetime.timedelta(minutes=5)
         for seconds in runtimes:
             Task.objects.create(
                 user=user,
                 ra=1.0,
                 dec=2.0,
+                timestamp=finished - datetime.timedelta(seconds=seconds + 1),
                 starttimestamp=finished - datetime.timedelta(seconds=seconds),
                 finishtimestamp=finished,
             )
@@ -2417,16 +2420,23 @@ class TypicalRuntimeTests(TestCase):
 
         The finish times are staggered a second apart in creation order rather than all landing on
         `now`, so that a test relying on which completions are the most recent -- the sample limit
-        is applied in that order -- states its intent by the order it creates them in.
+        is applied in that order -- states its intent by the order it creates them in. Milliseconds
+        rather than seconds, so that a test creating thousands of tasks still lands them all in the
+        past.
         """
         self.created += 1
-        finished = timezone.now() - datetime.timedelta(hours=1) + datetime.timedelta(seconds=self.created)
+        finished = timezone.now() - datetime.timedelta(hours=1) + datetime.timedelta(milliseconds=self.created)
+        started = finished - datetime.timedelta(seconds=runtime_seconds)
         return Task.objects.create(
             user=self.user,
             ra=1.0,
             dec=2.0,
             request_type=request_type,
-            starttimestamp=finished - datetime.timedelta(seconds=runtime_seconds),
+            # submitted before it started, which the default of `now` would not be: these tasks
+            # finish in the past, so the default leaves every one of them with a wait of minus an
+            # hour for anything that reads waittime()
+            timestamp=started - datetime.timedelta(seconds=1),
+            starttimestamp=started,
             finishtimestamp=finished,
             **kwargs,
         )
