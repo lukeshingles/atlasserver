@@ -51,21 +51,30 @@ def _atlasserverpath() -> Path:
 ATLASSERVERPATH = _atlasserverpath()
 
 
-def is_our_httpd(pid: int) -> bool:
-    """Whether the process is this server, rather than whatever inherited its pid.
+def our_httpd_process(pid: int) -> "psutil.Process | None":
+    """Return the process if it is this server, or None if it is anything else.
 
     A pid file outlives an unclean exit, and by the time it is read the number in it can belong to
     something else entirely -- so existence alone is not identity. The generated config path is
     unique to this instance and is on its command line.
+
+    The process is returned rather than a yes or no so that a caller acting on it holds the object
+    that was checked. psutil records a process's creation time when the object is built and refuses
+    to signal a pid that has since been reused, which a second lookup from the bare number could
+    not detect.
 
     A process that cannot be inspected -- including one that is not there at all -- is treated as
     not ours: the caller either signals it or declines to start over it, and both are worse to get
     wrong than an unnecessary "not running".
     """
     try:
-        return str(APACHEPATH / "httpd.conf") in psutil.Process(pid).cmdline()
+        process = psutil.Process(pid)
+        if str(APACHEPATH / "httpd.conf") in process.cmdline():
+            return process
     except psutil.Error:
-        return False
+        pass
+
+    return None
 
 
 def get_httpd_pid() -> int | None:
@@ -75,7 +84,7 @@ def get_httpd_pid() -> int | None:
         pid = int(pidfile.open().read().strip())
         # no separate liveness check: a pid with no process raises NoSuchProcess inside this, which
         # is one of the ways of not being ours
-        if is_our_httpd(pid):
+        if our_httpd_process(pid) is not None:
             return pid
 
         # the process ended, or its pid has since been handed to something else
@@ -184,18 +193,21 @@ def start() -> None:
     print(f"ATLAS Apache server is running with pid {get_httpd_pid()}")
 
 
-def signal_graceful_stop(pid: int) -> bool:
+def signal_graceful_stop(process: "psutil.Process") -> bool:
     """Ask the running server to finish its requests and exit, without going through apachectl.
 
     SIGWINCH is the signal `httpd -k graceful-stop` sends, so this is the same shutdown by a route
     that touches nothing on disk.
+
+    Takes the process rather than its number so that psutil can refuse the signal if that number
+    has been reused since the process was identified.
     """
     try:
-        psutil.Process(pid).send_signal(signal.SIGWINCH)
+        process.send_signal(signal.SIGWINCH)
     except psutil.NoSuchProcess:
-        return True  # it exited between the pid check and the signal, which is the wanted end state
+        return True  # it exited between the check and the signal, which is the wanted end state
     except psutil.AccessDenied:
-        print(f"Not allowed to signal pid {pid}. Stop it as the user that started it, or as root.")
+        print(f"Not allowed to signal pid {process.pid}. Stop it as the user that started it, or as root.")
         return False
 
     return True
@@ -220,7 +232,16 @@ def stop() -> None:
     #
     # The running process needs nothing from disk to shut down, so signal it instead.
     print("apachectl could not stop the server, so signalling the process directly")
-    signal_graceful_stop(pid)
+
+    # Identified again rather than trusting the number from before the command above: that command
+    # blocks, and the server can exit -- perhaps part-way through the shutdown it was asked for --
+    # and have its pid handed to something else while it runs.
+    process = our_httpd_process(pid)
+    if process is None:
+        print(f"Process {pid} is no longer this server, so there is nothing to signal")
+        return
+
+    signal_graceful_stop(process)
 
 
 def main() -> None:
