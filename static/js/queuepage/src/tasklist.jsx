@@ -6,6 +6,7 @@ import { describeAge } from "agetext";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
+import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from "waitestimate";
 
 function debug_log(...args) {
     // uncomment for debugging in development
@@ -322,6 +323,8 @@ function useTimeElapsed(taskdata) {
 function taskPropsEqual(prev, next) {
     return (
         prev.hidePlot === next.hidePlot
+        // a string or null, so this stays the cheap check the rest of this function avoids
+        && prev.waitestimate === next.waitestimate
         && (prev.taskdata === next.taskdata
             || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
     );
@@ -574,6 +577,20 @@ export const Task = React.memo(function Task(props) {
     meta.push(['queuetime', 'Queued at:', new Date(task.timestamp).toLocaleString()]);
     if (task.finishtimestamp != null) {
         meta.push(['finishtime', 'Finished at:', new Date(task.finishtimestamp).toLocaleString()]);
+
+        // How the two timestamps above break down, which the server has always recorded and never
+        // shown. Worth a line because it is what tells the user whether a slow result was a busy
+        // queue or a slow job -- and it calibrates what to expect from the next request.
+        // Either half can be absent (a task cancelled before it started has no run time), so they
+        // are assembled rather than formatted as one string.
+        const timings = [
+            task.waittime != null ? 'waited ' + formatDuration(task.waittime) : null,
+            task.runtime != null ? 'ran ' + formatDuration(task.runtime) : null,
+        ].filter((part) => part != null);
+
+        if (timings.length > 0) {
+            meta.push(['timings', 'Took:', timings.join(' · ')]);
+        }
     }
 
     taskbox.push(
@@ -645,9 +662,15 @@ export const Task = React.memo(function Task(props) {
         // the position as a chip rather than inside the sentence, so it can be found down a column
         // of rows. queuepos counts the tasks ahead, so zero is the one that runs next.
         const ahead = task.queuepos == 0 ? 'next' : task.queuepos + ' ahead';
+        // Only when the server gave enough to compute one -- a stale runner, or a request type it
+        // has too few recent samples of, produces null and nothing is shown. An absent estimate is
+        // a smaller failure than an invented one, which is the number the user plans around.
+        const estimate = props.waitestimate != null
+            ? <span className="taskestimate">{props.waitestimate}<span className="visually-hidden"> estimated wait</span></span>
+            : null;
         taskbox.push(
             <div key="status" className="taskstatus waiting">
-                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>
+                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>{estimate}
             </div>);
     } else {
         // queuepos is null until the queue has been renumbered, and the sentence used to be
@@ -690,7 +713,33 @@ const tasklist_pollcache = new PollCache();
 // restored a scroll position of its own, and jumping to the top would throw it away.
 let historynavigations = 0;
 
-const RunnerStatus = React.memo(function RunnerStatus() {
+/**
+ * Whether two runner status responses say the same thing to everything that reads one.
+ *
+ * Field by field rather than a deep compare, because status_age_seconds necessarily differs on
+ * every poll and is only shown when the runner is stale -- which `stale` itself already carries.
+ */
+function runnerStatusEqual(previous, next) {
+    if (previous == null || next == null) {
+        return previous === next;
+    }
+
+    return ['stale', 'maintenance', 'slots_busy', 'numslots', 'queued_task_count', 'distinct_queued_users']
+        .every(field => previous[field] === next[field])
+        // the only nested value, and small: a handful of request types to a number each
+        && JSON.stringify(previous.typical_runtime_seconds) === JSON.stringify(next.typical_runtime_seconds);
+}
+
+/*
+ * Poll the task runner's status, and return the last answer.
+ *
+ * The fetch used to live inside the RunnerStatus banner, which was the only thing that read it.
+ * The wait estimates need the same three fields (numslots, distinct_queued_users and the typical
+ * run times), and a second component polling the same endpoint would have doubled the requests to
+ * ask an identical question -- so the poll moved up to TaskPage and the banner became a
+ * presentational component that is handed the answer.
+ */
+function useRunnerStatus() {
     const [status, setStatus] = React.useState(null);
     // when the endpoint was last actually reachable. A ref, not state: nothing renders it, and it
     // must not be a render input or every poll would re-render the banner unchanged.
@@ -704,7 +753,14 @@ const RunnerStatus = React.memo(function RunnerStatus() {
                 .then(response => response.json())
                 .then(status => {
                     lastgoodfetch.current = Date.now();
-                    setStatus(status);
+                    // Replaced only when something a reader looks at has moved. The response is a
+                    // freshly parsed object every minute, so assigning it unconditionally gave it a
+                    // new identity every poll -- and now that this state lives in TaskPage rather
+                    // than inside the memoised banner, that re-rendered the whole page (every row's
+                    // estimate, two URL parses) to redraw an unchanged line. status_age_seconds
+                    // changes on every poll by definition, so a whole-object compare would never
+                    // hold; it is only rendered when stale, which is compared here.
+                    setStatus(previous => (runnerStatusEqual(previous, status) ? previous : status));
                 })
                 .catch(error => {
                     // not being able to reach this endpoint says nothing about the runner, so do not
@@ -730,6 +786,10 @@ const RunnerStatus = React.memo(function RunnerStatus() {
         return () => clearInterval(interval);
     }, []);
 
+    return status;
+}
+
+const RunnerStatus = React.memo(function RunnerStatus({ status }) {
     if (status == null) {
         return null;
     }
@@ -813,7 +873,20 @@ export function TaskPage() {
         // how many of the user's tasks have left the queue since the tab was last looked at; see
         // countFinishedWhileAway and pageTitle
         finishedwhileaway: 0,
+        /*
+         * The queue positions of all the user's queued tasks, ascending.
+         *
+         * State rather than a ref, unlike queuedIdsRef below, because the wait estimates are
+         * rendered from it. It is the whole queued set and not the page on screen: a user with
+         * forty queued tasks sees six of them, and it is the other thirty-four that their last
+         * task is waiting behind. See estimateWaitSeconds.
+         */
+        ownqueuepositions: [],
     });
+
+    // polled here rather than inside the banner that used to own it, because the wait estimates
+    // read the same response; see useRunnerStatus
+    const runnerstatus = useRunnerStatus();
 
     /*
      * The current state, readable from asynchronous code.
@@ -1042,6 +1115,10 @@ export function TaskPage() {
                 // tasklist_last_fetch_time and tasklist_api_error are deliberately NOT touched
                 // here: this endpoint says nothing about whether the task list is reachable, and
                 // stamping them would report a stale page as current.
+                // sorted so that the elementwise comparison below is meaningful -- the estimate
+                // itself counts positions below a given one and does not care about the order
+                const ownpositions = Object.values(data.queuepositions).sort((a, b) => a - b);
+
                 setState(prevstate => {
                     if (prevstate.results == null) {
                         return null;
@@ -1057,7 +1134,23 @@ export function TaskPage() {
                         return { ...task, queuepos: queuepos };
                     });
 
-                    return changed ? { results: newresults } : null;
+                    // compared rather than assigned, for the reason the rows above are: this runs
+                    // every two seconds, and handing back a fresh array each time would re-render
+                    // the page on every tick of a queue that has not moved
+                    const positionschanged = (
+                        prevstate.ownqueuepositions.length != ownpositions.length
+                        || ownpositions.some((position, index) => position !== prevstate.ownqueuepositions[index]));
+
+                    if (!changed && !positionschanged) {
+                        return null;
+                    }
+
+                    // handing back the previous reference for the half that did not move preserves
+                    // its identity exactly as omitting the key would, and setState merges either way
+                    return {
+                        results: changed ? newresults : prevstate.results,
+                        ownqueuepositions: positionschanged ? ownpositions : prevstate.ownqueuepositions,
+                    };
                 });
 
                 // was the setState callback: the caches have to move with the state, or a
@@ -1558,7 +1651,7 @@ export function TaskPage() {
             </ul>);
     }
 
-    pagehtml.push(<RunnerStatus key="runnerstatus" />);
+    pagehtml.push(<RunnerStatus key="runnerstatus" status={runnerstatus} />);
 
     if (state.tasklist_last_fetch_time != null) {
         pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{state.tasklist_api_error}</span></p>);
@@ -1613,9 +1706,22 @@ export function TaskPage() {
             </p>);
     } else {
         const pagetaskcount = (state.results != null) ? state.results.length : null;
+
+        // Computed here rather than in the row, which cannot see the user's other queued tasks: the
+        // estimate depends on the whole queued set, and a row only knows about itself. Handed down
+        // as a string so that the memo comparison in taskPropsEqual stays a primitive check.
+        const waitEstimateFor = (task) => formatWaitEstimate(estimateWaitSeconds({
+            queuepos: task.queuepos,
+            ownqueuepositions: state.ownqueuepositions,
+            requesttype: task.request_type,
+            runnerstatus,
+        }));
+
         tasklist = [
             <ul key="ultasklist" className="tasks">
-                {state.results.map((task) => (<Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView} hidePlot={pagetaskcount > 10} />))}
+                {state.results.map((task) => (
+                    <Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView}
+                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} />))}
             </ul>,
             <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
         ];

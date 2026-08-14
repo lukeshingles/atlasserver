@@ -40,6 +40,7 @@ export async function importComponent(entry) {
             'react-dom': 'react-dom/client',
             csrftoken: join(SRC, 'csrftoken.js'),
             agetext: join(SRC, 'agetext.js'),
+            waitestimate: join(SRC, 'waitestimate.js'),
             pollcache: join(SRC, 'pollcache.js'),
             newrequest: join(SRC, 'newrequest.jsx'),
         },

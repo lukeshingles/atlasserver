@@ -105,7 +105,23 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return obj.queuepos_relative - self.min_queuepos_relative
 
+    @staticmethod
+    def get_waittime(obj) -> float | None:
+        """Return how long the task waited in the queue before starting, in seconds."""
+        waittime = obj.waittime()
+        return None if waittime is None else round(waittime, 1)
+
+    @staticmethod
+    def get_runtime(obj) -> float | None:
+        """Return how long the task took to run, in seconds."""
+        runtime = obj.runtime()
+        return None if runtime is None else round(runtime, 1)
+
     queuepos = serializers.SerializerMethodField("get_queuepos")
+    # declared rather than left to ModelSerializer, which would resolve these two model methods to
+    # a plain ReadOnlyField and render their full float precision
+    waittime = serializers.SerializerMethodField("get_waittime")
+    runtime = serializers.SerializerMethodField("get_runtime")
     result_url = serializers.SerializerMethodField("get_result_url")
     parent_task_url = serializers.SerializerMethodField("get_parent_task_url")
     pdfplot_url = serializers.SerializerMethodField("get_pdfplot_url")
@@ -312,6 +328,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             "result_imagestack_url",
             "result_imagezip_url",
             "userqueuedtasks_on_submit",
+            "waittime",
+            "runtime",
         ]
 
         read_only_fields = [
@@ -333,4 +351,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             "result_imagestack_url",
             "result_imagezip_url",
             "userqueuedtasks_on_submit",
+            "waittime",
+            "runtime",
         ]

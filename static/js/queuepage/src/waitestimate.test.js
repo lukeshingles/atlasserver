@@ -1,0 +1,164 @@
+// The wait estimate arithmetic.
+//
+// These are the cases that separate the model in estimateWaitSeconds from the obvious
+// tasks-ahead-over-slots formula. The first is the one that matters most in practice: a radeclist
+// submission creates up to 100 tasks at once, the runner runs at most one task per user at a time,
+// and so those tasks are worked through one after another however many slots are free.
+//
+// A plain import, with no DOM and no React: that is what keeping these functions out of the
+// component module buys (the same reasoning as agetext.test.js).
+import assert from 'node:assert/strict';
+import test, { describe } from 'node:test';
+
+import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from './waitestimate.js';
+
+const status = (overrides = {}) => ({
+    stale: false,
+    numslots: 16,
+    distinct_queued_users: 1,
+    typical_runtime_seconds: { FP: 60, IMGZIP: 900 },
+    ...overrides,
+});
+
+/** A bulk submission: every task ahead of this one belongs to the same user. */
+const ownqueue = (count) => Array.from({ length: count }, (unused, index) => index);
+
+/** The estimate for a task at `queuepos` that is the only one of the user's in the queue. */
+const soleTaskAt = (queuepos, statusoverrides = {}, requesttype = 'FP') => estimateWaitSeconds({
+    queuepos,
+    ownqueuepositions: [queuepos],
+    requesttype,
+    runnerstatus: status(statusoverrides),
+});
+
+describe('estimateWaitSeconds', () => {
+    test('a bulk submission is serialised, not divided by the free slots', () => {
+        // 40 of the user's own tasks ahead, every slot free. They run one at a time, so the wait is
+        // 40 run times -- not the 40/16 = 2.5 that dividing by the slot count would promise.
+        const seconds = estimateWaitSeconds({
+            queuepos: 40,
+            ownqueuepositions: ownqueue(41),
+            requesttype: 'FP',
+            runnerstatus: status({ distinct_queued_users: 1 }),
+        });
+
+        assert.equal(seconds, 40 * 60);
+    });
+
+    test('other users\' tasks ahead drain in parallel', () => {
+        // the same 40 tasks ahead, but none of them this user's and 20 users sharing the queue: now
+        // the slots genuinely apply
+        assert.equal(soleTaskAt(40, { distinct_queued_users: 20 }), (40 / 16) * 60);
+    });
+
+    test('concurrency is bounded by the number of users, not the slot count', () => {
+        // 16 slots but only 2 users with work: at most one task per user runs, so two at a time
+        assert.equal(soleTaskAt(8, { distinct_queued_users: 2 }), (8 / 2) * 60);
+    });
+
+    test('the wait is the longer of the two, since they happen at once', () => {
+        // 4 of the user's own ahead (4 x 60 = 240s serialised) and 32 others at 16 at a time
+        // (2 x 60 = 120s). The user's own queue is the binding constraint.
+        const seconds = estimateWaitSeconds({
+            queuepos: 36,
+            ownqueuepositions: [0, 1, 2, 3, 36],
+            requesttype: 'FP',
+            runnerstatus: status({ distinct_queued_users: 20 }),
+        });
+
+        assert.equal(seconds, 4 * 60);
+    });
+
+    test('the next task in an empty queue waits for nothing', () => {
+        assert.equal(soleTaskAt(0), 0);
+    });
+
+    test('the request type selects its own typical runtime', () => {
+        // 2 ahead at 16-way concurrency, against IMGZIP's 900s rather than FP's 60s
+        assert.equal(soleTaskAt(2, { distinct_queued_users: 20 }, 'IMGZIP'), (2 / 16) * 900);
+    });
+
+    test('nothing is estimated when the runner is stale', () => {
+        assert.equal(soleTaskAt(5, { stale: true }), null);
+    });
+
+    test('nothing is estimated before the first status response', () => {
+        assert.equal(estimateWaitSeconds({
+            queuepos: 5, ownqueuepositions: [5], requesttype: 'FP', runnerstatus: null,
+        }), null);
+    });
+
+    test('nothing is estimated for a request type with too few samples', () => {
+        // the server omits a type it has not seen enough of recently, rather than sending a figure
+        // it does not stand behind
+        assert.equal(soleTaskAt(5, {}, 'SSOSTACK'), null);
+    });
+
+    test('nothing is estimated when the runner reported no runtimes at all', () => {
+        assert.equal(soleTaskAt(5, { typical_runtime_seconds: {} }), null);
+    });
+
+    test('nothing is estimated for a task with no queue position yet', () => {
+        assert.equal(estimateWaitSeconds({
+            queuepos: null, ownqueuepositions: [], requesttype: 'FP', runnerstatus: status(),
+        }), null);
+    });
+
+    test('a stale zero user count cannot divide the estimate by nothing', () => {
+        const seconds = soleTaskAt(4, { distinct_queued_users: 0 });
+
+        assert.ok(isFinite(seconds), `expected a finite estimate, got ${seconds}`);
+        assert.equal(seconds, 4 * 60);
+    });
+});
+
+describe('formatWaitEstimate', () => {
+    test('estimates are hedged and coarse, never a bare number of seconds', () => {
+        assert.equal(formatWaitEstimate(null), null);
+        assert.equal(formatWaitEstimate(30), 'under a minute');
+        assert.equal(formatWaitEstimate(240), '~4 min');
+        assert.equal(formatWaitEstimate(2 * 3600), '~2 hours');
+        assert.equal(formatWaitEstimate(5 * 3600), 'over 4 hours');
+    });
+
+    test('every band rounds up', () => {
+        // an estimate that expires while the task is still queued reads as a broken promise in a
+        // way that one that comes good early does not, so no band is allowed to round down
+        assert.equal(formatWaitEstimate(241), '~5 min');
+        assert.equal(formatWaitEstimate(91 * 60), '~2 hours');
+        assert.equal(formatWaitEstimate(2 * 3600 + 1), '~3 hours');
+    });
+
+    test('the ladder is monotone across every boundary', () => {
+        // the bands used to disagree about their direction, so one second could move the estimate
+        // downwards -- visible, because this string is recomputed as the queue moves
+        let previous = -1;
+        for (let seconds = 0; seconds <= 5 * 3600; seconds += 7) {
+            const estimate = estimateOrder(formatWaitEstimate(seconds));
+            assert.ok(estimate >= previous,
+                `${seconds}s reads as a shorter wait than the second before it`);
+            previous = estimate;
+        }
+    });
+});
+
+/** Rank the possible outputs so the monotonicity check above can compare two of them. */
+function estimateOrder(text) {
+    if (text === 'under a minute') {
+        return 0;
+    }
+    if (text === 'over 4 hours') {
+        return Number.MAX_SAFE_INTEGER;
+    }
+    const value = parseFloat(text.replace('~', ''));
+    return text.includes('hour') ? value * 60 : value;
+}
+
+describe('formatDuration', () => {
+    test('durations read as durations', () => {
+        assert.equal(formatDuration(null), null);
+        assert.equal(formatDuration(40), '40s');
+        assert.equal(formatDuration(130), '2m 10s');
+        assert.equal(formatDuration(3860), '1h 04m');
+    });
+});

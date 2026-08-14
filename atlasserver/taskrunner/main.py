@@ -19,6 +19,7 @@ import django
 import pandas as pd
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
+from django.db import models
 from django.forms.models import model_to_dict
 
 from atlasserver import settings
@@ -564,7 +565,20 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     slot fields are frozen for that whole window (nothing is reaped or dispatched), so without the
     flag the file would confidently describe workers that may have already exited.
     """
-    oldest_queued = Task.queued().order_by("timestamp").values_list("timestamp", flat=True).first()
+    # One pass over the queued set for all three figures, rather than a first(), a count() and a
+    # distinct count() each rebuilding the queryset and scanning again -- this runs every
+    # STATUS_WRITE_SECONDS for as long as the runner is up, and the scan grows with the queue.
+    #
+    # distinct users is here because it is what bounds the rate the queue drains at: dispatch below
+    # takes at most one task per user at a time, so the effective concurrency is min(numslots,
+    # this). A fact about the queue, counted on the runner's own timescale instead of once per
+    # request from every open queue page.
+    queuestats = Task.queued().aggregate(
+        queued_task_count=models.Count("id"),
+        distinct_queued_users=models.Count("user_id", distinct=True),
+        oldest_queued=models.Min("timestamp"),
+    )
+    oldest_queued = queuestats["oldest_queued"]
 
     status = {
         "written": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -573,7 +587,8 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "slots_busy": len(procs_taskids),
         "running_taskids": sorted(procs_taskids.values()),
         "maintenance": maintenance,
-        "queued_task_count": Task.queued().count(),
+        "queued_task_count": queuestats["queued_task_count"],
+        "distinct_queued_users": queuestats["distinct_queued_users"],
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -802,7 +817,7 @@ def main() -> None:
 
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
-    numslots: int = 16
+    numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
     procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None

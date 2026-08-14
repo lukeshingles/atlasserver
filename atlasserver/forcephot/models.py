@@ -200,10 +200,12 @@ class Task(models.Model):
             + f" {'redimg' if self.use_reduced else 'diffimg'} {status} {' archived' if self.is_archived else ''}"
         )
 
-        if self.starttimestamp:
-            strtask += f" waittime: {self.waittime():.0f}s"
-        if self.finishtimestamp:
-            strtask += f" runtime: {self.runtime():.0f}s"
+        # tested against the value rather than against the timestamps it is derived from, which is
+        # what these two branches used to do to keep a NaN out of the string
+        if (waittime := self.waittime()) is not None:
+            strtask += f" waittime: {waittime:.0f}s"
+        if (runtime := self.runtime()) is not None:
+            strtask += f" runtime: {runtime:.0f}s"
 
         strtask += f" queuedtasks_on_submit: {self.userqueuedtasks_on_submit}"
 
@@ -341,19 +343,25 @@ class Task(models.Model):
     def finished(self) -> bool:
         return bool(self.finishtimestamp)
 
-    def waittime(self) -> float:
+    # None rather than NaN for "not applicable yet". These both used to answer NaN, which every
+    # caller then had to remember to strip: __str__ re-derived the timestamp condition to avoid
+    # printing one, statsshortterm filtered with math.isfinite in two places, and the serializer
+    # needed a third guard -- where forgetting is not cosmetic, because NaN is not part of JSON and
+    # DRF renders it as a bare token that JSON.parse rejects. One sentinel that Python already has
+    # a word for, instead of three defences against a float that means "no answer".
+    def waittime(self) -> float | None:
+        """Return how long the task waited before starting, or None if it has not started."""
         if self.starttimestamp and self.timestamp:
-            timediff = self.starttimestamp - self.timestamp
-            return timediff.total_seconds()
+            return (self.starttimestamp - self.timestamp).total_seconds()
 
-        return float("NaN")
+        return None
 
-    def runtime(self) -> float:
+    def runtime(self) -> float | None:
+        """Return how long the task took to run, or None if it has not finished running."""
         if self.finishtimestamp and self.starttimestamp:
-            timediff = self.finishtimestamp - self.starttimestamp
-            return timediff.total_seconds()
+            return (self.finishtimestamp - self.starttimestamp).total_seconds()
 
-        return float("NaN")
+        return None
 
     @property
     def username(self) -> str:

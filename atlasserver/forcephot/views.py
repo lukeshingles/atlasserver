@@ -6,7 +6,6 @@ import hashlib
 import ipaddress
 import json
 import logging
-import math
 import os
 import statistics
 import time
@@ -81,6 +80,7 @@ from atlasserver.forcephot.netaddr import client_address
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
+from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
@@ -865,10 +865,10 @@ def statsshortterm(request):
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
-    def mean_seconds_str(values: list[float]) -> str:
-        """Format the mean of a list of second counts, ignoring NaNs and empty lists."""
-        finitevalues = [value for value in values if math.isfinite(value)]
-        return f"{statistics.fmean(finitevalues):.1f}s" if finitevalues else "-"
+    def mean_seconds_str(values: list[float | None]) -> str:
+        """Format the mean of a list of second counts, ignoring the unanswerable ones and empties."""
+        known = [value for value in values if value is not None]
+        return f"{statistics.fmean(known):.1f}s" if known else "-"
 
     if sevendaytasks_finished.count() > 0:
         dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
@@ -879,10 +879,10 @@ def statsshortterm(request):
         )
 
         sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
-        sevenday_finite_runtimes = [runtime for runtime in sevenday_runtimes if math.isfinite(runtime)]
+        sevenday_known_runtimes = [runtime for runtime in sevenday_runtimes if runtime is not None]
         dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
-        num_job_processors = 16
-        sevenday_mean_runtime = statistics.fmean(sevenday_finite_runtimes) if sevenday_finite_runtimes else 0.0
+        num_job_processors = runnerstatus.NUMSLOTS
+        sevenday_mean_runtime = statistics.fmean(sevenday_known_runtimes) if sevenday_known_runtimes else 0.0
         dictparams["sevendayloadpercent"] = (
             f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
         )
@@ -947,8 +947,20 @@ def taskrunnerstatus(request):
     # several missed writes rather than one, so that a slow write does not raise a false alarm
     stale = age_seconds > (runnerstatus.STATUS_WRITE_SECONDS * 4)
 
+    # Only when the runner is running. A wait estimate is a claim about work being done, and when
+    # the status file has stopped being refreshed nothing is being done -- the queue page discards
+    # the figure in that case, so computing it would be a cache read (and, on expiry, a query) per
+    # poll from every open tab for a value certain to be thrown away.
+    typical_runtimes: dict[str, float] = {} if stale else typical_runtime_seconds()
+
     return JsonResponse(
-        {**status, "running": not stale, "stale": stale, "status_age_seconds": round(age_seconds, 1)},
+        {
+            **status,
+            "running": not stale,
+            "stale": stale,
+            "status_age_seconds": round(age_seconds, 1),
+            "typical_runtime_seconds": typical_runtimes,
+        },
         status=503 if stale else 200,
     )
 

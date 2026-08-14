@@ -2245,6 +2245,19 @@ class TaskRunnerStatusTests(TestCase):
     pandas), so patching the shared module is what makes one patch cover both sides.
     """
 
+    def status_response(self, **write_status_kwargs: t.Any) -> t.Any:
+        """Have the runner write a status file, then read it back through the endpoint.
+
+        The temporary directory, the patch and the two calls were written out in full by every test
+        that needed them; the wait-estimate fields added two more copies, which is what made a
+        helper worth having.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(numslots=runnerstatus.NUMSLOTS, **write_status_kwargs)
+                return self.client.get(reverse("taskrunnerstatus"))
+
     def test_missing_status_file_reports_not_running(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
@@ -2259,11 +2272,7 @@ class TaskRunnerStatusTests(TestCase):
         user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
         Task.objects.create(user=user, ra=1.0, dec=2.0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            statuspath = Path(tmpdir, "taskrunner_status.json")
-            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16)
-                response = self.client.get(reverse("taskrunnerstatus"))
+        response = self.status_response(procs_taskids={0: 42})
 
         assert response.status_code == 200, response.content
         body = response.json()
@@ -2271,7 +2280,7 @@ class TaskRunnerStatusTests(TestCase):
         assert body["stale"] is False
         assert body["slots_busy"] == 1
         assert body["running_taskids"] == [42]
-        assert body["numslots"] == 16
+        assert body["numslots"] == runnerstatus.NUMSLOTS
         assert body["maintenance"] is False
         assert body["queued_task_count"] == 1
         assert body["oldest_queued_task_time"] is not None
@@ -2279,16 +2288,56 @@ class TaskRunnerStatusTests(TestCase):
     def test_a_maintenance_snapshot_is_reported_as_such(self) -> None:
         # written by the sweep's heartbeat: the slot fields are frozen while the sweep blocks the
         # runner's loop, so the flag is what tells a reader not to trust them
-        with tempfile.TemporaryDirectory() as tmpdir:
-            statuspath = Path(tmpdir, "taskrunner_status.json")
-            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16, maintenance=True)
-                response = self.client.get(reverse("taskrunnerstatus"))
+        response = self.status_response(procs_taskids={0: 42}, maintenance=True)
 
         assert response.status_code == 200, response.content
         body = response.json()
         assert body["running"] is True
         assert body["maintenance"] is True
+
+    def test_the_queue_figures_the_wait_estimate_needs(self) -> None:
+        # distinct_queued_users bounds how fast the queue drains, since dispatch takes at most one
+        # task per user at a time -- so it counts users, not their tasks
+        user = User.objects.create_user(username="queuedone", email="q1@example.com", password=None)
+        other = User.objects.create_user(username="queuedtwo", email="q2@example.com", password=None)
+        for _ in range(3):
+            Task.objects.create(user=user, ra=1.0, dec=2.0)
+        Task.objects.create(user=other, ra=3.0, dec=4.0)
+
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["queued_task_count"] == 4
+        assert body["distinct_queued_users"] == 2
+
+    def test_typical_runtimes_ride_along_when_the_runner_is_alive(self) -> None:
+        started = timezone.now() - datetime.timedelta(minutes=5)
+        user = User.objects.create_user(username="ranbefore", email="rb@example.com", password=None)
+        caches["usagestats"].clear()
+        for seconds in (10.0, 20.0, 30.0, 40.0, 50.0):
+            Task.objects.create(
+                user=user,
+                ra=1.0,
+                dec=2.0,
+                starttimestamp=started,
+                finishtimestamp=started + datetime.timedelta(seconds=seconds),
+            )
+
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["typical_runtime_seconds"]["FP"] == 30.0
+
+    def test_a_stale_runner_offers_no_wait_estimate(self) -> None:
+        # the queue page discards the figure when the runner is stale, so computing it would be
+        # work per poll per open tab for a value certain to be thrown away
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            stale_written = timezone.now() - datetime.timedelta(hours=1)
+            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.json()["typical_runtime_seconds"] == {}
 
     def test_old_status_file_reports_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2324,6 +2373,149 @@ class TaskRunnerStatusTests(TestCase):
             assert response.status_code == 503, f"{description}: {response.content!r}"
             assert response.json()["stale"] is True, description
             assert response.json()["running"] is False, description
+
+
+class TypicalRuntimeTests(TestCase):
+    """The median run times the queue page multiplies by the number of tasks ahead."""
+
+    def setUp(self) -> None:
+        # the figure is cached for five minutes, and the cache outlives one test within the process
+        caches["usagestats"].clear()
+        self.user = User.objects.create_user(username="runtimeuser", email="rt@example.com", password=None)
+
+    def _finished_task(self, runtime_seconds: float, request_type: str = "FP", **kwargs: t.Any) -> Task:
+        started = timezone.now() - datetime.timedelta(seconds=runtime_seconds + 1)
+        return Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            request_type=request_type,
+            starttimestamp=started,
+            finishtimestamp=started + datetime.timedelta(seconds=runtime_seconds),
+            **kwargs,
+        )
+
+    def _finished_tasks(self, *runtimes: float, request_type: str = "FP") -> None:
+        """Create one finished task per run time given, so a test states only its own fixture."""
+        for runtime_seconds in runtimes:
+            self._finished_task(runtime_seconds, request_type=request_type)
+
+    def test_the_median_is_reported_per_request_type(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+        self._finished_tasks(100.0, 200.0, 300.0, 400.0, 500.0, request_type="IMGZIP")
+
+        typical = taskqueue.typical_runtime_seconds()
+
+        assert typical["FP"] == 30.0
+        assert typical["IMGZIP"] == 300.0
+
+    def test_one_stuck_task_does_not_drag_every_estimate_up(self) -> None:
+        """The reason this is a median and not the mean the stats page uses.
+
+        A task may run for TASK_MAXTIME_SECONDS (four hours) before it is killed. Against a mean,
+        one of those would add most of an hour to the figure shown to every waiting user; the
+        median does not move.
+        """
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 4 * 60 * 60)
+
+        assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
+
+    def test_a_type_with_too_few_samples_is_omitted(self) -> None:
+        # below the threshold nothing is reported for the type, and the queue page shows no
+        # estimate at all rather than one drawn from two tasks
+        self._finished_tasks(10.0, 20.0)
+
+        assert "FP" not in taskqueue.typical_runtime_seconds()
+
+    def test_no_finished_tasks_at_all_is_an_empty_answer(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        assert taskqueue.typical_runtime_seconds() == {}
+
+    def test_tasks_outside_the_window_are_not_counted(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+
+        # older than TYPICAL_RUNTIME_WINDOW_HOURS, so out of scope however many there are
+        old = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 1)
+        Task.objects.filter(user=self.user).update(timestamp=old)
+
+        assert taskqueue.typical_runtime_seconds() == {}
+
+    def test_an_unfinished_task_contributes_nothing(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+        # started but not finished: subtracting a null finishtimestamp would raise, so this is the
+        # case the query's isnull filters exist for
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, starttimestamp=timezone.now())
+
+        assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
+
+
+class TaskTimingSerializerTests(TestCase):
+    """waittime and runtime, which the model has always computed and nothing ever showed."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="timinguser", email="tm@example.com", password="pw")
+        self.client.force_login(self.user)
+
+    def test_a_finished_task_reports_both(self) -> None:
+        submitted = timezone.now() - datetime.timedelta(seconds=170)
+        task = Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            timestamp=submitted,
+            starttimestamp=submitted + datetime.timedelta(seconds=40),
+            finishtimestamp=submitted + datetime.timedelta(seconds=170),
+        )
+
+        body = self.client.get(reverse("task-detail", args=[task.id])).json()
+
+        assert body["waittime"] == 40.0
+        assert body["runtime"] == 130.0
+
+    def test_an_unstarted_task_reports_null_rather_than_nan(self) -> None:
+        """NaN is not part of JSON.
+
+        Task.waittime() and Task.runtime() answer NaN when their timestamps are not both set. The
+        renderer writes that as a bare `NaN` token, which JSON.parse rejects — so a single queued
+        task would fail the whole response in the browser rather than leaving one field empty.
+        """
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        response = self.client.get(reverse("task-detail", args=[task.id]))
+
+        assert b"NaN" not in response.content, response.content
+        body = response.json()
+        assert body["waittime"] is None
+        assert body["runtime"] is None
+
+    def test_a_task_list_of_queued_tasks_is_still_parseable_json(self) -> None:
+        # the list is what the queue page actually fetches, and one unparseable row takes the page
+        # down rather than one field
+        for _ in range(3):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        response = self.client.get(reverse("task-list"), {"format": "json"})
+
+        assert response.status_code == 200
+        assert b"NaN" not in response.content, response.content
+        assert all(task["runtime"] is None for task in response.json()["results"])
+
+    def test_neither_field_can_be_set_by_a_client(self) -> None:
+        # both are derived from the timestamps the runner writes, so a submitted value must be
+        # ignored rather than stored or echoed back
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 1.0, "dec": 2.0, "waittime": 999.0, "runtime": 999.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        created = response.json()
+        assert created["waittime"] is None
+        assert created["runtime"] is None
+        assert Task.objects.get(id=created["id"]).starttimestamp is None
 
 
 class OpenApiSchemaTests(TestCase):

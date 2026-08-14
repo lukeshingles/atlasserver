@@ -333,9 +333,10 @@ describe('TaskPage', () => {
      * Answer the three endpoints, with the queuepositions body under the test's control.
      *
      * Returns a handle whose `positions` can be reassigned, so a test can let the queue empty.
+     * `runnerstatus` on the same handle overrides the status body, which the wait estimates read.
      */
-    const stubFetchWithPositions = (results, positions) => {
-        const control = { positions, results };
+    const stubFetchWithPositions = (results, positions, runnerstatus = {}) => {
+        const control = { positions, results, runnerstatus: { stale: false, queued_task_count: 0, ...runnerstatus } };
         global.fetch = (url, init = {}) => {
             const href = url.toString();
             requested.push(href);
@@ -345,7 +346,7 @@ describe('TaskPage', () => {
                 return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve(control.created ?? []) });
             }
             if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(control.runnerstatus) });
             }
             if (href.includes('queuepositions')) {
                 // control.hold, when set, is a promise the test resolves: it keeps one response in
@@ -1078,5 +1079,85 @@ describe('TaskPage', () => {
 
         assert.equal(rowMeta(container)['MPC Object:'], 'Makemake');
         assert.ok(!('RA Dec:' in rowMeta(container)), 'the coordinate row should be absent');
+    });
+
+    test('a finished task reports how long it waited and how long it ran', async () => {
+        const { container } = await renderPage([task(1, {
+            starttimestamp: '2026-01-01T00:00:40Z',
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            waittime: 40.0,
+            runtime: 130.0,
+        })]);
+
+        assert.equal(rowMeta(container)['Took:'], 'waited 40s · ran 2m 10s');
+    });
+
+    test('a task cancelled before it ran reports only the half that happened', async () => {
+        // waittime is null when the task never started, and rendering "waited null" or dropping the
+        // whole line would both be worse than showing the half that is known
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:00:40Z',
+            waittime: 40.0,
+            runtime: null,
+        })]);
+
+        assert.equal(rowMeta(container)['Took:'], 'waited 40s');
+    });
+
+    /*
+     * The wait estimate, as it reaches the page.
+     *
+     * waitestimate.test.js covers the arithmetic on its own; what these three check is the wiring
+     * that only exists once it is assembled -- the runner status poll, the queue positions poll,
+     * and the estimate computed from both in TaskPage and handed down to a row.
+     */
+    const renderWithStatus = async (results, positions, runnerstatus) => {
+        stubFetchWithPositions(results, positions, runnerstatus);
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(120);
+        return rendered;
+    };
+
+    test('a waiting row shows its position and an estimated wait', async () => {
+        const { container } = await renderWithStatus([task(1, { queuepos: 4 })], { 1: 4 }, {
+            queued_task_count: 5,
+            numslots: 16,
+            distinct_queued_users: 20,
+            typical_runtime_seconds: { FP: 600 },
+        });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /4 ahead/);
+        // 4 ahead, none of them this user's, at 16-way concurrency: 0.25 x 600s = 150s
+        assert.match(status.textContent, /~3 min/);
+    });
+
+    test('a waiting row shows no estimate when the runner is not running', async () => {
+        const { container } = await renderWithStatus([task(1, { queuepos: 4 })], { 1: 4 }, {
+            stale: true,
+            queued_task_count: 5,
+            typical_runtime_seconds: { FP: 600 },
+        });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /4 ahead/);
+        assert.equal(status.querySelector('.taskestimate'), null,
+            'a stopped queue must not be counted down against');
+    });
+
+    test('a bulk submission is not told it will be finished in a moment', async () => {
+        // the case the naive formula gets wrong, end to end: 20 of this user's own tasks queued and
+        // every slot free. They run one at a time, so the last one waits 20 run times.
+        const positions = Object.fromEntries(Array.from({ length: 21 }, (unused, index) => [index + 1, index]));
+        const { container } = await renderWithStatus([task(21, { queuepos: 20 })], positions, {
+            queued_task_count: 21,
+            numslots: 16,
+            distinct_queued_users: 1,
+            typical_runtime_seconds: { FP: 60 },
+        });
+
+        // 20 x 60s = 20 min, not the 20/16 x 60s = 75s that dividing by the slots would claim
+        assert.match(container.querySelector('.taskstatus.waiting').textContent, /~20 min/);
     });
 });

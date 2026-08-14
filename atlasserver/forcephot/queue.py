@@ -6,13 +6,18 @@ rest of the web stack, and so that the two processes cannot drift on what "queue
 
 import datetime
 import operator
+import statistics
 import typing as t
+from collections import defaultdict
 
 from django.core.cache import caches
 from django.db import models
 from django.db import transaction
 
 from atlasserver.forcephot.models import Task
+
+if t.TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Bumped by the web app when the queued set changes; the runner watches it and remembers the value
 # it last acted on. A counter rather than a flag it clears, because clearing loses a request that
@@ -33,6 +38,27 @@ RECALC_MAX_INTERVAL_SECONDS: t.Final = 30.0
 # the queue before the request returns (see next_queuepos_relative), so what waits is only the
 # round-robin reordering among users.
 RECALC_CHECK_INTERVAL_SECONDS: t.Final = 2.0
+
+# How far back typical_runtime_seconds() looks. A day rather than the stats page's week: this
+# figure tells a waiting user how long their task will take, so it should follow current conditions
+# -- a slow night, a backlog, a change on the remote host -- rather than average them away.
+TYPICAL_RUNTIME_WINDOW_HOURS: t.Final = 24
+
+# At most this many recent tasks are read to compute the medians. The window alone is not a bound:
+# a busy day can finish tens of thousands of tasks, and the median of the most recent few thousand
+# is the same answer for a great deal less memory.
+TYPICAL_RUNTIME_SAMPLE_LIMIT: t.Final = 2000
+
+# Below this many samples of a request type, no figure is reported for it and the queue page shows
+# no estimate at all. A median of two tasks is not knowledge, and a wrong estimate is worse than
+# none: it is the number the user plans their afternoon around.
+TYPICAL_RUNTIME_MIN_SAMPLES: t.Final = 5
+
+# The medians move slowly and are read by every open queue page, so they are worth caching. Short
+# enough that a queue which has just become slow is reflected within minutes.
+TYPICAL_RUNTIME_CACHE_SECONDS: t.Final = 300
+
+TYPICAL_RUNTIME_CACHEKEY: t.Final = "typical_runtime_seconds_v1"
 
 
 def request_recalc() -> None:
@@ -75,6 +101,66 @@ def next_queuepos_relative() -> int:
     maxpos = Task.queued().aggregate(models.Max("queuepos_relative"))["queuepos_relative__max"]
 
     return 0 if maxpos is None else maxpos + 1
+
+
+def typical_runtime_seconds() -> dict[str, float]:
+    """Return the median recent run time, in seconds, of each request type that has enough samples.
+
+    This is what the queue page multiplies by the number of tasks ahead to estimate a wait, so it
+    lives here beside the position numbering it is read with rather than in the web layer: it takes
+    no request, answers a question about how fast the queue drains, and the runner can import this
+    module without pulling in DRF and the rest of the web stack (see the note at the top of it).
+
+    Keyed by request type because they are not comparable: an IMGZIP request retrieves up to a
+    thousand images where an FP task fits one light curve, so a single figure across both would
+    over-promise for one and under-promise for the other.
+
+    The median, not the mean. TASK_MAXTIME_SECONDS lets a task run for four hours before it is
+    killed, and a mean has no defence against that -- one stuck task would add minutes to the
+    estimate shown to every waiting user for the rest of the day. The stats page does use a mean,
+    which is right for the load factor it feeds (total occupancy genuinely includes the four hours)
+    and wrong for a per-task promise.
+
+    Failed tasks are counted. They usually fail quickly, which pulls the figure down, but what the
+    estimate needs to know is how fast the queue drains -- and a task that errors frees its slot
+    just as surely as one that succeeds.
+    """
+    cached = caches["usagestats"].get(TYPICAL_RUNTIME_CACHEKEY, default=None)
+    if cached is not None:
+        return cached
+
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=TYPICAL_RUNTIME_WINDOW_HOURS)
+
+    # Ordered by -timestamp rather than -id so that task_timestamp_idx bounds the work by the
+    # window. Under -id the planner walks the primary key backwards and only stops once it has
+    # found SAMPLE_LIMIT qualifying rows -- which on a quiet day it never does, so it scans back
+    # through however many months of tasks the retention sweep has left.
+    #
+    # Both timestamp columns are nullable on the model and so are typed as optional however the
+    # queryset was filtered; the isnull=False pair is what actually guarantees them. The cast says
+    # so once, next to the filter that earns it.
+    recent = t.cast(
+        "Iterable[tuple[str, datetime.datetime, datetime.datetime]]",
+        Task.objects.filter(timestamp__gt=cutoff, finishtimestamp__isnull=False, starttimestamp__isnull=False)
+        .order_by("-timestamp")
+        .values_list("request_type", "starttimestamp", "finishtimestamp")[:TYPICAL_RUNTIME_SAMPLE_LIMIT],
+    )
+
+    runtimes: dict[str, list[float]] = defaultdict(list)
+    for request_type, started, finished in recent:
+        # the same quantity as Task.runtime(), computed from two columns rather than from a model
+        # instance: this reads thousands of rows and does not need them built into objects
+        runtimes[request_type].append((finished - started).total_seconds())
+
+    medians = {
+        request_type: round(statistics.median(values), 1)
+        for request_type, values in runtimes.items()
+        if len(values) >= TYPICAL_RUNTIME_MIN_SAMPLES
+    }
+
+    caches["usagestats"].set(TYPICAL_RUNTIME_CACHEKEY, medians, timeout=TYPICAL_RUNTIME_CACHE_SECONDS)
+
+    return medians
 
 
 def calculate_queue_positions() -> None:
