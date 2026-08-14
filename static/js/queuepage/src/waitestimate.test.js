@@ -24,14 +24,14 @@ const status = (overrides = {}) => ({
     ...overrides,
 });
 
-/** A bulk submission: every task ahead of this one belongs to the same user. */
-const ownqueue = (count) => Array.from({ length: count }, (unused, index) => index);
+/** A bulk submission: every task ahead of this one belongs to the same user, and is the same type. */
+const ownqueue = (count, requesttype = 'FP') =>
+    Array.from({ length: count }, (unused, index) => ({ position: index, requesttype }));
 
 /** The estimate for a task at `queuepos` that is the only one of the user's in the queue. */
 const soleTaskAt = (queuepos, statusoverrides = {}, requesttype = 'FP') => estimateWaitSeconds({
     queuepos,
-    ownqueuepositions: [queuepos],
-    requesttype,
+    ownqueued: [{ position: queuepos, requesttype }],
     runnerstatus: status(statusoverrides),
 });
 
@@ -41,8 +41,7 @@ describe('estimateWaitSeconds', () => {
         // 40 run times -- not the 40/16 = 2.5 that dividing by the slot count would promise.
         const seconds = estimateWaitSeconds({
             queuepos: 40,
-            ownqueuepositions: ownqueue(41),
-            requesttype: 'FP',
+            ownqueued: ownqueue(41),
             runnerstatus: status({ distinct_queued_users: 1 }),
         });
 
@@ -79,8 +78,8 @@ describe('estimateWaitSeconds', () => {
         // (2 x 60 = 120s). The user's own queue is the binding constraint.
         const seconds = estimateWaitSeconds({
             queuepos: 36,
-            ownqueuepositions: [0, 1, 2, 3, 36],
-            requesttype: 'FP',
+            ownqueued: [0, 1, 2, 3].map((position) => ({ position, requesttype: 'FP' }))
+                .concat([{ position: 36, requesttype: 'FP' }]),
             runnerstatus: status({ distinct_queued_users: 20 }),
         });
 
@@ -96,8 +95,7 @@ describe('estimateWaitSeconds', () => {
         // are IMGZIP too
         const seconds = estimateWaitSeconds({
             queuepos: 3,
-            ownqueuepositions: ownqueue(4),
-            requesttype: 'IMGZIP',
+            ownqueued: ownqueue(4, 'IMGZIP'),
             runnerstatus: status({ distinct_queued_users: 1 }),
         });
 
@@ -126,13 +124,14 @@ describe('estimateWaitSeconds', () => {
         assert.equal(seconds, 2 * 270);
     });
 
-    test('nothing is estimated when a queued type has no runtime to price it', () => {
-        // an unpriced type is the one that would distort the answer most, being new or rare enough
-        // that nothing like it has finished recently
+    test('a queued type with no runtime is left out of the weighting', () => {
+        // a type is unpriced by being rare, so it is only ever a minority of the queue -- and
+        // letting it decide would mean work sitting behind a task could blank the estimate in
+        // front of it
         assert.equal(soleTaskAt(32, {
             distinct_queued_users: 20,
             queued_by_request_type: { FP: 300, SSOSTACK: 4 },
-        }), null);
+        }), 2 * 60);
     });
 
     test('a runner too old to report what is queued offers no estimate', () => {
@@ -146,8 +145,7 @@ describe('estimateWaitSeconds', () => {
         // no full pass of other users' work to price, so an unpriceable queue cannot matter
         const seconds = estimateWaitSeconds({
             queuepos: 3,
-            ownqueuepositions: ownqueue(4),
-            requesttype: 'FP',
+            ownqueued: ownqueue(4),
             runnerstatus: status({ distinct_queued_users: 1, queued_by_request_type: undefined }),
         });
 
@@ -166,7 +164,7 @@ describe('estimateWaitSeconds', () => {
 
     test('nothing is estimated before the first status response', () => {
         assert.equal(estimateWaitSeconds({
-            queuepos: 5, ownqueuepositions: [5], requesttype: 'FP', runnerstatus: null,
+            queuepos: 5, ownqueued: [{ position: 5, requesttype: 'FP' }], runnerstatus: null,
         }), null);
     });
 
@@ -174,14 +172,41 @@ describe('estimateWaitSeconds', () => {
         // null, not [] -- an empty array means the user has nothing else queued, and treating "not
         // asked yet" as that collapses a bulk submitter's estimate to the divide-by-slots form
         assert.equal(estimateWaitSeconds({
-            queuepos: 40, ownqueuepositions: null, requesttype: 'FP', runnerstatus: status(),
+            queuepos: 40, ownqueued: null, runnerstatus: status(),
         }), null);
     });
 
-    test('nothing is estimated for a request type with too few samples', () => {
-        // the server omits a type it has not seen enough of recently, rather than sending a figure
-        // it does not stand behind
-        assert.equal(soleTaskAt(5, {}, 'SSOSTACK'), null);
+    test('the waiting task\'s own type does not affect when it starts', () => {
+        // its own run time says when it finishes, not when it begins -- so a type the server has
+        // too few samples of is no reason to withhold the wait
+        assert.equal(soleTaskAt(5, {}, 'SSOSTACK'), 5 * 60);
+    });
+
+    test('the user\'s own mixed types ahead are each priced as themselves', () => {
+        // one task per user at a time, so an image request submitted first is waited through in
+        // full before the light curve behind it starts
+        const seconds = estimateWaitSeconds({
+            queuepos: 2,
+            ownqueued: [
+                { position: 0, requesttype: 'IMGZIP' },
+                { position: 1, requesttype: 'FP' },
+                { position: 2, requesttype: 'FP' },
+            ],
+            runnerstatus: status({ distinct_queued_users: 1 }),
+        });
+
+        assert.equal(seconds, 900 + 60);
+    });
+
+    test('an own task ahead that cannot be priced withholds the estimate', () => {
+        // unlike a rare type elsewhere in the queue, this one is directly in the way
+        const seconds = estimateWaitSeconds({
+            queuepos: 1,
+            ownqueued: [{ position: 0, requesttype: 'SSOSTACK' }, { position: 1, requesttype: 'FP' }],
+            runnerstatus: status({ distinct_queued_users: 1 }),
+        });
+
+        assert.equal(seconds, null);
     });
 
     test('nothing is estimated when the runner reported no runtimes at all', () => {
@@ -190,7 +215,7 @@ describe('estimateWaitSeconds', () => {
 
     test('nothing is estimated for a task with no queue position yet', () => {
         assert.equal(estimateWaitSeconds({
-            queuepos: null, ownqueuepositions: [], requesttype: 'FP', runnerstatus: status(),
+            queuepos: null, ownqueued: [], runnerstatus: status(),
         }), null);
     });
 
@@ -200,8 +225,7 @@ describe('estimateWaitSeconds', () => {
         // slot count, which is the invented estimate this module refuses.
         const seconds = estimateWaitSeconds({
             queuepos: 40,
-            ownqueuepositions: [40],
-            requesttype: 'FP',
+            ownqueued: [{ position: 40, requesttype: 'FP' }],
             runnerstatus: { stale: false, numslots: 16, slots_busy: 0, typical_runtime_seconds: { FP: 60 } },
         });
 

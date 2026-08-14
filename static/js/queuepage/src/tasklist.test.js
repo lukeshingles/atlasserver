@@ -361,7 +361,12 @@ describe('TaskPage', () => {
                 return gate.then(() => ({
                     ok: true,
                     status: 200,
-                    json: () => Promise.resolve({ queuepositions: body }),
+                    json: () => Promise.resolve({
+                        queuepositions: body,
+                        // the endpoint sends a type per queued task; FP unless a test says otherwise
+                        queuedtypes: { ...Object.fromEntries(Object.keys(body).map((id) => [id, 'FP'])),
+                            ...control.queuedtypes },
+                    }),
                 }));
             }
             return Promise.resolve({
@@ -1089,6 +1094,19 @@ describe('TaskPage', () => {
         })]);
 
         assert.equal(rowMeta(container)['Attempts:'], '4');
+    });
+
+    test('a retried task does not blame the queue for time it spent failing', async () => {
+        // starttimestamp moves to each new attempt, so the span from submission to it covers the
+        // earlier attempts as well as the queue -- which is not a wait
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            waittime: 2400.0,
+            runtime: 130.0,
+            attempt_count: 3,
+        })]);
+
+        assert.equal(rowMeta(container)['Took:'], 'ran 2m 10s');
     });
 
     test('a task that ran first time does not mention attempts', async () => {

@@ -598,8 +598,15 @@ export const Task = React.memo(function Task(props) {
             return text != null ? label + ' ' + text : null;
         };
 
-        const timings = [timing('waited', task.waittime), timing('ran', task.runtime)]
-            .filter((part) => part != null);
+        // The wait is only reported for a task that ran once. starttimestamp moves to each new
+        // attempt, so after a retry the span from submission to it covers the earlier attempts and
+        // the pauses between them as well as the queue -- and calling that "waited" blames the
+        // queue for time the task spent failing, which is the one distinction this line is for.
+        // The run time is unaffected: it is the attempt that produced the result either way.
+        const timings = [
+            task.attempt_count > 1 ? null : timing('waited', task.waittime),
+            timing('ran', task.runtime),
+        ].filter((part) => part != null);
 
         if (timings.length > 0) {
             meta.push(['timings', 'Took:', timings.join(' · ')]);
@@ -913,8 +920,9 @@ export function TaskPage() {
         // countFinishedWhileAway and pageTitle
         finishedwhileaway: 0,
         /*
-         * The queue positions of all the user's queued tasks, ascending, or null until the queue
-         * positions endpoint has answered.
+         * All the user's queued tasks as {position, requesttype}, ascending by position, or null
+         * until the queue positions endpoint has answered. The type is there because these are
+         * waited through one at a time, so what each of them is decides how long it takes.
          *
          * Null rather than an empty array, which would mean "this user has nothing else queued" --
          * a different answer, and the one that makes a bulk submitter's estimate wrong by up to the
@@ -926,7 +934,7 @@ export function TaskPage() {
          * forty queued tasks sees six of them, and it is the other thirty-four that their last
          * task is waiting behind.
          */
-        ownqueuepositions: null,
+        ownqueued: null,
     });
 
     // read by both the banner and the wait estimates; see useRunnerStatus
@@ -1161,7 +1169,11 @@ export function TaskPage() {
                 // stamping them would report a stale page as current.
                 // sorted so that the elementwise comparison below is meaningful -- the estimate
                 // itself counts positions below a given one and does not care about the order
-                const ownpositions = Object.values(data.queuepositions).sort((a, b) => a - b);
+                // sorted so that the elementwise comparison below is meaningful; the estimate
+                // itself filters on position and does not care about the order
+                const ownqueued = Object.entries(data.queuepositions)
+                    .map(([taskid, position]) => ({ position, requesttype: data.queuedtypes?.[taskid] }))
+                    .sort((a, b) => a.position - b.position);
 
                 setState(prevstate => {
                     if (prevstate.results == null) {
@@ -1182,11 +1194,12 @@ export function TaskPage() {
                     // every two seconds, and handing back a fresh array each time would re-render
                     // the page on every tick of a queue that has not moved. A null previous is the
                     // first answer, which is always a change.
-                    const previouspositions = prevstate.ownqueuepositions;
+                    const previousqueued = prevstate.ownqueued;
                     const positionschanged = (
-                        previouspositions == null
-                        || previouspositions.length != ownpositions.length
-                        || ownpositions.some((position, index) => position !== previouspositions[index]));
+                        previousqueued == null
+                        || previousqueued.length != ownqueued.length
+                        || ownqueued.some((task, index) => task.position !== previousqueued[index].position
+                            || task.requesttype !== previousqueued[index].requesttype));
 
                     if (!changed && !positionschanged) {
                         return null;
@@ -1196,7 +1209,7 @@ export function TaskPage() {
                     // its identity exactly as omitting the key would, and setState merges either way
                     return {
                         results: changed ? newresults : prevstate.results,
-                        ownqueuepositions: positionschanged ? ownpositions : prevstate.ownqueuepositions,
+                        ownqueued: positionschanged ? ownqueued : prevstate.ownqueued,
                     };
                 });
 
@@ -1764,8 +1777,7 @@ export function TaskPage() {
         // the viewer's queue, counting the owner's own earlier tasks as other users'.
         const waitEstimateFor = (task) => (!tracksQueuePosition(task) ? null : formatWaitEstimate(estimateWaitSeconds({
             queuepos: task.queuepos,
-            ownqueuepositions: state.ownqueuepositions,
-            requesttype: task.request_type,
+            ownqueued: state.ownqueued,
             runnerstatus,
         })));
 

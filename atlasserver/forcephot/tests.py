@@ -2216,6 +2216,20 @@ class QueuePositionsEndpointTests(TestCase):
             task.refresh_from_db()  # the positions were assigned after these instances were built
             assert data["queuepositions"][str(task.id)] == task.queuepos
 
+    def test_reports_what_each_queued_task_is(self) -> None:
+        # dispatch runs one task per user at a time, so the queue page waits through these in
+        # series and needs to know which of them is a quarter of an hour and which is a minute
+        fptask = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        imgtask = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=fptask)
+        calculate_queue_positions()
+        self.client.force_login(self.user)
+
+        data = self.client.get(reverse("queuepositions")).json()
+
+        assert data["queuedtypes"][str(fptask.id)] == "FP"
+        assert data["queuedtypes"][str(imgtask.id)] == "IMGZIP"
+        assert set(data["queuedtypes"]) == set(data["queuepositions"]), "every position needs its type"
+
     def test_finished_tasks_are_omitted(self) -> None:
         Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)

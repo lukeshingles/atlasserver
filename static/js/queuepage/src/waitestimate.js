@@ -26,10 +26,10 @@
 /**
  * Seconds a task at this queue position is likely to wait, or null if that cannot be said.
  *
- * `ownqueuepositions` is the positions of the caller's other queued tasks, or null while that is
- * not yet known — the two are different answers and an empty array only means the first.
+ * `ownqueued` is the caller's other queued tasks as {position, requesttype} pairs, or null while
+ * that is not yet known — the two are different answers and an empty array only means the first.
  */
-export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, runnerstatus }) {
+export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus }) {
     // A queue that is not being dispatched from has no wait to report. `maintenance` means the
     // hourly sweep is blocking the runner's loop, so nothing starts for its duration and the slot
     // figures are frozen -- the banner already says so, and a countdown beside it would be against
@@ -41,21 +41,14 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     // Null until the queue positions endpoint has answered. Treating that as "no other tasks of
     // mine" is the one error this whole module exists to avoid: it collapses a bulk submitter's
     // serialised queue into the divide-by-slots form and under-promises by up to that factor.
-    if (ownqueuepositions == null) {
+    if (ownqueued == null) {
         return null;
     }
 
-    // per request type: an IMGZIP task retrieves up to a thousand images where an FP task fits one
-    // light curve, so the two are not interchangeable. A type the server has not seen enough of
-    // recently is absent from this object, and gets no estimate rather than a borrowed one.
-    //
-    // Negated rather than tested for a positive, so an absent type and a NaN are turned away by
-    // the same comparison.
+    // Nothing here reads the run time of the task being estimated. What it is waiting for is the
+    // work ahead of it, so its own type says nothing about when it starts -- only about when it
+    // then finishes, which is not what is being reported.
     const runtimes = runnerstatus.typical_runtime_seconds;
-    const typicalruntime = runtimes?.[requesttype];
-    if (!(typicalruntime > 0)) {
-        return null;
-    }
 
     // How many tasks run at once: the slot count, but never more than the number of users sharing
     // the queue, because dispatch takes at most one task per user at a time.
@@ -75,16 +68,24 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     }
     const concurrency = Math.max(1, Math.min(numslots, queuedusers));
 
-    // Positions strictly ahead of this one. The endpoint reports the user's whole queued set, not
-    // the page on screen, which is what makes this a count of their queue rather than of the rows
-    // that happen to be rendered.
-    const ownahead = ownqueuepositions.filter((position) => position < queuepos).length;
-    const otherahead = queuepos - ownahead;
+    // Strictly ahead of this one. The endpoint reports the user's whole queued set, not the page on
+    // screen, which is what makes this their queue rather than the rows that happen to be rendered.
+    const ownahead = ownqueued.filter((task) => task.position < queuepos);
+    const otherahead = queuepos - ownahead.length;
 
-    // The user's own tasks ahead are serialised one per pass, and they are this task's own type:
-    // a radeclist submission is one request type by construction, and it is that submission which
-    // makes this term large enough to matter.
-    const ownseconds = ownahead * typicalruntime;
+    // The user's own tasks ahead run one at a time, so their run times add up -- each priced by
+    // what it actually is. A radeclist submission is one type throughout, but a user who asked for
+    // images and then submitted a light curve waits through the image request, and a quarter of an
+    // hour of that is not a minute of it.
+    let ownseconds = 0;
+    for (const task of ownahead) {
+        const median = runtimes?.[task.requesttype];
+        if (!(median > 0)) {
+            // one of this user's own tasks ahead cannot be priced, and it is directly in the way
+            return null;
+        }
+        ownseconds += median;
+    }
 
     // Everybody else's drain in whole passes, not fractions of one. With fifteen other users'
     // tasks ahead and sixteen ways of running them, all fifteen start in the same pass as this
@@ -117,10 +118,17 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
 /**
  * How long a dispatch pass takes on average, given what is queued, or null if that cannot be said.
  *
- * Weighted by the number of queued tasks of each type, since a pass is filled from the queue. A
- * type that is queued but has no median cannot be priced, and there is no honest figure to return
- * without it -- an unpriced type is exactly the one that would distort the answer most, being new
- * or rare enough that nothing like it has finished recently.
+ * Weighted by the number of queued tasks of each type, since a pass is filled from the queue.
+ *
+ * This is the whole queue rather than the part of it ahead of any particular task, which is the
+ * approximation in the estimate: a large batch of one type sitting behind a task still moves the
+ * price of the passes in front of it. The composition per position is not something the queue
+ * positions endpoint can carry at the rate it is polled, and the figure is rounded to "~N min"
+ * regardless, so the error is inside the precision being claimed.
+ *
+ * A type with no median is left out of the weighting rather than refusing the whole answer. It is
+ * only ever a minority of a queue -- a type is unpriced by being rare -- and letting it decide
+ * would mean work sitting behind a task could blank the estimate in front of it.
  */
 function meanQueuedRuntimeSeconds(queuedbytype, runtimes) {
     if (queuedbytype == null) {
@@ -130,12 +138,9 @@ function meanQueuedRuntimeSeconds(queuedbytype, runtimes) {
     let tasks = 0;
     let seconds = 0;
     for (const [requesttype, count] of Object.entries(queuedbytype)) {
-        if (!(count > 0)) {
-            continue;
-        }
         const median = runtimes?.[requesttype];
-        if (!(median > 0)) {
-            return null;
+        if (!(count > 0) || !(median > 0)) {
+            continue;
         }
         tasks += count;
         seconds += count * median;

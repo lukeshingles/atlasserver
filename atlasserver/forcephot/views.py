@@ -914,11 +914,16 @@ def queuepositions(request):
     queueoffset = Task.min_queuepos_relative()
     positions = Task.objects.filter(
         user_id=request.user.pk, finishtimestamp__isnull=True, is_archived=False, queuepos_relative__isnull=False
-    ).values_list("id", "queuepos_relative")
+    ).values_list("id", "queuepos_relative", "request_type")
 
     return JsonResponse(
         {
-            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos in positions},
+            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
+            # What each of those tasks is. Dispatch runs one task per user at a time, so a user's
+            # own tasks ahead of this one are waited through in series -- and an IMGZIP among them
+            # is a quarter of an hour of that wait where an FP task is a minute. Another column on
+            # a query already being made, and only ever this user's own tasks.
+            "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
             "queueoffset": queueoffset,
         }
     )
