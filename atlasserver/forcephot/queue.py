@@ -8,7 +8,6 @@ import datetime
 import operator
 import statistics
 import typing as t
-from collections import defaultdict
 
 from django.core.cache import caches
 from django.db import models
@@ -131,32 +130,35 @@ def typical_runtime_seconds() -> dict[str, float]:
 
     cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=TYPICAL_RUNTIME_WINDOW_HOURS)
 
-    # Ordered by -timestamp rather than -id so that task_timestamp_idx bounds the work by the
-    # window. Under -id the planner walks the primary key backwards and only stops once it has
-    # found SAMPLE_LIMIT qualifying rows -- which on a quiet day it never does, so it scans back
-    # through however many months of tasks the retention sweep has left.
-    #
-    # Both timestamp columns are nullable on the model and so are typed as optional however the
-    # queryset was filtered; the isnull=False pair is what actually guarantees them. The cast says
-    # so once, next to the filter that earns it.
-    recent = t.cast(
-        "Iterable[tuple[str, datetime.datetime, datetime.datetime]]",
-        Task.objects.filter(timestamp__gt=cutoff, finishtimestamp__isnull=False, starttimestamp__isnull=False)
-        .order_by("-timestamp")
-        .values_list("request_type", "starttimestamp", "finishtimestamp")[:TYPICAL_RUNTIME_SAMPLE_LIMIT],
-    )
+    medians = {}
+    for request_type in Task.RequestType.values:
+        # One query per type, each with its own sample limit, rather than one shared limit applied
+        # before grouping. Under a shared limit a busy day of one type fills the whole sample and
+        # crowds the others out: a type with plenty of completions in the window still falls under
+        # the minimum and gets no figure -- and the long-running types, where a wait estimate is
+        # worth the most, are the low-volume ones.
+        #
+        # Windowed and ordered on finishtimestamp, which is what is being measured. On submission
+        # time a queue backlogged for longer than the window excludes every task completing now,
+        # so the estimate would disappear exactly during the backlog it exists to describe.
+        # task_maint_idx is (request_type, finishtimestamp), so this pair is index-covered.
+        #
+        # Both timestamp columns are nullable on the model and so are typed as optional however the
+        # queryset was filtered; the isnull=False pair is what actually guarantees them. The cast
+        # says so once, next to the filter that earns it.
+        recent = t.cast(
+            "Iterable[tuple[datetime.datetime, datetime.datetime]]",
+            Task.objects.filter(request_type=request_type, finishtimestamp__gt=cutoff, starttimestamp__isnull=False)
+            .order_by("-finishtimestamp")
+            .values_list("starttimestamp", "finishtimestamp")[:TYPICAL_RUNTIME_SAMPLE_LIMIT],
+        )
 
-    runtimes: dict[str, list[float]] = defaultdict(list)
-    for request_type, started, finished in recent:
         # the same quantity as Task.runtime(), computed from two columns rather than from a model
         # instance: this reads thousands of rows and does not need them built into objects
-        runtimes[request_type].append((finished - started).total_seconds())
+        runtimes = [(finished - started).total_seconds() for started, finished in recent]
 
-    medians = {
-        request_type: round(statistics.median(values), 1)
-        for request_type, values in runtimes.items()
-        if len(values) >= TYPICAL_RUNTIME_MIN_SAMPLES
-    }
+        if len(runtimes) >= TYPICAL_RUNTIME_MIN_SAMPLES:
+            medians[request_type] = round(statistics.median(runtimes), 1)
 
     caches["usagestats"].set(TYPICAL_RUNTIME_CACHEKEY, medians, timeout=TYPICAL_RUNTIME_CACHE_SECONDS)
 

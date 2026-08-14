@@ -578,15 +578,21 @@ export const Task = React.memo(function Task(props) {
     if (task.finishtimestamp != null) {
         meta.push(['finishtime', 'Finished at:', new Date(task.finishtimestamp).toLocaleString()]);
 
-        // How the two timestamps above break down, which the server has always recorded and never
-        // shown. Worth a line because it is what tells the user whether a slow result was a busy
-        // queue or a slow job -- and it calibrates what to expect from the next request.
+        // How the two timestamps above break down. Worth a line because it is what tells the user
+        // whether a slow result was a busy queue or a slow job -- and it calibrates what to expect
+        // from the next request.
+        //
         // Either half can be absent (a task cancelled before it started has no run time), so they
-        // are assembled rather than formatted as one string.
-        const timings = [
-            task.waittime != null ? 'waited ' + formatDuration(task.waittime) : null,
-            task.runtime != null ? 'ran ' + formatDuration(task.runtime) : null,
-        ].filter((part) => part != null);
+        // are assembled rather than formatted as one string. Each is tested on the formatted text
+        // rather than on the raw number: formatDuration also declines a value it cannot render, and
+        // testing the input instead concatenates its null into the sentence.
+        const timing = (label, seconds) => {
+            const text = formatDuration(seconds);
+            return text != null ? label + ' ' + text : null;
+        };
+
+        const timings = [timing('waited', task.waittime), timing('ran', task.runtime)]
+            .filter((part) => part != null);
 
         if (timings.length > 0) {
             meta.push(['timings', 'Took:', timings.join(' · ')]);
@@ -670,7 +676,7 @@ export const Task = React.memo(function Task(props) {
             : null;
         taskbox.push(
             <div key="status" className="taskstatus waiting">
-                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>{estimate}
+                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>{estimate != null ? ' ' : null}{estimate}
             </div>);
     } else {
         // queuepos is null until the queue has been renumbered, and the sentence used to be
@@ -713,31 +719,67 @@ const tasklist_pollcache = new PollCache();
 // restored a scroll position of its own, and jumping to the top would throw it away.
 let historynavigations = 0;
 
-/**
- * Whether two runner status responses say the same thing to everything that reads one.
+/*
+ * Fields of the runner status that move on their own and are not read for their value.
  *
- * Field by field rather than a deep compare, because status_age_seconds necessarily differs on
- * every poll and is only shown when the runner is stale -- which `stale` itself already carries.
+ * A denylist rather than a list of the fields that matter: a field added to the endpoint later is
+ * then compared by default, so the worst it can do is cost a re-render. Under an allowlist it would
+ * be silently invisible to every reader, with nothing failing to say so.
  */
+const RUNNERSTATUS_VOLATILE_FIELDS = ['written', 'pid', 'running_taskids', 'status_age_seconds'];
+
+/** Whether two runner status responses say the same thing to everything that reads one. */
 function runnerStatusEqual(previous, next) {
     if (previous == null || next == null) {
         return previous === next;
     }
 
-    return ['stale', 'maintenance', 'slots_busy', 'numslots', 'queued_task_count', 'distinct_queued_users']
-        .every(field => previous[field] === next[field])
-        // the only nested value, and small: a handful of request types to a number each
-        && JSON.stringify(previous.typical_runtime_seconds) === JSON.stringify(next.typical_runtime_seconds);
+    // The age advances on every poll by construction, so comparing it always would make this gate
+    // useless. It is rendered in one place, the outage banner -- and that is exactly the case where
+    // every other field has stopped moving, because a runner that is not writing its status file is
+    // not changing any of them. Excluded when the runner is healthy, compared when it is not.
+    if ((previous.stale || next.stale) && previous.status_age_seconds !== next.status_age_seconds) {
+        return false;
+    }
+
+    const fields = new Set([...Object.keys(previous), ...Object.keys(next)]
+        .filter(field => !RUNNERSTATUS_VOLATILE_FIELDS.includes(field)));
+
+    for (const field of fields) {
+        const before = previous[field];
+        const after = next[field];
+        if (before === after) {
+            continue;
+        }
+        // typical_runtime_seconds is the one nested value: a handful of request types to a number
+        // each. Compared key by key rather than by JSON.stringify, which is sensitive to key order
+        // -- and the server builds that object in whichever order the request types are met in a
+        // scan, so the same medians can arrive spelled two ways.
+        if (!plainObjectsEqual(before, after)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/** Whether two values are objects with the same keys and identical values, one level deep. */
+function plainObjectsEqual(before, after) {
+    if (before == null || after == null || typeof before !== 'object' || typeof after !== 'object') {
+        return false;
+    }
+
+    const beforekeys = Object.keys(before);
+    return beforekeys.length === Object.keys(after).length
+        && beforekeys.every(key => before[key] === after[key]);
 }
 
 /*
  * Poll the task runner's status, and return the last answer.
  *
- * The fetch used to live inside the RunnerStatus banner, which was the only thing that read it.
- * The wait estimates need the same three fields (numslots, distinct_queued_users and the typical
- * run times), and a second component polling the same endpoint would have doubled the requests to
- * ask an identical question -- so the poll moved up to TaskPage and the banner became a
- * presentational component that is handed the answer.
+ * Owned by TaskPage rather than by the banner that renders it, because the wait estimates read the
+ * same response -- numslots, distinct_queued_users, slots_busy and the typical run times. Two
+ * components polling this endpoint would be two requests a minute asking an identical question.
  */
 function useRunnerStatus() {
     const [status, setStatus] = React.useState(null);
@@ -754,12 +796,9 @@ function useRunnerStatus() {
                 .then(status => {
                     lastgoodfetch.current = Date.now();
                     // Replaced only when something a reader looks at has moved. The response is a
-                    // freshly parsed object every minute, so assigning it unconditionally gave it a
-                    // new identity every poll -- and now that this state lives in TaskPage rather
-                    // than inside the memoised banner, that re-rendered the whole page (every row's
-                    // estimate, two URL parses) to redraw an unchanged line. status_age_seconds
-                    // changes on every poll by definition, so a whole-object compare would never
-                    // hold; it is only rendered when stale, which is compared here.
+                    // freshly parsed object every poll, so its identity always differs -- and this
+                    // state is TaskPage's, so taking it unconditionally re-renders the whole page
+                    // (every row's estimate, two URL parses) to redraw an unchanged line.
                     setStatus(previous => (runnerStatusEqual(previous, status) ? previous : status));
                 })
                 .catch(error => {
@@ -874,18 +913,23 @@ export function TaskPage() {
         // countFinishedWhileAway and pageTitle
         finishedwhileaway: 0,
         /*
-         * The queue positions of all the user's queued tasks, ascending.
+         * The queue positions of all the user's queued tasks, ascending, or null until the queue
+         * positions endpoint has answered.
+         *
+         * Null rather than an empty array, which would mean "this user has nothing else queued" --
+         * a different answer, and the one that makes a bulk submitter's estimate wrong by up to the
+         * slot count. The rows are on screen before the first positions response lands, so the
+         * distinction is visible on every page load. See estimateWaitSeconds.
          *
          * State rather than a ref, unlike queuedIdsRef below, because the wait estimates are
          * rendered from it. It is the whole queued set and not the page on screen: a user with
          * forty queued tasks sees six of them, and it is the other thirty-four that their last
-         * task is waiting behind. See estimateWaitSeconds.
+         * task is waiting behind.
          */
-        ownqueuepositions: [],
+        ownqueuepositions: null,
     });
 
-    // polled here rather than inside the banner that used to own it, because the wait estimates
-    // read the same response; see useRunnerStatus
+    // read by both the banner and the wait estimates; see useRunnerStatus
     const runnerstatus = useRunnerStatus();
 
     /*
@@ -1136,10 +1180,13 @@ export function TaskPage() {
 
                     // compared rather than assigned, for the reason the rows above are: this runs
                     // every two seconds, and handing back a fresh array each time would re-render
-                    // the page on every tick of a queue that has not moved
+                    // the page on every tick of a queue that has not moved. A null previous is the
+                    // first answer, which is always a change.
+                    const previouspositions = prevstate.ownqueuepositions;
                     const positionschanged = (
-                        prevstate.ownqueuepositions.length != ownpositions.length
-                        || ownpositions.some((position, index) => position !== prevstate.ownqueuepositions[index]));
+                        previouspositions == null
+                        || previouspositions.length != ownpositions.length
+                        || ownpositions.some((position, index) => position !== previouspositions[index]));
 
                     if (!changed && !positionschanged) {
                         return null;
@@ -1710,12 +1757,17 @@ export function TaskPage() {
         // Computed here rather than in the row, which cannot see the user's other queued tasks: the
         // estimate depends on the whole queued set, and a row only knows about itself. Handed down
         // as a string so that the memo comparison in taskPropsEqual stays a primitive check.
-        const waitEstimateFor = (task) => formatWaitEstimate(estimateWaitSeconds({
+        //
+        // Only for the viewer's own tasks. queuepositions.json answers for request.user alone, so
+        // for somebody else's task -- a task detail page is public, and staff see every row -- the
+        // positions on hand belong to the wrong person: the owner's own earlier tasks would be
+        // counted as other users' and divided by the concurrency instead of serialised.
+        const waitEstimateFor = (task) => (task.user_id != user_id ? null : formatWaitEstimate(estimateWaitSeconds({
             queuepos: task.queuepos,
             ownqueuepositions: state.ownqueuepositions,
             requesttype: task.request_type,
             runnerstatus,
-        }));
+        })));
 
         tasklist = [
             <ul key="ultasklist" className="tasks">

@@ -23,9 +23,25 @@
 // If the dispatch policy in taskrunner/main.py ever changes -- a second concurrent task per user,
 // a priority tier -- this is the copy of it that has to change with it.
 
-/** Seconds a task at this queue position is likely to wait, or null if that cannot be said. */
+/**
+ * Seconds a task at this queue position is likely to wait, or null if that cannot be said.
+ *
+ * `ownqueuepositions` is the positions of the caller's other queued tasks, or null while that is
+ * not yet known — the two are different answers and an empty array only means the first.
+ */
 export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, runnerstatus }) {
-    if (queuepos == null || runnerstatus == null || runnerstatus.stale) {
+    // A queue that is not being dispatched from has no wait to report. `maintenance` means the
+    // hourly sweep is blocking the runner's loop, so nothing starts for its duration and the slot
+    // figures are frozen -- the banner already says so, and a countdown beside it would be against
+    // a queue that is not moving.
+    if (queuepos == null || runnerstatus == null || runnerstatus.stale || runnerstatus.maintenance) {
+        return null;
+    }
+
+    // Null until the queue positions endpoint has answered. Treating that as "no other tasks of
+    // mine" is the one error this whole module exists to avoid: it collapses a bulk submitter's
+    // serialised queue into the divide-by-slots form and under-promises by up to that factor.
+    if (ownqueuepositions == null) {
         return null;
     }
 
@@ -40,19 +56,40 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
         return null;
     }
 
+    // How many tasks run at once: the slot count, but never more than the number of users sharing
+    // the queue, because dispatch takes at most one task per user at a time.
+    //
+    // Both are required rather than defaulted. A runner that has not been restarted since this
+    // field was added still writes a fresh status file without it, so `stale` is false and the
+    // absence is silent -- and defaulting it to 1 would multiply every estimate by up to the slot
+    // count, which is the "invented estimate" case this module refuses.
+    const numslots = runnerstatus.numslots;
+    const queuedusers = runnerstatus.distinct_queued_users;
+    if (!(numslots > 0) || !(queuedusers > 0)) {
+        return null;
+    }
+    const concurrency = Math.min(numslots, queuedusers);
+
     // Positions strictly ahead of this one. The endpoint reports the user's whole queued set, not
     // the page on screen, which is what makes this a count of their queue rather than of the rows
     // that happen to be rendered.
     const ownahead = ownqueuepositions.filter((position) => position < queuepos).length;
     const otherahead = queuepos - ownahead;
 
-    // distinct_queued_users can lag the queue by up to one status write, and a queue with work in
-    // it always has at least one user, so the floor of 1 keeps a stale zero from dividing by nothing
-    const concurrency = Math.max(1, Math.min(runnerstatus.numslots || 1, runnerstatus.distinct_queued_users || 1));
+    // Whole dispatch passes, not a fraction of one. With fifteen other users' tasks ahead and
+    // sixteen ways of running them, all fifteen start in the same pass as this one, so it waits
+    // for none of them -- a fraction here would report most of a run time for a task about to
+    // start. The user's own tasks are serialised one per pass, so they count individually.
+    const passesahead = Math.max(ownahead, Math.floor(otherahead / concurrency));
 
-    // the user's own tasks and everybody else's are worked through concurrently, so the wait is the
-    // longer of the two, not their sum
-    return Math.max(ownahead, otherahead / concurrency) * typicalruntime;
+    if (passesahead === 0) {
+        // Nothing has to finish first, so the only question is whether a slot is free now. If every
+        // slot is busy the task waits for one to come free, and nothing reported here says how far
+        // through those tasks are -- so say nothing, and let the position chip carry it.
+        return runnerstatus.slots_busy < numslots ? 0 : null;
+    }
+
+    return passesahead * typicalruntime;
 }
 
 /**
@@ -88,17 +125,22 @@ export function formatWaitEstimate(seconds) {
 
 /** Seconds as a short duration for the finished-row timings: "40s", "2m 10s", "1h 04m". */
 export function formatDuration(seconds) {
-    if (seconds == null || !isFinite(seconds) || seconds < 0) {
+    if (seconds == null || !Number.isFinite(seconds) || seconds < 0) {
         return null;
     }
 
-    if (seconds < 60) {
-        return Math.round(seconds) + 's';
+    // Rounded to whole seconds once, before being split into units. Rounding each unit separately
+    // lets them disagree: the serializer sends one decimal place, and 119.6s taken as floor(1)
+    // minutes and round(59.6) seconds reads as "1m 60s".
+    const whole = Math.round(seconds);
+
+    if (whole < 60) {
+        return whole + 's';
     }
 
-    if (seconds < 3600) {
-        return Math.floor(seconds / 60) + 'm ' + String(Math.round(seconds % 60)).padStart(2, '0') + 's';
+    if (whole < 3600) {
+        return Math.floor(whole / 60) + 'm ' + String(whole % 60).padStart(2, '0') + 's';
     }
 
-    return Math.floor(seconds / 3600) + 'h ' + String(Math.floor((seconds % 3600) / 60)).padStart(2, '0') + 'm';
+    return Math.floor(whole / 3600) + 'h ' + String(Math.floor((whole % 3600) / 60)).padStart(2, '0') + 'm';
 }

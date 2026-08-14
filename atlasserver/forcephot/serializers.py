@@ -106,16 +106,23 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return obj.queuepos_relative - self.min_queuepos_relative
 
     @staticmethod
-    def get_waittime(obj) -> float | None:
-        """Return how long the task waited in the queue before starting, in seconds."""
-        waittime = obj.waittime()
-        return None if waittime is None else round(waittime, 1)
+    def _rounded_seconds(value: float | None) -> float | None:
+        """Round a second count for display, or pass through the None that means "not yet".
 
-    @staticmethod
-    def get_runtime(obj) -> float | None:
-        """Return how long the task took to run, in seconds."""
-        runtime = obj.runtime()
-        return None if runtime is None else round(runtime, 1)
+        Floored at zero: the runner writes starttimestamp truncated to the whole second while
+        timestamp keeps its microseconds, so a task dispatched the moment it arrives computes a
+        wait a fraction of a second below zero. That is a clock artefact rather than a measurement,
+        and it reads as one.
+        """
+        return None if value is None else round(max(0.0, value), 1)
+
+    def get_waittime(self, obj) -> float | None:
+        """Seconds the task spent in the queue before it started."""
+        return self._rounded_seconds(obj.waittime())
+
+    def get_runtime(self, obj) -> float | None:
+        """Seconds the task took to run."""
+        return self._rounded_seconds(obj.runtime())
 
     queuepos = serializers.SerializerMethodField("get_queuepos")
     # declared rather than left to ModelSerializer, which would resolve these two model methods to

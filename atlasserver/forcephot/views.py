@@ -865,10 +865,15 @@ def statsshortterm(request):
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
+    def mean_seconds(values: list[float | None]) -> float | None:
+        """Return the mean of the values that have one, or None if none of them do."""
+        known = [value for value in values if value is not None]
+        return statistics.fmean(known) if known else None
+
     def mean_seconds_str(values: list[float | None]) -> str:
         """Format the mean of a list of second counts, ignoring the unanswerable ones and empties."""
-        known = [value for value in values if value is not None]
-        return f"{statistics.fmean(known):.1f}s" if known else "-"
+        mean = mean_seconds(values)
+        return "-" if mean is None else f"{mean:.1f}s"
 
     if sevendaytasks_finished.count() > 0:
         dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
@@ -879,10 +884,10 @@ def statsshortterm(request):
         )
 
         sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
-        sevenday_known_runtimes = [runtime for runtime in sevenday_runtimes if runtime is not None]
         dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
         num_job_processors = runnerstatus.NUMSLOTS
-        sevenday_mean_runtime = statistics.fmean(sevenday_known_runtimes) if sevenday_known_runtimes else 0.0
+        # one definition of which values count, shared with the string above
+        sevenday_mean_runtime = mean_seconds(sevenday_runtimes) or 0.0
         dictparams["sevendayloadpercent"] = (
             f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
         )
@@ -940,8 +945,16 @@ def taskrunnerstatus(request):
     except (OSError, KeyError, TypeError, ValueError) as ex:
         # never written, unreadable, half-written despite the atomic rename, or written by a
         # version that recorded something else. A naive `written` lands here as a TypeError.
+        # typical_runtime_seconds is present but empty, as it is on the stale branch below: one
+        # response shape for both, so a reader can subscript it without checking which failure it got
         return JsonResponse(
-            {"running": False, "stale": True, "detail": f"no usable status file ({type(ex).__name__})"}, status=503
+            {
+                "running": False,
+                "stale": True,
+                "typical_runtime_seconds": {},
+                "detail": f"no usable status file ({type(ex).__name__})",
+            },
+            status=503,
         )
 
     # several missed writes rather than one, so that a slow write does not raise a false alarm

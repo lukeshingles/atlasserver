@@ -8,8 +8,8 @@ first request to /taskrunnerstatus.json used to load all of that into every mod_
 keep it there, to read these few values.
 
 Anything the two processes must agree on belongs here rather than in `main`, which the web app
-cannot reach: a second copy in views.py is how NUMSLOTS below came to be a bare literal that could
-drift from the pool the runner actually sizes.
+cannot reach: a value defined in both places can drift, and NUMSLOTS below is one the queue page
+and the runner's own pool size have to derive from the same number.
 """
 
 from pathlib import Path

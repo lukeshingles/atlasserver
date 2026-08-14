@@ -14,7 +14,9 @@ import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from './waite
 
 const status = (overrides = {}) => ({
     stale: false,
+    maintenance: false,
     numslots: 16,
+    slots_busy: 0,
     distinct_queued_users: 1,
     typical_runtime_seconds: { FP: 60, IMGZIP: 900 },
     ...overrides,
@@ -45,10 +47,17 @@ describe('estimateWaitSeconds', () => {
         assert.equal(seconds, 40 * 60);
     });
 
-    test('other users\' tasks ahead drain in parallel', () => {
-        // the same 40 tasks ahead, but none of them this user's and 20 users sharing the queue: now
-        // the slots genuinely apply
-        assert.equal(soleTaskAt(40, { distinct_queued_users: 20 }), (40 / 16) * 60);
+    test('other users\' tasks ahead drain in whole passes', () => {
+        // 40 tasks ahead, none of them this user's, 20 users sharing 16 ways of running them: two
+        // full passes clear 32 of them and this task goes in the third alongside the rest
+        assert.equal(soleTaskAt(40, { distinct_queued_users: 20 }), 2 * 60);
+    });
+
+    test('a task in the first pass waits for nobody ahead of it', () => {
+        // 15 other users' tasks ahead and 16 ways of running them: all 16 start together, so this
+        // one is not behind any of them. A fraction of a pass here would report most of a run time
+        // for a task about to start.
+        assert.equal(soleTaskAt(15, { distinct_queued_users: 20 }), 0);
     });
 
     test('concurrency is bounded by the number of users, not the slot count', () => {
@@ -69,22 +78,42 @@ describe('estimateWaitSeconds', () => {
         assert.equal(seconds, 4 * 60);
     });
 
-    test('the next task in an empty queue waits for nothing', () => {
+    test('the next task waits for nothing while a slot is free', () => {
         assert.equal(soleTaskAt(0), 0);
     });
 
+    test('nothing is estimated for the next task while every slot is busy', () => {
+        // it starts when one of the running tasks finishes, and nothing reported here says how far
+        // through those are -- the position chip already says "next"
+        assert.equal(soleTaskAt(0, { slots_busy: 16 }), null);
+    });
+
     test('the request type selects its own typical runtime', () => {
-        // 2 ahead at 16-way concurrency, against IMGZIP's 900s rather than FP's 60s
-        assert.equal(soleTaskAt(2, { distinct_queued_users: 20 }, 'IMGZIP'), (2 / 16) * 900);
+        // two full passes ahead, against IMGZIP's 900s rather than FP's 60s
+        assert.equal(soleTaskAt(32, { distinct_queued_users: 20 }, 'IMGZIP'), 2 * 900);
     });
 
     test('nothing is estimated when the runner is stale', () => {
         assert.equal(soleTaskAt(5, { stale: true }), null);
     });
 
+    test('nothing is estimated during the maintenance sweep', () => {
+        // the sweep blocks the runner's dispatch loop, so nothing starts for its duration and the
+        // slot figures it reports are frozen
+        assert.equal(soleTaskAt(5, { maintenance: true }), null);
+    });
+
     test('nothing is estimated before the first status response', () => {
         assert.equal(estimateWaitSeconds({
             queuepos: 5, ownqueuepositions: [5], requesttype: 'FP', runnerstatus: null,
+        }), null);
+    });
+
+    test('nothing is estimated before the queue positions are known', () => {
+        // null, not [] -- an empty array means the user has nothing else queued, and treating "not
+        // asked yet" as that collapses a bulk submitter's estimate to the divide-by-slots form
+        assert.equal(estimateWaitSeconds({
+            queuepos: 40, ownqueuepositions: null, requesttype: 'FP', runnerstatus: status(),
         }), null);
     });
 
@@ -104,11 +133,22 @@ describe('estimateWaitSeconds', () => {
         }), null);
     });
 
-    test('a stale zero user count cannot divide the estimate by nothing', () => {
-        const seconds = soleTaskAt(4, { distinct_queued_users: 0 });
+    test('a runner too old to report its queued users offers no estimate', () => {
+        // the runner is a separate long-lived process, so it can still be writing a fresh status
+        // file without this field. Defaulting it to 1 would multiply every estimate by up to the
+        // slot count, which is the invented estimate this module refuses.
+        const seconds = estimateWaitSeconds({
+            queuepos: 40,
+            ownqueuepositions: [40],
+            requesttype: 'FP',
+            runnerstatus: { stale: false, numslots: 16, slots_busy: 0, typical_runtime_seconds: { FP: 60 } },
+        });
 
-        assert.ok(isFinite(seconds), `expected a finite estimate, got ${seconds}`);
-        assert.equal(seconds, 4 * 60);
+        assert.equal(seconds, null);
+    });
+
+    test('an empty queued-user count offers no estimate either', () => {
+        assert.equal(soleTaskAt(4, { distinct_queued_users: 0 }), null);
     });
 });
 
@@ -130,8 +170,8 @@ describe('formatWaitEstimate', () => {
     });
 
     test('the ladder is monotone across every boundary', () => {
-        // the bands used to disagree about their direction, so one second could move the estimate
-        // downwards -- visible, because this string is recomputed as the queue moves
+        // one second must never move the estimate downwards: this string is recomputed as the
+        // queue moves, and a figure that grows as the wait shrinks reads as broken
         let previous = -1;
         for (let seconds = 0; seconds <= 5 * 3600; seconds += 7) {
             const estimate = estimateOrder(formatWaitEstimate(seconds));
@@ -160,5 +200,17 @@ describe('formatDuration', () => {
         assert.equal(formatDuration(40), '40s');
         assert.equal(formatDuration(130), '2m 10s');
         assert.equal(formatDuration(3860), '1h 04m');
+    });
+
+    test('a fraction of a second cannot carry a unit to 60', () => {
+        // the serializer sends one decimal place, so these arrive in practice. Rounding the minutes
+        // and the seconds separately lets them disagree: 119.6 reads as "1m 60s".
+        assert.equal(formatDuration(59.6), '1m 00s');
+        assert.equal(formatDuration(119.6), '2m 00s');
+        assert.equal(formatDuration(3599.7), '1h 00m');
+    });
+
+    test('a negative duration is declined rather than rendered', () => {
+        assert.equal(formatDuration(-0.3), null);
     });
 });

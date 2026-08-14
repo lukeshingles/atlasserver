@@ -1120,17 +1120,18 @@ describe('TaskPage', () => {
     };
 
     test('a waiting row shows its position and an estimated wait', async () => {
-        const { container } = await renderWithStatus([task(1, { queuepos: 4 })], { 1: 4 }, {
-            queued_task_count: 5,
+        const { container } = await renderWithStatus([task(1, { queuepos: 20 })], { 1: 20 }, {
+            queued_task_count: 21,
             numslots: 16,
-            distinct_queued_users: 20,
+            slots_busy: 5,
+            distinct_queued_users: 5,
             typical_runtime_seconds: { FP: 600 },
         });
 
         const status = container.querySelector('.taskstatus.waiting');
-        assert.match(status.textContent, /4 ahead/);
-        // 4 ahead, none of them this user's, at 16-way concurrency: 0.25 x 600s = 150s
-        assert.match(status.textContent, /~3 min/);
+        assert.match(status.textContent, /20 ahead/);
+        // 20 ahead, none of them this user's, 5 users sharing the queue: 4 passes x 600s
+        assert.match(status.textContent, /~40 min/);
     });
 
     test('a waiting row shows no estimate when the runner is not running', async () => {
@@ -1144,6 +1145,74 @@ describe('TaskPage', () => {
         assert.match(status.textContent, /4 ahead/);
         assert.equal(status.querySelector('.taskestimate'), null,
             'a stopped queue must not be counted down against');
+    });
+
+    test('another user\'s task gets no estimate from this user\'s queue', async () => {
+        // queuepositions.json answers for the signed-in user alone, and a task detail page is
+        // public. Applying those positions to somebody else's task counts the owner's own earlier
+        // tasks as other users' and divides them by the concurrency.
+        const { container } = await renderWithStatus(
+            [task(1, { queuepos: 20, user_id: 999 })], { 1: 20 }, {
+                queued_task_count: 21,
+                numslots: 16,
+                slots_busy: 5,
+                distinct_queued_users: 5,
+                typical_runtime_seconds: { FP: 600 },
+            });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /20 ahead/);
+        assert.equal(status.querySelector('.taskestimate'), null);
+    });
+
+    /**
+     * Render, then drive one more runner-status poll with a replacement body.
+     *
+     * The replacement is a distinct object, as a real `response.json()` is on every poll — a stub
+     * that hands back one shared reference makes the comparison in runnerStatusEqual unobservable,
+     * since both branches of it then yield the same reference.
+     */
+    const repollRunnerStatus = async (results, positions, first, second) => {
+        mock.timers.enable({ apis: ['setInterval'] });
+        try {
+            const control = stubFetchWithPositions(results, positions, first);
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            const before = rendered.container.querySelector('#runnerstatus')?.textContent;
+            control.runnerstatus = second;
+            mock.timers.tick(60000);
+            await flush(120);
+
+            return { before, after: rendered.container.querySelector('#runnerstatus')?.textContent };
+        } finally {
+            mock.timers.reset();
+        }
+    };
+
+    test('the outage banner keeps counting up while the runner stays down', async () => {
+        // every other field is frozen while the runner is down -- the status file is not being
+        // rewritten, and the medians are withheld -- so the age is the only thing that moves. A
+        // comparison that skips it leaves the banner reporting its first reading for the whole
+        // outage.
+        const { before, after } = await repollRunnerStatus(
+            [task(1, { queuepos: 1 })], { 1: 1 },
+            { stale: true, queued_task_count: 1, status_age_seconds: 61, typical_runtime_seconds: {} },
+            { stale: true, queued_task_count: 1, status_age_seconds: 7200, typical_runtime_seconds: {} });
+
+        assert.match(before, /1 minute ago/);
+        assert.match(after, /2 hours ago/);
+    });
+
+    test('an unchanged status leaves the banner alone', async () => {
+        // the gate that stops a poll re-rendering the whole page once a minute
+        const body = { queued_task_count: 3, numslots: 16, slots_busy: 2, typical_runtime_seconds: { FP: 60 } };
+        const { before, after } = await repollRunnerStatus(
+            [task(1, { queuepos: 1 })], { 1: 1 }, { ...body }, { ...body });
+
+        assert.match(before, /2 of 16 slots busy/);
+        assert.equal(after, before);
     });
 
     test('a bulk submission is not told it will be finished in a moment', async () => {

@@ -2245,12 +2245,16 @@ class TaskRunnerStatusTests(TestCase):
     pandas), so patching the shared module is what makes one patch cover both sides.
     """
 
+    def setUp(self) -> None:
+        # the medians are cached for five minutes in a cache the per-test transaction rollback does
+        # not touch, so without this a test that populates them decides what a later one sees
+        caches["usagestats"].clear()
+
     def status_response(self, **write_status_kwargs: t.Any) -> t.Any:
         """Have the runner write a status file, then read it back through the endpoint.
 
-        The temporary directory, the patch and the two calls were written out in full by every test
-        that needed them; the wait-estimate fields added two more copies, which is what made a
-        helper worth having.
+        Patching the shared `status` module is what makes one patch cover both sides; see the class
+        docstring.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
@@ -2309,30 +2313,52 @@ class TaskRunnerStatusTests(TestCase):
         assert body["queued_task_count"] == 4
         assert body["distinct_queued_users"] == 2
 
-    def test_typical_runtimes_ride_along_when_the_runner_is_alive(self) -> None:
-        started = timezone.now() - datetime.timedelta(minutes=5)
-        user = User.objects.create_user(username="ranbefore", email="rb@example.com", password=None)
-        caches["usagestats"].clear()
-        for seconds in (10.0, 20.0, 30.0, 40.0, 50.0):
+    def _finished_tasks(self, *runtimes: float) -> None:
+        """Create one finished task per run time given, so the medians have something to report."""
+        user = User.objects.create_user(username=f"ran{len(runtimes)}", email="rb@example.com", password=None)
+        finished = timezone.now() - datetime.timedelta(minutes=5)
+        for seconds in runtimes:
             Task.objects.create(
                 user=user,
                 ra=1.0,
                 dec=2.0,
-                starttimestamp=started,
-                finishtimestamp=started + datetime.timedelta(seconds=seconds),
+                starttimestamp=finished - datetime.timedelta(seconds=seconds),
+                finishtimestamp=finished,
             )
+
+    def test_typical_runtimes_ride_along_when_the_runner_is_alive(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
 
         body = self.status_response(procs_taskids={}).json()
 
         assert body["typical_runtime_seconds"]["FP"] == 30.0
 
     def test_a_stale_runner_offers_no_wait_estimate(self) -> None:
-        # the queue page discards the figure when the runner is stale, so computing it would be
-        # work per poll per open tab for a value certain to be thrown away
+        """The queue page discards the figure when the runner is stale, so the view must not pay for it.
+
+        The fixture matters: with no finished tasks the medians are empty anyway and the assertion
+        would hold whether or not the short-circuit exists.
+        """
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
             stale_written = timezone.now() - datetime.timedelta(hours=1)
             statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert response.json()["stale"] is True
+        assert response.json()["typical_runtime_seconds"] == {}
+
+    def test_an_unreadable_status_file_still_answers_with_the_same_shape(self) -> None:
+        # both failure branches carry the key, so a reader can subscript it without first working
+        # out which kind of failure it got
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            statuspath.write_text("half a fi")
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
@@ -2435,11 +2461,35 @@ class TypicalRuntimeTests(TestCase):
     def test_tasks_outside_the_window_are_not_counted(self) -> None:
         self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
 
-        # older than TYPICAL_RUNTIME_WINDOW_HOURS, so out of scope however many there are
+        # finished longer ago than TYPICAL_RUNTIME_WINDOW_HOURS, so out of scope however many
+        # there are
         old = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 1)
-        Task.objects.filter(user=self.user).update(timestamp=old)
+        Task.objects.filter(user=self.user).update(finishtimestamp=old)
 
         assert taskqueue.typical_runtime_seconds() == {}
+
+    def test_a_backlogged_queue_still_reports_its_completions(self) -> None:
+        """The window is on completion, not submission.
+
+        A queue backlogged for longer than the window has nothing finishing that was submitted
+        inside it — which is exactly when a waiting user most wants the estimate.
+        """
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+        long_ago = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 5)
+        Task.objects.filter(user=self.user).update(timestamp=long_ago)
+
+        assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
+
+    def test_a_busy_type_does_not_crowd_out_a_quiet_one(self) -> None:
+        # the sample limit is per request type: under one shared cap a flood of FP tasks fills it
+        # and IMGZIP loses its estimate, which is the type where a wait matters most
+        self._finished_tasks(*([10.0] * (taskqueue.TYPICAL_RUNTIME_SAMPLE_LIMIT + 50)))
+        self._finished_tasks(100.0, 200.0, 300.0, 400.0, 500.0, request_type="IMGZIP")
+
+        typical = taskqueue.typical_runtime_seconds()
+
+        assert typical["FP"] == 10.0
+        assert typical["IMGZIP"] == 300.0
 
     def test_an_unfinished_task_contributes_nothing(self) -> None:
         self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
@@ -2474,11 +2524,11 @@ class TaskTimingSerializerTests(TestCase):
         assert body["runtime"] == 130.0
 
     def test_an_unstarted_task_reports_null_rather_than_nan(self) -> None:
-        """NaN is not part of JSON.
+        """A float sentinel for "not applicable" cannot cross this boundary.
 
-        Task.waittime() and Task.runtime() answer NaN when their timestamps are not both set. The
-        renderer writes that as a bare `NaN` token, which JSON.parse rejects — so a single queued
-        task would fail the whole response in the browser rather than leaving one field empty.
+        NaN is not part of JSON: the renderer writes it as a bare `NaN` token, which JSON.parse
+        rejects — so one queued task would fail the whole response in the browser rather than
+        leaving a single field empty.
         """
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 

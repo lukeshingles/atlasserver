@@ -200,8 +200,8 @@ class Task(models.Model):
             + f" {'redimg' if self.use_reduced else 'diffimg'} {status} {' archived' if self.is_archived else ''}"
         )
 
-        # tested against the value rather than against the timestamps it is derived from, which is
-        # what these two branches used to do to keep a NaN out of the string
+        # tested against the value rather than against the timestamps it is derived from, so the
+        # condition cannot drift from the one inside waittime()/runtime()
         if (waittime := self.waittime()) is not None:
             strtask += f" waittime: {waittime:.0f}s"
         if (runtime := self.runtime()) is not None:
@@ -343,12 +343,10 @@ class Task(models.Model):
     def finished(self) -> bool:
         return bool(self.finishtimestamp)
 
-    # None rather than NaN for "not applicable yet". These both used to answer NaN, which every
-    # caller then had to remember to strip: __str__ re-derived the timestamp condition to avoid
-    # printing one, statsshortterm filtered with math.isfinite in two places, and the serializer
-    # needed a third guard -- where forgetting is not cosmetic, because NaN is not part of JSON and
-    # DRF renders it as a bare token that JSON.parse rejects. One sentinel that Python already has
-    # a word for, instead of three defences against a float that means "no answer".
+    # None rather than a float sentinel for "not applicable yet", so a caller that forgets to check
+    # gets a TypeError rather than a number that quietly propagates. It also crosses the API
+    # boundary: NaN is not part of JSON, and the renderer emits it as a bare token that JSON.parse
+    # rejects, so one unstarted task would fail a whole response.
     def waittime(self) -> float | None:
         """Return how long the task waited before starting, or None if it has not started."""
         if self.starttimestamp and self.timestamp:
