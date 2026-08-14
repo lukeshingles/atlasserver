@@ -6,7 +6,6 @@ import hashlib
 import ipaddress
 import json
 import logging
-import math
 import os
 import statistics
 import time
@@ -81,6 +80,7 @@ from atlasserver.forcephot.netaddr import client_address
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
+from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
@@ -865,10 +865,15 @@ def statsshortterm(request):
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
-    def mean_seconds_str(values: list[float]) -> str:
-        """Format the mean of a list of second counts, ignoring NaNs and empty lists."""
-        finitevalues = [value for value in values if math.isfinite(value)]
-        return f"{statistics.fmean(finitevalues):.1f}s" if finitevalues else "-"
+    def mean_seconds(values: list[float | None]) -> float | None:
+        """Return the mean of the values that have one, or None if none of them do."""
+        known = [value for value in values if value is not None]
+        return statistics.fmean(known) if known else None
+
+    def mean_seconds_str(values: list[float | None]) -> str:
+        """Format the mean of a list of second counts, ignoring the unanswerable ones and empties."""
+        mean = mean_seconds(values)
+        return "-" if mean is None else f"{mean:.1f}s"
 
     if sevendaytasks_finished.count() > 0:
         dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
@@ -879,10 +884,10 @@ def statsshortterm(request):
         )
 
         sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
-        sevenday_finite_runtimes = [runtime for runtime in sevenday_runtimes if math.isfinite(runtime)]
         dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
-        num_job_processors = 16
-        sevenday_mean_runtime = statistics.fmean(sevenday_finite_runtimes) if sevenday_finite_runtimes else 0.0
+        num_job_processors = runnerstatus.NUMSLOTS
+        # one definition of which values count, shared with the string above
+        sevenday_mean_runtime = mean_seconds(sevenday_runtimes) or 0.0
         dictparams["sevendayloadpercent"] = (
             f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
         )
@@ -909,11 +914,16 @@ def queuepositions(request):
     queueoffset = Task.min_queuepos_relative()
     positions = Task.objects.filter(
         user_id=request.user.pk, finishtimestamp__isnull=True, is_archived=False, queuepos_relative__isnull=False
-    ).values_list("id", "queuepos_relative")
+    ).values_list("id", "queuepos_relative", "request_type")
 
     return JsonResponse(
         {
-            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos in positions},
+            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
+            # What each of those tasks is. Dispatch runs one task per user at a time, so a user's
+            # own tasks ahead of this one are waited through in series -- and an IMGZIP among them
+            # is a quarter of an hour of that wait where an FP task is a minute. Another column on
+            # a query already being made, and only ever this user's own tasks.
+            "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
             "queueoffset": queueoffset,
         }
     )
@@ -940,15 +950,35 @@ def taskrunnerstatus(request):
     except (OSError, KeyError, TypeError, ValueError) as ex:
         # never written, unreadable, half-written despite the atomic rename, or written by a
         # version that recorded something else. A naive `written` lands here as a TypeError.
+        # typical_runtime_seconds is present but empty, as it is on the stale branch below: one
+        # response shape for both, so a reader can subscript it without checking which failure it got
         return JsonResponse(
-            {"running": False, "stale": True, "detail": f"no usable status file ({type(ex).__name__})"}, status=503
+            {
+                "running": False,
+                "stale": True,
+                "typical_runtime_seconds": {},
+                "detail": f"no usable status file ({type(ex).__name__})",
+            },
+            status=503,
         )
 
     # several missed writes rather than one, so that a slow write does not raise a false alarm
     stale = age_seconds > (runnerstatus.STATUS_WRITE_SECONDS * 4)
 
+    # Only when the runner is running. A wait estimate is a claim about work being done, and when
+    # the status file has stopped being refreshed nothing is being done -- the queue page discards
+    # the figure in that case, so computing it would be a cache read (and, on expiry, a query) per
+    # poll from every open tab for a value certain to be thrown away.
+    typical_runtimes: dict[str, float] = {} if stale else typical_runtime_seconds()
+
     return JsonResponse(
-        {**status, "running": not stale, "stale": stale, "status_age_seconds": round(age_seconds, 1)},
+        {
+            **status,
+            "running": not stale,
+            "stale": stale,
+            "status_age_seconds": round(age_seconds, 1),
+            "typical_runtime_seconds": typical_runtimes,
+        },
         status=503 if stale else 200,
     )
 

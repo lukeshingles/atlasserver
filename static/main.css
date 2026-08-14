@@ -369,6 +369,19 @@ against its own fill, and no state needs a second value here.
   font-weight: normal;
 }
 
+/* The wait estimate beside the position chip. Plain text rather than a second badge: two chips side
+   by side read as two facts of equal standing, and the position is the one that is known while this
+   one is inferred. Quieter than the chip for the same reason, and it says "~4 min" rather than a
+   figure that looks measured. tabular-nums so a number ticking down does not shift the text beside
+   it. */
+.taskestimate {
+  color: var(--bs-secondary-color);
+  font-size: 0.875em;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.5em;
+}
+
 /*
 What the task is, as a two column grid: label, then value.
 

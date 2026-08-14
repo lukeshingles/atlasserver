@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 from unittest import skipUnless
 
+import psutil
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
@@ -2214,6 +2216,20 @@ class QueuePositionsEndpointTests(TestCase):
             task.refresh_from_db()  # the positions were assigned after these instances were built
             assert data["queuepositions"][str(task.id)] == task.queuepos
 
+    def test_reports_what_each_queued_task_is(self) -> None:
+        # dispatch runs one task per user at a time, so the queue page waits through these in
+        # series and needs to know which of them is a quarter of an hour and which is a minute
+        fptask = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        imgtask = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=fptask)
+        calculate_queue_positions()
+        self.client.force_login(self.user)
+
+        data = self.client.get(reverse("queuepositions")).json()
+
+        assert data["queuedtypes"][str(fptask.id)] == "FP"
+        assert data["queuedtypes"][str(imgtask.id)] == "IMGZIP"
+        assert set(data["queuedtypes"]) == set(data["queuepositions"]), "every position needs its type"
+
     def test_finished_tasks_are_omitted(self) -> None:
         Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
@@ -2245,6 +2261,23 @@ class TaskRunnerStatusTests(TestCase):
     pandas), so patching the shared module is what makes one patch cover both sides.
     """
 
+    def setUp(self) -> None:
+        # the medians are cached for five minutes in a cache the per-test transaction rollback does
+        # not touch, so without this a test that populates them decides what a later one sees
+        caches["usagestats"].clear()
+
+    def status_response(self, **write_status_kwargs: t.Any) -> t.Any:
+        """Have the runner write a status file, then read it back through the endpoint.
+
+        Patching the shared `status` module is what makes one patch cover both sides; see the class
+        docstring.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(numslots=runnerstatus.NUMSLOTS, **write_status_kwargs)
+                return self.client.get(reverse("taskrunnerstatus"))
+
     def test_missing_status_file_reports_not_running(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmpdir,
@@ -2259,11 +2292,7 @@ class TaskRunnerStatusTests(TestCase):
         user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
         Task.objects.create(user=user, ra=1.0, dec=2.0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            statuspath = Path(tmpdir, "taskrunner_status.json")
-            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16)
-                response = self.client.get(reverse("taskrunnerstatus"))
+        response = self.status_response(procs_taskids={0: 42})
 
         assert response.status_code == 200, response.content
         body = response.json()
@@ -2271,7 +2300,7 @@ class TaskRunnerStatusTests(TestCase):
         assert body["stale"] is False
         assert body["slots_busy"] == 1
         assert body["running_taskids"] == [42]
-        assert body["numslots"] == 16
+        assert body["numslots"] == runnerstatus.NUMSLOTS
         assert body["maintenance"] is False
         assert body["queued_task_count"] == 1
         assert body["oldest_queued_task_time"] is not None
@@ -2279,16 +2308,99 @@ class TaskRunnerStatusTests(TestCase):
     def test_a_maintenance_snapshot_is_reported_as_such(self) -> None:
         # written by the sweep's heartbeat: the slot fields are frozen while the sweep blocks the
         # runner's loop, so the flag is what tells a reader not to trust them
-        with tempfile.TemporaryDirectory() as tmpdir:
-            statuspath = Path(tmpdir, "taskrunner_status.json")
-            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                taskrunner_main.write_status(procs_taskids={0: 42}, numslots=16, maintenance=True)
-                response = self.client.get(reverse("taskrunnerstatus"))
+        response = self.status_response(procs_taskids={0: 42}, maintenance=True)
 
         assert response.status_code == 200, response.content
         body = response.json()
         assert body["running"] is True
         assert body["maintenance"] is True
+
+    def test_the_queue_figures_the_wait_estimate_needs(self) -> None:
+        # distinct_queued_users bounds how fast the queue drains, since dispatch takes at most one
+        # task per user at a time -- so it counts users, not their tasks
+        user = User.objects.create_user(username="queuedone", email="q1@example.com", password=None)
+        other = User.objects.create_user(username="queuedtwo", email="q2@example.com", password=None)
+        for _ in range(3):
+            Task.objects.create(user=user, ra=1.0, dec=2.0)
+        Task.objects.create(user=other, ra=3.0, dec=4.0)
+
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["queued_task_count"] == 4
+        assert body["distinct_queued_users"] == 2
+
+    def test_the_queue_composition_the_wait_estimate_prices_passes_by(self) -> None:
+        # dispatch orders one global queue across every request type, so a wait is priced by what
+        # is actually ahead rather than by the type of the task doing the waiting
+        user = User.objects.create_user(username="mixedqueue", email="mq@example.com", password=None)
+        for _ in range(3):
+            Task.objects.create(user=user, ra=1.0, dec=2.0)
+        parent = Task.objects.create(user=user, ra=3.0, dec=4.0)
+        Task.objects.create(user=user, ra=3.0, dec=4.0, request_type="IMGZIP", parent_task=parent)
+
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["queued_by_request_type"] == {"FP": 4, "IMGZIP": 1}
+
+    def test_an_empty_queue_is_composed_of_nothing(self) -> None:
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["queued_by_request_type"] == {}
+
+    def _finished_tasks(self, *runtimes: float) -> None:
+        """Create one finished task per run time given, so the medians have something to report."""
+        # one user for the whole test rather than one per call: auth_user.email carries a unique
+        # index (migration 0005), so a second call with a fixed address is an IntegrityError
+        user, _ = User.objects.get_or_create(username="ranbefore", defaults={"email": "rb@example.com"})
+        finished = timezone.now() - datetime.timedelta(minutes=5)
+        for seconds in runtimes:
+            Task.objects.create(
+                user=user,
+                ra=1.0,
+                dec=2.0,
+                timestamp=finished - datetime.timedelta(seconds=seconds + 1),
+                starttimestamp=finished - datetime.timedelta(seconds=seconds),
+                finishtimestamp=finished,
+            )
+
+    def test_typical_runtimes_ride_along_when_the_runner_is_alive(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+
+        body = self.status_response(procs_taskids={}).json()
+
+        assert body["typical_runtime_seconds"]["FP"] == 30.0
+
+    def test_a_stale_runner_offers_no_wait_estimate(self) -> None:
+        """The queue page discards the figure when the runner is stale, so the view must not pay for it.
+
+        The fixture matters: with no finished tasks the medians are empty anyway and the assertion
+        would hold whether or not the short-circuit exists.
+        """
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            stale_written = timezone.now() - datetime.timedelta(hours=1)
+            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert response.json()["stale"] is True
+        assert response.json()["typical_runtime_seconds"] == {}
+
+    def test_an_unreadable_status_file_still_answers_with_the_same_shape(self) -> None:
+        # both failure branches carry the key, so a reader can subscript it without first working
+        # out which kind of failure it got
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            statuspath.write_text("half a fi")
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.json()["typical_runtime_seconds"] == {}
 
     def test_old_status_file_reports_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2324,6 +2436,429 @@ class TaskRunnerStatusTests(TestCase):
             assert response.status_code == 503, f"{description}: {response.content!r}"
             assert response.json()["stale"] is True, description
             assert response.json()["running"] is False, description
+
+
+class TypicalRuntimeTests(TestCase):
+    """The median run times the queue page multiplies by the number of tasks ahead."""
+
+    def setUp(self) -> None:
+        # the figure is cached for five minutes, and the cache outlives one test within the process
+        caches["usagestats"].clear()
+        self.user = User.objects.create_user(username="runtimeuser", email="rt@example.com", password=None)
+        # how many tasks this test has made so far, which sets how long ago each one finished; see
+        # _finished_task
+        self.created = 0
+
+    def _finished_task(self, runtime_seconds: float, request_type: str = "FP", **kwargs: t.Any) -> Task:
+        """Create one finished task, more recent than the one before it.
+
+        The finish times are staggered a second apart in creation order rather than all landing on
+        `now`, so that a test relying on which completions are the most recent -- the sample limit
+        is applied in that order -- states its intent by the order it creates them in. Milliseconds
+        rather than seconds, so that a test creating thousands of tasks still lands them all in the
+        past.
+        """
+        self.created += 1
+        finished = timezone.now() - datetime.timedelta(hours=1) + datetime.timedelta(milliseconds=self.created)
+        started = finished - datetime.timedelta(seconds=runtime_seconds)
+        return Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            request_type=request_type,
+            # submitted before it started, which the default of `now` would not be: these tasks
+            # finish in the past, so the default leaves every one of them with a wait of minus an
+            # hour for anything that reads waittime()
+            timestamp=started - datetime.timedelta(seconds=1),
+            starttimestamp=started,
+            finishtimestamp=finished,
+            **kwargs,
+        )
+
+    def _finished_tasks(self, *runtimes: float, request_type: str = "FP") -> None:
+        """Create one finished task per run time given, so a test states only its own fixture."""
+        for runtime_seconds in runtimes:
+            self._finished_task(runtime_seconds, request_type=request_type)
+
+    def test_the_median_is_reported_per_request_type(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+        self._finished_tasks(100.0, 200.0, 300.0, 400.0, 500.0, request_type="IMGZIP")
+
+        typical = taskqueue.typical_runtime_seconds()
+
+        assert typical["FP"] == 30.0
+        assert typical["IMGZIP"] == 300.0
+
+    def test_one_stuck_task_does_not_drag_every_estimate_up(self) -> None:
+        """The reason this is a median and not the mean the stats page uses.
+
+        A task may run for TASK_MAXTIME_SECONDS (four hours) before it is killed. Against a mean,
+        one of those would add most of an hour to the figure shown to every waiting user; the
+        median does not move.
+        """
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 4 * 60 * 60)
+
+        assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
+
+    def test_a_type_with_too_few_samples_is_omitted(self) -> None:
+        # below the threshold nothing is reported for the type, and the queue page shows no
+        # estimate at all rather than one drawn from two tasks
+        self._finished_tasks(10.0, 20.0)
+
+        assert "FP" not in taskqueue.typical_runtime_seconds()
+
+    def test_no_finished_tasks_at_all_is_an_empty_answer(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        assert taskqueue.typical_runtime_seconds() == {}
+
+    def test_tasks_outside_the_window_are_not_counted(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+
+        # finished longer ago than TYPICAL_RUNTIME_WINDOW_HOURS, so out of scope however many
+        # there are
+        old = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 1)
+        Task.objects.filter(user=self.user).update(finishtimestamp=old)
+
+        assert taskqueue.typical_runtime_seconds() == {}
+
+    def test_a_backlogged_queue_still_reports_its_completions(self) -> None:
+        """The window is on completion, not submission.
+
+        A queue backlogged for longer than the window has nothing finishing that was submitted
+        inside it — which is exactly when a waiting user most wants the estimate.
+        """
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+        long_ago = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 5)
+        Task.objects.filter(user=self.user).update(timestamp=long_ago)
+
+        assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
+
+    def test_a_busy_type_does_not_crowd_out_a_quiet_one(self) -> None:
+        """The sample limit is per request type, not shared across them.
+
+        The IMGZIP tasks are created first, so they are the *oldest* completions: under one shared
+        cap the newest TYPICAL_RUNTIME_SAMPLE_LIMIT rows are all FP and IMGZIP falls below the
+        minimum. Created last they would sit at the front of a shared sample too, and the test
+        would pass either way.
+        """
+        self._finished_tasks(100.0, 200.0, 300.0, 400.0, 500.0, request_type="IMGZIP")
+        self._finished_tasks(*([10.0] * (taskqueue.TYPICAL_RUNTIME_SAMPLE_LIMIT + 50)))
+
+        typical = taskqueue.typical_runtime_seconds()
+
+        assert typical["FP"] == 10.0
+        assert typical["IMGZIP"] == 300.0
+
+    def test_an_unfinished_task_contributes_nothing(self) -> None:
+        self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
+        # started but not finished: subtracting a null finishtimestamp would raise, so this is the
+        # case the query's isnull filters exist for
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, starttimestamp=timezone.now())
+
+        assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
+
+
+class TaskTimingSerializerTests(TestCase):
+    """waittime and runtime, which the model has always computed and nothing ever showed."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="timinguser", email="tm@example.com", password="pw")
+        self.client.force_login(self.user)
+
+    def test_a_finished_task_reports_both(self) -> None:
+        submitted = timezone.now() - datetime.timedelta(seconds=170)
+        task = Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            timestamp=submitted,
+            starttimestamp=submitted + datetime.timedelta(seconds=40),
+            finishtimestamp=submitted + datetime.timedelta(seconds=170),
+        )
+
+        body = self.client.get(reverse("task-detail", args=[task.id])).json()
+
+        assert body["waittime"] == 40.0
+        assert body["runtime"] == 130.0
+
+    def test_an_unstarted_task_reports_null_rather_than_nan(self) -> None:
+        """A float sentinel for "not applicable" cannot cross this boundary.
+
+        NaN is not part of JSON: the renderer writes it as a bare `NaN` token, which JSON.parse
+        rejects — so one queued task would fail the whole response in the browser rather than
+        leaving a single field empty.
+        """
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        response = self.client.get(reverse("task-detail", args=[task.id]))
+
+        assert b"NaN" not in response.content, response.content
+        body = response.json()
+        assert body["waittime"] is None
+        assert body["runtime"] is None
+
+    def test_a_task_list_of_queued_tasks_is_still_parseable_json(self) -> None:
+        # the list is what the queue page actually fetches, and one unparseable row takes the page
+        # down rather than one field
+        for _ in range(3):
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        response = self.client.get(reverse("task-list"), {"format": "json"})
+
+        assert response.status_code == 200
+        assert b"NaN" not in response.content, response.content
+        assert all(task["runtime"] is None for task in response.json()["results"])
+
+    def test_neither_field_can_be_set_by_a_client(self) -> None:
+        # both are derived from the timestamps the runner writes, so a submitted value must be
+        # ignored rather than stored or echoed back
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 1.0, "dec": 2.0, "waittime": 999.0, "runtime": 999.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        created = response.json()
+        assert created["waittime"] is None
+        assert created["runtime"] is None
+        assert Task.objects.get(id=created["id"]).starttimestamp is None
+
+
+class TaskAttemptCountTests(TestCase):
+    """The retries that leave a task unfinished and get it dispatched again."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="retryuser", email="ru@example.com", password=None)
+
+    def test_each_attempt_is_counted_from_zero(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        for expected in (1, 2, 3):
+            taskrunner_main.mark_started(task)
+            task.refresh_from_db()
+            assert task.attempt_count == expected
+
+    def test_the_run_time_measures_the_attempt_that_produced_the_result(self) -> None:
+        """Not the whole history of them; the count is what carries that. See mark_started."""
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        Task.objects.filter(pk=task.id).update(starttimestamp=timezone.now() - datetime.timedelta(minutes=10))
+
+        taskrunner_main.mark_started(task)
+        taskrunner_main.mark_finished(task=task, error_msg=None)
+
+        task.refresh_from_db()
+        runtime = task.runtime()
+        assert runtime is not None
+        assert runtime < 60, "the run time should cover the last attempt, not the ten minutes before it"
+        assert task.attempt_count == 1
+
+    def test_the_instance_carries_the_attempt_as_well_as_the_row(self) -> None:
+        # `task` is a copy read when the queue was scanned, and do_task logs model_to_dict(task)
+        # straight after starting it -- so a database-only write leaves every task log reporting
+        # the previous attempt's values
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        taskrunner_main.mark_started(task)
+
+        assert task.starttimestamp is not None
+        assert task.attempt_count == 1
+
+    def test_the_count_reaches_the_api(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        taskrunner_main.mark_started(task)
+        taskrunner_main.mark_started(task)
+        self.client.force_login(self.user)
+
+        body = self.client.get(reverse("task-detail", args=[task.id])).json()
+
+        assert body["attempt_count"] == 2
+
+
+class WebserverStopTests(SimpleTestCase):
+    """Stopping the server when apachectl cannot run.
+
+    apachectl reaches the shutdown by parsing the generated config, which loads mod_wsgi, which
+    names its interpreter by absolute path -- so moving that interpreter leaves a running server
+    with no way to stop it through the normal route.
+    """
+
+    @staticmethod
+    def _atlaswebserver() -> t.Any:
+        """Import the CLI module with a project path its module body will accept.
+
+        That body rejects a path containing a space, which a checkout may well have; the override
+        exists for exactly that case and has to be in the environment before the first import.
+        """
+        os.environ.setdefault("ATLASSERVER_PATH", "/tmp/atlasserver-clitest")
+        from atlasserver import atlaswebserver
+
+        return atlaswebserver
+
+    def test_a_server_that_apachectl_stops_is_not_also_signalled(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=0) as runcommand,
+            mock.patch.object(atlaswebserver, "our_httpd_process") as ourprocess,
+        ):
+            atlaswebserver.stop()
+
+        assert runcommand.call_count == 1
+        assert not ourprocess.called, "the normal route worked, so nothing should be signalled"
+
+    def test_a_server_apachectl_cannot_stop_is_signalled_instead(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+        process = mock.Mock()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver, "our_httpd_process", return_value=process) as ourprocess,
+        ):
+            atlaswebserver.stop()
+
+        # identified again after the blocking command, not trusted from before it
+        ourprocess.assert_called_once_with(4242)
+        # the signal httpd -k graceful-stop sends: finish the current requests, then exit
+        process.send_signal.assert_called_once_with(signal.SIGWINCH)
+
+    def test_a_pid_reused_while_apachectl_ran_is_not_signalled(self) -> None:
+        # apachectl blocks, so the server can exit and its number be handed to something else
+        # between the check that found it and the fallback that would signal it
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
+            mock.patch.object(atlaswebserver, "signal_graceful_stop") as signalstop,
+        ):
+            atlaswebserver.stop()
+
+        assert not signalstop.called, "a pid that is no longer this server must not be signalled"
+
+    def test_a_server_that_is_not_running_is_neither_stopped_nor_signalled(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=None),
+            mock.patch.object(atlaswebserver, "run_command") as runcommand,
+            mock.patch.object(atlaswebserver.psutil, "Process") as process,
+        ):
+            atlaswebserver.stop()
+
+        assert not runcommand.called
+        assert not process.called
+
+    def test_a_process_that_exits_before_the_signal_is_not_an_error(self) -> None:
+        # the pid is read, then checked, then signalled, and the server can finish stopping in
+        # between -- which is the outcome being asked for, not a failure
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
+        ):
+            gone = mock.Mock()
+            gone.send_signal.side_effect = psutil.NoSuchProcess(4242)
+            assert atlaswebserver.signal_graceful_stop(gone) is True
+            atlaswebserver.stop()
+
+    def test_a_pid_that_now_belongs_to_something_else_is_not_the_server(self) -> None:
+        """A pid file outlives an unclean exit, and its number can be reused.
+
+        Without an identity check the fallback signals whatever inherited the pid, and restart then
+        waits forever for an unrelated process to exit.
+        """
+        atlaswebserver = self._atlaswebserver()
+
+        with mock.patch.object(atlaswebserver.psutil, "Process") as process:
+            process.return_value.cmdline.return_value = ["/usr/bin/some-other-daemon", "--serve"]
+
+            assert atlaswebserver.our_httpd_process(4242) is None
+
+    def test_a_pid_running_this_server_is_the_server(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+        conf = str(atlaswebserver.APACHEPATH / "httpd.conf")
+
+        with mock.patch.object(atlaswebserver.psutil, "Process") as process:
+            process.return_value.cmdline.return_value = ["httpd (mod_wsgi-express)", "-f", conf, "-DFOO"]
+
+            # the object that was checked, so psutil can refuse it later if the pid is reused
+            assert atlaswebserver.our_httpd_process(4242) is process.return_value
+
+    def test_a_process_that_cannot_be_inspected_is_not_assumed_to_be_ours(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        # a dead pid and one belonging to another user both arrive as psutil.Error
+        for failure in (psutil.NoSuchProcess(4242), psutil.AccessDenied(4242)):
+            with mock.patch.object(atlaswebserver.psutil, "Process", side_effect=failure):
+                assert atlaswebserver.our_httpd_process(4242) is None, failure
+
+    def test_a_stale_pid_file_is_removed_rather_than_believed(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("4242\n")
+
+            with (
+                mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
+                mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
+                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=False),
+            ):
+                assert atlaswebserver.get_httpd_pid() is None
+
+            assert not pidfile.exists(), "a pid file whose process is gone should not be kept"
+
+    def test_a_live_process_that_cannot_be_inspected_keeps_its_pid_file(self) -> None:
+        """Deleting it would throw away the only pointer to a running server.
+
+        get_httpd_pid then reports nothing running, so start() tries to bind a port that is already
+        held and retries for as long as it is left to.
+        """
+        atlaswebserver = self._atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("4242\n")
+
+            with (
+                mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
+                mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.AccessDenied(4242)),
+                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
+            ):
+                assert atlaswebserver.get_httpd_pid() is None
+
+            assert pidfile.exists(), "a live process we merely cannot inspect must keep its pid file"
+
+    def test_an_unreadable_pid_file_is_reported_rather_than_raised(self) -> None:
+        # every command begins by asking whether the server is up, so raising here makes the tool
+        # unusable until the file is removed by hand
+        atlaswebserver = self._atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "httpd.pid").write_text("")  # truncated by an unclean exit
+
+            with mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)):
+                assert atlaswebserver.get_httpd_pid() is None
+
+    def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
+        atlaswebserver = self._atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1),
+            mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
+        ):
+            denied = mock.Mock(pid=4242)
+            denied.send_signal.side_effect = psutil.AccessDenied(4242)
+            assert atlaswebserver.signal_graceful_stop(denied) is False
 
 
 class OpenApiSchemaTests(TestCase):

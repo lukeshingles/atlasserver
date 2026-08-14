@@ -19,6 +19,7 @@ import django
 import pandas as pd
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
+from django.db import models
 from django.forms.models import model_to_dict
 
 from atlasserver import settings
@@ -436,6 +437,29 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     return localresultfile, None
 
 
+def mark_started(task) -> None:
+    """Record that an attempt at the task has started.
+
+    A task that fails without a definite error is left unfinished and picked up again by the
+    dispatch loop, so this runs once per attempt.
+
+    starttimestamp is overwritten each time, so that finish minus start measures the attempt which
+    actually produced the result -- which is what says how long a comparable task will take, and so
+    what the wait estimate is built on. What that leaves out is that the task needed more than one
+    go, which the timestamps cannot express, so the attempts are counted alongside them.
+
+    A queryset update rather than a save(), and then the same values onto the instance, both for
+    the reasons given in mark_finished below -- `task` is a copy read when the queue was scanned,
+    and do_task logs model_to_dict(task) immediately after calling this.
+    """
+    starttimestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+
+    Task.objects.filter(pk=task.id).update(starttimestamp=starttimestamp, attempt_count=models.F("attempt_count") + 1)
+
+    task.starttimestamp = starttimestamp
+    task.attempt_count += 1
+
+
 def mark_finished(task, error_msg: str | None) -> None:
     """Record that a task has finished, in the database and on the in-memory instance.
 
@@ -564,7 +588,32 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     slot fields are frozen for that whole window (nothing is reaped or dispatched), so without the
     flag the file would confidently describe workers that may have already exited.
     """
-    oldest_queued = Task.queued().order_by("timestamp").values_list("timestamp", flat=True).first()
+    # One pass over the queued set for all three figures, rather than a first(), a count() and a
+    # distinct count() each rebuilding the queryset and scanning again -- this runs every
+    # STATUS_WRITE_SECONDS for as long as the runner is up, and the scan grows with the queue.
+    #
+    # distinct users is here because it is what bounds the rate the queue drains at: dispatch below
+    # takes at most one task per user at a time, so the effective concurrency is min(numslots,
+    # this). A fact about the queue, counted on the runner's own timescale instead of once per
+    # request from every open queue page.
+    queuestats = Task.queued().aggregate(
+        queued_task_count=models.Count("id"),
+        distinct_queued_users=models.Count("user_id", distinct=True),
+        oldest_queued=models.Min("timestamp"),
+    )
+    oldest_queued = queuestats["oldest_queued"]
+
+    # What the queue is made of, so that a wait can be priced by the work actually ahead rather
+    # than by the type of the task doing the waiting. Dispatch orders one global queue across every
+    # request type, and an IMGZIP task fetching a thousand images takes orders of magnitude longer
+    # than an FP task fitting one light curve -- so an FP task behind a run of them waits on their
+    # run times, not on its own.
+    #
+    # A second query rather than another aggregate: this one groups, and the counts above do not.
+    queued_by_request_type = {
+        row["request_type"]: row["count"]
+        for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
+    }
 
     status = {
         "written": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -573,7 +622,9 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "slots_busy": len(procs_taskids),
         "running_taskids": sorted(procs_taskids.values()),
         "maintenance": maintenance,
-        "queued_task_count": Task.queued().count(),
+        "queued_task_count": queuestats["queued_task_count"],
+        "distinct_queued_users": queuestats["distinct_queued_users"],
+        "queued_by_request_type": queued_by_request_type,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -606,9 +657,7 @@ def do_task(task, slotid: int) -> None:
         # also log to the main process
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
 
-    Task.objects.all().filter(pk=task.id).update(
-        starttimestamp=datetime.datetime.now(datetime.UTC).replace(tzinfo=datetime.UTC, microsecond=0).isoformat()
-    )
+    mark_started(task)
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
@@ -802,7 +851,7 @@ def main() -> None:
 
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
-    numslots: int = 16
+    numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
     procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
     procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None

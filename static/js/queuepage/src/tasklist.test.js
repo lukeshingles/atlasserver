@@ -42,6 +42,7 @@ function task(id, overrides = {}) {
         parent_task_id: null,
         parent_task_url: null,
         queuepos: 0,
+        attempt_count: 1,
         ...overrides,
     };
 }
@@ -333,9 +334,10 @@ describe('TaskPage', () => {
      * Answer the three endpoints, with the queuepositions body under the test's control.
      *
      * Returns a handle whose `positions` can be reassigned, so a test can let the queue empty.
+     * `runnerstatus` on the same handle overrides the status body, which the wait estimates read.
      */
-    const stubFetchWithPositions = (results, positions) => {
-        const control = { positions, results };
+    const stubFetchWithPositions = (results, positions, runnerstatus = {}) => {
+        const control = { positions, results, runnerstatus: { stale: false, queued_task_count: 0, ...runnerstatus } };
         global.fetch = (url, init = {}) => {
             const href = url.toString();
             requested.push(href);
@@ -345,7 +347,7 @@ describe('TaskPage', () => {
                 return Promise.resolve({ ok: true, status: 201, json: () => Promise.resolve(control.created ?? []) });
             }
             if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(control.runnerstatus) });
             }
             if (href.includes('queuepositions')) {
                 // control.hold, when set, is a promise the test resolves: it keeps one response in
@@ -359,7 +361,12 @@ describe('TaskPage', () => {
                 return gate.then(() => ({
                     ok: true,
                     status: 200,
-                    json: () => Promise.resolve({ queuepositions: body }),
+                    json: () => Promise.resolve({
+                        queuepositions: body,
+                        // the endpoint sends a type per queued task; FP unless a test says otherwise
+                        queuedtypes: { ...Object.fromEntries(Object.keys(body).map((id) => [id, 'FP'])),
+                            ...control.queuedtypes },
+                    }),
                 }));
             }
             return Promise.resolve({
@@ -1078,5 +1085,263 @@ describe('TaskPage', () => {
 
         assert.equal(rowMeta(container)['MPC Object:'], 'Makemake');
         assert.ok(!('RA Dec:' in rowMeta(container)), 'the coordinate row should be absent');
+    });
+
+    test('a task that needed several attempts says so', async () => {
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            attempt_count: 4,
+        })]);
+
+        assert.equal(rowMeta(container)['Attempts:'], '4');
+    });
+
+    test('a retried task does not blame the queue for time it spent failing', async () => {
+        // starttimestamp moves to each new attempt, so the span from submission to it covers the
+        // earlier attempts as well as the queue -- which is not a wait
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            waittime: 2400.0,
+            runtime: 130.0,
+            attempt_count: 3,
+        })]);
+
+        assert.equal(rowMeta(container)['Took:'], 'ran 2m 10s');
+    });
+
+    test('a task that ran first time does not mention attempts', async () => {
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            attempt_count: 1,
+        })]);
+
+        assert.ok(!('Attempts:' in rowMeta(container)), 'one attempt is the ordinary case and needs no line');
+    });
+
+    test('a finished task reports how long it waited and how long it ran', async () => {
+        const { container } = await renderPage([task(1, {
+            starttimestamp: '2026-01-01T00:00:40Z',
+            finishtimestamp: '2026-01-01T00:02:50Z',
+            waittime: 40.0,
+            runtime: 130.0,
+        })]);
+
+        assert.equal(rowMeta(container)['Took:'], 'waited 40s · ran 2m 10s');
+    });
+
+    test('a task cancelled before it ran reports only the half that happened', async () => {
+        // waittime is null when the task never started, and rendering "waited null" or dropping the
+        // whole line would both be worse than showing the half that is known
+        const { container } = await renderPage([task(1, {
+            finishtimestamp: '2026-01-01T00:00:40Z',
+            waittime: 40.0,
+            runtime: null,
+        })]);
+
+        assert.equal(rowMeta(container)['Took:'], 'waited 40s');
+    });
+
+    /*
+     * The wait estimate, as it reaches the page.
+     *
+     * waitestimate.test.js covers the arithmetic on its own; what these three check is the wiring
+     * that only exists once it is assembled -- the runner status poll, the queue positions poll,
+     * and the estimate computed from both in TaskPage and handed down to a row.
+     */
+    const renderWithStatus = async (results, positions, runnerstatus) => {
+        stubFetchWithPositions(results, positions, runnerstatus);
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(120);
+        return rendered;
+    };
+
+    test('a waiting row shows its position and an estimated wait', async () => {
+        const { container } = await renderWithStatus([task(1, { queuepos: 20 })], { 1: 20 }, {
+            queued_task_count: 21,
+            numslots: 16,
+            slots_busy: 5,
+            distinct_queued_users: 5,
+            typical_runtime_seconds: { FP: 600 },
+            queued_by_request_type: { FP: 21 },
+        });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /20 ahead/);
+        // 20 ahead, none of them this user's, 5 users sharing the queue: 4 passes x 600s
+        assert.match(status.textContent, /~40 min/);
+    });
+
+    test('a waiting row shows no estimate when the runner is not running', async () => {
+        const { container } = await renderWithStatus([task(1, { queuepos: 4 })], { 1: 4 }, {
+            stale: true,
+            queued_task_count: 5,
+            typical_runtime_seconds: { FP: 600 },
+        });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /4 ahead/);
+        assert.equal(status.querySelector('.taskestimate'), null,
+            'a stopped queue must not be counted down against');
+    });
+
+    test('another user\'s task gets no estimate from this user\'s queue', async () => {
+        // queuepositions.json answers for the signed-in user alone, and a task detail page is
+        // public. Applying those positions to somebody else's task counts the owner's own earlier
+        // tasks as other users' and divides them by the concurrency.
+        const { container } = await renderWithStatus(
+            [task(1, { queuepos: 20, user_id: 999 })], { 1: 20 }, {
+                queued_task_count: 21,
+                numslots: 16,
+                slots_busy: 5,
+                distinct_queued_users: 5,
+                typical_runtime_seconds: { FP: 600 },
+            });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /20 ahead/);
+        assert.equal(status.querySelector('.taskestimate'), null);
+    });
+
+    /**
+     * Render, then drive one more runner-status poll with a replacement body.
+     *
+     * The replacement is a distinct object, as a real `response.json()` is on every poll — a stub
+     * that hands back one shared reference makes the comparison in runnerStatusEqual unobservable,
+     * since both branches of it then yield the same reference.
+     */
+    const repollRunnerStatus = async (results, positions, first, second) => {
+        mock.timers.enable({ apis: ['setInterval'] });
+        try {
+            const control = stubFetchWithPositions(results, positions, first);
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            const before = rendered.container.querySelector('#runnerstatus')?.textContent;
+            control.runnerstatus = second;
+            mock.timers.tick(60000);
+            await flush(120);
+
+            return { before, after: rendered.container.querySelector('#runnerstatus')?.textContent };
+        } finally {
+            mock.timers.reset();
+        }
+    };
+
+    test('the outage banner keeps counting up while the runner stays down', async () => {
+        // every other field is frozen while the runner is down -- the status file is not being
+        // rewritten, and the medians are withheld -- so the age is the only thing that moves. A
+        // comparison that skips it leaves the banner reporting its first reading for the whole
+        // outage.
+        const { before, after } = await repollRunnerStatus(
+            [task(1, { queuepos: 1 })], { 1: 1 },
+            { stale: true, queued_task_count: 1, status_age_seconds: 61, typical_runtime_seconds: {} },
+            { stale: true, queued_task_count: 1, status_age_seconds: 7200, typical_runtime_seconds: {} });
+
+        assert.match(before, /1 minute ago/);
+        assert.match(after, /2 hours ago/);
+    });
+
+    test('a poll that moved a rendered field updates the banner', async () => {
+        // the other half: the gate must not swallow a real change
+        const body = { numslots: 16, typical_runtime_seconds: { FP: 60 } };
+        const { before, after } = await repollRunnerStatus(
+            [task(1, { queuepos: 1 })], { 1: 1 },
+            { ...body, queued_task_count: 3, slots_busy: 2 },
+            { ...body, queued_task_count: 9, slots_busy: 7 });
+
+        assert.match(before, /2 of 16 slots busy/);
+        assert.match(after, /7 of 16 slots busy/);
+    });
+
+    test('a bulk submission is not told it will be finished in a moment', async () => {
+        // the case the naive formula gets wrong, end to end: 20 of this user's own tasks queued and
+        // every slot free. They run one at a time, so the last one waits 20 run times.
+        const positions = Object.fromEntries(Array.from({ length: 21 }, (unused, index) => [index + 1, index]));
+        const { container } = await renderWithStatus([task(21, { queuepos: 20 })], positions, {
+            queued_task_count: 21,
+            numslots: 16,
+            distinct_queued_users: 1,
+            typical_runtime_seconds: { FP: 60 },
+        });
+
+        // 20 x 60s = 20 min, not the 20/16 x 60s = 75s that dividing by the slots would claim
+        assert.match(container.querySelector('.taskstatus.waiting').textContent, /~20 min/);
+    });
+});
+
+/*
+ * The gate that decides whether a runner-status poll re-renders the page.
+ *
+ * Tested directly rather than through a rendered component: its only effect is whether a render
+ * happens, and a render that produces identical output leaves the DOM identical too, so no
+ * assertion on the page can tell the two apart.
+ */
+describe('runnerStatusEqual', () => {
+    let runnerStatusEqual;
+
+    beforeEach(async () => {
+        if (window) {
+            await teardownDom(window);
+        }
+        window = setupDom();
+        await loadReact();
+        ({ runnerStatusEqual } = await importComponent('tasklist.jsx'));
+    });
+
+    const healthy = (overrides = {}) => ({
+        stale: false,
+        maintenance: false,
+        numslots: 16,
+        slots_busy: 2,
+        queued_task_count: 3,
+        distinct_queued_users: 2,
+        typical_runtime_seconds: { FP: 60 },
+        written: '2026-01-01T00:00:00Z',
+        status_age_seconds: 3.1,
+        ...overrides,
+    });
+
+    test('a poll that only moved the clock says nothing new', () => {
+        // what every healthy poll looks like, and the whole reason the volatile list exists
+        assert.equal(runnerStatusEqual(
+            healthy(), healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 8.4 })), true);
+    });
+
+    test('the running task ids are not read, so they do not count as a change', () => {
+        assert.equal(runnerStatusEqual(
+            healthy({ running_taskids: [1, 2] }), healthy({ running_taskids: [3, 4] })), true);
+    });
+
+    for (const field of ['stale', 'maintenance', 'slots_busy', 'numslots', 'queued_task_count', 'distinct_queued_users']) {
+        test(`a change to ${field} is a change`, () => {
+            const before = healthy();
+            assert.equal(runnerStatusEqual(before, healthy({ [field]: 99 })), false);
+        });
+    }
+
+    test('a change to the medians is a change', () => {
+        assert.equal(runnerStatusEqual(
+            healthy(), healthy({ typical_runtime_seconds: { FP: 61 } })), false);
+        assert.equal(runnerStatusEqual(
+            healthy(), healthy({ typical_runtime_seconds: { FP: 60, IMGZIP: 900 } })), false);
+    });
+
+    test('a field the endpoint gains later is compared by default', () => {
+        // the point of listing what to ignore rather than what to read: a new field can cost a
+        // re-render, but it cannot go silently unnoticed by a reader that wants it
+        assert.equal(runnerStatusEqual(healthy(), healthy({ future_field: 'a' })), false);
+    });
+
+    test('the age is compared while the runner is down, since nothing else moves then', () => {
+        assert.equal(runnerStatusEqual(
+            healthy({ stale: true, status_age_seconds: 61 }),
+            healthy({ stale: true, status_age_seconds: 7200 })), false);
+    });
+
+    test('a first answer is always a change', () => {
+        assert.equal(runnerStatusEqual(null, healthy()), false);
+        assert.equal(runnerStatusEqual(null, null), true);
     });
 });

@@ -108,6 +108,11 @@ class Task(models.Model):
     )
     propermotion_ra = models.FloatField(null=True, blank=True, verbose_name="Proper motion RA (mas/yr)")
     propermotion_dec = models.FloatField(null=True, blank=True, verbose_name="Proper motion Dec (mas/yr)")
+    # How many times the runner has started this task; zero until the first attempt. The timestamps
+    # describe only the attempt that produced the result, so this is the one record that a task
+    # needed more than one. See taskrunner.main.mark_started.
+    attempt_count = models.IntegerField(default=0, verbose_name="Execution attempts")
+
     queuepos_relative = models.IntegerField(null=True, blank=True, default=None, verbose_name="Queue position")
     userqueuedtasks_on_submit = models.IntegerField(
         null=True, blank=True, default=None, verbose_name="User queued tasks when submitted", editable=False
@@ -200,10 +205,12 @@ class Task(models.Model):
             + f" {'redimg' if self.use_reduced else 'diffimg'} {status} {' archived' if self.is_archived else ''}"
         )
 
-        if self.starttimestamp:
-            strtask += f" waittime: {self.waittime():.0f}s"
-        if self.finishtimestamp:
-            strtask += f" runtime: {self.runtime():.0f}s"
+        # tested against the value rather than against the timestamps it is derived from, so the
+        # condition cannot drift from the one inside waittime()/runtime()
+        if (waittime := self.waittime()) is not None:
+            strtask += f" waittime: {waittime:.0f}s"
+        if (runtime := self.runtime()) is not None:
+            strtask += f" runtime: {runtime:.0f}s"
 
         strtask += f" queuedtasks_on_submit: {self.userqueuedtasks_on_submit}"
 
@@ -341,19 +348,29 @@ class Task(models.Model):
     def finished(self) -> bool:
         return bool(self.finishtimestamp)
 
-    def waittime(self) -> float:
+    # None rather than a float sentinel for "not applicable yet", so a caller that forgets to check
+    # gets a TypeError rather than a number that quietly propagates. It also crosses the API
+    # boundary: NaN is not part of JSON, and the renderer emits it as a bare token that JSON.parse
+    # rejects, so one unstarted task would fail a whole response.
+    def waittime(self) -> float | None:
+        """Return how long the task waited before starting, or None if it has not started."""
         if self.starttimestamp and self.timestamp:
-            timediff = self.starttimestamp - self.timestamp
-            return timediff.total_seconds()
+            # Floored at zero, but only across the sub-second gap the runner's own rounding opens:
+            # it writes starttimestamp truncated to the whole second while timestamp keeps its
+            # microseconds, so a task dispatched the moment it arrives computes a small negative.
+            # Anything below that is clock skew between the two hosts and is left visible rather
+            # than flattened into a plausible-looking zero.
+            waited = (self.starttimestamp - self.timestamp).total_seconds()
+            return 0.0 if -1.0 < waited < 0.0 else waited
 
-        return float("NaN")
+        return None
 
-    def runtime(self) -> float:
+    def runtime(self) -> float | None:
+        """Return how long the task took to run, or None if it has not finished running."""
         if self.finishtimestamp and self.starttimestamp:
-            timediff = self.finishtimestamp - self.starttimestamp
-            return timediff.total_seconds()
+            return (self.finishtimestamp - self.starttimestamp).total_seconds()
 
-        return float("NaN")
+        return None
 
     @property
     def username(self) -> str:
