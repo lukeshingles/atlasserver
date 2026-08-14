@@ -2810,10 +2810,43 @@ class WebserverStopTests(SimpleTestCase):
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
                 mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
+                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=False),
             ):
                 assert atlaswebserver.get_httpd_pid() is None
 
-            assert not pidfile.exists(), "a pid file naming somebody else's process should not be kept"
+            assert not pidfile.exists(), "a pid file whose process is gone should not be kept"
+
+    def test_a_live_process_that_cannot_be_inspected_keeps_its_pid_file(self) -> None:
+        """Deleting it would throw away the only pointer to a running server.
+
+        get_httpd_pid then reports nothing running, so start() tries to bind a port that is already
+        held and retries for as long as it is left to.
+        """
+        atlaswebserver = self._atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("4242\n")
+
+            with (
+                mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
+                mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.AccessDenied(4242)),
+                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
+            ):
+                assert atlaswebserver.get_httpd_pid() is None
+
+            assert pidfile.exists(), "a live process we merely cannot inspect must keep its pid file"
+
+    def test_an_unreadable_pid_file_is_reported_rather_than_raised(self) -> None:
+        # every command begins by asking whether the server is up, so raising here makes the tool
+        # unusable until the file is removed by hand
+        atlaswebserver = self._atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "httpd.pid").write_text("")  # truncated by an unclean exit
+
+            with mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)):
+                assert atlaswebserver.get_httpd_pid() is None
 
     def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
         atlaswebserver = self._atlaswebserver()
