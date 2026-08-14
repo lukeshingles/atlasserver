@@ -351,14 +351,6 @@ export const Task = React.memo(function Task(props) {
 
     function deleteTask() {
         const task = props.taskdata;
-        // deleting a finished task also removes its data file, plot and any retrieved images, and
-        // none of that can be recovered. Cancelling a task that has not finished stays one click.
-        if (task.finishtimestamp != null && !window.confirm(
-            'Delete task ' + task.id + '? Its data file, plot and any retrieved images will be'
-            + ' removed and cannot be recovered.')) {
-            return;
-        }
-
         collapseRow(task.id);
         setTimeout(() => {
             fetch(task.url, {
