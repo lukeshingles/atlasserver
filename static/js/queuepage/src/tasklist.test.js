@@ -1205,14 +1205,16 @@ describe('TaskPage', () => {
         assert.match(after, /2 hours ago/);
     });
 
-    test('an unchanged status leaves the banner alone', async () => {
-        // the gate that stops a poll re-rendering the whole page once a minute
-        const body = { queued_task_count: 3, numslots: 16, slots_busy: 2, typical_runtime_seconds: { FP: 60 } };
+    test('a poll that moved a rendered field updates the banner', async () => {
+        // the other half: the gate must not swallow a real change
+        const body = { numslots: 16, typical_runtime_seconds: { FP: 60 } };
         const { before, after } = await repollRunnerStatus(
-            [task(1, { queuepos: 1 })], { 1: 1 }, { ...body }, { ...body });
+            [task(1, { queuepos: 1 })], { 1: 1 },
+            { ...body, queued_task_count: 3, slots_busy: 2 },
+            { ...body, queued_task_count: 9, slots_busy: 7 });
 
         assert.match(before, /2 of 16 slots busy/);
-        assert.equal(after, before);
+        assert.match(after, /7 of 16 slots busy/);
     });
 
     test('a bulk submission is not told it will be finished in a moment', async () => {
@@ -1228,5 +1230,80 @@ describe('TaskPage', () => {
 
         // 20 x 60s = 20 min, not the 20/16 x 60s = 75s that dividing by the slots would claim
         assert.match(container.querySelector('.taskstatus.waiting').textContent, /~20 min/);
+    });
+});
+
+/*
+ * The gate that decides whether a runner-status poll re-renders the page.
+ *
+ * Tested directly rather than through a rendered component: its only effect is whether a render
+ * happens, and a render that produces identical output leaves the DOM identical too, so no
+ * assertion on the page can tell the two apart.
+ */
+describe('runnerStatusEqual', () => {
+    let runnerStatusEqual;
+
+    beforeEach(async () => {
+        if (window) {
+            await teardownDom(window);
+        }
+        window = setupDom();
+        await loadReact();
+        ({ runnerStatusEqual } = await importComponent('tasklist.jsx'));
+    });
+
+    const healthy = (overrides = {}) => ({
+        stale: false,
+        maintenance: false,
+        numslots: 16,
+        slots_busy: 2,
+        queued_task_count: 3,
+        distinct_queued_users: 2,
+        typical_runtime_seconds: { FP: 60 },
+        written: '2026-01-01T00:00:00Z',
+        status_age_seconds: 3.1,
+        ...overrides,
+    });
+
+    test('a poll that only moved the clock says nothing new', () => {
+        // what every healthy poll looks like, and the whole reason the volatile list exists
+        assert.equal(runnerStatusEqual(
+            healthy(), healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 8.4 })), true);
+    });
+
+    test('the running task ids are not read, so they do not count as a change', () => {
+        assert.equal(runnerStatusEqual(
+            healthy({ running_taskids: [1, 2] }), healthy({ running_taskids: [3, 4] })), true);
+    });
+
+    for (const field of ['stale', 'maintenance', 'slots_busy', 'numslots', 'queued_task_count', 'distinct_queued_users']) {
+        test(`a change to ${field} is a change`, () => {
+            const before = healthy();
+            assert.equal(runnerStatusEqual(before, healthy({ [field]: 99 })), false);
+        });
+    }
+
+    test('a change to the medians is a change', () => {
+        assert.equal(runnerStatusEqual(
+            healthy(), healthy({ typical_runtime_seconds: { FP: 61 } })), false);
+        assert.equal(runnerStatusEqual(
+            healthy(), healthy({ typical_runtime_seconds: { FP: 60, IMGZIP: 900 } })), false);
+    });
+
+    test('a field the endpoint gains later is compared by default', () => {
+        // the point of listing what to ignore rather than what to read: a new field can cost a
+        // re-render, but it cannot go silently unnoticed by a reader that wants it
+        assert.equal(runnerStatusEqual(healthy(), healthy({ future_field: 'a' })), false);
+    });
+
+    test('the age is compared while the runner is down, since nothing else moves then', () => {
+        assert.equal(runnerStatusEqual(
+            healthy({ stale: true, status_age_seconds: 61 }),
+            healthy({ stale: true, status_age_seconds: 7200 })), false);
+    });
+
+    test('a first answer is always a change', () => {
+        assert.equal(runnerStatusEqual(null, healthy()), false);
+        assert.equal(runnerStatusEqual(null, null), true);
     });
 });

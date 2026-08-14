@@ -107,14 +107,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
     @staticmethod
     def _rounded_seconds(value: float | None) -> float | None:
-        """Round a second count for display, or pass through the None that means "not yet".
-
-        Floored at zero: the runner writes starttimestamp truncated to the whole second while
-        timestamp keeps its microseconds, so a task dispatched the moment it arrives computes a
-        wait a fraction of a second below zero. That is a clock artefact rather than a measurement,
-        and it reads as one.
-        """
-        return None if value is None else round(max(0.0, value), 1)
+        """Round a second count for display, or pass through the None that means "not yet"."""
+        return None if value is None else round(value, 1)
 
     def get_waittime(self, obj) -> float | None:
         """Seconds the task spent in the queue before it started."""

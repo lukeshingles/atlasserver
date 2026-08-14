@@ -60,6 +60,13 @@ describe('estimateWaitSeconds', () => {
         assert.equal(soleTaskAt(15, { distinct_queued_users: 20 }), 0);
     });
 
+    test('the first pass is still estimated when every slot is busy', () => {
+        // optimistic, since the task then waits for a slot to free -- but withholding on a full
+        // queue would make the figure appear and vanish between polls as slots_busy moves, across
+        // the last few positions, which is the stretch a waiting user watches hardest
+        assert.equal(soleTaskAt(15, { distinct_queued_users: 20, slots_busy: 16 }), 0);
+    });
+
     test('concurrency is bounded by the number of users, not the slot count', () => {
         // 16 slots but only 2 users with work: at most one task per user runs, so two at a time
         assert.equal(soleTaskAt(8, { distinct_queued_users: 2 }), (8 / 2) * 60);
@@ -78,14 +85,8 @@ describe('estimateWaitSeconds', () => {
         assert.equal(seconds, 4 * 60);
     });
 
-    test('the next task waits for nothing while a slot is free', () => {
+    test('the next task waits for nothing', () => {
         assert.equal(soleTaskAt(0), 0);
-    });
-
-    test('nothing is estimated for the next task while every slot is busy', () => {
-        // it starts when one of the running tasks finishes, and nothing reported here says how far
-        // through those are -- the position chip already says "next"
-        assert.equal(soleTaskAt(0, { slots_busy: 16 }), null);
     });
 
     test('the request type selects its own typical runtime', () => {
@@ -147,8 +148,11 @@ describe('estimateWaitSeconds', () => {
         assert.equal(seconds, null);
     });
 
-    test('an empty queued-user count offers no estimate either', () => {
-        assert.equal(soleTaskAt(4, { distinct_queued_users: 0 }), null);
+    test('a queued-user count of zero is a lagging snapshot, not a missing field', () => {
+        // the status file is written every 15s and read every 60, so it can still describe the
+        // empty queue this task was submitted into. Refusing here would blank every row of a bulk
+        // submission for over a minute -- the case the module exists for.
+        assert.equal(soleTaskAt(4, { distinct_queued_users: 0 }), 4 * 60);
     });
 });
 

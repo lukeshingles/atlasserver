@@ -350,7 +350,13 @@ class Task(models.Model):
     def waittime(self) -> float | None:
         """Return how long the task waited before starting, or None if it has not started."""
         if self.starttimestamp and self.timestamp:
-            return (self.starttimestamp - self.timestamp).total_seconds()
+            # Floored at zero, but only across the sub-second gap the runner's own rounding opens:
+            # it writes starttimestamp truncated to the whole second while timestamp keeps its
+            # microseconds, so a task dispatched the moment it arrives computes a small negative.
+            # Anything below that is clock skew between the two hosts and is left visible rather
+            # than flattened into a plausible-looking zero.
+            waited = (self.starttimestamp - self.timestamp).total_seconds()
+            return 0.0 if -1.0 < waited < 0.0 else waited
 
         return None
 

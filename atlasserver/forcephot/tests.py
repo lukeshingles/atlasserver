@@ -2408,16 +2408,26 @@ class TypicalRuntimeTests(TestCase):
         # the figure is cached for five minutes, and the cache outlives one test within the process
         caches["usagestats"].clear()
         self.user = User.objects.create_user(username="runtimeuser", email="rt@example.com", password=None)
+        # how many tasks this test has made so far, which sets how long ago each one finished; see
+        # _finished_task
+        self.created = 0
 
     def _finished_task(self, runtime_seconds: float, request_type: str = "FP", **kwargs: t.Any) -> Task:
-        started = timezone.now() - datetime.timedelta(seconds=runtime_seconds + 1)
+        """Create one finished task, more recent than the one before it.
+
+        The finish times are staggered a second apart in creation order rather than all landing on
+        `now`, so that a test relying on which completions are the most recent -- the sample limit
+        is applied in that order -- states its intent by the order it creates them in.
+        """
+        self.created += 1
+        finished = timezone.now() - datetime.timedelta(hours=1) + datetime.timedelta(seconds=self.created)
         return Task.objects.create(
             user=self.user,
             ra=1.0,
             dec=2.0,
             request_type=request_type,
-            starttimestamp=started,
-            finishtimestamp=started + datetime.timedelta(seconds=runtime_seconds),
+            starttimestamp=finished - datetime.timedelta(seconds=runtime_seconds),
+            finishtimestamp=finished,
             **kwargs,
         )
 
@@ -2481,10 +2491,15 @@ class TypicalRuntimeTests(TestCase):
         assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
 
     def test_a_busy_type_does_not_crowd_out_a_quiet_one(self) -> None:
-        # the sample limit is per request type: under one shared cap a flood of FP tasks fills it
-        # and IMGZIP loses its estimate, which is the type where a wait matters most
-        self._finished_tasks(*([10.0] * (taskqueue.TYPICAL_RUNTIME_SAMPLE_LIMIT + 50)))
+        """The sample limit is per request type, not shared across them.
+
+        The IMGZIP tasks are created first, so they are the *oldest* completions: under one shared
+        cap the newest TYPICAL_RUNTIME_SAMPLE_LIMIT rows are all FP and IMGZIP falls below the
+        minimum. Created last they would sit at the front of a shared sample too, and the test
+        would pass either way.
+        """
         self._finished_tasks(100.0, 200.0, 300.0, 400.0, 500.0, request_type="IMGZIP")
+        self._finished_tasks(*([10.0] * (taskqueue.TYPICAL_RUNTIME_SAMPLE_LIMIT + 50)))
 
         typical = taskqueue.typical_runtime_seconds()
 

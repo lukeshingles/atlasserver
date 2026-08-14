@@ -59,16 +59,18 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     // How many tasks run at once: the slot count, but never more than the number of users sharing
     // the queue, because dispatch takes at most one task per user at a time.
     //
-    // Both are required rather than defaulted. A runner that has not been restarted since this
-    // field was added still writes a fresh status file without it, so `stale` is false and the
-    // absence is silent -- and defaulting it to 1 would multiply every estimate by up to the slot
-    // count, which is the "invented estimate" case this module refuses.
+    // Absent is refused, zero is not. A runner predating this field writes a fresh status file
+    // without it, so `stale` is false and the absence is silent -- an estimate built on a guessed
+    // concurrency would be off by up to the slot count. A present zero is different: the status
+    // file is written every 15s and read every 60, so it can still describe an empty queue when
+    // this task's own position proves otherwise. One is the floor that case needs, and it is the
+    // right answer anyway, since a queue with anything in it has at least one user.
     const numslots = runnerstatus.numslots;
     const queuedusers = runnerstatus.distinct_queued_users;
-    if (!(numslots > 0) || !(queuedusers > 0)) {
+    if (numslots == null || queuedusers == null) {
         return null;
     }
-    const concurrency = Math.min(numslots, queuedusers);
+    const concurrency = Math.max(1, Math.min(numslots, queuedusers));
 
     // Positions strictly ahead of this one. The endpoint reports the user's whole queued set, not
     // the page on screen, which is what makes this a count of their queue rather than of the rows
@@ -80,14 +82,13 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
     // sixteen ways of running them, all fifteen start in the same pass as this one, so it waits
     // for none of them -- a fraction here would report most of a run time for a task about to
     // start. The user's own tasks are serialised one per pass, so they count individually.
+    //
+    // A task in the first pass gets zero, which reads as "under a minute". That is optimistic when
+    // every slot is occupied, since it then waits for one to come free; the alternative of
+    // withholding the estimate whenever slots_busy equals numslots is worse in practice, because
+    // slots_busy moves on its own and the figure would appear and vanish from one poll to the next
+    // across the last `concurrency` positions -- the stretch a waiting user watches hardest.
     const passesahead = Math.max(ownahead, Math.floor(otherahead / concurrency));
-
-    if (passesahead === 0) {
-        // Nothing has to finish first, so the only question is whether a slot is free now. If every
-        // slot is busy the task waits for one to come free, and nothing reported here says how far
-        // through those tasks are -- so say nothing, and let the position chip carry it.
-        return runnerstatus.slots_busy < numslots ? 0 : null;
-    }
 
     return passesahead * typicalruntime;
 }
@@ -101,7 +102,7 @@ export function estimateWaitSeconds({ queuepos, ownqueuepositions, requesttype, 
  * reads as a broken promise in a way that one that comes good early does not.
  */
 export function formatWaitEstimate(seconds) {
-    if (seconds == null || !isFinite(seconds)) {
+    if (seconds == null || !Number.isFinite(seconds)) {
         return null;
     }
 

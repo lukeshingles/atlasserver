@@ -672,11 +672,11 @@ export const Task = React.memo(function Task(props) {
         // has too few recent samples of, produces null and nothing is shown. An absent estimate is
         // a smaller failure than an invented one, which is the number the user plans around.
         const estimate = props.waitestimate != null
-            ? <span className="taskestimate">{props.waitestimate}<span className="visually-hidden"> estimated wait</span></span>
+            ? <>{' '}<span className="taskestimate">{props.waitestimate}<span className="visually-hidden"> estimated wait</span></span></>
             : null;
         taskbox.push(
             <div key="status" className="taskstatus waiting">
-                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>{estimate != null ? ' ' : null}{estimate}
+                Waiting <span className="badge taskposition">{ahead}<span className="visually-hidden"> in the queue</span></span>{estimate}
             </div>);
     } else {
         // queuepos is null until the queue has been renumbered, and the sentence used to be
@@ -728,8 +728,13 @@ let historynavigations = 0;
  */
 const RUNNERSTATUS_VOLATILE_FIELDS = ['written', 'pid', 'running_taskids', 'status_age_seconds'];
 
-/** Whether two runner status responses say the same thing to everything that reads one. */
-function runnerStatusEqual(previous, next) {
+/**
+ * Whether two runner status responses say the same thing to everything that reads one.
+ *
+ * Exported for its own tests: what it decides is whether the page re-renders, which leaves no mark
+ * on the DOM either way, so it cannot be pinned through a rendered component.
+ */
+export function runnerStatusEqual(previous, next) {
     if (previous == null || next == null) {
         return previous === next;
     }
@@ -752,26 +757,14 @@ function runnerStatusEqual(previous, next) {
             continue;
         }
         // typical_runtime_seconds is the one nested value: a handful of request types to a number
-        // each. Compared key by key rather than by JSON.stringify, which is sensitive to key order
-        // -- and the server builds that object in whichever order the request types are met in a
-        // scan, so the same medians can arrive spelled two ways.
-        if (!plainObjectsEqual(before, after)) {
+        // each. Serialising is enough to compare it, because the server builds it by iterating the
+        // declared request types, so a given set of medians has one spelling.
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
             return false;
         }
     }
 
     return true;
-}
-
-/** Whether two values are objects with the same keys and identical values, one level deep. */
-function plainObjectsEqual(before, after) {
-    if (before == null || after == null || typeof before !== 'object' || typeof after !== 'object') {
-        return false;
-    }
-
-    const beforekeys = Object.keys(before);
-    return beforekeys.length === Object.keys(after).length
-        && beforekeys.every(key => before[key] === after[key]);
 }
 
 /*
@@ -1758,11 +1751,11 @@ export function TaskPage() {
         // estimate depends on the whole queued set, and a row only knows about itself. Handed down
         // as a string so that the memo comparison in taskPropsEqual stays a primitive check.
         //
-        // Only for the viewer's own tasks. queuepositions.json answers for request.user alone, so
-        // for somebody else's task -- a task detail page is public, and staff see every row -- the
-        // positions on hand belong to the wrong person: the owner's own earlier tasks would be
-        // counted as other users' and divided by the concurrency instead of serialised.
-        const waitEstimateFor = (task) => (task.user_id != user_id ? null : formatWaitEstimate(estimateWaitSeconds({
+        // tracksQueuePosition is the same question this needs answered -- is the queuepositions
+        // response about this task? -- so it is reused rather than restated. Without it, somebody
+        // else's task (a detail page is public, and staff see every row) would be measured against
+        // the viewer's queue, counting the owner's own earlier tasks as other users'.
+        const waitEstimateFor = (task) => (!tracksQueuePosition(task) ? null : formatWaitEstimate(estimateWaitSeconds({
             queuepos: task.queuepos,
             ownqueuepositions: state.ownqueuepositions,
             requesttype: task.request_type,
