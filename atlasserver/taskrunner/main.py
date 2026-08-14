@@ -448,12 +448,16 @@ def mark_started(task) -> None:
     what the wait estimate is built on. What that leaves out is that the task needed more than one
     go, which the timestamps cannot express, so the attempts are counted alongside them.
 
-    A queryset update rather than a save() for the reason given in mark_finished below.
+    A queryset update rather than a save(), and then the same values onto the instance, both for
+    the reasons given in mark_finished below -- `task` is a copy read when the queue was scanned,
+    and do_task logs model_to_dict(task) immediately after calling this.
     """
-    Task.objects.filter(pk=task.id).update(
-        starttimestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0),
-        attempt_count=models.F("attempt_count") + 1,
-    )
+    starttimestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+
+    Task.objects.filter(pk=task.id).update(starttimestamp=starttimestamp, attempt_count=models.F("attempt_count") + 1)
+
+    task.starttimestamp = starttimestamp
+    task.attempt_count += 1
 
 
 def mark_finished(task, error_msg: str | None) -> None:

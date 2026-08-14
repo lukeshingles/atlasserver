@@ -574,10 +574,9 @@ export const Task = React.memo(function Task(props) {
         meta.push(['mjdrange', 'MJD request:', <span>[{mjdmin}, {mjdmax}]</span>]);
     }
 
-    // Only when there was more than one. A task that failed without a definite error is dispatched
-    // again, and the timestamps show only the attempt that produced the result -- so a result that
-    // took four goes is otherwise indistinguishable from one that took a single go, and a user
-    // comparing two runs of the same target has no way to see why one of them was slow to appear.
+    // Only when there was more than one, since one is the ordinary case. The timings below cover
+    // the attempt that produced the result, so this is what says a result was slow to appear
+    // because the task had to be retried.
     if (task.attempt_count > 1) {
         meta.push(['attempts', 'Attempts:', task.attempt_count]);
     }

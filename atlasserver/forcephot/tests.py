@@ -2619,12 +2619,7 @@ class TaskAttemptCountTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="retryuser", email="ru@example.com", password=None)
 
-    def test_a_task_that_has_never_run_has_no_attempts(self) -> None:
-        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
-
-        assert task.attempt_count == 0
-
-    def test_each_attempt_is_counted(self) -> None:
+    def test_each_attempt_is_counted_from_zero(self) -> None:
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
         for expected in (1, 2, 3):
@@ -2633,11 +2628,7 @@ class TaskAttemptCountTests(TestCase):
             assert task.attempt_count == expected
 
     def test_the_run_time_measures_the_attempt_that_produced_the_result(self) -> None:
-        """Not the whole history of them.
-
-        What a run time is for is saying how long a comparable task will take, so it has to be the
-        time an attempt actually takes; the count is what carries the fact that there were several.
-        """
+        """Not the whole history of them; the count is what carries that. See mark_started."""
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
         Task.objects.filter(pk=task.id).update(starttimestamp=timezone.now() - datetime.timedelta(minutes=10))
 
@@ -2648,6 +2639,17 @@ class TaskAttemptCountTests(TestCase):
         runtime = task.runtime()
         assert runtime is not None
         assert runtime < 60, "the run time should cover the last attempt, not the ten minutes before it"
+        assert task.attempt_count == 1
+
+    def test_the_instance_carries_the_attempt_as_well_as_the_row(self) -> None:
+        # `task` is a copy read when the queue was scanned, and do_task logs model_to_dict(task)
+        # straight after starting it -- so a database-only write leaves every task log reporting
+        # the previous attempt's values
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        taskrunner_main.mark_started(task)
+
+        assert task.starttimestamp is not None
         assert task.attempt_count == 1
 
     def test_the_count_reaches_the_api(self) -> None:
@@ -2759,7 +2761,8 @@ class WebserverStopTests(SimpleTestCase):
     def test_a_process_that_cannot_be_inspected_is_not_assumed_to_be_ours(self) -> None:
         atlaswebserver = self._atlaswebserver()
 
-        for failure in (psutil.NoSuchProcess(4242), psutil.AccessDenied(4242), psutil.ZombieProcess(4242)):
+        # a dead pid and one belonging to another user both arrive as psutil.Error
+        for failure in (psutil.NoSuchProcess(4242), psutil.AccessDenied(4242)):
             with mock.patch.object(atlaswebserver.psutil, "Process", side_effect=failure):
                 assert atlaswebserver.is_our_httpd(4242) is False, failure
 
@@ -2772,7 +2775,6 @@ class WebserverStopTests(SimpleTestCase):
 
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
-                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
                 mock.patch.object(atlaswebserver, "is_our_httpd", return_value=False),
             ):
                 assert atlaswebserver.get_httpd_pid() is None

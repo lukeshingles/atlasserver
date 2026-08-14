@@ -1083,8 +1083,6 @@ describe('TaskPage', () => {
     });
 
     test('a task that needed several attempts says so', async () => {
-        // the timestamps show only the attempt that produced the result, so without this a result
-        // that took four goes looks exactly like one that took a single go
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:02:50Z',
             attempt_count: 4,
