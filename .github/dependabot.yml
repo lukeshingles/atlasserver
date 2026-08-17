@@ -2,12 +2,22 @@
 version: 2
 updates:
 
+    # A group covers one kind of update: applies-to defaults to version-updates, and there is no
+    # value meaning both, so an ecosystem that can raise security pull requests needs a second
+    # group to keep those from arriving one-per-advisory. pre-commit gets no second group, because
+    # advisories are keyed to package ecosystems and a hook is just a git repo and a rev, so
+    # Dependabot only ever raises version updates for it.
     - package-ecosystem: github-actions
       directory: /
       schedule:
           interval: weekly
       groups:
           github-actions:
+              applies-to: version-updates
+              patterns:
+                  - '*'
+          github-actions-security:
+              applies-to: security-updates
               patterns:
                   - '*'
 
@@ -18,6 +28,11 @@ updates:
       versioning-strategy: lockfile-only
       groups:
           lockfile:
+              applies-to: version-updates
+              patterns:
+                  - '*'
+          lockfile-security:
+              applies-to: security-updates
               patterns:
                   - '*'
 
@@ -39,5 +54,10 @@ updates:
           interval: weekly
       groups:
           npm:
+              applies-to: version-updates
+              patterns:
+                  - '*'
+          npm-security:
+              applies-to: security-updates
               patterns:
                   - '*'
