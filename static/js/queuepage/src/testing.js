@@ -39,7 +39,7 @@ export async function importComponent(entry) {
             // would otherwise resolve the package root, whose default export has no createRoot
             'react-dom': 'react-dom/client',
             csrftoken: join(SRC, 'csrftoken.js'),
-            agetext: join(SRC, 'agetext.js'),
+            runnerstatus: join(SRC, 'runnerstatus.js'),
             waitestimate: join(SRC, 'waitestimate.js'),
             pollcache: join(SRC, 'pollcache.js'),
             newrequest: join(SRC, 'newrequest.jsx'),
@@ -75,10 +75,21 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     // node exposes globalThis.navigator as a getter-only property, so a plain assignment throws
     Object.defineProperty(global, 'navigator', { value: window.navigator, configurable: true });
 
+    /*
+     * Where runnerstatus.js reads its endpoint, as base.html gives it.
+     *
+     * The box itself (#sitenotice) is deliberately absent. The module starts its poll when it is
+     * given a box or when something subscribes, so without one here the first fetch happens as
+     * TaskPage mounts -- which is after each test has installed its fetch stub. Adding the box for
+     * realism would fetch at importComponent() time with no stub in place, and the response the
+     * wait estimates need would be lost.
+     */
+    window.document.head.insertAdjacentHTML(
+        'beforeend', '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json">');
+
     // globals from the inline script in tasklist-react.html
     global.api_url_base = 'http://testserver/queue/';
     global.queuepositions_url = 'http://testserver/queuepositions.json';
-    global.taskrunnerstatus_url = 'http://testserver/taskrunnerstatus.json';
     global.user_id = 1;
     global.user_is_active = true;
     global.hidden = 'hidden';

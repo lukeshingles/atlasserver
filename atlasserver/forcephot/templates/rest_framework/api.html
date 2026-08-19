@@ -21,6 +21,9 @@
   {# had this since the navbar stopped being usable on a phone; the API page never did.           #}
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
+
+  {# see base.html: where js/runnerstatus.min.js reads the endpoint to poll #}
+  <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
 {% endblock %}
 
 {% block style %}
@@ -44,6 +47,11 @@
 {% block navbar %}{% include "navbar.html" %}{% endblock %}
 
 {% block breadcrumbs %}
+  {# The site notice, in the block DRF gives above the content. This is the only block between the #}
+  {# navigation and the page, and it is where base.html puts the box as well, so the browsable API #}
+  {# carries the same note and the same runner status as every other page. #}
+  {% include "sitenotice.html" %}
+
   {% comment %}
     DRF builds a trail from the URL, and on a list endpoint that trail is one entry -- the page's own
     heading, printed a second time immediately above itself.
@@ -74,4 +82,7 @@
   <script src="{% static "rest_framework/js/load-ajax-form.js" %}"></script>
   {# the navbar included above is the site's, so it gets the site's navbar behaviour too #}
   <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
+
+  {# fills the runner line of the box above. It imports nothing, so this page needs no import map #}
+  <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>
 {% endblock %}

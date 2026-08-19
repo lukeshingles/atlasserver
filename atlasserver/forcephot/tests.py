@@ -1685,7 +1685,9 @@ class TaskCreateResponseTests(TestCase):
         content = response.content.decode()
         assert "const api_url_base = 'http://testserver/queue/'" in content, content[:500]
         assert "const queuepositions_url = 'http://testserver/queuepositions.json'" in content
-        assert "const taskrunnerstatus_url = 'http://testserver/taskrunnerstatus.json'" in content
+        # the runner status endpoint reaches the page as a meta tag from base.html, which every
+        # page carries, so this render path gets it without the view context either
+        assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
 
     def test_single_task_creation(self) -> None:
         # RA 0 / Dec 0 doubles as the end-to-end check that zero coordinates survive the API
@@ -4577,3 +4579,72 @@ class BrowsableApiBreadcrumbTests(TestCase):
         assert 'class="breadcrumb"' in content, "the way back to the list was removed with it"
         assert f'<a href="{reverse("task-list")}?format=api">Force Phot Task List</a>' in content
         assert "<h1>Force Phot Task Instance" in content
+
+
+class SiteNoticeTests(TestCase):
+    """The one box above the content, on every page.
+
+    It carries the standing note about the data and the task runner's own status. The note is
+    rendered by the server; js/runnerstatus.min.js fills the runner line and polls for it, so the
+    page has to supply the endpoint URL and the module as well as the markup.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="reader", email="reader@example.com", password=None)
+
+    def page(self, url: str) -> str:
+        return self.client.get(url, HTTP_ACCEPT="text/html").content.decode()
+
+    def test_every_page_carries_the_box_and_what_fills_it(self) -> None:
+        # a page the user is on during an outage is not necessarily the queue: the note and the
+        # runner status are the two things a reader needs before they trust any page of the site
+        pagenames = ["index", "faq", "resultdesc", "apiguide", "stats", "login"]
+
+        for name in pagenames:
+            with self.subTest(page=name):
+                content = self.page(reverse(name))
+
+                assert '<div class="sitenotice" id="sitenotice">' in content
+                assert "Forced photometry is now available from the Southern Telescopes" in content
+                assert '<p class="sitenotice-runner" id="runnerstatus" role="status">' in content
+                assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
+                assert "js/runnerstatus.min.js" in content
+
+    def test_the_queue_page_carries_it_too(self) -> None:
+        self.client.force_login(self.user)
+
+        content = self.page(reverse("task-list"))
+
+        assert '<div class="sitenotice" id="sitenotice">' in content
+        assert "js/runnerstatus.min.js" in content
+
+    def test_the_browsable_api_carries_it_too(self) -> None:
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("task-list"), {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+
+        assert '<div class="sitenotice" id="sitenotice">' in content
+        assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
+        assert "js/runnerstatus.min.js" in content
+
+    def test_the_queue_page_reaches_one_copy_of_the_module(self) -> None:
+        """The import map and the script tag must name the same URL, character for character.
+
+        A browser holds one instance of a module per resolved URL. The queue page loads the module
+        as a script and imports it again for its wait estimates, so two spellings of the URL would
+        give two instances, two polls a minute, and a page reading a store that nothing draws.
+        """
+        self.client.force_login(self.user)
+        content = self.page(reverse("task-list"))
+
+        imported = re.search(r'"runnerstatus": "([^"]+)"', content)
+        loaded = re.search(r'<script type="module" src="([^"]*runnerstatus[^"]*)"', content)
+
+        assert imported is not None, "the import map lost its runnerstatus entry"
+        assert loaded is not None, "the page does not load the module"
+        assert imported.group(1) == loaded.group(1)
+
+    def test_the_module_is_built(self) -> None:
+        # the bundles are committed, and CI rebuilds them to prove they are current; this only
+        # catches the source file being added without its build
+        assert (settings.STATIC_ROOT / "js" / "runnerstatus.min.js").is_file()

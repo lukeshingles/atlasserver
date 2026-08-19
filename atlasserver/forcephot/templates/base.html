@@ -18,6 +18,11 @@
         {# unreadable and none of the responsive rules in main.css ever apply #}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="NONE,NOARCHIVE" />
+
+        {# where js/runnerstatus.min.js reads the endpoint to poll. In the page rather than in the #}
+        {# script, because {% url %} carries the /forcedphot script prefix and only a template #}
+        {# knows it. A relative URL is enough for a same-origin fetch. #}
+        <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
       {% endblock %}
 
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
@@ -54,6 +59,12 @@
         <script src="{% static "js/theme.js" %}?ver={{ static_version }}"></script>
       {% endblock %}
 
+      {# The queue page's import map; every other page leaves this empty. A map has to come before #}
+      {# every module script in the document, and the runner status module at the foot of this page #}
+      {# is one, so the map cannot sit down there with it. A page that fills this block defines it #}
+      {# at its own top level, so that the map renders once and in this position. #}
+      {% block importmap %}{% endblock %}
+
     {% endblock %}
   </head>
 
@@ -64,7 +75,7 @@
       {% block navbar %}{% include "navbar.html" %}{% endblock %}
 
       <div class="container">
-        <div class="notices">{% include "notice.txt" %}</div>
+        {% block sitenotice %}{% include "sitenotice.html" %}{% endblock %}
 
         <div id="content" role="main" aria-label="{% translate "content" %}">
           {% block content %}{% endblock %}
@@ -78,6 +89,11 @@
       {# At the foot of the page, unlike theme.js: this one measures the rendered navbar rather than #}
       {# deciding a colour, so it has nothing to say before the first paint. #}
       <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
+
+      {# Fills the runner line of the box above the content, and polls for it once a minute. The #}
+      {# queue page imports this same URL through its import map, so the browser instantiates the #}
+      {# module once and both readers share its one poll. #}
+      <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>
     {% endblock %}
 
   </body>

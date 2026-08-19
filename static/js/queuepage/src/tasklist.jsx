@@ -2,7 +2,7 @@
 
 import React from "react"
 import ReactDOM from 'react-dom';
-import { describeAge } from "agetext";
+import { subscribe } from "runnerstatus";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
@@ -22,7 +22,6 @@ function debug_log(...args) {
 // immediate full fetch, so "my task is done" still appears within one short interval.
 const TASKLIST_POLL_MS = 6000;
 const QUEUEPOS_POLL_MS = 2000;
-const RUNNERSTATUS_POLL_MS = 60000;
 
 const SITE_TITLE = 'ATLAS Forced Photometry';
 
@@ -726,144 +725,21 @@ const tasklist_pollcache = new PollCache();
 let historynavigations = 0;
 
 /*
- * Fields of the runner status that move on their own and are not read for their value.
+ * The task runner's status, as the shared poll last reported it.
  *
- * A denylist rather than a list of the fields that matter: a field added to the endpoint later is
- * then compared by default, so the worst it can do is cost a re-render. Under an allowlist it would
- * be silently invisible to every reader, with nothing failing to say so.
- */
-const RUNNERSTATUS_VOLATILE_FIELDS = ['written', 'pid', 'running_taskids', 'status_age_seconds'];
-
-/**
- * Whether two runner status responses say the same thing to everything that reads one.
- *
- * Exported for its own tests: what it decides is whether the page re-renders, which leaves no mark
- * on the DOM either way, so it cannot be pinned through a rendered component.
- */
-export function runnerStatusEqual(previous, next) {
-    if (previous == null || next == null) {
-        return previous === next;
-    }
-
-    // The age advances on every poll by construction, so comparing it always would make this gate
-    // useless. It is rendered in one place, the outage banner -- and that is exactly the case where
-    // every other field has stopped moving, because a runner that is not writing its status file is
-    // not changing any of them. Excluded when the runner is healthy, compared when it is not.
-    if ((previous.stale || next.stale) && previous.status_age_seconds !== next.status_age_seconds) {
-        return false;
-    }
-
-    const fields = new Set([...Object.keys(previous), ...Object.keys(next)]
-        .filter(field => !RUNNERSTATUS_VOLATILE_FIELDS.includes(field)));
-
-    for (const field of fields) {
-        const before = previous[field];
-        const after = next[field];
-        if (before === after) {
-            continue;
-        }
-        // typical_runtime_seconds is the one nested value: a handful of request types to a number
-        // each. Serialising is enough to compare it, because the server builds it by iterating the
-        // declared request types, so a given set of medians has one spelling.
-        if (JSON.stringify(before) !== JSON.stringify(after)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/*
- * Poll the task runner's status, and return the last answer.
- *
- * Owned by TaskPage rather than by the banner that renders it, because the wait estimates read the
- * same response -- numslots, distinct_queued_users, slots_busy and the typical run times. Two
- * components polling this endpoint would be two requests a minute asking an identical question.
+ * Owned by TaskPage rather than by a component of its own, because the wait estimates read this
+ * response -- numslots, distinct_queued_users, slots_busy and the typical run times. The sentence
+ * about the runner is drawn by runnerstatus.js into the box above the content, on every page of the
+ * site; this page reads the same store, so the two share one request a minute.
  */
 function useRunnerStatus() {
     const [status, setStatus] = React.useState(null);
-    // when the endpoint was last actually reachable. A ref, not state: nothing renders it, and it
-    // must not be a render input or every poll would re-render the banner unchanged.
-    const lastgoodfetch = React.useRef(null);
 
-    React.useEffect(() => {
-        function fetchStatus() {
-            // a stale runner is reported with HTTP 503 and a body, so the status is read from the
-            // body rather than from the status code
-            fetch(taskrunnerstatus_url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-                .then(response => response.json())
-                .then(status => {
-                    lastgoodfetch.current = Date.now();
-                    // Replaced only when something a reader looks at has moved. The response is a
-                    // freshly parsed object every poll, so its identity always differs -- and this
-                    // state is TaskPage's, so taking it unconditionally re-renders the whole page
-                    // (every row's estimate, two URL parses) to redraw an unchanged line.
-                    setStatus(previous => (runnerStatusEqual(previous, status) ? previous : status));
-                })
-                .catch(error => {
-                    // not being able to reach this endpoint says nothing about the runner, so do not
-                    // claim an outage on the strength of our own failed request — but a status we have
-                    // not been able to re-confirm for several polls is no longer worth asserting
-                    // either, in either direction: a frozen "3 slots busy" line outlives a dead
-                    // runner, and a frozen outage banner outlives a recovered one.
-                    debug_log('Could not read the task runner status', error);
-                    if (lastgoodfetch.current != null && (Date.now() - lastgoodfetch.current) > RUNNERSTATUS_POLL_MS * 5) {
-                        setStatus(null);
-                    }
-                });
-        }
-
-        // the mount fetch runs whether or not polling is paused, for the same reason fetchData's
-        // does: it is the one that fills the page, not a repeat of it. That also retires the
-        // 2-second retry timer this used to need — the retry existed only because a tab opened in
-        // the background (cmd-click, session restore) had its mount fetch dropped and would
-        // otherwise have shown no outage banner until the 60-second interval first fired.
-        fetchStatus();
-        const interval = pollInterval(fetchStatus, RUNNERSTATUS_POLL_MS);
-
-        return () => clearInterval(interval);
-    }, []);
+    // subscribe() returns its own unsubscribe function, which is what the effect has to clean up
+    React.useEffect(() => subscribe(setStatus), []);
 
     return status;
 }
-
-const RunnerStatus = React.memo(function RunnerStatus({ status }) {
-    if (status == null) {
-        return null;
-    }
-
-    if (status.stale) {
-        const age = status.status_age_seconds != null
-            ? ' It last reported ' + describeAge(status.status_age_seconds) + '.'
-            : '';
-        return (
-            <p key="runnerstatus" id="runnerstatus" className="runnerstatus stale" role="status">
-                The task runner is not currently processing jobs.{age} Queued tasks will start once it is
-                back; there is no need to submit them again.
-            </p>
-        );
-    }
-
-    if (!status.queued_task_count) {
-        // an idle runner with an empty queue is the normal case and needs no commentary
-        return null;
-    }
-
-    // during the hourly maintenance sweep the slot counts are frozen (nothing is dispatched or
-    // reaped while it runs), so say what is happening rather than reporting numbers that are
-    // temporarily meaningless
-    const activity = status.maintenance
-        ? 'maintenance sweep in progress;'
-        : status.slots_busy + ' of ' + status.numslots + ' slots busy,';
-
-    return (
-        <p key="runnerstatus" id="runnerstatus" className="runnerstatus" role="status">
-            Task runner: {activity}
-            {' '}{status.queued_task_count} unfinished {status.queued_task_count == 1 ? 'task' : 'tasks'} from
-            all users in the queue.
-        </p>
-    );
-});
 
 const Pager = React.memo(function Pager({ previous, next, taskcount, pagefirsttaskposition, pagetaskcount, updateCursor }) {
     debug_log('Pager rendered');
@@ -929,7 +805,7 @@ export function TaskPage() {
         ownqueued: null,
     });
 
-    // read by both the banner and the wait estimates; see useRunnerStatus
+    // read by the wait estimates, and by the site notice box through the same store
     const runnerstatus = useRunnerStatus();
 
     /*
@@ -1702,8 +1578,6 @@ export function TaskPage() {
                 <li key="started"><button type="button" onClick={() => setFilter('started')} aria-pressed={filterIsActive('started', state.dataurl)} className={'btn ' + filterclass('started', state.dataurl)}>Running/Finished</button></li>
             </ul>);
     }
-
-    pagehtml.push(<RunnerStatus key="runnerstatus" status={runnerstatus} />);
 
     if (state.tasklist_last_fetch_time != null) {
         pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{state.tasklist_api_error}</span></p>);

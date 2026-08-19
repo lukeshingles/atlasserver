@@ -6,7 +6,7 @@
 // and so those tasks are worked through one after another however many slots are free.
 //
 // A plain import, with no DOM and no React: that is what keeping these functions out of the
-// component module buys (the same reasoning as agetext.test.js).
+// component module buys (the same reasoning as pollcache.test.js).
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 

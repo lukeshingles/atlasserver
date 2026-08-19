@@ -105,12 +105,13 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-top: 0em;
 } */
 
-/* The standing note about the data, on every page above the content. As a panel rather than a line
-   of small grey text: what it carries is a caveat about the measurements themselves, which is worth
-   more than the smallest type on the page. The edge is the warm orange of the mark's trail, which is
+/* The one box above the content, on every page: the standing note about the data, and the task
+   runner's account of itself from /taskrunnerstatus.json. As a panel rather than a line of small
+   grey text: what it carries is a caveat about the measurements themselves, which is worth more
+   than the smallest type on the page. The edge is the warm orange of the mark's trail, which is
    the site's colour for "read this", and it is quiet enough at this width not to compete with the
    heading below it. */
-.notices {
+.sitenotice {
   background-color: var(--bs-tertiary-bg);
   border-left: 3px solid var(--atlas-ember);
   border-radius: 0.4em;
@@ -118,6 +119,36 @@ in the query, the -webkit- form included, since that is the only form Safari has
   font-size: 0.85em;
   margin-bottom: 1.5em;
   padding: 0.7em 1em;
+}
+
+.sitenotice p {
+  margin-bottom: 0.5em;
+}
+
+.sitenotice p:last-child {
+  margin-bottom: 0;
+}
+
+/* The runner line is in the page before there is anything to say, so that it is a live region a
+   screen reader announces into. Empty, it draws no line box; this takes away the margin as well,
+   so it holds no space until it is filled. */
+.sitenotice-runner:empty {
+  margin: 0;
+}
+
+/* While the runner is down, the same box in Bootstrap's own warning colours. The -subtle and
+   -emphasis variables have a dark value as well as a light one, so the panel stays a warning on
+   the dark theme rather than a pale yellow block. The border shorthand replaces the orange edge
+   above with a yellow rule on all four sides, which is what makes this read as a different state
+   of the box and not as the box with another line in it. It is on the box rather than on the
+   runner line, so that the panel holds the standing note too: while the runner is down, both
+   lines are things the reader has to know before they read the page. */
+.sitenotice.stale {
+  background-color: var(--bs-warning-bg-subtle);
+  border: 1px solid var(--bs-warning-border-subtle);
+  border-radius: 0.3em;
+  color: var(--bs-warning-text-emphasis);
+  font-size: 1em;
 }
 
 div.page-header {
@@ -561,25 +592,6 @@ p.taskerror {
   color: var(--bs-body-color);
   font-weight: bold;
   margin-top: 1em;
-}
-
-/* the task runner health line, from /taskrunnerstatus.json */
-p.runnerstatus {
-  color: var(--bs-secondary-color);
-  font-size: 0.85em;
-  margin-bottom: 0.5em;
-}
-
-/* Bootstrap's own warning panel colours, which is what this yellow was a hand-written copy of.
-   The -subtle and -emphasis variables have a dark value as well as a light one, so the panel
-   stays a warning on the dark theme rather than a pale yellow block. */
-p.runnerstatus.stale {
-  background-color: var(--bs-warning-bg-subtle);
-  border: 1px solid var(--bs-warning-border-subtle);
-  border-radius: 0.3em;
-  color: var(--bs-warning-text-emphasis);
-  font-size: 1em;
-  padding: 0.7em 1em;
 }
 
 /* Bootstrap 3's button palette, which the two frameworks disagree about: .btn-warning was orange

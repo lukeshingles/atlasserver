@@ -1,0 +1,15 @@
+{# The one box above the content, on every page: the standing note about the data, and the task #}
+{# runner's own account of itself. Both are things a reader must know before they trust what the #}
+{# page below shows, so they share one place and one treatment rather than stacking two panels. #}
+{# js/runnerstatus.min.js fills the second line and turns the box into a warning panel while the #}
+{# runner is down; the first line is server-rendered, so it shows with no JavaScript. #}
+<div class="sitenotice" id="sitenotice">
+  {# notice.txt is inline text inside this paragraph. Keep it that way: a block element added to #}
+  {# that file would nest inside a <p> and the browser would close the paragraph before it. #}
+  <p class="sitenotice-note">{% include "notice.txt" %}</p>
+
+  {# Present and empty rather than added when there is something to say. A live region has to be #}
+  {# in the page before its content changes for a screen reader to announce the change. An empty #}
+  {# paragraph draws no line box, and main.css takes away its margin, so it occupies nothing. #}
+  <p class="sitenotice-runner" id="runnerstatus" role="status"></p>
+</div>
