@@ -83,6 +83,9 @@
   {# the navbar included above is the site's, so it gets the site's navbar behaviour too #}
   <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
 
+  {# see base.html: the dismiss control for the standing note #}
+  <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
+
   {# fills the runner line of the box above. It imports nothing, so this page needs no import map #}
   <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>
 {% endblock %}

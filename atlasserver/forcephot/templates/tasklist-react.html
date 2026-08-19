@@ -57,6 +57,11 @@
 </script>
 {% endblock %}
 
+{# The queue page always wants the runner's queue counts, whether or not this user is waiting on #}
+{# anything: it is the page about the queue. Every other page asks for them only on behalf of a #}
+{# reader who has tasks in it. #}
+{% block sitenotice %}{% include "sitenotice.html" with alwaysshowqueue=True %}{% endblock %}
+
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
 

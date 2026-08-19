@@ -136,6 +136,60 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin: 0;
 }
 
+/* Nothing to say, so nothing to draw. Both paragraphs can be empty at once: the runner is healthy
+   and quiet, and the reader has dismissed the standing note (js/sitenotice.js takes it out of the
+   page) or the site is running without one. Without this the page would carry a padded panel with
+   nothing in it. Whitespace counts as content, so an emptied notice.txt has to be empty of that
+   too. */
+.sitenotice:not(:has(p:not(:empty))) {
+  display: none;
+}
+
+/* The control that puts the standing note away. Bootstrap's own close button, which carries its
+   mark as a background image and so leaves the paragraph's text as the reader reads it -- which is
+   what js/sitenotice.js hashes to tell one notice from the next. Small, and at the end of the line
+   rather than over it: it is not the thing to reach for on this box. */
+.sitenotice-dismiss {
+  float: right;
+  font-size: 0.7em;
+  margin-left: 0.75em;
+  margin-top: 0.2em;
+}
+
+/* The outage mark, in front of the sentence about the runner. The panel's colour says the same
+   thing, and this is for the reader who cannot use it: a colour-blind reader, and a printed page.
+   Drawn by js/runnerstatus.min.js, so it exists only in the state it belongs to. */
+.sitenotice-warnmark {
+  height: 1.1em;
+  /* the gap belongs here rather than in the sentence, which is then exactly what it reads as */
+  margin-right: 0.3em;
+  vertical-align: -0.2em;
+  width: 1.1em;
+}
+
+/* The box changes state under the reader, on a poll they did not ask for, so the colours move
+   rather than snap. Only the colours: a size or a position that animates would move the text
+   under a reader who is part-way through it. */
+@media (prefers-reduced-motion: no-preference) {
+  .sitenotice {
+    transition: background-color 0.4s ease, border-color 0.4s ease, color 0.4s ease;
+  }
+}
+
+/* On paper the runner line is wrong before the ink is dry, and the box has no state to be in. The
+   note is a caveat about the measurements, so it stays with them. */
+@media print {
+  .sitenotice,
+  .sitenotice.stale {
+    background-color: transparent;
+  }
+
+  .sitenotice-dismiss,
+  .sitenotice-runner {
+    display: none;
+  }
+}
+
 /* While the runner is down, the same box in Bootstrap's own warning colours. The -subtle and
    -emphasis variables have a dark value as well as a light one, so the panel stays a warning on
    the dark theme rather than a pale yellow block. The border shorthand replaces the orange edge

@@ -2290,6 +2290,28 @@ class TaskRunnerStatusTests(TestCase):
         assert response.status_code == 503
         assert response.json()["running"] is False
 
+    def test_a_status_is_cacheable_for_one_write_interval(self) -> None:
+        """Every page asks for this on load and then once a minute.
+
+        Several open tabs therefore ask several times for a file the runner rewrites every
+        STATUS_WRITE_SECONDS, and inside that interval there is nothing new to be had.
+        """
+        response = self.status_response(procs_taskids={})
+
+        assert response.status_code == 200
+        assert response["Cache-Control"] == "private, max-age=15, stale-while-revalidate=45"
+
+    def test_an_outage_is_cacheable_too(self) -> None:
+        # the same reasoning, and the case where every page in the site is asking at once
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+        ):
+            response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert "max-age=15" in response["Cache-Control"]
+
     def test_fresh_status_file_reports_running(self) -> None:
         user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
         Task.objects.create(user=user, ra=1.0, dec=2.0)
@@ -4615,7 +4637,7 @@ class SiteNoticeTests(TestCase):
 
         content = self.page(reverse("task-list"))
 
-        assert '<div class="sitenotice" id="sitenotice">' in content
+        assert 'class="sitenotice" id="sitenotice"' in content
         assert "js/runnerstatus.min.js" in content
 
     def test_the_browsable_api_carries_it_too(self) -> None:
@@ -4648,3 +4670,31 @@ class SiteNoticeTests(TestCase):
         # the bundles are committed, and CI rebuilds them to prove they are current; this only
         # catches the source file being added without its build
         assert (settings.STATIC_ROOT / "js" / "runnerstatus.min.js").is_file()
+
+    def test_the_dismiss_control_is_hidden_until_its_script_runs(self) -> None:
+        # a page without JavaScript keeps the note and offers no control that would do nothing
+        content = self.page(reverse("index"))
+
+        assert 'class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden' in content
+        assert "js/sitenotice.js" in content
+
+    def test_the_queue_counts_are_offered_to_a_reader_who_is_waiting(self) -> None:
+        """data-showqueue is what tells runnerstatus.js to draw the queue line.
+
+        How many slots are busy answers "when does my task start". A reader with nothing queued has
+        not asked that, so the attribute is absent and the line is not drawn. The outage sentence
+        does not depend on it.
+        """
+        assert "data-showqueue" not in self.page(reverse("index")), "an anonymous reader is waiting on nothing"
+
+        self.client.force_login(self.user)
+        assert "data-showqueue" not in self.page(reverse("index")), "signed in, but with an empty queue"
+
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        assert "data-showqueue" in self.page(reverse("index")), "this reader has something in the queue"
+
+    def test_the_queue_page_always_asks_for_the_queue_counts(self) -> None:
+        # it is the page about the queue, whether or not this reader is waiting on anything
+        self.client.force_login(self.user)
+
+        assert "data-showqueue" in self.page(reverse("task-list"))

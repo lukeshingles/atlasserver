@@ -90,6 +90,10 @@
       {# deciding a colour, so it has nothing to say before the first paint. #}
       <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
 
+      {# Reveals the control that puts the standing note away, and keeps it away until the note #}
+      {# changes. At the foot of the page with the others: it reads the note, which is above it. #}
+      <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
+
       {# Fills the runner line of the box above the content, and polls for it once a minute. The #}
       {# queue page imports this same URL through its import map, so the browser instantiates the #}
       {# module once and both readers share its one poll. #}

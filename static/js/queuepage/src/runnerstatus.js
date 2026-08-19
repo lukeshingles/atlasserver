@@ -88,8 +88,13 @@ export function runnerStatusEqual(previous, next) {
  * The sentence for a status, or null when the runner has nothing to report.
  *
  * A string rather than markup, so that the one caller which touches the DOM is renderInto below.
+ *
+ * `showQueue` is whether the queue counts are of use to this reader. The outage sentence is for
+ * everybody, because it changes what to expect of every page. How many slots are busy is not: it
+ * is an answer to "when does my task start", so a reader with nothing queued, on a page that is
+ * not the queue, is told nothing at all.
  */
-export function runnerMessage(status) {
+export function runnerMessage(status, { showQueue = true } = {}) {
     if (status == null) {
         return null;
     }
@@ -102,7 +107,7 @@ export function runnerMessage(status) {
             + ' Queued tasks will start once it is back; there is no need to submit them again.';
     }
 
-    if (!status.queued_task_count) {
+    if (!status.queued_task_count || !showQueue) {
         // an idle runner with an empty queue is the normal case and needs no commentary
         return null;
     }
@@ -118,7 +123,7 @@ export function runnerMessage(status) {
         + (status.queued_task_count == 1 ? 'task' : 'tasks') + ' from all users in the queue.';
 }
 
-/** Whether polling is to be skipped for now. */
+/** Whether the page is on screen. A hidden tab is not polled; see subscribe below. */
 function pollingPaused() {
     // typeof, because the store also runs under `node --test` with no DOM at all. The queue page
     // pauses on its own inactivity timer as well, which is a global no other page defines, so a
@@ -176,10 +181,19 @@ export function createStore({ url, poll = POLL_MS }) {
             });
     }
 
+    function refreshIfVisible() {
+        if (!pollingPaused()) {
+            refresh();
+        }
+    }
+
     /** Stop polling, and forget the last reading. */
     function stop() {
         clearInterval(interval);
         interval = null;
+        if (typeof document !== 'undefined') {
+            document.removeEventListener('visibilitychange', refreshIfVisible);
+        }
         // A store with no readers has no way to know how old its answer will be when somebody
         // subscribes again, so it keeps none. The next subscriber gets null and a fresh request,
         // which is what a first subscriber gets. A page that draws the box never reaches this: its
@@ -204,6 +218,12 @@ export function createStore({ url, poll = POLL_MS }) {
             // outage line until the interval first fired.
             refresh();
             interval = setInterval(() => { if (!pollingPaused()) { refresh(); } }, poll);
+            // A hidden tab is not polled, so what it shows is as old as the moment it was hidden.
+            // The reader who comes back to it is the one person looking at that line, and an
+            // outage that started, or ended, while they were away is exactly what it gets wrong.
+            if (typeof document !== 'undefined') {
+                document.addEventListener('visibilitychange', refreshIfVisible);
+            }
         }
 
         listener(status);
@@ -246,6 +266,45 @@ export function subscribe(listener) {
     return pageStore().subscribe(listener);
 }
 
+/**
+ * The warning mark that goes in front of the outage sentence.
+ *
+ * Drawn here rather than written into the template, because it belongs to a state the template
+ * cannot know. It is aria-hidden: the sentence beside it already says that the runner is down, and
+ * a screen reader announcing "warning" first would only delay it. What the mark is for is the
+ * reader who cannot tell the yellow panel from the grey one, and the page printed in black.
+ */
+function warningMark(document) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'sitenotice-warnmark');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+
+    const triangle = document.createElementNS(ns, 'path');
+    triangle.setAttribute('d', 'M8 2.4 14.8 13.8H1.2z');
+    triangle.setAttribute('fill', 'none');
+    triangle.setAttribute('stroke', 'currentColor');
+    triangle.setAttribute('stroke-width', '1.4');
+    triangle.setAttribute('stroke-linejoin', 'round');
+
+    const bang = document.createElementNS(ns, 'path');
+    bang.setAttribute('d', 'M8 6.4v3.2');
+    bang.setAttribute('stroke', 'currentColor');
+    bang.setAttribute('stroke-width', '1.4');
+    bang.setAttribute('stroke-linecap', 'round');
+
+    const dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('cx', '8');
+    dot.setAttribute('cy', '11.7');
+    dot.setAttribute('r', '0.8');
+    dot.setAttribute('fill', 'currentColor');
+
+    svg.append(triangle, bang, dot);
+    return svg;
+}
+
 /** Put a status into the box: the runner line, and the panel the whole box becomes when stale. */
 export function renderInto(box, status) {
     const line = box.querySelector('.sitenotice-runner');
@@ -253,11 +312,24 @@ export function renderInto(box, status) {
         return;
     }
 
-    // textContent rather than innerHTML: the sentence is built here, and the box also holds the
-    // notice, which this must not be able to rewrite
-    line.textContent = runnerMessage(status) || '';
+    // Whether this page's reader is one of the people the queue counts are for; see runnerMessage.
+    // Read off the box, because the server is what knows it -- who is signed in, and what they
+    // have queued.
+    const message = runnerMessage(status, { showQueue: box.hasAttribute('data-showqueue') });
+    const stale = status != null && Boolean(status.stale);
+
+    // Text nodes and one drawn element, never innerHTML: the sentence is built here, and the box
+    // also holds the standing note, which this must not be able to rewrite.
+    if (message == null) {
+        line.textContent = '';
+    } else if (stale) {
+        line.replaceChildren(warningMark(box.ownerDocument), message);
+    } else {
+        line.textContent = message;
+    }
+
     // on the box rather than on the line, so the warning panel wraps the notice as well
-    box.classList.toggle('stale', status != null && Boolean(status.stale));
+    box.classList.toggle('stale', stale);
 }
 
 /** Keep `box` showing the runner status. Returns the unsubscribe function. */

@@ -2,11 +2,19 @@
 {# runner's own account of itself. Both are things a reader must know before they trust what the #}
 {# page below shows, so they share one place and one treatment rather than stacking two panels. #}
 {# js/runnerstatus.min.js fills the second line and turns the box into a warning panel while the #}
-{# runner is down; the first line is server-rendered, so it shows with no JavaScript. #}
-<div class="sitenotice" id="sitenotice">
+{# runner is down; js/sitenotice.js reveals the dismiss control and remembers what was dismissed. #}
+{# The first line is server-rendered, so it shows with no JavaScript. #}
+{# #}
+{# data-showqueue says that the queue counts are worth telling this reader: they have something #}
+{# waiting, or this is the queue page, which includes this file with alwaysshowqueue. The outage #}
+{# sentence does not depend on it -- that one is for everybody. See runnerMessage. #}
+<div class="sitenotice" id="sitenotice"{% if alwaysshowqueue or queued_task_count %} data-showqueue{% endif %}>
   {# notice.txt is inline text inside this paragraph. Keep it that way: a block element added to #}
   {# that file would nest inside a <p> and the browser would close the paragraph before it. #}
-  <p class="sitenotice-note">{% include "notice.txt" %}</p>
+  {# #}
+  {# The button carries no text, so that the note reads the same to js/sitenotice.js, which #}
+  {# hashes this paragraph to tell one notice from the next. It is hidden until that file runs. #}
+  <p class="sitenotice-note"><button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>{% include "notice.txt" %}</p>
 
   {# Present and empty rather than added when there is something to say. A live region has to be #}
   {# in the page before its content changes for a screen reader to announce the change. An empty #}

@@ -133,6 +133,18 @@ describe('runnerMessage', () => {
         assert.equal(runnerMessage(healthy({ queued_task_count: 0 })), null);
     });
 
+    test('the queue counts are withheld from a reader who is not waiting on the queue', () => {
+        // "12 unfinished tasks from all users" answers "when does my task start". A reader of the
+        // FAQ with nothing queued has not asked that question.
+        assert.equal(runnerMessage(healthy(), { showQueue: false }), null);
+    });
+
+    test('the outage is told to everybody, waiting or not', () => {
+        // this one is not an answer about a queue position: it says what to expect of the site
+        const message = runnerMessage({ stale: true, status_age_seconds: 600 }, { showQueue: false });
+        assert.match(message, /not currently processing jobs/);
+    });
+
     test('no answer yet says nothing', () => {
         assert.equal(runnerMessage(null), null);
     });
@@ -274,6 +286,29 @@ describe('the store', () => {
         unsubscribe();
     });
 
+    test('a tab that comes back asks again rather than showing what it last heard', async () => {
+        // a hidden tab is not polled, so an outage that started or ended while the reader was away
+        // is exactly what its line gets wrong. A DOM of its own, because this is the one store
+        // test whose subject is an event: the rest need no document and are quicker without one.
+        const window = setupDom();
+        try {
+            bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
+            const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+            const unsubscribe = store.subscribe(() => {});
+            await settle();
+            assert.equal(fetched.length, 1);
+
+            window.document.dispatchEvent(new window.Event('visibilitychange'));
+            await settle();
+
+            assert.equal(fetched.length, 2);
+            assert.equal(store.current().slots_busy, 9);
+            unsubscribe();
+        } finally {
+            await teardownDom(window);
+        }
+    });
+
     test('the last reader to leave stops the poll', async () => {
         mock.timers.enable({ apis: ['setInterval', 'Date'] });
         bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
@@ -333,11 +368,41 @@ describe('the box', () => {
     const note = () => window.document.querySelector('.sitenotice-note').textContent;
 
     test('the runner line is filled and the note is left alone', () => {
+        box().setAttribute('data-showqueue', '');
         renderInto(box(), healthy({ slots_busy: 4, queued_task_count: 5 }));
 
         assert.match(window.document.getElementById('runnerstatus').textContent, /4 of 16 slots busy/);
         assert.equal(note(), 'Standing note about the data.');
         assert.equal(box().classList.contains('stale'), false);
+    });
+
+    test('the queue line is drawn only when the box asks for it', () => {
+        const line = () => window.document.getElementById('runnerstatus').textContent;
+
+        renderInto(box(), healthy());
+        assert.equal(line(), '', 'the box carries no data-showqueue in this fixture');
+
+        box().setAttribute('data-showqueue', '');
+        renderInto(box(), healthy({ slots_busy: 4 }));
+        assert.match(line(), /4 of 16 slots busy/);
+    });
+
+    test('an outage carries a mark as well as a colour', () => {
+        renderInto(box(), { stale: true, status_age_seconds: 3600 });
+
+        const mark = box().querySelector('.sitenotice-warnmark');
+        assert.notEqual(mark, null, 'the yellow panel must not be the only sign of an outage');
+        assert.equal(mark.getAttribute('aria-hidden'), 'true', 'the sentence beside it already says this');
+        // the sentence is still the sentence, mark or no mark
+        assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
+    });
+
+    test('a runner that came back takes the mark with it', () => {
+        box().setAttribute('data-showqueue', '');
+        renderInto(box(), { stale: true, status_age_seconds: 3600 });
+        renderInto(box(), healthy());
+
+        assert.equal(box().querySelector('.sitenotice-warnmark'), null);
     });
 
     test('a quiet runner leaves the line empty, so the box is the note alone', () => {
