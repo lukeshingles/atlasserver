@@ -59,9 +59,17 @@ theme control in navbar.html).
     }
   }
 
-  /** Take the note out of the box. The box hides itself once nothing in it has anything to say. */
-  function removeNote(note) {
+  /**
+   * Take the note, and the control that dismissed it, out of the box.
+   *
+   * The box collapses on its own once both of its lines are empty. main.css keys that off the
+   * class set here rather than off the shape of the box, because a browser without :has() would
+   * otherwise keep an empty panel on every page for ever.
+   */
+  function removeNote(box, note, button) {
     note.remove();
+    button.remove();
+    box.classList.add('sitenotice-nonote');
   }
 
   function init() {
@@ -76,20 +84,29 @@ theme control in navbar.html).
       return;
     }
 
-    // The text as the reader would read it, so that white space in the template cannot change the
-    // hash. textContent includes the button's label, which is why the label lives in the button's
-    // aria-label rather than in its text.
-    var hash = hashOf(note.textContent.trim());
+    // The words, and only the words. Runs of white space collapse to one space first. Rewrapping
+    // notice.txt onto three lines changes textContent and changes nothing a reader can see, and
+    // without this it would read as a new notice and come back for everybody who dismissed it.
+    var text = note.textContent.replace(/\s+/g, ' ').trim();
+
+    // A notice with no words in it is already dismissed. The control would offer to put away what
+    // is not there, and the box must collapse rather than draw an empty panel.
+    if (text === '') {
+      removeNote(box, note, button);
+      return;
+    }
+
+    var hash = hashOf(text);
 
     if (storedHash() === hash) {
-      removeNote(note);
+      removeNote(box, note, button);
       return;
     }
 
     button.hidden = false;
     button.addEventListener('click', function () {
       storeHash(hash);
-      removeNote(note);
+      removeNote(box, note, button);
     });
   }
 

@@ -2291,15 +2291,16 @@ class TaskRunnerStatusTests(TestCase):
         assert response.json()["running"] is False
 
     def test_a_status_is_cacheable_for_one_write_interval(self) -> None:
-        """Every page asks for this on load and then once a minute.
+        """Every page asks for this on load, so several tabs opened at once ask several times.
 
-        Several open tabs therefore ask several times for a file the runner rewrites every
-        STATUS_WRITE_SECONDS, and inside that interval there is nothing new to be had.
+        The window is the interval the runner rewrites the file in. It carries no
+        stale-while-revalidate: runnerstatus.js asks again when a hidden tab comes back, and that
+        reader must not be given the answer from before they left.
         """
         response = self.status_response(procs_taskids={})
 
         assert response.status_code == 200
-        assert response["Cache-Control"] == "private, max-age=15, stale-while-revalidate=45"
+        assert response["Cache-Control"] == "private, max-age=15"
 
     def test_an_outage_is_cacheable_too(self) -> None:
         # the same reasoning, and the case where every page in the site is asking at once
@@ -2311,6 +2312,7 @@ class TaskRunnerStatusTests(TestCase):
 
         assert response.status_code == 503
         assert "max-age=15" in response["Cache-Control"]
+        assert "stale-while-revalidate" not in response["Cache-Control"]
 
     def test_fresh_status_file_reports_running(self) -> None:
         user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
@@ -4627,8 +4629,10 @@ class SiteNoticeTests(TestCase):
                 content = self.page(reverse(name))
 
                 assert '<div class="sitenotice" id="sitenotice">' in content
-                assert "Forced photometry is now available from the Southern Telescopes" in content
-                assert '<p class="sitenotice-runner" id="runnerstatus" role="status">' in content
+                # the note itself, whatever notice.txt says today: asserting the words would put
+                # the text of a file an operator is expected to edit into the test suite
+                assert '<p class="sitenotice-note">' in content
+                assert '<p class="sitenotice-runner" id="runnerstatus" role="status"' in content
                 assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
                 assert "js/runnerstatus.min.js" in content
 

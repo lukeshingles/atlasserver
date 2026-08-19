@@ -1,23 +1,29 @@
-{# The one box above the content, on every page: the standing note about the data, and the task #}
-{# runner's own account of itself. Both are things a reader must know before they trust what the #}
-{# page below shows, so they share one place and one treatment rather than stacking two panels. #}
-{# js/runnerstatus.min.js fills the second line and turns the box into a warning panel while the #}
-{# runner is down; js/sitenotice.js reveals the dismiss control and remembers what was dismissed. #}
-{# The first line is server-rendered, so it shows with no JavaScript. #}
+{# The one box above the content, on every page. It holds the standing note about the data, and #}
+{# the task runner's own account of itself. A reader needs both before they trust what the page #}
+{# below shows, so the two share one place and one treatment. #}
 {# #}
-{# data-showqueue says that the queue counts are worth telling this reader: they have something #}
-{# waiting, or this is the queue page, which includes this file with alwaysshowqueue. The outage #}
-{# sentence does not depend on it -- that one is for everybody. See runnerMessage. #}
+{# js/runnerstatus.min.js writes the second line and makes the box a warning panel while the #}
+{# runner is down. js/sitenotice.js reveals the dismiss control and remembers what was dismissed. #}
+{# The first line comes from the server, so it shows with no JavaScript. #}
+{# #}
+{# data-showqueue says that the queue counts are of use to this reader. The reader waits on a #}
+{# task, or this is the queue page, which includes this file with alwaysshowqueue. The outage #}
+{# sentence does not depend on it. See runnerMessage. #}
 <div class="sitenotice" id="sitenotice"{% if alwaysshowqueue or queued_task_count %} data-showqueue{% endif %}>
-  {# notice.txt is inline text inside this paragraph. Keep it that way: a block element added to #}
-  {# that file would nest inside a <p> and the browser would close the paragraph before it. #}
-  {# #}
-  {# The button carries no text, so that the note reads the same to js/sitenotice.js, which #}
-  {# hashes this paragraph to tell one notice from the next. It is hidden until that file runs. #}
-  <p class="sitenotice-note"><button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>{% include "notice.txt" %}</p>
+  {# A child of the box, and not of the paragraph below. The paragraph must be able to become #}
+  {# empty, because main.css collapses the box when both of its lines are empty, and an element #}
+  {# inside a paragraph keeps that paragraph full. js/sitenotice.js removes the two together. #}
+  {# The control stays hidden until that file runs, so a page without JavaScript offers nothing #}
+  {# that would do nothing. #}
+  <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>
 
-  {# Present and empty rather than added when there is something to say. A live region has to be #}
-  {# in the page before its content changes for a screen reader to announce the change. An empty #}
+  {# notice.txt is inline text inside this paragraph. Keep it that way. A block element in that #}
+  {# file would nest inside a <p>, and the browser would close the paragraph before it. #}
+  <p class="sitenotice-note">{% include "notice.txt" %}</p>
+
+  {# Present and empty, rather than added when there is something to say. A live region must be in #}
+  {# the page before its content changes for a screen reader to announce the change. An empty #}
   {# paragraph draws no line box, and main.css takes away its margin, so it occupies nothing. #}
-  <p class="sitenotice-runner" id="runnerstatus" role="status"></p>
+  {# renderInto turns the announcement on for the outage sentence alone. #}
+  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"></p>
 </div>

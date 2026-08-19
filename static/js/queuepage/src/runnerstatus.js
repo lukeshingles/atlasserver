@@ -123,12 +123,22 @@ export function runnerMessage(status, { showQueue = true } = {}) {
         + (status.queued_task_count == 1 ? 'task' : 'tasks') + ' from all users in the queue.';
 }
 
-/** Whether the page is on screen. A hidden tab is not polled; see subscribe below. */
+/**
+ * Whether polling is to be skipped for now.
+ *
+ * A hidden tab is not polled. Nor is a tab whose reader has gone away: the queue page runs an
+ * inactivity timer and publishes the answer as `user_is_active`, which the poll on that page
+ * honoured before this module took it over. No other page sets the global, so no other page pauses
+ * for it.
+ */
 function pollingPaused() {
-    // typeof, because the store also runs under `node --test` with no DOM at all. The queue page
-    // pauses on its own inactivity timer as well, which is a global no other page defines, so a
-    // visible but idle tab now keeps polling.
-    return typeof document !== 'undefined' && document.hidden;
+    // typeof for both, because the store also runs under `node --test` with no DOM at all, and a
+    // bare reference to a name that is not there is a ReferenceError rather than undefined
+    if (typeof document === 'undefined') {
+        return false;
+    }
+
+    return document.hidden || (typeof window !== 'undefined' && window.user_is_active === false);
 }
 
 /**
@@ -142,6 +152,8 @@ export function createStore({ url, poll = POLL_MS }) {
     // when the endpoint was last actually reachable
     let lastgoodfetch = null;
     let interval = null;
+    // counts the requests, so that an answer can tell whether its question is still the newest one
+    let generation = 0;
     const listeners = new Set();
 
     function publish(next) {
@@ -153,28 +165,68 @@ export function createStore({ url, poll = POLL_MS }) {
         }
 
         status = next;
-        // over a copy, so that a listener which unsubscribes from inside its own call cannot
-        // shorten the set that is being walked
+        // One value for the whole round, and a copy of the set. A listener is free to unsubscribe
+        // from inside its own call, which both shortens the set and can stop the store -- and
+        // stop() sets `status` to null, which the listeners after it must not be told.
+        const published = status;
         for (const listener of [...listeners]) {
-            listener(status);
+            tell(listener, published);
         }
     }
 
-    function refresh() {
+    /** Hand one status to one reader, and keep that reader's faults to itself. */
+    function tell(listener, published) {
+        // A reader that throws is a bug in that reader. Left to propagate, it would reach the
+        // fetch's catch below, which reads any throw as an unreachable endpoint. The readers after
+        // it would never hear this status, nor -- since the next equal poll is suppressed -- any
+        // later one. The box renderer subscribes first and the queue page second, so that is every
+        // wait estimate frozen for the life of the page.
+        try {
+            listener(published);
+        } catch (error) {
+            console.error('A task runner status reader failed', error);
+        }
+    }
+
+    /**
+     * Ask the endpoint, and report the answer if it is still the answer to the newest question.
+     *
+     * `fresh` skips the browser's cache. The response is cacheable for one write interval of the
+     * runner, which is what stops several tabs opening at once from asking several times; a reader
+     * coming back to a tab has to be told what is true now, and a cached answer from before they
+     * left is the one thing that reader must not get.
+     */
+    function refresh({ fresh = false } = {}) {
+        // Which question this is. Requests can overlap -- the interval and a return to the tab can
+        // fall in the same second -- and they can answer in any order, so an answer to a question
+        // that has since been asked again is dropped. Without this the older reading wins and
+        // stands for a whole poll, and on the queue page it moves every row's wait estimate.
+        const asked = (generation += 1);
+
         // a stale runner is reported with HTTP 503 and a body, so the status is read from the
         // body rather than from the status code
-        return fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+        return fetch(url, {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+            cache: fresh ? 'no-cache' : 'default',
+        })
             .then(response => response.json())
             .then(body => {
+                if (asked !== generation) {
+                    return;
+                }
                 lastgoodfetch = Date.now();
                 publish(body);
             })
-            .catch(() => {
-                // not being able to reach this endpoint says nothing about the runner, so do not
-                // claim an outage on the strength of our own failed request — but a status we have
-                // not been able to re-confirm for several polls is no longer worth asserting
-                // either, in either direction: a frozen "3 slots busy" line outlives a dead
-                // runner, and a frozen outage line outlives a recovered one.
+            .catch(error => {
+                if (asked !== generation) {
+                    return;
+                }
+                // Our own failed request says nothing about the runner, so this claims no outage.
+                // But a status that several polls have not confirmed is no longer worth asserting,
+                // in either direction: a frozen "3 slots busy" line outlives a dead runner, and a
+                // frozen outage line outlives a recovered one.
+                console.debug('Could not read the task runner status', error);
                 if (lastgoodfetch != null && (Date.now() - lastgoodfetch) > poll * 5) {
                     publish(null);
                 }
@@ -183,7 +235,7 @@ export function createStore({ url, poll = POLL_MS }) {
 
     function refreshIfVisible() {
         if (!pollingPaused()) {
-            refresh();
+            refresh({ fresh: true });
         }
     }
 
@@ -198,6 +250,10 @@ export function createStore({ url, poll = POLL_MS }) {
         // subscribes again, so it keeps none. The next subscriber gets null and a fresh request,
         // which is what a first subscriber gets. A page that draws the box never reaches this: its
         // renderer stays subscribed for the life of the page.
+        //
+        // The generation moves as well, which drops whatever is in flight. Without that fence the
+        // request started before the stop lands after it and puts back the reading just forgotten.
+        generation += 1;
         status = null;
         lastgoodfetch = null;
     }
@@ -226,7 +282,9 @@ export function createStore({ url, poll = POLL_MS }) {
             }
         }
 
-        listener(status);
+        // through tell(), because this call runs from the module's own bootstrap: a throw here
+        // would take the whole module with it, and the queue page imports it for its estimates
+        tell(listener, status);
 
         let subscribed = true;
         return () => {
@@ -305,7 +363,14 @@ function warningMark(document) {
     return svg;
 }
 
-/** Put a status into the box: the runner line, and the panel the whole box becomes when stale. */
+/**
+ * Put a status into the box: the runner line, and the panel the whole box becomes when stale.
+ *
+ * Nothing is written when the sentence and the state are the ones already on screen. The runner
+ * line is a live region, and rewriting it announces it again: during an outage the age moves on
+ * every poll while the wording stays the same for an hour at a time, which is the same sentence
+ * read out sixty times over.
+ */
 export function renderInto(box, status) {
     const line = box.querySelector('.sitenotice-runner');
     if (line == null) {
@@ -317,6 +382,29 @@ export function renderInto(box, status) {
     // have queued.
     const message = runnerMessage(status, { showQueue: box.hasAttribute('data-showqueue') });
     const stale = status != null && Boolean(status.stale);
+    const drawn = message == null ? '' : message;
+
+    // First, and outside the guard below, because they are what the box is drawn from: a box that
+    // opens empty and stays empty still has to carry the class that collapses it. Setting a class
+    // to the value it already has changes nothing, so this costs a comparison.
+    box.classList.toggle('stale', stale);
+    // the other half of the collapse; js/sitenotice.js owns sitenotice-nonote. See main.css.
+    box.classList.toggle('sitenotice-noline', message == null);
+
+    if (line.textContent === drawn) {
+        return;
+    }
+
+    /*
+     * What is announced, and what is only shown.
+     *
+     * The outage sentence changes what to expect of every page, so a reader who cannot see it is
+     * told. The queue counts are an answer to "when does my task start", and this box is on every
+     * page of the site: read out once a minute over whatever the reader is doing, they are an
+     * interruption nobody asked for. The attribute is set before the text, because a live region
+     * is read as it stood when its content changed.
+     */
+    line.setAttribute('aria-live', stale ? 'polite' : 'off');
 
     // Text nodes and one drawn element, never innerHTML: the sentence is built here, and the box
     // also holds the standing note, which this must not be able to rewrite.
@@ -328,8 +416,6 @@ export function renderInto(box, status) {
         line.textContent = message;
     }
 
-    // on the box rather than on the line, so the warning panel wraps the notice as well
-    box.classList.toggle('stale', stale);
 }
 
 /** Keep `box` showing the runner status. Returns the unsubscribe function. */
@@ -340,6 +426,15 @@ export function start(box) {
 // Every page that draws the box gets the status; a page without one (a test harness, an email
 // body) starts nothing. The same guard shape as tasklist.jsx uses for #taskpage.
 const sitenotice = typeof document !== 'undefined' ? document.getElementById('sitenotice') : null;
-if (sitenotice != null) {
-    start(sitenotice);
+const stopbootstrap = sitenotice != null ? start(sitenotice) : () => {};
+
+/**
+ * End the subscription made above.
+ *
+ * For the tests, which load this module against a document of their own and would otherwise leave
+ * its poll running for the rest of the run. A page never calls it: the box is drawn for as long as
+ * the page is open.
+ */
+export function stopPageStore() {
+    stopbootstrap();
 }

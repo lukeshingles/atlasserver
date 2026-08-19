@@ -103,9 +103,24 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     return window;
 }
 
-/** Tear down a window created by setupDom. */
+/**
+ * Tear down a window created by setupDom.
+ *
+ * The globals go as well as the window. A closed jsdom window still answers -- its document
+ * reports visibilityState "visible" and still takes listeners -- so a `typeof document` test in
+ * the code under test would go on finding the dead document from the test before. runnerstatus.js
+ * branches on exactly that.
+ */
 export async function teardownDom(window) {
     window.close();
+
+    // `window` itself stays: a poll or a promise from the page under test can still be settling
+    // as this runs, and those read window.location and window.history directly, where a missing
+    // binding is a ReferenceError that fails the suite from outside any test.
+    for (const name of ['document', 'localStorage', 'HTMLElement', 'Event',
+        'requestAnimationFrame', 'cancelAnimationFrame', 'navigator']) {
+        delete global[name];
+    }
 }
 
 /**

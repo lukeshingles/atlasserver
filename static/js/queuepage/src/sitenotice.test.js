@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { before, describe, test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
@@ -21,14 +21,22 @@ const NOTE = 'Forced photometry is now available from the Southern Telescopes.';
 // runner line, which this file must not touch
 const box = (note) => `
   <div class="sitenotice" id="sitenotice">
-    <p class="sitenotice-note"><button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>${note}</p>
+    <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>
+    <p class="sitenotice-note">${note}</p>
     <p class="sitenotice-runner" id="runnerstatus" role="status">Task runner: 2 of 16 slots busy.</p>
   </div>`;
 
 let source;
+// every load opens a window, and an open jsdom window holds the node event loop after the suite
+// has finished; theme.test.js and navbar.test.js keep the same book
+const open = [];
 
 before(async () => {
   source = await readFile(SITENOTICE_JS, 'utf8');
+});
+
+after(() => {
+  open.forEach((window) => window.close());
 });
 
 /**
@@ -43,6 +51,7 @@ async function load({ note = NOTE, stored = null, storage = 'working' } = {}) {
     url: 'http://testserver/',
   });
   const window = dom.window;
+  open.push(window);
 
   if (storage === 'unavailable') {
     const reject = () => {
@@ -72,10 +81,12 @@ async function load({ note = NOTE, stored = null, storage = 'working' } = {}) {
   return {
     window,
     note: () => query('.sitenotice-note'),
+    noteText: () => (query('.sitenotice-note') || {}).textContent,
     runner: () => query('.sitenotice-runner').textContent,
     button: () => query('.sitenotice-dismiss'),
     dismiss: () => query('.sitenotice-dismiss').click(),
     stored: () => window.localStorage.getItem('atlas-notice-dismissed'),
+    collapsed: () => query('#sitenotice').classList.contains('sitenotice-nonote'),
   };
 }
 
@@ -132,6 +143,39 @@ describe('the standing note', () => {
     assert.equal(page.button().hidden, false, 'the control must work for this page at least');
     page.dismiss();
     assert.equal(page.note(), null, 'the dismissal is honoured, it just is not remembered');
+  });
+
+  test('the control goes with the note, so the box has nothing left to draw', async () => {
+    // the box collapses on the two classes rather than on the shape of its contents, because a
+    // browser without :has() would otherwise keep an empty panel on every page for ever
+    const page = await load();
+
+    page.dismiss();
+
+    assert.equal(page.button(), null, 'a control that dismisses nothing is not left behind');
+    assert.equal(page.collapsed(), true);
+  });
+
+  test('rewrapping the notice is not a new notice', async () => {
+    // the same words over three lines: textContent changes, and nothing the reader can see does
+    const first = await load({ note: 'The southern telescopes are offline this week.' });
+    first.dismiss();
+
+    const second = await load({
+      note: '\n      The southern telescopes\n      are offline this week.\n    ',
+      stored: first.stored(),
+    });
+
+    assert.equal(second.note(), null, 'the reader dismissed these words already');
+  });
+
+  test('a notice with no words in it is already dismissed', async () => {
+    // what an operator leaves behind when they empty notice.txt to take the notice down
+    const page = await load({ note: '\n  ' });
+
+    assert.equal(page.note(), null);
+    assert.equal(page.button(), null);
+    assert.equal(page.collapsed(), true);
   });
 
   test('a page without the box is left alone', async () => {

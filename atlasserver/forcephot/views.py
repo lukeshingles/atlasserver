@@ -39,7 +39,7 @@ from django.http import HttpResponseNotModified
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
-from django.utils.cache import patch_cache_control
+from django.views.decorators.cache import cache_control
 from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
 from django_filters.rest_framework import DjangoFilterBackend
@@ -930,27 +930,13 @@ def queuepositions(request):
     )
 
 
-def _briefly_cacheable(response: JsonResponse) -> JsonResponse:
-    """Let a browser answer repeat requests for the runner status from its own cache.
-
-    Every page of the site asks for this status on load and then once a minute, so a reader with
-    three tabs open asks three times a minute for a file the runner rewrites every fifteen seconds.
-    The window is that write interval: inside it there is nothing new to be had, and outside it the
-    answer is fetched again. stale-while-revalidate lets the tab draw the line it already has while
-    the fresh answer is on its way, so a slow response never leaves the box empty.
-
-    Private, because the request carries the session cookie: the payload is the same for everybody,
-    but a shared cache keying on the URL alone is not something to invite.
-    """
-    patch_cache_control(
-        response,
-        private=True,
-        max_age=int(runnerstatus.STATUS_WRITE_SECONDS),
-        stale_while_revalidate=int(runnerstatus.STATUS_WRITE_SECONDS * 3),
-    )
-    return response
-
-
+# Let a browser answer a repeat request from its own cache, for one write interval of the runner.
+# Every page of the site asks for this status on load, so several tabs opened at once would
+# otherwise ask several times for a file that changes every fifteen seconds. The window stops
+# there. A longer one would need stale-while-revalidate, and that is the one thing this must not
+# do: runnerstatus.js re-asks when a hidden tab comes back, and the answer that reader needs is the
+# one that is true now, not the one from before they left.
+@cache_control(private=True, max_age=int(runnerstatus.STATUS_WRITE_SECONDS))
 def taskrunnerstatus(request):
     """Report whether the task runner is alive and what it is doing.
 
@@ -974,7 +960,7 @@ def taskrunnerstatus(request):
         # version that recorded something else. A naive `written` lands here as a TypeError.
         # typical_runtime_seconds is present but empty, as it is on the stale branch below: one
         # response shape for both, so a reader can subscript it without checking which failure it got
-        response = JsonResponse(
+        return JsonResponse(
             {
                 "running": False,
                 "stale": True,
@@ -983,7 +969,6 @@ def taskrunnerstatus(request):
             },
             status=503,
         )
-        return _briefly_cacheable(response)
 
     # several missed writes rather than one, so that a slow write does not raise a false alarm
     stale = age_seconds > (runnerstatus.STATUS_WRITE_SECONDS * 4)
@@ -994,7 +979,7 @@ def taskrunnerstatus(request):
     # poll from every open tab for a value certain to be thrown away.
     typical_runtimes: dict[str, float] = {} if stale else typical_runtime_seconds()
 
-    response = JsonResponse(
+    return JsonResponse(
         {
             **status,
             "running": not stale,
@@ -1004,7 +989,6 @@ def taskrunnerstatus(request):
         },
         status=503 if stale else 200,
     )
-    return _briefly_cacheable(response)
 
 
 @functools.cache

@@ -5,12 +5,17 @@
 // for everything but the last group, without a DOM.
 
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
     createStore, describeAge, renderInto, runnerMessage, runnerStatusEqual,
 } from './runnerstatus.js';
 import { setupDom, teardownDom } from './testing.js';
+
+const SRC = dirname(fileURLToPath(import.meta.url));
 
 /** Let the fetch chain settle. Works with the timers mocked, which a `setTimeout(0)` would not. */
 async function settle() {
@@ -309,6 +314,75 @@ describe('the store', () => {
         }
     });
 
+    test('the answer to the newest question is the one that is kept', async () => {
+        // the interval and a return to the tab can fall in the same second, and the two requests
+        // can answer in either order. The older reading standing for a whole poll would take every
+        // queue row's wait estimate back with it.
+        const answers = [];
+        global.fetch = () => new Promise((resolve) => {
+            const body = { ...healthy(), queued_task_count: answers.length + 1 };
+            answers.push((slow) => resolve({ ok: true, status: 200, json: () => Promise.resolve(body) }));
+        });
+
+        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const unsubscribe = store.subscribe(() => {});
+        store.refresh();
+        await settle();
+
+        // the second question was asked last, so its answer is the one that counts, whichever
+        // order the two land in
+        answers[1]();
+        await settle();
+        answers[0]();
+        await settle();
+
+        assert.equal(store.current().queued_task_count, 2);
+        unsubscribe();
+    });
+
+    test('a request in flight when the poll stops does not put back what was forgotten', async () => {
+        let answer;
+        global.fetch = () => new Promise((resolve) => {
+            answer = () => resolve({ ok: true, status: 200, json: () => Promise.resolve(healthy()) });
+        });
+
+        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        store.subscribe(() => {})();
+        answer();
+        await settle();
+
+        assert.equal(store.current(), null, 'a stopped store keeps no reading');
+    });
+
+    test('one reader that fails does not silence the others', async () => {
+        // the box renderer subscribes first and the queue page second. A throw from the first used
+        // to reach the fetch's catch, which reads any throw as an unreachable endpoint, so the
+        // queue page was left with no status for the life of the page.
+        bodies.push({ body: healthy() });
+        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const seen = [];
+        const errors = [];
+        const consoleError = console.error;
+        console.error = (...args) => errors.push(args);
+        let first;
+        let second;
+
+        try {
+            first = store.subscribe(() => { throw new Error('a reader is broken'); });
+            second = store.subscribe((status) => seen.push(status));
+            await settle();
+
+            assert.equal(seen.at(-1).slots_busy, 2, 'the second reader is told');
+            // twice: the reader throws on the status it is given when it subscribes, and again on
+            // the first response
+            assert.equal(errors.length, 2, 'and the reader\'s own fault is reported');
+        } finally {
+            console.error = consoleError;
+            if (first) { first(); }
+            if (second) { second(); }
+        }
+    });
+
     test('the last reader to leave stops the poll', async () => {
         mock.timers.enable({ apis: ['setInterval', 'Date'] });
         bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
@@ -345,6 +419,49 @@ describe('the store', () => {
         await settle();
         assert.equal(fetched.length, 3, 'the second reader is still being polled for');
         second();
+    });
+});
+
+/*
+ * The two things about this module that only hold outside it.
+ *
+ * It is loaded as a bare <script type="module"> on every page of the site, and only the queue page
+ * renders an import map. So the module must resolve nothing by name, and it must find the box on
+ * its own. Neither shows up in a test of an exported function: an import added here keeps the
+ * queue page working and silently empties the line everywhere else, and a bootstrap that stops
+ * finding #sitenotice leaves every page quiet with every test still green.
+ */
+describe('the module as a page loads it', () => {
+    test('it imports nothing, because most pages have no import map to resolve a name with', async () => {
+        const built = await readFile(join(SRC, '..', '..', 'runnerstatus.min.js'), 'utf8');
+
+        assert.equal(/\bfrom\s*["']/.test(built), false, 'a bare specifier here fails on every page but the queue');
+        assert.equal(/\bimport\s*\(/.test(built), false);
+    });
+
+    test('it finds the box and fills it, with nothing else on the page to help', async () => {
+        const window = setupDom();
+        try {
+            window.document.body.innerHTML = `
+                <div class="sitenotice" id="sitenotice" data-showqueue>
+                  <p class="sitenotice-note">Standing note.</p>
+                  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"></p>
+                </div>`;
+            global.fetch = () => Promise.resolve({
+                ok: true, status: 200, json: () => Promise.resolve(healthy({ slots_busy: 5 })),
+            });
+
+            // a fresh copy: the module reads the document and subscribes as it is evaluated, and
+            // node caches a module by URL
+            const module = await import(`./runnerstatus.js?bootstrap=${Date.now()}`);
+            await settle();
+
+            assert.match(window.document.getElementById('runnerstatus').textContent, /5 of 16 slots busy/);
+            module.stopPageStore();
+        } finally {
+            delete global.fetch;
+            await teardownDom(window);
+        }
     });
 });
 
@@ -395,6 +512,44 @@ describe('the box', () => {
         assert.equal(mark.getAttribute('aria-hidden'), 'true', 'the sentence beside it already says this');
         // the sentence is still the sentence, mark or no mark
         assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
+    });
+
+    test('an unchanged sentence is not written again', () => {
+        // the line is a live region: rewriting it announces it. During an outage the age moves on
+        // every poll while the wording stays the same for an hour at a time.
+        renderInto(box(), { stale: true, status_age_seconds: 7200 });
+        const line = window.document.getElementById('runnerstatus');
+        const mark = line.firstChild;
+
+        renderInto(box(), { stale: true, status_age_seconds: 7260 });
+
+        assert.equal(line.firstChild, mark, 'the same nodes are still there, untouched');
+    });
+
+    test('only the outage sentence is announced', () => {
+        // the queue counts are on every page of the site, and read out once a minute over
+        // whatever the reader is doing they are an interruption nobody asked for
+        const line = () => window.document.getElementById('runnerstatus');
+
+        box().setAttribute('data-showqueue', '');
+        renderInto(box(), healthy());
+        assert.equal(line().getAttribute('aria-live'), 'off');
+
+        renderInto(box(), { stale: true, status_age_seconds: 60 });
+        assert.equal(line().getAttribute('aria-live'), 'polite');
+    });
+
+    test('a box with nothing to say collapses instead of leaving a panel', () => {
+        // both halves have to be empty: the note is dismissed or has no words in it, and the
+        // runner is healthy and quiet. A class from each side, so that no browser has to support
+        // :has() for an empty panel to go away.
+        renderInto(box(), healthy({ queued_task_count: 0 }));
+
+        assert.equal(box().classList.contains('sitenotice-noline'), true);
+
+        box().setAttribute('data-showqueue', '');
+        renderInto(box(), healthy());
+        assert.equal(box().classList.contains('sitenotice-noline'), false);
     });
 
     test('a runner that came back takes the mark with it', () => {
