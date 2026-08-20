@@ -83,9 +83,6 @@
   {# the navbar included above is the site's, so it gets the site's navbar behaviour too #}
   <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
 
-  {# See base.html. This file shows the control that removes the note. #}
-  <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
-
   {# This module writes the runner sentence in the box above. It imports no other module, and #}
   {# thus this page needs no import map. #}
   <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>

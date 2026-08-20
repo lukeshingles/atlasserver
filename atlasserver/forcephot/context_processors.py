@@ -1,7 +1,6 @@
 """Template context shared by every page."""
 
 import functools
-import hashlib
 import typing as t
 
 from django.conf import settings
@@ -59,39 +58,24 @@ def queued_task_count(request: HttpRequest) -> dict[str, t.Any]:
 
 
 @functools.cache
-def _notice() -> tuple[str, str]:
-    """Return the words of notice.txt, and a short version string for them.
-
-    The words are the rendered template with each group of space characters as one space. Thus a
-    new line in the file does not give a new version, because it does not give new words.
+def _notice() -> bool:
+    """Whether notice.txt has words to show.
 
     Computed one time for each process, as STATIC_VERSION is. An edit of notice.txt reaches the
     site with the deploy that restarts the server.
     """
-    words = " ".join(render_to_string("notice.txt").split())
-    return words, hashlib.sha256(words.encode()).hexdigest()[:16]
+    return bool(render_to_string("notice.txt").split())
 
 
 def sitenotice(request: HttpRequest) -> dict[str, t.Any]:
-    """Expose the version of the standing note, whether to render it, and whether it starts folded.
+    """Expose whether to render the standing note in the site notice box.
 
-    A reader folds the note with the control in the site notice box. The click stores the version
-    in a cookie, and this reads the cookie back. The server then renders the note folded, and no
-    page shows the note and folds it after the first paint. The note stays in the page, because
-    the same control unfolds it without a new request.
+    The note shows on every page while notice.txt has words. There is no control that removes or
+    folds it: the note gives a limit of the measurements, and a reader who put it away would read
+    their measurements without it. An earlier control stored such a choice in a cookie
+    (atlas-notice-dismissed); that cookie is ignored, and a reader who stored one gets the note.
 
-    The cookie under the old name comes from the control that this one replaced. That control
-    removed the note outright, and its cookie holds the same version string. A reader who removed
-    the note asked not to see it, and thus that cookie folds the note too.
-
-    A note with no words is not rendered at all. That is what an operator leaves when they empty
+    A note with no words is not rendered. That is what an operator leaves when they empty
     notice.txt to remove the note from the site.
     """
-    words, version = _notice()
-    cookie = request.COOKIES.get("atlas-notice-collapsed") or request.COOKIES.get("atlas-notice-dismissed")
-
-    return {
-        "notice_version": version,
-        "notice_present": bool(words),
-        "notice_collapsed": bool(words) and cookie == version,
-    }
+    return {"notice_present": _notice()}

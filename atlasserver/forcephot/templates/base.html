@@ -92,11 +92,6 @@
       {# deciding a colour, so it has nothing to say before the first paint. #}
       <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
 
-      {# This file shows the control that removes the note. It keeps the note away until the #}
-      {# words of the note change. It is at the foot of the page with the other scripts, because #}
-      {# it reads the note, which is above it. #}
-      <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
-
       {# This module writes the runner sentence in the box above the content, and it polls each #}
       {# minute. The queue page imports the same URL through its import map. Thus the browser #}
       {# makes one instance of the module, and the two readers share its one poll. #}

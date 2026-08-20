@@ -4,9 +4,9 @@
 {# #}
 {# js/runnerstatus.min.js writes the runner sentence, and it gives the box the warning colours #}
 {# while the task runner is down. The server renders the note, and thus the note shows with no #}
-{# JavaScript. The server renders the note folded when the reader folded it, and it omits the #}
-{# note when notice.txt has no words; see context_processors.sitenotice. js/sitenotice.js shows #}
-{# the control that folds and unfolds it. #}
+{# JavaScript. There is no control that removes or folds the note: the note gives a limit of the #}
+{# measurements, and a reader who put it away would read their measurements without it. The #}
+{# server omits the note when notice.txt has no words; see context_processors.sitenotice. #}
 {# #}
 {# data-showqueue tells that the queue counts are of use to each reader of this page. Only the #}
 {# queue page sets it, through alwaysshowqueue. For each other page, the status response tells #}
@@ -15,19 +15,11 @@
 {# sitenotice-noline starts on the box, because the runner paragraph starts empty. Thus a box #}
 {# with no note collapses from the first paint. renderInto keeps the class correct from the #}
 {# first response on. #}
-<div class="sitenotice sitenotice-noline{% if not notice_present %} sitenotice-nonote{% endif %}{% if notice_collapsed %} sitenotice-collapsed{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
+<div class="sitenotice sitenotice-noline{% if not notice_present %} sitenotice-nonote{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
 {% if notice_present %}
-  {# This control is a child of the box, and not of the note paragraph. Thus the note stays a #}
-  {# paragraph of words. The control stays hidden until js/sitenotice.js runs. Thus a page #}
-  {# without JavaScript shows the note in the condition the server rendered it, and it shows no #}
-  {# control that does not work. The chevron points at what a click does: up folds the note away, #}
-  {# and down brings it back. main.css turns the one mark with the sitenotice-collapsed class. #}
-  <button type="button" class="sitenotice-toggle" aria-controls="sitenotice-note" aria-expanded="{% if notice_collapsed %}false{% else %}true{% endif %}" aria-label="{% if notice_collapsed %}Expand this notice{% else %}Collapse this notice{% endif %}" data-notice-version="{{ notice_version }}" hidden><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 10.5 8 5l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-
   {# notice.txt gives text in this paragraph. Keep it as text. A block element in that file would #}
-  {# be inside a <p>, and the browser would close the paragraph in front of it. The id is what #}
-  {# aria-controls on the control names. #}
-  <p class="sitenotice-note" id="sitenotice-note">{% include "notice.txt" %}</p>
+  {# be inside a <p>, and the browser would close the paragraph in front of it. #}
+  <p class="sitenotice-note">{% include "notice.txt" %}</p>
 {% endif %}
 
   {# This paragraph is present and empty, and no code adds it when there is a sentence to give. A #}
