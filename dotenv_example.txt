@@ -39,5 +39,7 @@ export ATLASSERVER_SITE_ORIGIN='https://fallingstar-data.com'
 # The standing note in the box above the content, on every page: a caveat about the data. Leave it
 # empty or unset for no note. Inline HTML such as <strong> or a link is fine; a block element is
 # not, because the note sits inside a <p> and the browser would close the paragraph in front of
-# it. A change reaches the site with the restart that applies the new .env.
-export ATLASSERVER_SITE_NOTICE='Forced photometry is now available from the Southern Telescopes (El Sauce, Chile and Sutherland, South Africa). Please be aware that the difference imaging template south of -50 degrees declination was changed during commissioning, so you may get an unexpected discontinuity in your target'"'"'s difference lightcurve.'
+# it. A change reaches the site with the restart that applies the new .env. Double quotes, not
+# single: the apostrophe in the value ends a single-quoted string, and python-dotenv skips a line
+# it cannot parse — the note would silently vanish.
+export ATLASSERVER_SITE_NOTICE="Forced photometry is now available from the Southern Telescopes (El Sauce, Chile and Sutherland, South Africa). Please be aware that the difference imaging template south of -50 degrees declination was changed during commissioning, so you may get an unexpected discontinuity in your target's difference lightcurve."
