@@ -2,11 +2,13 @@
 
 // The task runner status, as it reaches every page.
 //
-// This module does three things:
+// This module does four things:
 //
 // - it polls /taskrunnerstatus.json;
 // - it writes the sentence that gives the status;
-// - it puts that sentence into the site notice box.
+// - it puts that sentence into the site notice box;
+// - it keeps the last status for the next page, so that the box is filled before the first
+//   response of that page arrives. See createCache.
 //
 // The queue page reads the same response for its wait estimates. It subscribes to this module, so
 // the two readers share one request each minute.
@@ -148,16 +150,149 @@ function pollingPaused() {
     return document.hidden || (typeof window !== 'undefined' && window.user_is_active === false);
 }
 
+// Where a page leaves its last status for the page after it. See createCache.
+const CACHE_KEY = 'atlas-runnerstatus';
+
+/**
+ * sessionStorage, or null where there is none.
+ *
+ * A browser that is set to refuse site data throws from this name rather than giving null, and
+ * node, which runs the tests, has no such name at all. theme.js makes the same allowance for
+ * localStorage.
+ */
+function browserStorage() {
+    try {
+        return typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * A status as it stands `seconds` later.
+ *
+ * The outage sentence gives the age of the status file, and that age grows while no page of this
+ * site is open. To report the age as it was kept would move the start of the outage forward by the
+ * time the reader spent on the page before, once for each page they open.
+ */
+function advanceAge(status, seconds) {
+    if (typeof status.status_age_seconds !== 'number') {
+        return status;
+    }
+
+    // To one decimal, which is what the endpoint gives. A value with more digits than the one it
+    // replaces would say that this number is measured more finely than it is.
+    return { ...status, status_age_seconds: Math.round((status.status_age_seconds + seconds) * 10) / 10 };
+}
+
+/**
+ * The place where one page leaves the status for the next one.
+ *
+ * The box is on every page, and each page load starts with no status and asks for one. The answer
+ * takes about a second, and the box is empty for that second. A reader who moves between pages
+ * thus watches the sentence go and come back, and a reader who is told of an outage on one page
+ * has to wait to be told again on the next.
+ *
+ * So a page keeps its last answer, and the page after it starts from that answer instead of from
+ * nothing. The kept status is shown for as long as the page that kept it would have shown it: one
+ * poll interval. Beyond that it is discarded, and the new page starts empty as before, because a
+ * sentence that no poll has confirmed for longer than that is a sentence an open tab would have
+ * replaced by now.
+ *
+ * sessionStorage, and not localStorage: this is a snapshot of a moment and not a preference of the
+ * reader. It belongs to the tab that took it, it is gone when that tab is closed, and a browser
+ * that opens the site again after an hour has nothing to start from, which is the correct amount.
+ * That scope also bounds the one field of the response that is about the reader rather than about
+ * the task runner: user_queued_task_count, which decides whether this reader is shown the queue
+ * counts. The counts themselves are the same for everybody, and the queue page gives them to any
+ * reader who asks.
+ *
+ * `storage` is a parameter so that the tests can pass their own, and `url` guards against a status
+ * kept by another endpoint on the same origin, such as a second instance under another prefix.
+ */
+export function createCache({ storage = browserStorage(), url = '', key = CACHE_KEY } = {}) {
+    function clear() {
+        try {
+            if (storage != null) {
+                storage.removeItem(key);
+            }
+        } catch (error) {
+            console.debug('Could not discard the kept task runner status', error);
+        }
+    }
+
+    /**
+     * The kept status and the time it was confirmed, or null when there is nothing to start from.
+     *
+     * `maxage` is in milliseconds. The age of the record decides, and not the age of the status
+     * file: those are two different things, and only the outage sentence gives the second one.
+     */
+    function read(maxage) {
+        if (storage == null) {
+            return null;
+        }
+
+        let record = null;
+        try {
+            const text = storage.getItem(key);
+            record = text == null ? null : JSON.parse(text);
+        } catch (error) {
+            // Refused storage, or a value that another version of this file wrote. Neither is
+            // worth a message: the page then does what it did before this cache existed.
+            record = null;
+        }
+
+        if (record == null || typeof record !== 'object' || record.status == null
+            || typeof record.status !== 'object' || record.url !== url
+            || typeof record.saved !== 'number') {
+            return null;
+        }
+
+        // A negative age means the clock moved back between the two pages, and thus that the age
+        // of this record is not known. Such a record is discarded with the ones that are too old.
+        const elapsed = Date.now() - record.saved;
+        if (!(elapsed >= 0 && elapsed <= maxage)) {
+            clear();
+            return null;
+        }
+
+        return { saved: record.saved, status: advanceAge(record.status, elapsed / 1000) };
+    }
+
+    /** Keep `status`, as confirmed by a response that arrived at `at`. */
+    function write(status, at) {
+        if (storage == null) {
+            return;
+        }
+
+        try {
+            storage.setItem(key, JSON.stringify({ url, saved: at, status }));
+        } catch (error) {
+            // A storage that is full or refused must not stop the poll. The cost of a failure
+            // here is the empty second that this cache is here to remove.
+            console.debug('Could not keep the task runner status for the next page', error);
+        }
+    }
+
+    return { read, write, clear };
+}
+
 /**
  * A poll of one status URL, and the readers that the poll reports to.
  *
  * This function is exported for the tests. Each test makes its own store, with a test fetch
  * function and a short interval. A page uses the store below, which all of its readers share.
  */
-export function createStore({ url, poll = POLL_MS }) {
-    let status = null;
-    // The time of the last request that reached the endpoint.
-    let lastgoodfetch = null;
+export function createStore({ url, poll = POLL_MS, cache = createCache({ url }) }) {
+    // What the page before this one last heard, which is what the box drew as that page closed.
+    // Thus the box of this page is filled at its first paint, and the response that arrives a
+    // moment later is usually equal to this status and redraws nothing. See createCache.
+    const kept = cache.read(poll);
+    let status = kept == null ? null : kept.status;
+    // The time of the last request that reached the endpoint. A kept status carries the time of
+    // the request that gave it, and so an endpoint that cannot be reached from this page
+    // withdraws that status at the same time as it would have on the page that kept it.
+    let lastgoodfetch = kept == null ? null : kept.saved;
     let interval = null;
     // A count of the questions that this store asked.
     let generation = 0;
@@ -234,6 +369,11 @@ export function createStore({ url, poll = POLL_MS }) {
                 }
                 answered = asked;
                 lastgoodfetch = Date.now();
+                // At each confirmation, and not at each change. A status that holds its value
+                // while a reader spends ten minutes on one page must not become too old for the
+                // next page to start from: what is kept here is the time of this answer, and the
+                // next page reads that time to judge the age of what it finds.
+                cache.write(body, lastgoodfetch);
                 publish(body);
             })
             .catch(error => {
@@ -247,6 +387,9 @@ export function createStore({ url, poll = POLL_MS }) {
                 // runner starts again.
                 console.debug('Could not read the task runner status', error);
                 if (lastgoodfetch != null && (Date.now() - lastgoodfetch) > poll * 5) {
+                    // Also from the store for the next page. A status this old is one that this
+                    // page stopped showing, and the next page must not bring it back.
+                    cache.clear();
                     publish(null);
                 }
             });
@@ -285,6 +428,9 @@ export function createStore({ url, poll = POLL_MS }) {
         answered = generation;
         status = null;
         lastgoodfetch = null;
+        // The store for the next page is left as it is, and this is the difference between the
+        // two. It holds the time of the answer in it, and thus the page that reads it can tell
+        // how old that answer is. That is the one thing this store cannot do with `status`.
     }
 
     /**
