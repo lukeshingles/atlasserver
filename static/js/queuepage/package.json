@@ -11,7 +11,8 @@
     "test": "node --test 'src/*.test.js'"
   },
   "allowScripts": {
-    "fsevents@2.3.3": true
+    "fsevents@2.3.3": true,
+    "esbuild@0.28.2": true
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.1",
