@@ -43,7 +43,6 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
-from atlasserver.forcephot import context_processors
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
@@ -4654,12 +4653,13 @@ class BrowsableApiBreadcrumbTests(TestCase):
         assert "<h1>Force Phot Task Instance" in content
 
 
+@override_settings(SITE_NOTICE="A standing note about the data.")
 class SiteNoticeTests(TestCase):
     """The one box above the content, on every page.
 
     The box holds the note about the data and the status of the task runner. The server renders the
-    note. js/runnerstatus.min.js writes the runner sentence and polls for it. Thus the page must
-    give the address of the endpoint, and the module, and the markup.
+    note from ATLASSERVER_SITE_NOTICE. js/runnerstatus.min.js writes the runner sentence and polls
+    for it. Thus the page must give the address of the endpoint, and the module, and the markup.
     """
 
     def setUp(self) -> None:
@@ -4678,9 +4678,8 @@ class SiteNoticeTests(TestCase):
                 content = self.page(reverse(name))
 
                 assert 'id="sitenotice"' in content
-                # The note, with the words that notice.txt gives today. A test of the words
-                # would put the text of an editable file into the test suite.
-                assert '<p class="sitenotice-note">' in content
+                # The note, with the words the class decorator sets on SITE_NOTICE.
+                assert '<p class="sitenotice-note">A standing note about the data.</p>' in content
                 assert '<p class="sitenotice-runner" id="runnerstatus" role="status"' in content
                 assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
                 assert "js/runnerstatus.min.js" in content
@@ -4746,12 +4745,21 @@ class SiteNoticeTests(TestCase):
         assert "sitenotice-nonote" not in content
 
     def test_a_notice_with_no_words_is_not_rendered(self) -> None:
-        # This is what an operator leaves when they empty notice.txt to remove the note.
-        with mock.patch.object(context_processors, "_notice", return_value=False):
+        # This is what an operator leaves when they unset ATLASSERVER_SITE_NOTICE to remove
+        # the note.
+        with override_settings(SITE_NOTICE=""):
             content = self.page(reverse("index"))
 
         assert "sitenotice-note" not in content
         assert "sitenotice-nonote" in content
+
+    def test_the_note_keeps_its_inline_markup(self) -> None:
+        # An operator may mark a phrase up, with <strong> or a link. The note goes into the
+        # page as it is given, and the template comment holds the rule: inline elements only.
+        with override_settings(SITE_NOTICE="a <strong>changed</strong> template"):
+            content = self.page(reverse("index"))
+
+        assert '<p class="sitenotice-note">a <strong>changed</strong> template</p>' in content
 
     def test_the_queue_counts_travel_in_the_response_and_not_in_the_page(self) -> None:
         """data-showqueue marks the queue page alone.

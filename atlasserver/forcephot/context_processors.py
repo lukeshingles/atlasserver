@@ -1,11 +1,9 @@
 """Template context shared by every page."""
 
-import functools
 import typing as t
 
 from django.conf import settings
 from django.http import HttpRequest
-from django.template.loader import render_to_string
 from django.utils.functional import SimpleLazyObject
 
 from atlasserver.forcephot.models import Task
@@ -57,25 +55,16 @@ def queued_task_count(request: HttpRequest) -> dict[str, t.Any]:
     return {"queued_task_count": SimpleLazyObject(lambda: Task.queued().filter(user_id=userid).count())}
 
 
-@functools.cache
-def _notice() -> bool:
-    """Whether notice.txt has words to show.
-
-    Computed one time for each process, as STATIC_VERSION is. An edit of notice.txt reaches the
-    site with the deploy that restarts the server.
-    """
-    return bool(render_to_string("notice.txt").split())
-
-
 def sitenotice(request: HttpRequest) -> dict[str, t.Any]:
-    """Expose whether to render the standing note in the site notice box.
+    """Expose the text of the standing note in the site notice box.
 
-    The note shows on every page while notice.txt has words. There is no control that removes or
-    folds it: the note gives a limit of the measurements, and a reader who put it away would read
-    their measurements without it. An earlier control stored such a choice in a cookie
+    The note shows on every page while ATLASSERVER_SITE_NOTICE has words, and an edit of that
+    variable reaches the site with the restart that applies it. There is no control that removes
+    or folds the note: the note gives a limit of the measurements, and a reader who put it away
+    would read their measurements without it. An earlier control stored such a choice in a cookie
     (atlas-notice-dismissed); that cookie is ignored, and a reader who stored one gets the note.
 
-    A note with no words is not rendered. That is what an operator leaves when they empty
-    notice.txt to remove the note from the site.
+    A note with no words is not rendered. That is what an operator leaves when they unset the
+    variable to remove the note from the site.
     """
-    return {"notice_present": _notice()}
+    return {"notice": settings.SITE_NOTICE}

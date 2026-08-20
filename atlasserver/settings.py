@@ -88,6 +88,13 @@ if not _siteorigin and not DEBUG:
     raise ImproperlyConfigured(_msg)
 SITE_ORIGIN = _siteorigin
 
+# The standing note in the box above the content, on every page: a caveat about the data. Empty
+# means no note, which is what an operator leaves when they unset the variable to take the note
+# down. Whitespace is collapsed, so a value written across several lines in .env renders as one
+# paragraph, and a value of only whitespace counts as empty. A change reaches the site with the
+# restart that applies the new .env.
+SITE_NOTICE = " ".join(os.environ.get("ATLASSERVER_SITE_NOTICE", "").split())
+
 ADMINS = [
     ("Luke Shingles", "luke.shingles@gmail.com"),
 ]  # send server error notifications to this person
