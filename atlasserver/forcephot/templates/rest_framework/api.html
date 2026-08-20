@@ -22,8 +22,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
 
-  {# See base.html. This is where js/runnerstatus.min.js reads the address to poll. #}
+  {# See base.html. This is where js/runnerstatus.min.js reads the address to poll, and the #}
+  {# reader that the status it keeps for the next page belongs to. #}
   <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
+  <meta name="atlas-reader" content="{% if user.is_authenticated %}{{ user.pk }}{% endif %}" />
 {% endblock %}
 
 {% block style %}

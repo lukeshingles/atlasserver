@@ -92,6 +92,8 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     global.window = window;
     global.document = window.document;
     global.localStorage = window.localStorage;
+    // runnerstatus.js keeps its last status here for the page after this one
+    global.sessionStorage = window.sessionStorage;
     global.HTMLElement = window.HTMLElement;
     global.Event = window.Event;
     global.requestAnimationFrame = window.requestAnimationFrame.bind(window);
@@ -140,7 +142,7 @@ export async function teardownDom(window) {
     // `window` stays. A poll or a promise from the page under test can complete while this
     // function runs. Such code reads window.location and window.history directly. A name that
     // does not exist gives a ReferenceError, which fails the suite from outside every test.
-    for (const name of ['document', 'localStorage', 'HTMLElement', 'Event',
+    for (const name of ['document', 'localStorage', 'sessionStorage', 'HTMLElement', 'Event',
         'requestAnimationFrame', 'cancelAnimationFrame', 'navigator']) {
         delete global[name];
     }
