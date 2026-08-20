@@ -355,74 +355,52 @@ export function subscribe(listener) {
 }
 
 /**
- * The warning mark in front of the outage sentence.
- *
- * This function draws the mark, and the template does not hold it, because the mark belongs to a
- * condition that the template cannot know. The mark has aria-hidden. The sentence next to it
- * already reports that the task runner stopped, and a screen reader that speaks "warning" first
- * would only delay that sentence. The mark is for the reader who cannot see the difference between
- * the yellow box and the grey box.
- */
-function warningMark(document) {
-    const ns = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('class', 'sitenotice-warnmark');
-    svg.setAttribute('viewBox', '0 0 16 16');
-    svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('focusable', 'false');
-
-    const triangle = document.createElementNS(ns, 'path');
-    triangle.setAttribute('d', 'M8 2.4 14.8 13.8H1.2z');
-    triangle.setAttribute('fill', 'none');
-    triangle.setAttribute('stroke', 'currentColor');
-    triangle.setAttribute('stroke-width', '1.4');
-    triangle.setAttribute('stroke-linejoin', 'round');
-
-    const bang = document.createElementNS(ns, 'path');
-    bang.setAttribute('d', 'M8 6.4v3.2');
-    bang.setAttribute('stroke', 'currentColor');
-    bang.setAttribute('stroke-width', '1.4');
-    bang.setAttribute('stroke-linecap', 'round');
-
-    const dot = document.createElementNS(ns, 'circle');
-    dot.setAttribute('cx', '8');
-    dot.setAttribute('cy', '11.7');
-    dot.setAttribute('r', '0.8');
-    dot.setAttribute('fill', 'currentColor');
-
-    svg.append(triangle, bang, dot);
-    return svg;
-}
-
-/**
  * Put a status into the box. This gives the runner sentence, and the warning colours of the box.
  *
- * This function writes nothing when the sentence and the condition are the ones on the screen. The
- * runner sentence is in a live region, and a second write of it makes a screen reader speak it
- * again. In an outage, the age changes at each poll, but the words stay the same for an hour. A
- * write at each poll would thus speak one sentence sixty times.
+ * This function writes no text when the sentence is the one on the screen. The runner sentence is
+ * in a live region, and a second write of it makes a screen reader speak it again. In an outage,
+ * the age changes at each poll, but the words stay the same for an hour. A write at each poll
+ * would thus speak one sentence sixty times.
  */
 export function renderInto(box, status) {
     const line = box.querySelector('.sitenotice-runner');
-    if (line == null) {
+    const text = line == null ? null : line.querySelector('.sitenotice-runnertext');
+    if (line == null || text == null) {
         return;
     }
 
-    // Whether the queue counts are of use to the reader of this page; see runnerMessage. The
-    // value comes from the box, because the server knows it: who has signed in, and what that
-    // reader has in the queue.
-    const message = runnerMessage(status, { showQueue: box.hasAttribute('data-showqueue') });
+    /*
+     * Whether the queue counts are of use to the reader of this page; see runnerMessage.
+     *
+     * The queue page sets the attribute, because it is the page about the queue. On each other
+     * page, the response tells whether this reader has a task in the queue. Thus the answer
+     * follows the queue within one poll. A reader whose tasks all complete stops to get the
+     * counts. A reader who submits from another tab starts to get them.
+     */
+    const showQueue = box.hasAttribute('data-showqueue')
+        || (status != null && status.user_queued_task_count > 0);
+    const message = runnerMessage(status, { showQueue });
     const stale = status != null && Boolean(status.stale);
     const drawn = message == null ? '' : message;
 
-    // These two classes come first, and before the test below, because the box is drawn from
-    // them. A box that opens empty and stays empty must also get the class that collapses it. To
-    // set a class to the value that it has changes nothing, and thus this costs one comparison.
+    // The classes and the mark come first, and before the test below, because the box is drawn
+    // from them. A box that opens empty and stays empty must also get the class that collapses
+    // it. To set a class to the value that it has changes nothing, and thus this costs one
+    // comparison. The mark is in the template, hidden, with the other icons of the site; it
+    // belongs to the outage sentence and shows with it.
     box.classList.toggle('stale', stale);
-    // The second part of the collapse. js/sitenotice.js sets sitenotice-nonote. See main.css.
+    // The second part of the collapse. The server and js/sitenotice.js set sitenotice-nonote.
+    // See main.css.
     box.classList.toggle('sitenotice-noline', message == null);
+    const mark = line.querySelector('.sitenotice-warnmark');
+    if (mark != null) {
+        // The attribute, and not the `hidden` property. The mark is an SVG element, and only HTML
+        // elements have that property. An assignment to it makes a plain value on the object, and
+        // the attribute that hides the mark stays.
+        mark.toggleAttribute('hidden', !(stale && message != null));
+    }
 
-    if (line.textContent === drawn) {
+    if (text.textContent === drawn) {
         return;
     }
 
@@ -437,16 +415,9 @@ export function renderInto(box, status) {
      */
     line.setAttribute('aria-live', stale ? 'polite' : 'off');
 
-    // Text nodes and one drawn element, and never innerHTML. This function makes the sentence,
-    // and the box also holds the note. This function must not be able to change that note.
-    if (message == null) {
-        line.textContent = '';
-    } else if (stale) {
-        line.replaceChildren(warningMark(box.ownerDocument), message);
-    } else {
-        line.textContent = message;
-    }
-
+    // One write of text, and never innerHTML. This function makes the sentence, and the box also
+    // holds the note. This function must not be able to change that note.
+    text.textContent = drawn;
 }
 
 /** Keep the status of the task runner in `box`. Return the function that cancels this. */

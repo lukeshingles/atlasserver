@@ -2,29 +2,34 @@
 {# of the task runner. A reader needs both before they can use what the page below shows. Thus #}
 {# the two share one place and one treatment. #}
 {# #}
-{# js/runnerstatus.min.js writes the second sentence, and it gives the box the warning colours #}
-{# while the task runner is down. js/sitenotice.js shows the control that removes the note, and #}
-{# it stores which note the reader removed. The server writes the first sentence, and thus that #}
-{# sentence shows with no JavaScript. #}
+{# js/runnerstatus.min.js writes the runner sentence, and it gives the box the warning colours #}
+{# while the task runner is down. The server renders the note, and thus the note shows with no #}
+{# JavaScript. The server omits the note when the reader removed it, and when notice.txt has no #}
+{# words; see context_processors.sitenotice. js/sitenotice.js shows the control that removes it. #}
 {# #}
-{# data-showqueue tells that the queue counts are of use to this reader. The reader has a task in #}
-{# the queue, or this is the queue page, which includes this file with alwaysshowqueue. The #}
-{# outage sentence does not use this attribute. See runnerMessage. #}
-<div class="sitenotice" id="sitenotice"{% if alwaysshowqueue or queued_task_count %} data-showqueue{% endif %}>
-  {# This control is a child of the box, and not of the paragraph below. That paragraph must be #}
-  {# able to become empty, because main.css collapses the box when both paragraphs are empty. An #}
-  {# element in a paragraph keeps that paragraph full. js/sitenotice.js removes the #}
-  {# two together. The control stays hidden until that file runs. Thus a page without #}
-  {# JavaScript shows the note, and it shows a control only when that control can remove it. #}
-  <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>
+{# data-showqueue tells that the queue counts are of use to each reader of this page. Only the #}
+{# queue page sets it, through alwaysshowqueue. For each other page, the status response tells #}
+{# whether this reader has a task in the queue. See renderInto in runnerstatus.js. #}
+{# #}
+{# sitenotice-noline starts on the box, because the runner paragraph starts empty. Thus a box #}
+{# with no note collapses from the first paint. renderInto keeps the class correct from the #}
+{# first response on. #}
+<div class="sitenotice sitenotice-noline{% if notice_dismissed %} sitenotice-nonote{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
+{% if not notice_dismissed %}
+  {# This control is a child of the box, and not of the note paragraph. Thus the note stays a #}
+  {# paragraph of words. The control stays hidden until js/sitenotice.js runs. Thus a page #}
+  {# without JavaScript shows the note, and it shows no control that does not work. #}
+  <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" data-notice-version="{{ notice_version }}" hidden></button>
 
   {# notice.txt gives text in this paragraph. Keep it as text. A block element in that file would #}
   {# be inside a <p>, and the browser would close the paragraph in front of it. #}
   <p class="sitenotice-note">{% include "notice.txt" %}</p>
+{% endif %}
 
-  {# This paragraph is present and empty, and this code does not add it when there is a sentence #}
-  {# to give. A live region must be in the page before its content changes, or a screen reader #}
-  {# does not speak the change. An empty paragraph draws no line, and main.css removes its margin. #}
-  {# Thus it holds no space. renderInto starts the speech for the outage sentence only. #}
-  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"></p>
+  {# This paragraph is present and empty, and no code adds it when there is a sentence to give. A #}
+  {# live region must be in the page before its content changes, or a screen reader does not #}
+  {# speak the change. The warning mark is here and hidden, because each other icon of this site #}
+  {# is markup and not script. renderInto shows the mark with the outage sentence, and it starts #}
+  {# the speech for that sentence only. #}
+  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" viewBox="0 0 16 16" aria-hidden="true" focusable="false" hidden><path d="M8 2.4 14.8 13.8H1.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.4v3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="11.7" r="0.8" fill="currentColor"/></svg><span class="sitenotice-runnertext"></span></p>
 </div>

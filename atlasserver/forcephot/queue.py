@@ -7,6 +7,7 @@ rest of the web stack, and so that the two processes cannot drift on what "queue
 import datetime
 import operator
 import statistics
+import time
 import typing as t
 
 from django.core.cache import caches
@@ -58,6 +59,17 @@ TYPICAL_RUNTIME_MIN_SAMPLES: t.Final = 5
 TYPICAL_RUNTIME_CACHE_SECONDS: t.Final = 300
 
 TYPICAL_RUNTIME_CACHEKEY: t.Final = "typical_runtime_seconds_v1"
+
+# How long each process keeps the medians in its own memory. The shared cache is a file, and a
+# read of it opens, reads and unpickles that file. The status endpoint asks for the medians at
+# each poll of each open tab, on every page of the site. Thus that file read became a cost on
+# each request. One write interval of the task runner is short, and the medians change each 300
+# seconds at most.
+TYPICAL_RUNTIME_MEMO_SECONDS: t.Final = 15.0
+
+# The memo of this process: the time at which it becomes too old, and the medians. Tests that
+# clear the shared cache must also set this back to None; see clear_typical_runtime_memo.
+_typical_runtime_memo: tuple[float, dict[str, float]] | None = None
 
 
 def request_recalc() -> None:
@@ -124,8 +136,14 @@ def typical_runtime_seconds() -> dict[str, float]:
     estimate needs to know is how fast the queue drains -- and a task that errors frees its slot
     just as surely as one that succeeds.
     """
+    global _typical_runtime_memo  # noqa: PLW0603
+
+    if _typical_runtime_memo is not None and time.monotonic() < _typical_runtime_memo[0]:
+        return _typical_runtime_memo[1]
+
     cached = caches["usagestats"].get(TYPICAL_RUNTIME_CACHEKEY, default=None)
     if cached is not None:
+        _typical_runtime_memo = (time.monotonic() + TYPICAL_RUNTIME_MEMO_SECONDS, cached)
         return cached
 
     cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=TYPICAL_RUNTIME_WINDOW_HOURS)
@@ -161,8 +179,19 @@ def typical_runtime_seconds() -> dict[str, float]:
             medians[request_type] = round(statistics.median(runtimes), 1)
 
     caches["usagestats"].set(TYPICAL_RUNTIME_CACHEKEY, medians, timeout=TYPICAL_RUNTIME_CACHE_SECONDS)
+    _typical_runtime_memo = (time.monotonic() + TYPICAL_RUNTIME_MEMO_SECONDS, medians)
 
     return medians
+
+
+def clear_typical_runtime_memo() -> None:
+    """Discard the medians that this process holds in its memory.
+
+    For the tests. A test that clears the usagestats cache expects the next call to compute new
+    medians, and the memo would give it the medians of the test before it.
+    """
+    global _typical_runtime_memo  # noqa: PLW0603
+    _typical_runtime_memo = None
 
 
 def calculate_queue_positions() -> None:

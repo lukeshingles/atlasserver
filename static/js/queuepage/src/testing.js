@@ -10,7 +10,7 @@
 // that node resolves them from node_modules, giving the test the same single React instance the
 // component tree uses.
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fireEvent } from '@testing-library/dom';
@@ -21,6 +21,30 @@ const SRC = dirname(fileURLToPath(import.meta.url));
 
 // inside the package so that node resolves "react" from node_modules by walking up from here
 const OUTDIR = resolve(SRC, '..', 'node_modules', '.cache', 'atlas-component-tests');
+
+/**
+ * Load one classic script into a window of its own, and return that window.
+ *
+ * For the plain scripts that base.html loads: they read the document and run, and they export
+ * nothing. The wait below is necessary because jsdom sends DOMContentLoaded one tick after it
+ * makes the window. Without the wait, a script that waits for that event would wait for an event
+ * that has already occurred. The caller closes the window.
+ */
+export async function loadClassicScript({ file, html, url = 'http://testserver/' }) {
+    const source = await readFile(file, 'utf8');
+    const dom = new JSDOM(html, { runScripts: 'outside-only', url });
+
+    await new Promise((resolve) => {
+        if (dom.window.document.readyState === 'loading') {
+            dom.window.document.addEventListener('DOMContentLoaded', resolve);
+        } else {
+            resolve();
+        }
+    });
+
+    dom.window.eval(source);
+    return dom.window;
+}
 
 /** Compile one source file and import it. Returns its module namespace. */
 export async function importComponent(entry) {

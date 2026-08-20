@@ -527,7 +527,7 @@ describe('the module as a page loads it', () => {
             window.document.body.innerHTML = `
                 <div class="sitenotice" id="sitenotice" data-showqueue>
                   <p class="sitenotice-note">Standing note.</p>
-                  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"></p>
+                  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
                 </div>`;
             global.fetch = () => Promise.resolve({
                 ok: true, status: 200, json: () => Promise.resolve(healthy({ slots_busy: 5 })),
@@ -553,9 +553,9 @@ describe('the box', () => {
     beforeEach(() => {
         window = setupDom();
         window.document.body.innerHTML = `
-            <div class="sitenotice" id="sitenotice">
+            <div class="sitenotice sitenotice-noline" id="sitenotice">
               <p class="sitenotice-note">Standing note about the data.</p>
-              <p class="sitenotice-runner" id="runnerstatus" role="status"></p>
+              <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
             </div>`;
     });
 
@@ -575,24 +575,38 @@ describe('the box', () => {
         assert.equal(box().classList.contains('stale'), false);
     });
 
-    test('the queue line is drawn only when the box asks for it', () => {
+    test('the queue line is drawn only when the counts are of use to this reader', () => {
         const line = () => window.document.getElementById('runnerstatus').textContent;
 
         renderInto(box(), healthy());
-        assert.equal(line(), '', 'the box carries no data-showqueue in this fixture');
+        assert.equal(line(), '', 'no attribute, and this reader has no task in the queue');
 
         box().setAttribute('data-showqueue', '');
         renderInto(box(), healthy({ slots_busy: 4 }));
         assert.match(line(), /4 of 16 slots busy/);
     });
 
+    test('the response tells whether this reader waits on the queue', () => {
+        // The attribute marks the queue page alone. On each other page the answer comes with the
+        // status, and thus it follows the queue within one poll.
+        const line = () => window.document.getElementById('runnerstatus').textContent;
+
+        renderInto(box(), healthy({ user_queued_task_count: 2 }));
+        assert.match(line(), /2 of 16 slots busy/, 'a reader with queued tasks gets the counts');
+
+        renderInto(box(), healthy({ user_queued_task_count: 0, written: 'later' }));
+        assert.equal(line(), '', 'a reader whose tasks all completed stops to get them');
+    });
+
     test('an outage carries a mark as well as a colour', () => {
         renderInto(box(), { stale: true, status_age_seconds: 3600 });
 
         const mark = box().querySelector('.sitenotice-warnmark');
-        assert.notEqual(mark, null, 'the yellow panel must not be the only sign of an outage');
-        assert.equal(mark.getAttribute('aria-hidden'), 'true', 'the sentence beside it already says this');
-        // the sentence is still the sentence, mark or no mark
+        // The attribute, and not the property: the mark is an SVG element, and only HTML elements
+        // have the `hidden` property. A test of the property passes on an expando value.
+        assert.equal(mark.hasAttribute('hidden'), false, 'the colours must not be the only sign of an outage');
+        assert.equal(mark.getAttribute('aria-hidden'), 'true', 'the sentence next to it already says this');
+        // the sentence is the same sentence, with the mark or without it
         assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
     });
 
@@ -601,12 +615,12 @@ describe('the box', () => {
         // again. In an outage the age changes at each poll, and the words stay the same for an
         // hour.
         renderInto(box(), { stale: true, status_age_seconds: 7200 });
-        const line = window.document.getElementById('runnerstatus');
-        const mark = line.firstChild;
+        const text = window.document.querySelector('.sitenotice-runnertext');
+        const node = text.firstChild;
 
         renderInto(box(), { stale: true, status_age_seconds: 7260 });
 
-        assert.equal(line.firstChild, mark, 'the same nodes are still there, untouched');
+        assert.equal(text.firstChild, node, 'the same text node is there, untouched');
     });
 
     test('only the outage sentence is announced', () => {
@@ -640,7 +654,7 @@ describe('the box', () => {
         renderInto(box(), { stale: true, status_age_seconds: 3600 });
         renderInto(box(), healthy());
 
-        assert.equal(box().querySelector('.sitenotice-warnmark'), null);
+        assert.equal(box().querySelector('.sitenotice-warnmark').hasAttribute('hidden'), true);
     });
 
     test('a quiet runner leaves the line empty, so the box is the note alone', () => {

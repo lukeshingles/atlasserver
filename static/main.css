@@ -129,22 +129,16 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-bottom: 0;
 }
 
-/* The runner sentence is in the page before there is a sentence to give. Thus it is a live region
-   that a screen reader speaks from. An empty paragraph draws no line, and this rule also removes
-   the margin. The paragraph then holds no space until this code fills it. */
-.sitenotice-runner:empty {
-  margin: 0;
-}
+/* Nothing to give, and thus nothing to draw. The box has no note, because the server omitted a
+   removed or empty note, and the task runner has nothing to report. Without this rule the page
+   holds a box with space in it and no words.
 
-/* Nothing to give, and thus nothing to draw. The box has no note, because the reader removed it
-   or because notice.txt has no words in it. The task runner also has nothing to report. Without
-   this rule the page holds a box with space in it and no words.
-
-   The two classes come from the two files that know the answer: js/sitenotice.js and
-   js/runnerstatus.min.js. This rule does not examine the contents of the box with :has(). A
-   browser without :has() ignores such a rule, and each reader who removed the note would then see
-   an empty box on each page always. Safari supports :has() from version 15.4, and this stylesheet
-   supports earlier versions.
+   The two classes come from the code that knows each answer. The server and js/sitenotice.js set
+   sitenotice-nonote, and the template and js/runnerstatus.min.js keep sitenotice-noline. This
+   rule does not examine the contents of the box with :has(). A browser without :has() ignores
+   such a rule, and each reader with a removed note would then see an empty box on each page
+   always. Safari supports :has() from version 15.4, and this stylesheet supports earlier
+   versions.
 
    The box collapses, and it stays in the page, because the runner sentence in it is a live region.
    A screen reader does not reliably speak a change inside a subtree with display:none, and an
@@ -169,9 +163,8 @@ in the query, the -webkit- form included, since that is the only form Safari has
 }
 
 /* The outage mark, in front of the sentence about the task runner. The colour of the box gives
-   the same information, and this mark is for the reader who cannot use that colour.
-   js/runnerstatus.min.js draws the mark, and thus it exists only in the condition it belongs to.
-   */
+   the same information, and this mark is for the reader who cannot use that colour. The template
+   holds the mark, hidden, and js/runnerstatus.min.js shows it in the condition it belongs to. */
 .sitenotice-warnmark {
   height: 1.1em;
   /* The space belongs to the mark, and not to the sentence. The sentence is then only words. */
@@ -191,17 +184,20 @@ in the query, the -webkit- form included, since that is the only form Safari has
 
 /* While the task runner is down, the same box takes the warning colours of Bootstrap. The -subtle
    and -emphasis variables have a dark value and a light value. Thus the box stays a warning on the
-   dark theme, and it is not a pale yellow block. The border property replaces the orange edge
-   above with a yellow line on all four sides. The reader then sees a different condition of the
-   box, and not the box with one more sentence in it. The rule is on the box, and not on the runner
-   sentence, so that the warning colours hold the note as well. While the task runner is down, the
-   reader must know both sentences before they read the page. */
+   dark theme, and it is not a pale yellow block.
+
+   Only the colours change: the ground, the edge, and the text. The size and the borders keep
+   their values, because this condition arrives at a poll that the reader did not ask for, and a
+   change of size moves the text while the reader reads it. The warning mark and the outage
+   sentence carry the change of condition for the reader who cannot use the colours.
+
+   The rule is on the box, and not on the runner sentence, so that the warning colours hold the
+   note as well. While the task runner is down, the reader must know both sentences before they
+   read the page. */
 .sitenotice.stale {
   background-color: var(--bs-warning-bg-subtle);
-  border: 1px solid var(--bs-warning-border-subtle);
-  border-radius: 0.3em;
+  border-left-color: var(--bs-warning-border-subtle);
   color: var(--bs-warning-text-emphasis);
-  font-size: 1em;
 }
 
 /* On paper the runner sentence is out of date immediately, and the box has no condition to show.
@@ -213,6 +209,8 @@ in the query, the -webkit- form included, since that is the only form Safari has
   .sitenotice,
   .sitenotice.stale {
     background-color: transparent;
+    border-left-color: var(--atlas-ember);
+    color: var(--bs-secondary-color);
   }
 
   .sitenotice-dismiss,
