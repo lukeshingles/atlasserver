@@ -37,6 +37,10 @@ SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
 SECURE_HSTS_SECONDS = 0
 
+# A developer's .env may set ATLASSERVER_SITE_NOTICE (load_dotenv overrides the environment).
+# Tests that need a note supply one with override_settings; every other test renders with none.
+SITE_NOTICE = ""
+
 if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
     DATABASES = {
         "default": {

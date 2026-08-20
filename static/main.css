@@ -129,14 +129,14 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-bottom: 0;
 }
 
-/* Nothing to give, and thus nothing to draw. The box has no note, because notice.txt has no
-   words, and the task runner has nothing to report. Without this rule the page holds a box with
-   space in it and no words.
+/* Nothing to give, and thus nothing to draw. The box has no note, because ATLASSERVER_SITE_NOTICE
+   has no words, and the task runner has nothing to report. Without this rule the page holds a box
+   with space in it and no words.
 
    The two classes come from the code that knows each answer. The template sets sitenotice-nonote,
    and the template and js/runnerstatus.min.js keep sitenotice-noline. This rule does not examine
    the contents of the box with :has(). A browser without :has() ignores such a rule, and each
-   reader would then see an empty box on each page while notice.txt is empty. Safari supports
+   reader would then see an empty box on each page while the notice is empty. Safari supports
    :has() from version 15.4, and this stylesheet supports earlier versions.
 
    The box collapses, and it stays in the page, because the runner sentence in it is a live region.
