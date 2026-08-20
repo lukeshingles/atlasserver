@@ -7,10 +7,19 @@ updates:
     # group to keep those from arriving one-per-advisory. pre-commit gets no second group, because
     # advisories are keyed to package ecosystems and a hook is just a git repo and a rev, so
     # Dependabot only ever raises version updates for it.
+    #
+    # Grouping alone still leaves one pull request per ecosystem per run, so every ecosystem is
+    # monthly rather than weekly, and every one has a cooldown: a version has to have been out for
+    # a fortnight (a month for a major) before it is worth a bump, which also means a release that
+    # is quickly superseded never costs a pull request of its own. Neither setting slows a fix for
+    # a vulnerability down -- security updates ignore both the schedule and the cooldown.
     - package-ecosystem: github-actions
       directory: /
       schedule:
-          interval: weekly
+          interval: monthly
+      cooldown:
+          default-days: 14
+          semver-major-days: 30
       groups:
           github-actions:
               applies-to: version-updates
@@ -24,7 +33,10 @@ updates:
     - package-ecosystem: uv
       directory: /
       schedule:
-          interval: weekly
+          interval: monthly
+      cooldown:
+          default-days: 14
+          semver-major-days: 30
       versioning-strategy: lockfile-only
       groups:
           lockfile:
@@ -39,7 +51,10 @@ updates:
     - package-ecosystem: pre-commit
       directory: /
       schedule:
-          interval: weekly
+          interval: monthly
+      cooldown:
+          default-days: 14
+          semver-major-days: 30
       groups:
           pre-commit:
               patterns:
@@ -47,11 +62,16 @@ updates:
 
     # A bump that changes babel's output makes the frontend CI job fail, because it rebuilds the
     # bundles and diffs them against the committed ones. That is the point: run build.sh and commit
-    # the result onto the dependabot branch to make it pass.
+    # the result onto the dependabot branch to make it pass. That hand step is why the monthly
+    # schedule above matters most here -- it is the one ecosystem whose pull requests cannot merge
+    # unattended, so its cadence is the rate at which the rebuild has to be done by hand.
     - package-ecosystem: npm
       directory: /static/js/queuepage
       schedule:
-          interval: weekly
+          interval: monthly
+      cooldown:
+          default-days: 14
+          semver-major-days: 30
       groups:
           npm:
               applies-to: version-updates
