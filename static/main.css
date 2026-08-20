@@ -244,6 +244,22 @@ in the query, the -webkit- form included, since that is the only form Safari has
   .sitenotice-runner {
     display: none;
   }
+
+  /* A folded note comes back on paper. The fold is for the screen, where the control above
+     brings the note back at a click; print hides that control, and a printout with no note gives
+     the reader no way to learn the limit of the measurements on it. These selectors match the
+     two rules they override, and thus they win by their place later in the file. */
+  .sitenotice.sitenotice-collapsed .sitenotice-note {
+    display: block;
+  }
+
+  /* The box of the folded note takes its edge and its space again. The values are the ones of
+     .sitenotice at the head of this section. */
+  .sitenotice.sitenotice-collapsed.sitenotice-noline {
+    border-left: 3px solid var(--atlas-ember);
+    margin-bottom: 1.5em;
+    padding: 0.7em 1em;
+  }
 }
 
 div.page-header {
