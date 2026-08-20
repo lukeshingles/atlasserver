@@ -129,37 +129,64 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-bottom: 0;
 }
 
-/* Nothing to give, and thus nothing to draw. The box has no note, because the server omitted a
-   removed or empty note, and the task runner has nothing to report. Without this rule the page
-   holds a box with space in it and no words.
+/* A folded note. The note stays in the page, so that the control unfolds it without a new
+   request, and it draws nothing. The server and js/sitenotice.js set the class; see
+   context_processors.sitenotice. The note is not a live region, and thus display:none costs it
+   nothing; the rule for the empty box below explains why the box itself never gets it. */
+.sitenotice.sitenotice-collapsed .sitenotice-note {
+  display: none;
+}
 
-   The two classes come from the code that knows each answer. The server and js/sitenotice.js set
-   sitenotice-nonote, and the template and js/runnerstatus.min.js keep sitenotice-noline. This
-   rule does not examine the contents of the box with :has(). A browser without :has() ignores
-   such a rule, and each reader with a removed note would then see an empty box on each page
-   always. Safari supports :has() from version 15.4, and this stylesheet supports earlier
-   versions.
+/* Nothing to give, and thus nothing to draw. The box shows no note, because the server omitted
+   an empty note (sitenotice-nonote) or the reader folded it (sitenotice-collapsed), and the task
+   runner has nothing to report. Without this rule the page holds a box with space in it and no
+   words. A folded note keeps its control: the chevron stays in the corner, and it is what brings
+   the note back.
+
+   The classes come from the code that knows each answer. The template sets sitenotice-nonote,
+   the server and js/sitenotice.js set sitenotice-collapsed, and the template and
+   js/runnerstatus.min.js keep sitenotice-noline. This rule does not examine the contents of the
+   box with :has(). A browser without :has() ignores such a rule, and each reader with a folded
+   note would then see an empty box on each page always. Safari supports :has() from version
+   15.4, and this stylesheet supports earlier versions.
 
    The box collapses, and it stays in the page, because the runner sentence in it is a live region.
    A screen reader does not reliably speak a change inside a subtree with display:none, and an
    outage that starts while the box is quiet makes such a change. With no border, no background and
    no space, an empty box draws nothing, and a screen reader can still speak from it. */
-.sitenotice.sitenotice-nonote.sitenotice-noline {
+.sitenotice.sitenotice-nonote.sitenotice-noline,
+.sitenotice.sitenotice-collapsed.sitenotice-noline {
   background-color: transparent;
   border: 0;
   margin: 0;
   padding: 0;
 }
 
-/* The control that removes the note. This is the close button of Bootstrap, which holds its mark
-   as a background image. Thus the note next to it stays a paragraph of words. The control is
-   small, and it is next to the note and not over it. On this box it is not the first control that
-   a reader needs. */
-.sitenotice-dismiss {
+/* The control that folds the note, and unfolds it. It draws only its chevron, which is markup
+   with the other icons of this site, and thus the note next to it stays a paragraph of words.
+   The control is small, and it is next to the note and not over it. On this box it is not the
+   first control that a reader needs. */
+.sitenotice-toggle {
+  background: none;
+  border: 0;
+  color: inherit;
   float: right;
-  font-size: 0.7em;
+  line-height: 1;
   margin-left: 0.75em;
-  margin-top: 0.2em;
+  padding: 0.1em 0.2em;
+}
+
+.sitenotice-toggle svg {
+  height: 0.8em;
+  vertical-align: 0;
+  width: 0.8em;
+}
+
+/* One mark for the two conditions. The chevron of the template points up, at the fold. On a
+   folded note it points down, at the unfold. A turn of the mark, and not a second mark, so that
+   the control cannot show one direction while the box is in the other condition. */
+.sitenotice-collapsed .sitenotice-toggle svg {
+  transform: rotate(180deg);
 }
 
 /* The outage mark, in front of the sentence about the task runner. The colour of the box gives
@@ -213,7 +240,7 @@ in the query, the -webkit- form included, since that is the only form Safari has
     color: var(--bs-secondary-color);
   }
 
-  .sitenotice-dismiss,
+  .sitenotice-toggle,
   .sitenotice-runner {
     display: none;
   }

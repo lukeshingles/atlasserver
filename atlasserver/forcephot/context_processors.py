@@ -73,16 +73,25 @@ def _notice() -> tuple[str, str]:
 
 
 def sitenotice(request: HttpRequest) -> dict[str, t.Any]:
-    """Expose the version of the standing note, and whether to render it.
+    """Expose the version of the standing note, whether to render it, and whether it starts folded.
 
-    A reader removes the note with the control in the site notice box. The click stores the
-    version in a cookie, and this reads the cookie back. The server then omits the note, and no
-    page shows the note and removes it after the first paint.
+    A reader folds the note with the control in the site notice box. The click stores the version
+    in a cookie, and this reads the cookie back. The server then renders the note folded, and no
+    page shows the note and folds it after the first paint. The note stays in the page, because
+    the same control unfolds it without a new request.
 
-    A note with no words is also not rendered. That is what an operator leaves when they empty
+    The cookie under the old name comes from the control that this one replaced. That control
+    removed the note outright, and its cookie holds the same version string. A reader who removed
+    the note asked not to see it, and thus that cookie folds the note too.
+
+    A note with no words is not rendered at all. That is what an operator leaves when they empty
     notice.txt to remove the note from the site.
     """
     words, version = _notice()
-    dismissed = not words or request.COOKIES.get("atlas-notice-dismissed") == version
+    cookie = request.COOKIES.get("atlas-notice-collapsed") or request.COOKIES.get("atlas-notice-dismissed")
 
-    return {"notice_version": version, "notice_dismissed": dismissed}
+    return {
+        "notice_version": version,
+        "notice_present": bool(words),
+        "notice_collapsed": bool(words) and cookie == version,
+    }

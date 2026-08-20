@@ -4680,7 +4680,7 @@ class SiteNoticeTests(TestCase):
                 assert 'id="sitenotice"' in content
                 # The note, with the words that notice.txt gives today. A test of the words
                 # would put the text of an editable file into the test suite.
-                assert '<p class="sitenotice-note">' in content
+                assert '<p class="sitenotice-note"' in content
                 assert '<p class="sitenotice-runner" id="runnerstatus" role="status"' in content
                 assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
                 assert "js/runnerstatus.min.js" in content
@@ -4725,38 +4725,51 @@ class SiteNoticeTests(TestCase):
         # they are current. This test finds a source file that has no build.
         assert (settings.STATIC_ROOT / "js" / "runnerstatus.min.js").is_file()
 
-    def test_the_dismiss_control_is_hidden_until_its_script_runs(self) -> None:
+    def test_the_fold_control_is_hidden_until_its_script_runs(self) -> None:
         # A page without JavaScript keeps the note. It shows a control only when that control
-        # can remove the note. The control carries the version that a click stores in the cookie.
+        # can fold the note. The control carries the version that a click stores in the cookie.
         content = self.page(reverse("index"))
 
-        assert 'class="btn-close sitenotice-dismiss"' in content
+        assert 'class="sitenotice-toggle"' in content
+        assert 'aria-expanded="true"' in content
         assert 'data-notice-version="' in content
         assert "js/sitenotice.js" in content
 
-    def test_a_removed_note_is_not_rendered_again(self) -> None:
-        """The cookie names the version of the note that the reader removed.
+    def test_a_folded_note_is_rendered_folded(self) -> None:
+        """The cookie names the version of the note that the reader folded away.
 
-        The server then omits the note and the control, and the box starts collapsed. Thus no page
-        shows the note and removes it after the first paint.
+        The server then renders the note folded, and no page shows the note and folds it after
+        the first paint. The note and its control stay in the page, because the control is what
+        unfolds the note, and it does so without a new request.
         """
+        version = context_processors._notice()[1]  # noqa: SLF001
+        self.client.cookies["atlas-notice-collapsed"] = version
+
+        content = self.page(reverse("index"))
+
+        assert "sitenotice-collapsed" in content, "the note must start folded"
+        assert 'id="sitenotice-note"' in content, "a folded note stays in the page"
+        assert 'class="sitenotice-toggle"' in content, "the control is what unfolds the note"
+        assert 'aria-expanded="false"' in content
+
+    def test_the_cookie_of_the_old_removal_control_folds_the_note_too(self) -> None:
+        # That control removed the note outright, under the same version string. A reader who
+        # removed the note asked not to see it.
         version = context_processors._notice()[1]  # noqa: SLF001
         self.client.cookies["atlas-notice-dismissed"] = version
 
         content = self.page(reverse("index"))
 
-        assert "sitenotice-note" not in content
-        assert "sitenotice-dismiss" not in content
-        assert "sitenotice-nonote" in content, "the box must start collapsed"
+        assert "sitenotice-collapsed" in content
 
-    def test_a_cookie_for_an_old_note_does_not_remove_the_new_note(self) -> None:
+    def test_a_cookie_for_an_old_note_does_not_fold_the_new_note(self) -> None:
         # New words give a new version. The reader reads the new note one time more.
-        self.client.cookies["atlas-notice-dismissed"] = "an-old-version"
+        self.client.cookies["atlas-notice-collapsed"] = "an-old-version"
 
         content = self.page(reverse("index"))
 
-        assert '<p class="sitenotice-note">' in content
-        assert "sitenotice-nonote" not in content
+        assert '<p class="sitenotice-note"' in content
+        assert "sitenotice-collapsed" not in content
 
     def test_a_notice_with_no_words_is_not_rendered(self) -> None:
         # This is what an operator leaves when they empty notice.txt to remove the note.
@@ -4764,6 +4777,7 @@ class SiteNoticeTests(TestCase):
             content = self.page(reverse("index"))
 
         assert "sitenotice-note" not in content
+        assert "sitenotice-toggle" not in content
         assert "sitenotice-nonote" in content
 
     def test_the_queue_counts_travel_in_the_response_and_not_in_the_page(self) -> None:
