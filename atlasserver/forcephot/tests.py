@@ -4725,33 +4725,20 @@ class SiteNoticeTests(TestCase):
         # they are current. This test finds a source file that has no build.
         assert (settings.STATIC_ROOT / "js" / "runnerstatus.min.js").is_file()
 
-    def test_the_dismiss_control_is_hidden_until_its_script_runs(self) -> None:
-        # A page without JavaScript keeps the note. It shows a control only when that control
-        # can remove the note. The control carries the version that a click stores in the cookie.
+    def test_the_note_has_no_control_to_remove_it(self) -> None:
+        # The note gives a limit of the measurements, and a reader who put it away would read
+        # their measurements without it. Thus the box holds no dismiss or fold control.
         content = self.page(reverse("index"))
 
-        assert 'class="btn-close sitenotice-dismiss"' in content
-        assert 'data-notice-version="' in content
-        assert "js/sitenotice.js" in content
-
-    def test_a_removed_note_is_not_rendered_again(self) -> None:
-        """The cookie names the version of the note that the reader removed.
-
-        The server then omits the note and the control, and the box starts collapsed. Thus no page
-        shows the note and removes it after the first paint.
-        """
-        version = context_processors._notice()[1]  # noqa: SLF001
-        self.client.cookies["atlas-notice-dismissed"] = version
-
-        content = self.page(reverse("index"))
-
-        assert "sitenotice-note" not in content
         assert "sitenotice-dismiss" not in content
-        assert "sitenotice-nonote" in content, "the box must start collapsed"
+        assert "sitenotice-toggle" not in content
+        assert "js/sitenotice.js" not in content
 
-    def test_a_cookie_for_an_old_note_does_not_remove_the_new_note(self) -> None:
-        # New words give a new version. The reader reads the new note one time more.
-        self.client.cookies["atlas-notice-dismissed"] = "an-old-version"
+    def test_a_cookie_from_the_removed_dismiss_control_is_ignored(self) -> None:
+        # An earlier control stored the reader's choice in these cookies. A reader who stored
+        # one gets the note, like every other reader.
+        self.client.cookies["atlas-notice-dismissed"] = "some-version"
+        self.client.cookies["atlas-notice-collapsed"] = "some-version"
 
         content = self.page(reverse("index"))
 
@@ -4760,7 +4747,7 @@ class SiteNoticeTests(TestCase):
 
     def test_a_notice_with_no_words_is_not_rendered(self) -> None:
         # This is what an operator leaves when they empty notice.txt to remove the note.
-        with mock.patch.object(context_processors, "_notice", return_value=("", "emptyversion")):
+        with mock.patch.object(context_processors, "_notice", return_value=False):
             content = self.page(reverse("index"))
 
         assert "sitenotice-note" not in content

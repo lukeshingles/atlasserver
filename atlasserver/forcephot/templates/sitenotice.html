@@ -4,8 +4,9 @@
 {# #}
 {# js/runnerstatus.min.js writes the runner sentence, and it gives the box the warning colours #}
 {# while the task runner is down. The server renders the note, and thus the note shows with no #}
-{# JavaScript. The server omits the note when the reader removed it, and when notice.txt has no #}
-{# words; see context_processors.sitenotice. js/sitenotice.js shows the control that removes it. #}
+{# JavaScript. There is no control that removes or folds the note: the note gives a limit of the #}
+{# measurements, and a reader who put it away would read their measurements without it. The #}
+{# server omits the note when notice.txt has no words; see context_processors.sitenotice. #}
 {# #}
 {# data-showqueue tells that the queue counts are of use to each reader of this page. Only the #}
 {# queue page sets it, through alwaysshowqueue. For each other page, the status response tells #}
@@ -14,13 +15,8 @@
 {# sitenotice-noline starts on the box, because the runner paragraph starts empty. Thus a box #}
 {# with no note collapses from the first paint. renderInto keeps the class correct from the #}
 {# first response on. #}
-<div class="sitenotice sitenotice-noline{% if notice_dismissed %} sitenotice-nonote{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
-{% if not notice_dismissed %}
-  {# This control is a child of the box, and not of the note paragraph. Thus the note stays a #}
-  {# paragraph of words. The control stays hidden until js/sitenotice.js runs. Thus a page #}
-  {# without JavaScript shows the note, and it shows no control that does not work. #}
-  <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" data-notice-version="{{ notice_version }}" hidden></button>
-
+<div class="sitenotice sitenotice-noline{% if not notice_present %} sitenotice-nonote{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
+{% if notice_present %}
   {# notice.txt gives text in this paragraph. Keep it as text. A block element in that file would #}
   {# be inside a <p>, and the browser would close the paragraph in front of it. #}
   <p class="sitenotice-note">{% include "notice.txt" %}</p>

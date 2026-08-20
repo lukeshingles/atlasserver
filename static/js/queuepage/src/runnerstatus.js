@@ -389,8 +389,7 @@ export function renderInto(box, status) {
     // comparison. The mark is in the template, hidden, with the other icons of the site; it
     // belongs to the outage sentence and shows with it.
     box.classList.toggle('stale', stale);
-    // The second part of the collapse. The server and js/sitenotice.js set sitenotice-nonote.
-    // See main.css.
+    // The second part of the collapse. The template sets sitenotice-nonote. See main.css.
     box.classList.toggle('sitenotice-noline', message == null);
     const mark = line.querySelector('.sitenotice-warnmark');
     if (mark != null) {

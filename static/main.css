@@ -129,16 +129,15 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-bottom: 0;
 }
 
-/* Nothing to give, and thus nothing to draw. The box has no note, because the server omitted a
-   removed or empty note, and the task runner has nothing to report. Without this rule the page
-   holds a box with space in it and no words.
+/* Nothing to give, and thus nothing to draw. The box has no note, because notice.txt has no
+   words, and the task runner has nothing to report. Without this rule the page holds a box with
+   space in it and no words.
 
-   The two classes come from the code that knows each answer. The server and js/sitenotice.js set
-   sitenotice-nonote, and the template and js/runnerstatus.min.js keep sitenotice-noline. This
-   rule does not examine the contents of the box with :has(). A browser without :has() ignores
-   such a rule, and each reader with a removed note would then see an empty box on each page
-   always. Safari supports :has() from version 15.4, and this stylesheet supports earlier
-   versions.
+   The two classes come from the code that knows each answer. The template sets sitenotice-nonote,
+   and the template and js/runnerstatus.min.js keep sitenotice-noline. This rule does not examine
+   the contents of the box with :has(). A browser without :has() ignores such a rule, and each
+   reader would then see an empty box on each page while notice.txt is empty. Safari supports
+   :has() from version 15.4, and this stylesheet supports earlier versions.
 
    The box collapses, and it stays in the page, because the runner sentence in it is a live region.
    A screen reader does not reliably speak a change inside a subtree with display:none, and an
@@ -149,17 +148,6 @@ in the query, the -webkit- form included, since that is the only form Safari has
   border: 0;
   margin: 0;
   padding: 0;
-}
-
-/* The control that removes the note. This is the close button of Bootstrap, which holds its mark
-   as a background image. Thus the note next to it stays a paragraph of words. The control is
-   small, and it is next to the note and not over it. On this box it is not the first control that
-   a reader needs. */
-.sitenotice-dismiss {
-  float: right;
-  font-size: 0.7em;
-  margin-left: 0.75em;
-  margin-top: 0.2em;
 }
 
 /* The outage mark, in front of the sentence about the task runner. The colour of the box gives
@@ -213,7 +201,6 @@ in the query, the -webkit- form included, since that is the only form Safari has
     color: var(--bs-secondary-color);
   }
 
-  .sitenotice-dismiss,
   .sitenotice-runner {
     display: none;
   }
