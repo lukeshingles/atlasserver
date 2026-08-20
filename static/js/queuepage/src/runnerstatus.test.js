@@ -388,6 +388,40 @@ describe('the store', () => {
         unsubscribe();
     });
 
+    test('a later request that fails does not discard an earlier answer', async () => {
+        // The first request of a page can overlap the request from a return to the tab, or from
+        // the interval. A failure gives no status. Thus a failure must not discard a status that
+        // arrives after it. On a page that just opened, the box would else stay empty for a
+        // minute, with each wait estimate of the queue page.
+        let answerFirst;
+        const calls = [];
+        global.fetch = () => {
+            const call = calls.length;
+            return new Promise((resolve, reject) => {
+                if (call === 0) {
+                    answerFirst = () => resolve({ ok: true, status: 200, json: () => Promise.resolve(healthy({ slots_busy: 4 })) });
+                } else {
+                    reject(new Error('unreachable'));
+                }
+                calls.push(call);
+            });
+        };
+
+        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const unsubscribe = store.subscribe(() => {});
+        try {
+            store.refresh();
+            await settle();
+            answerFirst();
+            await settle();
+
+            assert.notEqual(store.current(), null, 'the answer that arrived is the one to keep');
+            assert.equal(store.current().slots_busy, 4);
+        } finally {
+            unsubscribe();
+        }
+    });
+
     test('a request in flight when the poll stops does not put back what was forgotten', async () => {
         let answer;
         global.fetch = () => new Promise((resolve) => {

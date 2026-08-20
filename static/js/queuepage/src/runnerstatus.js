@@ -159,8 +159,12 @@ export function createStore({ url, poll = POLL_MS }) {
     // The time of the last request that reached the endpoint.
     let lastgoodfetch = null;
     let interval = null;
-    // A count of the requests. An answer uses it to find whether its question is the newest.
+    // A count of the questions that this store asked.
     let generation = 0;
+    // The number of the newest question with a body in its answer. A failed request does not
+    // change this count, because a failure gives no status to report. stop() sets it to the
+    // current count of questions, which cancels each request that is in progress.
+    let answered = 0;
     const listeners = new Set();
 
     function publish(next) {
@@ -209,9 +213,9 @@ export function createStore({ url, poll = POLL_MS }) {
     function refresh({ fresh = false } = {}) {
         // The number of this question. Two requests can overlap, because the interval and a
         // return to the tab can occur in the same second. The two answers can arrive in any order.
-        // Thus the store discards the answer to a question that it asked again. Without this
-        // number, the store keeps the older value for a full poll. That value also changes the
-        // wait estimate of each row on the queue page.
+        // Thus the store keeps the answer with the highest number, and it discards an older
+        // answer. Without these numbers, the store keeps the older status for a full poll. That
+        // status also changes the wait estimate of each row on the queue page.
         const asked = (generation += 1);
 
         // The endpoint reports a stale task runner with HTTP status 503 and a body. Thus the store
@@ -223,14 +227,17 @@ export function createStore({ url, poll = POLL_MS }) {
         })
             .then(response => response.json())
             .then(body => {
-                if (asked !== generation) {
+                // The comparison is with the newest answer, and not with the newest question. A
+                // later request that fails gives no status, and thus it must not discard this one.
+                if (asked <= answered) {
                     return;
                 }
+                answered = asked;
                 lastgoodfetch = Date.now();
                 publish(body);
             })
             .catch(error => {
-                if (asked !== generation) {
+                if (asked <= answered) {
                     return;
                 }
                 // A failed request of our own tells us nothing about the task runner. Thus this
@@ -272,10 +279,10 @@ export function createStore({ url, poll = POLL_MS }) {
         // which is what the first reader gets. A page that draws the box does not come here,
         // because the box keeps its subscription for the life of the page.
         //
-        // The question number also increases, which discards each request that is in progress.
-        // Without that step, a request that started before the stop arrives after it, and it puts
-        // back the status that stop() just discarded.
-        generation += 1;
+        // The count of answers moves to the count of questions, which cancels each request that
+        // is in progress. Without that step, a request that started before the stop arrives after
+        // it, and it puts back the status that stop() just discarded.
+        answered = generation;
         status = null;
         lastgoodfetch = null;
     }
