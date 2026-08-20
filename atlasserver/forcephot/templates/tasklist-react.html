@@ -23,7 +23,6 @@
         {# SECURE_PROXY_SSL_HEADER and the proxy-fixed Host header. #}
         const api_url_base = '{{ request.scheme }}://{{ request.get_host }}{% url 'task-list' %}';
         const queuepositions_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'queuepositions' %}';
-        const taskrunnerstatus_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'taskrunnerstatus' %}';
 
         const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
         var user_is_active = true;
@@ -31,6 +30,39 @@
         var lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;
     </script>
 {% endblock %}
+
+{# This block is at the top level of this template, and not inside its {% block script %}. #}
+{# base.html renders the block in the <head>. A map must be there to reach the module scripts #}
+{# below it. #}
+{% block importmap %}
+{# This site serves react and react-dom, and it does not use esm.sh. A content delivery network #}
+{# of a third party on the critical path of a signed-in page has two risks. An outage of that #}
+{# network stops the page, and an attack on that network runs code in each signed-in session. An #}
+{# import map also cannot hold an integrity hash, which the <script> tags at the foot of this #}
+{# page do hold. build.sh makes these files with esbuild, because React 19 publishes CommonJS #}
+{# only. react.min.js and react-dom-client.min.js share their React through a #}
+{# react-shared-<hash>.js file. They import that file by a relative address, and thus it needs no #}
+{# entry in this map. The hash in its name makes a browser get the new copy, because a relative #}
+{# import does not get the ?ver= value from the map. #}
+<script type="importmap">
+    {
+        "imports": {
+            "react": "{% static 'js/vendor/react.min.js' %}?ver={{ static_version }}",
+            "react-dom": "{% static 'js/vendor/react-dom-client.min.js' %}?ver={{ static_version }}",
+            "newrequest": "{% static 'js/newrequest.min.js' %}?ver={{ static_version }}",
+            "pollcache": "{% static 'js/pollcache.min.js' %}?ver={{ static_version }}",
+            "runnerstatus": "{% static 'js/runnerstatus.min.js' %}?ver={{ static_version }}",
+            "waitestimate": "{% static 'js/waitestimate.min.js' %}?ver={{ static_version }}",
+            "csrftoken": "{% static 'js/csrftoken.min.js' %}?ver={{ static_version }}"
+        }
+    }
+</script>
+{% endblock %}
+
+{# The queue page always shows the queue counts of the task runner, and it shows them also to a #}
+{# reader who waits for nothing. It is the page about the queue. Each other page shows the counts #}
+{# only to a reader who has a task in the queue. #}
+{% block sitenotice %}{% include "sitenotice.html" with alwaysshowqueue=True %}{% endblock %}
 
 {% block content %}
 <div class="content-main" role="main" aria-label="main content">
@@ -132,27 +164,6 @@
         const jslcdataglobal = new Object();
         const jslabelsglobal = new Object();
         const jslimitsglobal = new Object();
-    </script>
-    {# react and react-dom are served from here rather than from esm.sh. A third-party CDN on the #}
-    {# critical path of a signed-in page meant an outage took the page down and a compromise would #}
-    {# have run arbitrary script in every logged-in session, and an import map cannot carry an #}
-    {# integrity hash the way the <script> tags above do. build.sh generates these with esbuild, #}
-    {# because React 19 publishes CommonJS only; react.min.js and react-dom-client.min.js share #}
-    {# their React through a react-shared-<hash>.js chunk, which they import relatively, so it needs #}
-    {# no entry here -- and the hash in its name is what busts it, since a relative import does not #}
-    {# inherit the ?ver= below. #}
-    <script type="importmap">
-        {
-            "imports": {
-                "react": "{% static 'js/vendor/react.min.js' %}?ver={{ static_version }}",
-                "react-dom": "{% static 'js/vendor/react-dom-client.min.js' %}?ver={{ static_version }}",
-                "newrequest": "{% static 'js/newrequest.min.js' %}?ver={{ static_version }}",
-                "pollcache": "{% static 'js/pollcache.min.js' %}?ver={{ static_version }}",
-                "agetext": "{% static 'js/agetext.min.js' %}?ver={{ static_version }}",
-                "waitestimate": "{% static 'js/waitestimate.min.js' %}?ver={{ static_version }}",
-                "csrftoken": "{% static 'js/csrftoken.min.js' %}?ver={{ static_version }}"
-            }
-        }
     </script>
     <script type="module" src="{% static 'js/tasklist.min.js' %}?ver={{ static_version }}"></script>
 {% endblock %}

@@ -105,12 +105,13 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-top: 0em;
 } */
 
-/* The standing note about the data, on every page above the content. As a panel rather than a line
-   of small grey text: what it carries is a caveat about the measurements themselves, which is worth
-   more than the smallest type on the page. The edge is the warm orange of the mark's trail, which is
-   the site's colour for "read this", and it is quiet enough at this width not to compete with the
-   heading below it. */
-.notices {
+/* The one box above the content, on every page. It holds the note about the data, and the status
+   of the task runner from /taskrunnerstatus.json. It is a box, and not a line of small grey text.
+   The note gives a limit of the measurements, which is of more importance than the smallest type
+   on the page. The edge is the warm orange of the trail of the mark, which is the colour of this
+   site for "read this". At this width the edge is quiet, and it does not compete with the heading
+   below it. */
+.sitenotice {
   background-color: var(--bs-tertiary-bg);
   border-left: 3px solid var(--atlas-ember);
   border-radius: 0.4em;
@@ -118,6 +119,104 @@ in the query, the -webkit- form included, since that is the only form Safari has
   font-size: 0.85em;
   margin-bottom: 1.5em;
   padding: 0.7em 1em;
+}
+
+.sitenotice-note {
+  margin-bottom: 0.5em;
+}
+
+.sitenotice-runner {
+  margin-bottom: 0;
+}
+
+/* Nothing to give, and thus nothing to draw. The box has no note, because the server omitted a
+   removed or empty note, and the task runner has nothing to report. Without this rule the page
+   holds a box with space in it and no words.
+
+   The two classes come from the code that knows each answer. The server and js/sitenotice.js set
+   sitenotice-nonote, and the template and js/runnerstatus.min.js keep sitenotice-noline. This
+   rule does not examine the contents of the box with :has(). A browser without :has() ignores
+   such a rule, and each reader with a removed note would then see an empty box on each page
+   always. Safari supports :has() from version 15.4, and this stylesheet supports earlier
+   versions.
+
+   The box collapses, and it stays in the page, because the runner sentence in it is a live region.
+   A screen reader does not reliably speak a change inside a subtree with display:none, and an
+   outage that starts while the box is quiet makes such a change. With no border, no background and
+   no space, an empty box draws nothing, and a screen reader can still speak from it. */
+.sitenotice.sitenotice-nonote.sitenotice-noline {
+  background-color: transparent;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* The control that removes the note. This is the close button of Bootstrap, which holds its mark
+   as a background image. Thus the note next to it stays a paragraph of words. The control is
+   small, and it is next to the note and not over it. On this box it is not the first control that
+   a reader needs. */
+.sitenotice-dismiss {
+  float: right;
+  font-size: 0.7em;
+  margin-left: 0.75em;
+  margin-top: 0.2em;
+}
+
+/* The outage mark, in front of the sentence about the task runner. The colour of the box gives
+   the same information, and this mark is for the reader who cannot use that colour. The template
+   holds the mark, hidden, and js/runnerstatus.min.js shows it in the condition it belongs to. */
+.sitenotice-warnmark {
+  height: 1.1em;
+  /* The space belongs to the mark, and not to the sentence. The sentence is then only words. */
+  margin-right: 0.3em;
+  vertical-align: -0.2em;
+  width: 1.1em;
+}
+
+/* The box changes its condition while the reader reads it, at a poll that the reader did not ask
+   for. Thus the colours change slowly. Only the colours change in this way. A change of size or of
+   position would move the text while the reader reads it. */
+@media (prefers-reduced-motion: no-preference) {
+  .sitenotice {
+    transition: background-color 0.4s ease, border-color 0.4s ease, color 0.4s ease;
+  }
+}
+
+/* While the task runner is down, the same box takes the warning colours of Bootstrap. The -subtle
+   and -emphasis variables have a dark value and a light value. Thus the box stays a warning on the
+   dark theme, and it is not a pale yellow block.
+
+   Only the colours change: the ground, the edge, and the text. The size and the borders keep
+   their values, because this condition arrives at a poll that the reader did not ask for, and a
+   change of size moves the text while the reader reads it. The warning mark and the outage
+   sentence carry the change of condition for the reader who cannot use the colours.
+
+   The rule is on the box, and not on the runner sentence, so that the warning colours hold the
+   note as well. While the task runner is down, the reader must know both sentences before they
+   read the page. */
+.sitenotice.stale {
+  background-color: var(--bs-warning-bg-subtle);
+  border-left-color: var(--bs-warning-border-subtle);
+  color: var(--bs-warning-text-emphasis);
+}
+
+/* On paper the runner sentence is out of date immediately, and the box has no condition to show.
+   The note gives a limit of the measurements, and thus it stays with them.
+
+   These rules come after .sitenotice.stale, and not before it. A media query adds no specificity,
+   and thus the same selector later in the file wins, in print as on the screen. */
+@media print {
+  .sitenotice,
+  .sitenotice.stale {
+    background-color: transparent;
+    border-left-color: var(--atlas-ember);
+    color: var(--bs-secondary-color);
+  }
+
+  .sitenotice-dismiss,
+  .sitenotice-runner {
+    display: none;
+  }
 }
 
 div.page-header {
@@ -561,25 +660,6 @@ p.taskerror {
   color: var(--bs-body-color);
   font-weight: bold;
   margin-top: 1em;
-}
-
-/* the task runner health line, from /taskrunnerstatus.json */
-p.runnerstatus {
-  color: var(--bs-secondary-color);
-  font-size: 0.85em;
-  margin-bottom: 0.5em;
-}
-
-/* Bootstrap's own warning panel colours, which is what this yellow was a hand-written copy of.
-   The -subtle and -emphasis variables have a dark value as well as a light one, so the panel
-   stays a warning on the dark theme rather than a pale yellow block. */
-p.runnerstatus.stale {
-  background-color: var(--bs-warning-bg-subtle);
-  border: 1px solid var(--bs-warning-border-subtle);
-  border-radius: 0.3em;
-  color: var(--bs-warning-text-emphasis);
-  font-size: 1em;
-  padding: 0.7em 1em;
 }
 
 /* Bootstrap 3's button palette, which the two frameworks disagree about: .btn-warning was orange

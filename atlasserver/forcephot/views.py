@@ -39,6 +39,7 @@ from django.http import HttpResponseNotModified
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
+from django.views.decorators.cache import cache_control
 from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
 from django_filters.rest_framework import DjangoFilterBackend
@@ -929,6 +930,13 @@ def queuepositions(request):
     )
 
 
+# A browser can answer a second request from its cache, for one write interval of the task runner.
+# Each page of the site asks for this status at load. Thus several tabs that open together would
+# make several requests for a file that changes every fifteen seconds. The interval stops there. A
+# longer interval would need stale-while-revalidate, and this endpoint must not give that
+# directive. runnerstatus.js asks again when a hidden tab becomes visible. That reader needs the
+# status at that moment, and not the status from before the tab became hidden.
+@cache_control(private=True, max_age=int(runnerstatus.STATUS_WRITE_SECONDS))
 def taskrunnerstatus(request):
     """Report whether the task runner is alive and what it is doing.
 
@@ -957,30 +965,55 @@ def taskrunnerstatus(request):
                 "running": False,
                 "stale": True,
                 "typical_runtime_seconds": {},
+                "user_queued_task_count": 0,
                 "detail": f"no usable status file ({type(ex).__name__})",
             },
             status=503,
         )
 
-    # several missed writes rather than one, so that a slow write does not raise a false alarm
+    # Some missed writes, and not one, so that one slow write does not give a false alarm.
     stale = age_seconds > (runnerstatus.STATUS_WRITE_SECONDS * 4)
 
-    # Only when the runner is running. A wait estimate is a claim about work being done, and when
-    # the status file has stopped being refreshed nothing is being done -- the queue page discards
-    # the figure in that case, so computing it would be a cache read (and, on expiry, a query) per
-    # poll from every open tab for a value certain to be thrown away.
+    # The version of this response, from the one field that changes with each write of the file.
+    # The medians and the count below can change while `written` does not. But the task runner
+    # writes the file every STATUS_WRITE_SECONDS, and thus this version holds for that interval
+    # at most. The poll asks each minute.
+    etag = f'"{status["written"]}"'
+
+    # A browser that holds the current version asks with If-None-Match, and the answer is 304 with
+    # no body. This comes before the medians and the count, because a 304 makes both unnecessary.
+    if not stale and request.headers.get("If-None-Match") == etag:
+        return HttpResponseNotModified()
+
+    # Only when the task runner runs. A wait estimate is a claim about work in progress. When the
+    # status file is stale, no work is in progress, and the queue page discards the figure. A
+    # computation at that time would cost a cache read, and at times a query, for each poll of
+    # each open tab. Every reader would discard the value.
     typical_runtimes: dict[str, float] = {} if stale else typical_runtime_seconds()
 
-    return JsonResponse(
+    # How many tasks this reader has in the queue. renderInto shows the queue counts to a reader
+    # who waits on the queue. This field is how a page that is not the queue page knows it. The
+    # count is for the signed-in user. The response is Cache-Control private, and thus no shared
+    # cache can serve one reader the count of another.
+    user_queued_task_count = (
+        Task.queued().filter(user_id=request.user.pk).count() if request.user.is_authenticated else 0
+    )
+
+    response = JsonResponse(
         {
             **status,
             "running": not stale,
             "stale": stale,
             "status_age_seconds": round(age_seconds, 1),
             "typical_runtime_seconds": typical_runtimes,
+            "user_queued_task_count": user_queued_task_count,
         },
         status=503 if stale else 200,
     )
+    # No ETag on a 503. A browser does not revalidate an error, and an outage response is small.
+    if not stale:
+        response["ETag"] = etag
+    return response
 
 
 @functools.cache

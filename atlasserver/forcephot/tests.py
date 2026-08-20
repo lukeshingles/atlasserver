@@ -43,6 +43,7 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
+from atlasserver.forcephot import context_processors
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
@@ -1685,7 +1686,10 @@ class TaskCreateResponseTests(TestCase):
         content = response.content.decode()
         assert "const api_url_base = 'http://testserver/queue/'" in content, content[:500]
         assert "const queuepositions_url = 'http://testserver/queuepositions.json'" in content
-        assert "const taskrunnerstatus_url = 'http://testserver/taskrunnerstatus.json'" in content
+        # The address of the runner status endpoint reaches the page as a meta tag from
+        # base.html, which each page holds. Thus this render path also gets it with no view
+        # context.
+        assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
 
     def test_single_task_creation(self) -> None:
         # RA 0 / Dec 0 doubles as the end-to-end check that zero coordinates survive the API
@@ -2255,7 +2259,7 @@ class QueuePositionsEndpointTests(TestCase):
 
 
 class TaskRunnerStatusTests(TestCase):
-    """Both the runner and the view read STATUS_PATH through atlasserver.taskrunner.status.
+    """The task runner and the view read STATUS_PATH through atlasserver.taskrunner.status.
 
     The view must not import atlasserver.taskrunner.main (which runs django.setup() and pulls in
     pandas), so patching the shared module is what makes one patch cover both sides.
@@ -2265,6 +2269,7 @@ class TaskRunnerStatusTests(TestCase):
         # the medians are cached for five minutes in a cache the per-test transaction rollback does
         # not touch, so without this a test that populates them decides what a later one sees
         caches["usagestats"].clear()
+        taskqueue.clear_typical_runtime_memo()
 
     def status_response(self, **write_status_kwargs: t.Any) -> t.Any:
         """Have the runner write a status file, then read it back through the endpoint.
@@ -2287,6 +2292,75 @@ class TaskRunnerStatusTests(TestCase):
 
         assert response.status_code == 503
         assert response.json()["running"] is False
+
+    def test_the_response_counts_the_tasks_of_the_signed_in_reader(self) -> None:
+        """RenderInto shows the queue counts to a reader who waits on the queue.
+
+        This field is how a page that is not the queue page knows it. The response is
+        Cache-Control private, and thus no shared cache serves one reader the count of another.
+        """
+        user = User.objects.create_user(username="statuscount", email="sc@example.com", password=None)
+        Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        assert self.status_response(procs_taskids={}).json()["user_queued_task_count"] == 0, "anonymous"
+
+        self.client.force_login(user)
+        assert self.status_response(procs_taskids={}).json()["user_queued_task_count"] == 1
+
+    def test_a_browser_with_the_current_version_gets_304_and_no_body(self) -> None:
+        """The ETag names the write of the status file, and it holds for one write interval.
+
+        A 304 comes before the medians and the count, and thus a revalidation costs no query and
+        no cache read.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(numslots=runnerstatus.NUMSLOTS, procs_taskids={})
+
+                first = self.client.get(reverse("taskrunnerstatus"))
+                etag = first["ETag"]
+                again = self.client.get(reverse("taskrunnerstatus"), HTTP_IF_NONE_MATCH=etag)
+
+        assert first.status_code == 200
+        assert etag.startswith('"')
+        assert again.status_code == 304
+        assert not again.content
+
+    def test_an_outage_response_has_no_etag(self) -> None:
+        # A browser does not revalidate an error response, and thus an ETag on it is of no use.
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+        ):
+            response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert "ETag" not in response.headers
+
+    def test_a_status_is_cacheable_for_one_write_interval(self) -> None:
+        """Each page asks for this status at load, and thus several tabs ask several times.
+
+        The interval is the time in which the task runner writes the file again. The header gives
+        no stale-while-revalidate. runnerstatus.js asks again when a hidden tab becomes visible,
+        and that reader must not get the answer from before the tab became hidden.
+        """
+        response = self.status_response(procs_taskids={})
+
+        assert response.status_code == 200
+        assert response["Cache-Control"] == "private, max-age=15"
+
+    def test_an_outage_is_cacheable_too(self) -> None:
+        # The same reason. In an outage each page of the site asks at the same time.
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+        ):
+            response = self.client.get(reverse("taskrunnerstatus"))
+
+        assert response.status_code == 503
+        assert "max-age=15" in response["Cache-Control"]
+        assert "stale-while-revalidate" not in response["Cache-Control"]
 
     def test_fresh_status_file_reports_running(self) -> None:
         user = User.objects.create_user(username="statuser", email="st@example.com", password=None)
@@ -2444,6 +2518,7 @@ class TypicalRuntimeTests(TestCase):
     def setUp(self) -> None:
         # the figure is cached for five minutes, and the cache outlives one test within the process
         caches["usagestats"].clear()
+        taskqueue.clear_typical_runtime_memo()
         self.user = User.objects.create_user(username="runtimeuser", email="rt@example.com", password=None)
         # how many tasks this test has made so far, which sets how long ago each one finished; see
         # _finished_task
@@ -4577,3 +4652,129 @@ class BrowsableApiBreadcrumbTests(TestCase):
         assert 'class="breadcrumb"' in content, "the way back to the list was removed with it"
         assert f'<a href="{reverse("task-list")}?format=api">Force Phot Task List</a>' in content
         assert "<h1>Force Phot Task Instance" in content
+
+
+class SiteNoticeTests(TestCase):
+    """The one box above the content, on every page.
+
+    The box holds the note about the data and the status of the task runner. The server renders the
+    note. js/runnerstatus.min.js writes the runner sentence and polls for it. Thus the page must
+    give the address of the endpoint, and the module, and the markup.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="reader", email="reader@example.com", password=None)
+
+    def page(self, url: str) -> str:
+        return self.client.get(url, HTTP_ACCEPT="text/html").content.decode()
+
+    def test_every_page_carries_the_box_and_what_fills_it(self) -> None:
+        # In an outage a reader can be on any page, and not only on the queue page. The note
+        # and the status of the task runner are the two items that a reader needs first.
+        pagenames = ["index", "faq", "resultdesc", "apiguide", "stats", "login"]
+
+        for name in pagenames:
+            with self.subTest(page=name):
+                content = self.page(reverse(name))
+
+                assert 'id="sitenotice"' in content
+                # The note, with the words that notice.txt gives today. A test of the words
+                # would put the text of an editable file into the test suite.
+                assert '<p class="sitenotice-note">' in content
+                assert '<p class="sitenotice-runner" id="runnerstatus" role="status"' in content
+                assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
+                assert "js/runnerstatus.min.js" in content
+
+    def test_the_queue_page_carries_it_too(self) -> None:
+        self.client.force_login(self.user)
+
+        content = self.page(reverse("task-list"))
+
+        assert 'id="sitenotice"' in content
+        assert "js/runnerstatus.min.js" in content
+
+    def test_the_browsable_api_carries_it_too(self) -> None:
+        self.client.force_login(self.user)
+
+        content = self.client.get(reverse("task-list"), {"format": "api"}, HTTP_ACCEPT="text/html").content.decode()
+
+        assert 'id="sitenotice"' in content
+        assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
+        assert "js/runnerstatus.min.js" in content
+
+    def test_the_queue_page_reaches_one_copy_of_the_module(self) -> None:
+        """The import map and the script tag must give the same URL, character for character.
+
+        A browser holds one instance of a module for each resolved URL. The queue page loads the
+        module as a script, and it imports the module again for its wait estimates. Two forms of
+        the URL would thus give two instances, two polls each minute, and a page that reads a store
+        which draws nothing.
+        """
+        self.client.force_login(self.user)
+        content = self.page(reverse("task-list"))
+
+        imported = re.search(r'"runnerstatus": "([^"]+)"', content)
+        loaded = re.search(r'<script type="module" src="([^"]*runnerstatus[^"]*)"', content)
+
+        assert imported is not None, "the import map lost its runnerstatus entry"
+        assert loaded is not None, "the page does not load the module"
+        assert imported.group(1) == loaded.group(1)
+
+    def test_the_module_is_built(self) -> None:
+        # The repository holds the built bundles, and the CI job builds them again to show that
+        # they are current. This test finds a source file that has no build.
+        assert (settings.STATIC_ROOT / "js" / "runnerstatus.min.js").is_file()
+
+    def test_the_dismiss_control_is_hidden_until_its_script_runs(self) -> None:
+        # A page without JavaScript keeps the note. It shows a control only when that control
+        # can remove the note. The control carries the version that a click stores in the cookie.
+        content = self.page(reverse("index"))
+
+        assert 'class="btn-close sitenotice-dismiss"' in content
+        assert 'data-notice-version="' in content
+        assert "js/sitenotice.js" in content
+
+    def test_a_removed_note_is_not_rendered_again(self) -> None:
+        """The cookie names the version of the note that the reader removed.
+
+        The server then omits the note and the control, and the box starts collapsed. Thus no page
+        shows the note and removes it after the first paint.
+        """
+        version = context_processors._notice()[1]  # noqa: SLF001
+        self.client.cookies["atlas-notice-dismissed"] = version
+
+        content = self.page(reverse("index"))
+
+        assert "sitenotice-note" not in content
+        assert "sitenotice-dismiss" not in content
+        assert "sitenotice-nonote" in content, "the box must start collapsed"
+
+    def test_a_cookie_for_an_old_note_does_not_remove_the_new_note(self) -> None:
+        # New words give a new version. The reader reads the new note one time more.
+        self.client.cookies["atlas-notice-dismissed"] = "an-old-version"
+
+        content = self.page(reverse("index"))
+
+        assert '<p class="sitenotice-note">' in content
+        assert "sitenotice-nonote" not in content
+
+    def test_a_notice_with_no_words_is_not_rendered(self) -> None:
+        # This is what an operator leaves when they empty notice.txt to remove the note.
+        with mock.patch.object(context_processors, "_notice", return_value=("", "emptyversion")):
+            content = self.page(reverse("index"))
+
+        assert "sitenotice-note" not in content
+        assert "sitenotice-nonote" in content
+
+    def test_the_queue_counts_travel_in_the_response_and_not_in_the_page(self) -> None:
+        """data-showqueue marks the queue page alone.
+
+        Each other page learns from the status response whether this reader has a task in the
+        queue. Thus the answer follows the queue within one poll, where an attribute in the page
+        held the answer from the render of that page.
+        """
+        self.client.force_login(self.user)
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        assert "data-showqueue" not in self.page(reverse("index"))
+        assert "data-showqueue" in self.page(reverse("task-list"))

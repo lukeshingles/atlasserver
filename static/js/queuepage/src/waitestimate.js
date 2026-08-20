@@ -3,7 +3,7 @@
 // How long a queued task is likely to wait, and how to say it.
 //
 // Kept free of React and of browser globals so that it can be tested directly with `node --test`
-// (the same reasoning as agetext.js and pollcache.js). Nothing here touches the DOM: seconds and
+// (the same reasoning as pollcache.js). Nothing here touches the DOM: seconds and
 // counts in, a number or a string out.
 //
 // The obvious formula -- tasks ahead, divided by the number of slots, times how long a task takes

@@ -10,7 +10,7 @@
 // that node resolves them from node_modules, giving the test the same single React instance the
 // component tree uses.
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fireEvent } from '@testing-library/dom';
@@ -21,6 +21,30 @@ const SRC = dirname(fileURLToPath(import.meta.url));
 
 // inside the package so that node resolves "react" from node_modules by walking up from here
 const OUTDIR = resolve(SRC, '..', 'node_modules', '.cache', 'atlas-component-tests');
+
+/**
+ * Load one classic script into a window of its own, and return that window.
+ *
+ * For the plain scripts that base.html loads: they read the document and run, and they export
+ * nothing. The wait below is necessary because jsdom sends DOMContentLoaded one tick after it
+ * makes the window. Without the wait, a script that waits for that event would wait for an event
+ * that has already occurred. The caller closes the window.
+ */
+export async function loadClassicScript({ file, html, url = 'http://testserver/' }) {
+    const source = await readFile(file, 'utf8');
+    const dom = new JSDOM(html, { runScripts: 'outside-only', url });
+
+    await new Promise((resolve) => {
+        if (dom.window.document.readyState === 'loading') {
+            dom.window.document.addEventListener('DOMContentLoaded', resolve);
+        } else {
+            resolve();
+        }
+    });
+
+    dom.window.eval(source);
+    return dom.window;
+}
 
 /** Compile one source file and import it. Returns its module namespace. */
 export async function importComponent(entry) {
@@ -39,7 +63,7 @@ export async function importComponent(entry) {
             // would otherwise resolve the package root, whose default export has no createRoot
             'react-dom': 'react-dom/client',
             csrftoken: join(SRC, 'csrftoken.js'),
-            agetext: join(SRC, 'agetext.js'),
+            runnerstatus: join(SRC, 'runnerstatus.js'),
             waitestimate: join(SRC, 'waitestimate.js'),
             pollcache: join(SRC, 'pollcache.js'),
             newrequest: join(SRC, 'newrequest.jsx'),
@@ -75,10 +99,21 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     // node exposes globalThis.navigator as a getter-only property, so a plain assignment throws
     Object.defineProperty(global, 'navigator', { value: window.navigator, configurable: true });
 
+    /*
+     * Where runnerstatus.js reads its endpoint, in the form that base.html gives.
+     *
+     * The box (#sitenotice) is absent here, and that is the intent. The module starts its poll
+     * when it gets a box, or when a reader subscribes. Without a box here, the first request
+     * occurs as TaskPage mounts, which is after each test installs its test fetch function. A box
+     * here would make a request at the time of importComponent(), with no test function in
+     * place. The wait estimates would then lose the response that they need.
+     */
+    window.document.head.insertAdjacentHTML(
+        'beforeend', '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json">');
+
     // globals from the inline script in tasklist-react.html
     global.api_url_base = 'http://testserver/queue/';
     global.queuepositions_url = 'http://testserver/queuepositions.json';
-    global.taskrunnerstatus_url = 'http://testserver/taskrunnerstatus.json';
     global.user_id = 1;
     global.user_is_active = true;
     global.hidden = 'hidden';
@@ -92,9 +127,23 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     return window;
 }
 
-/** Tear down a window created by setupDom. */
+/**
+ * Close a window that setupDom made, and remove the global values with it.
+ *
+ * A closed jsdom window continues to answer. Its document gives visibilityState "visible", and it
+ * accepts listeners. Thus a `typeof document` test in the code under test would find the closed
+ * document of the test before it. runnerstatus.js makes such a test.
+ */
 export async function teardownDom(window) {
     window.close();
+
+    // `window` stays. A poll or a promise from the page under test can complete while this
+    // function runs. Such code reads window.location and window.history directly. A name that
+    // does not exist gives a ReferenceError, which fails the suite from outside every test.
+    for (const name of ['document', 'localStorage', 'HTMLElement', 'Event',
+        'requestAnimationFrame', 'cancelAnimationFrame', 'navigator']) {
+        delete global[name];
+    }
 }
 
 /**

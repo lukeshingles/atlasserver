@@ -18,6 +18,12 @@
         {# unreadable and none of the responsive rules in main.css ever apply #}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="NONE,NOARCHIVE" />
+
+        {# Where js/runnerstatus.min.js reads the address of the endpoint to poll. The address #}
+        {# is in the page, and not in the script. {% url %} gives the /forcedphot script prefix, #}
+        {# and only a template knows that prefix. A relative URL is sufficient for a fetch of the #}
+        {# same origin. #}
+        <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
       {% endblock %}
 
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
@@ -54,6 +60,13 @@
         <script src="{% static "js/theme.js" %}?ver={{ static_version }}"></script>
       {% endblock %}
 
+      {# The import map of the queue page. Each other page leaves this block empty. A map must #}
+      {# come before each module script in the document. The runner status module at the foot of #}
+      {# this page is such a script, and thus the map cannot be at the foot with it. A page that #}
+      {# fills this block declares it at the top level of that page. The map then renders one #}
+      {# time, and in this position. #}
+      {% block importmap %}{% endblock %}
+
     {% endblock %}
   </head>
 
@@ -64,7 +77,7 @@
       {% block navbar %}{% include "navbar.html" %}{% endblock %}
 
       <div class="container">
-        <div class="notices">{% include "notice.txt" %}</div>
+        {% block sitenotice %}{% include "sitenotice.html" %}{% endblock %}
 
         <div id="content" role="main" aria-label="{% translate "content" %}">
           {% block content %}{% endblock %}
@@ -78,6 +91,16 @@
       {# At the foot of the page, unlike theme.js: this one measures the rendered navbar rather than #}
       {# deciding a colour, so it has nothing to say before the first paint. #}
       <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
+
+      {# This file shows the control that removes the note. It keeps the note away until the #}
+      {# words of the note change. It is at the foot of the page with the other scripts, because #}
+      {# it reads the note, which is above it. #}
+      <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
+
+      {# This module writes the runner sentence in the box above the content, and it polls each #}
+      {# minute. The queue page imports the same URL through its import map. Thus the browser #}
+      {# makes one instance of the module, and the two readers share its one poll. #}
+      <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>
     {% endblock %}
 
   </body>
