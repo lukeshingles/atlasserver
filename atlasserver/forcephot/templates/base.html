@@ -24,6 +24,13 @@
         {# and only a template knows that prefix. A relative URL is sufficient for a fetch of the #}
         {# same origin. #}
         <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
+
+        {# Who the page was rendered for, which is empty for a reader who is not signed in. #}
+        {# runnerstatus.js keeps its last status for the page after this one, and that status #}
+        {# holds a count of this reader's queued tasks. A tab that signs out, or signs in as #}
+        {# somebody else, keeps its sessionStorage across the change. Thus the record names the #}
+        {# reader it was kept for, and a page reads only a record with its own name on it. #}
+        <meta name="atlas-reader" content="{% if user.is_authenticated %}{{ user.pk }}{% endif %}" />
       {% endblock %}
 
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>

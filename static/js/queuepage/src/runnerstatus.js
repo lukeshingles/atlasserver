@@ -22,6 +22,11 @@ export const POLL_MS = 60000;
 // a global value, because {% url %} must supply the script prefix. Only a template knows it.
 const URL_META = 'meta[name="atlas-runnerstatus-url"]';
 
+// Where those templates put the reader that the page was rendered for, which is empty for a
+// reader who is not signed in. See createCache: the status that a page keeps for the next page
+// holds a count of this reader's own queued tasks.
+const READER_META = 'meta[name="atlas-reader"]';
+
 /**
  * Describe an age in seconds. Use the largest unit that gives a small number.
  *
@@ -205,10 +210,14 @@ function advanceAge(status, seconds) {
  * sessionStorage, and not localStorage: this is a snapshot of a moment and not a preference of the
  * reader. It belongs to the tab that took it, it is gone when that tab is closed, and a browser
  * that opens the site again after an hour has nothing to start from, which is the correct amount.
- * That scope also bounds the one field of the response that is about the reader rather than about
- * the task runner: user_queued_task_count, which decides whether this reader is shown the queue
- * counts. The counts themselves are the same for everybody, and the queue page gives them to any
- * reader who asks.
+ *
+ * One field of the response is about the reader and not about the task runner:
+ * user_queued_task_count, which decides whether this reader is shown the queue counts. A tab keeps
+ * its sessionStorage across a sign-out and a sign-in, and thus that field would otherwise reach
+ * the page of another reader: the counts of the queue would show to somebody who signed out, and
+ * they would be missing from the first page of somebody who signed in. So the record names the
+ * reader it was kept for, and a page reads only a record with its own name on it. The counts
+ * themselves are the same for everybody, and the queue page gives them to any reader who asks.
  *
  * This is not the first status that a page could have. The server renders the box, and it could
  * render the status into it, which would fill the box of the first page of a session as well. That
@@ -217,10 +226,11 @@ function advanceAge(status, seconds) {
  * render of every page. So the first page of a session waits for its answer, as every page did
  * before, and each page after it starts from the answer that page got.
  *
- * `storage` is a parameter so that the tests can pass their own, and `url` guards against a status
- * kept by another endpoint on the same origin, such as a second instance under another prefix.
+ * `storage` is a parameter so that the tests can pass their own. `url` guards against a status
+ * kept by another endpoint on the same origin, such as a second instance under another prefix,
+ * and `reader` against a status kept for another reader of this browser.
  */
-export function createCache({ storage = browserStorage(), url }) {
+export function createCache({ storage = browserStorage(), url, reader }) {
     function clear() {
         try {
             storage?.removeItem(CACHE_KEY);
@@ -249,8 +259,8 @@ export function createCache({ storage = browserStorage(), url }) {
 
         // A record that this file did not write fails one of these: a value of any other shape
         // has no `url` in it, and thus no `url` that is this one.
-        if (record == null || record.url !== url || record.status == null
-            || typeof record.status !== 'object') {
+        if (record == null || record.url !== url || record.reader !== reader
+            || record.status == null || typeof record.status !== 'object') {
             return null;
         }
 
@@ -271,7 +281,7 @@ export function createCache({ storage = browserStorage(), url }) {
     /** Keep `status`, as confirmed by a response that arrived at `at`. */
     function write(status, at) {
         try {
-            storage?.setItem(CACHE_KEY, JSON.stringify({ url, saved: at, status }));
+            storage?.setItem(CACHE_KEY, JSON.stringify({ url, reader, saved: at, status }));
         } catch (error) {
             // A storage that is full or refused must not stop the poll. The cost of a failure
             // here is the empty second that this cache is here to remove.
@@ -288,8 +298,8 @@ export function createCache({ storage = browserStorage(), url }) {
  * This function is exported for the tests. Each test makes its own store, with a test fetch
  * function and a short interval. A page uses the store below, which all of its readers share.
  */
-export function createStore({ url, poll = POLL_MS, storage = browserStorage() }) {
-    const cache = createCache({ storage, url });
+export function createStore({ url, poll = POLL_MS, reader = '', storage = browserStorage() }) {
+    const cache = createCache({ storage, url, reader });
     // What the page before this one last heard, which is what the box drew as that page closed.
     // Thus the box of this page is filled at its first paint, and the response that arrives a
     // moment later is usually equal to this status and redraws nothing. See createCache.
@@ -498,10 +508,14 @@ let pagestore = null;
 function pageStore() {
     if (pagestore == null) {
         const meta = document.querySelector(URL_META);
+        // A page with no reader tag is a page rendered for nobody in particular, which reads as
+        // the reader who is not signed in. A page that gives one and a page that gives none thus
+        // do not share a record, which is the safe way round.
+        const reader = document.querySelector(READER_META);
         // No meta tag means that no page gave the address of the endpoint. This store then gives
         // null always. A path in this file would be wrong, because it would have no script prefix.
         pagestore = meta != null
-            ? createStore({ url: meta.content })
+            ? createStore({ url: meta.content, reader: reader == null ? '' : reader.content })
             : { subscribe: (listener) => { listener(null); return () => {}; }, refresh: () => {}, stop: () => {}, current: () => null };
     }
 

@@ -4683,6 +4683,20 @@ class SiteNoticeTests(TestCase):
                 assert '<p class="sitenotice-runner" id="runnerstatus" role="status"' in content
                 assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
                 assert "js/runnerstatus.min.js" in content
+                # Nobody is signed in here, and thus the tag names no reader. runnerstatus.js
+                # keeps its last status for the next page under the reader of this one.
+                assert '<meta name="atlas-reader" content="" />' in content
+
+    def test_the_page_names_the_reader_the_status_belongs_to(self) -> None:
+        # The status that a page keeps for the next page holds a count of the reader's own
+        # queued tasks, and a tab keeps that record across a sign-out. Thus each page says who
+        # it was rendered for, and runnerstatus.js reads only a record with that name on it.
+        content = self.page(reverse("index"))
+        assert '<meta name="atlas-reader" content="" />' in content
+
+        self.client.force_login(self.user)
+        content = self.page(reverse("index"))
+        assert f'<meta name="atlas-reader" content="{self.user.pk}" />' in content
 
     def test_the_queue_page_carries_it_too(self) -> None:
         self.client.force_login(self.user)
@@ -4699,6 +4713,7 @@ class SiteNoticeTests(TestCase):
 
         assert 'id="sitenotice"' in content
         assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
+        assert f'<meta name="atlas-reader" content="{self.user.pk}" />' in content
         assert "js/runnerstatus.min.js" in content
 
     def test_the_queue_page_reaches_one_copy_of_the_module(self) -> None:

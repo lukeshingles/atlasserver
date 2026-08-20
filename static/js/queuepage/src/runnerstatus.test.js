@@ -571,27 +571,32 @@ describe('the status kept for the next page', () => {
         };
     }
 
-    /** The items of a storage holding a record as a page would have left it `ago` ms ago. */
-    function kept(status, ago, url = STATUS_URL) {
-        return { [CACHE_KEY]: JSON.stringify({ url, saved: Date.now() - ago, status }) };
+    /**
+     * The items of a storage holding a record as a page would have left it `ago` ms ago.
+     *
+     * `reader` is the reader the page was rendered for, empty for one who is not signed in.
+     */
+    function kept(status, ago, { url = STATUS_URL, reader = '' } = {}) {
+        return { [CACHE_KEY]: JSON.stringify({ url, reader, saved: Date.now() - ago, status }) };
+    }
+
+    /** The cache of a page of this endpoint, read by a reader who is not signed in. */
+    function cacheFor(storage, { url = STATUS_URL, reader = '' } = {}) {
+        return createCache({ storage, url, reader });
     }
 
     describe('the record', () => {
         test('what one page writes, the next one reads', () => {
             const storage = fakeStorage();
-            createCache({ storage, url: STATUS_URL }).write(healthy({ slots_busy: 7 }), Date.now());
+            cacheFor(storage).write(healthy({ slots_busy: 7 }), Date.now());
 
-            const read = createCache({ storage, url: STATUS_URL }).read(60000);
-            assert.equal(read.status.slots_busy, 7);
+            assert.equal(cacheFor(storage).read(60000).status.slots_busy, 7);
         });
 
         test('the age of the status file grows while no page is open', () => {
             // The outage sentence gives this age. A page that reported it as it was kept would
             // move the start of the outage forward by the reading time of every page before it.
-            const cache = createCache({
-                storage: fakeStorage(kept({ stale: true, status_age_seconds: 3540 }, 90000)),
-                url: STATUS_URL,
-            });
+            const cache = cacheFor(fakeStorage(kept({ stale: true, status_age_seconds: 3540 }, 90000)));
 
             assert.match(runnerMessage(cache.read(300000).status), /1 hour ago/);
         });
@@ -599,31 +604,37 @@ describe('the status kept for the next page', () => {
         test('a status that no poll confirmed for a full interval is not worth showing', () => {
             // For as long as the page that kept it would have shown it, and no longer: an open
             // tab would have replaced this sentence by now.
-            const cache = createCache({ storage: fakeStorage(kept(healthy(), 61000)), url: STATUS_URL });
-
-            assert.equal(cache.read(60000), null);
+            assert.equal(cacheFor(fakeStorage(kept(healthy(), 61000))).read(60000), null);
         });
 
         test('a clock that moved back leaves a record of unknown age, which is no use', () => {
-            const cache = createCache({ storage: fakeStorage(kept(healthy(), -5000)), url: STATUS_URL });
-
-            assert.equal(cache.read(60000), null);
+            assert.equal(cacheFor(fakeStorage(kept(healthy(), -5000))).read(60000), null);
         });
 
         test('a record from another endpoint on this origin is not this page\'s status', () => {
-            const cache = createCache({
-                storage: fakeStorage(kept(healthy(), 1000, '/other/taskrunnerstatus.json')),
-                url: STATUS_URL,
-            });
+            const storage = fakeStorage(kept(healthy(), 1000, { url: '/other/taskrunnerstatus.json' }));
 
-            assert.equal(cache.read(60000), null);
+            assert.equal(cacheFor(storage).read(60000), null);
+        });
+
+        test('a record kept for another reader of this browser is not this reader\'s status', () => {
+            // A tab keeps its storage across a sign-out and a sign-in. The status holds a count
+            // of the reader's own queued tasks, which decides whether they are shown the queue
+            // counts, so the record of one reader must not reach the page of another.
+            const signedin = fakeStorage(kept(healthy(), 1000, { reader: '7' }));
+            assert.equal(cacheFor(signedin).read(60000), null, 'signed out, and the record is not theirs');
+            assert.equal(cacheFor(signedin, { reader: '8' }).read(60000), null, 'nor another reader\'s');
+            assert.equal(cacheFor(signedin, { reader: '7' }).read(60000).status.slots_busy, 2);
+
+            // A page that names no reader is a page for the reader who is not signed in.
+            const signedout = fakeStorage(kept(healthy(), 1000));
+            assert.equal(cacheFor(signedout, { reader: '7' }).read(60000), null);
         });
 
         test('a value that this file did not write is ignored rather than thrown over', () => {
             for (const item of ['', 'not json', 'null', '"a string"', '{"saved":1}',
                 '{"saved":"soon","status":{}}']) {
-                const cache = createCache({ storage: fakeStorage({ [CACHE_KEY]: item }), url: STATUS_URL });
-                assert.equal(cache.read(60000), null, item);
+                assert.equal(cacheFor(fakeStorage({ [CACHE_KEY]: item })).read(60000), null, item);
             }
         });
 
@@ -632,7 +643,7 @@ describe('the status kept for the next page', () => {
             const debug = console.debug;
             console.debug = () => {};
             try {
-                const cache = createCache({ storage: fakeStorage({}, { refuse: true }), url: STATUS_URL });
+                const cache = cacheFor(fakeStorage({}, { refuse: true }));
                 cache.write(healthy(), Date.now());
                 assert.equal(cache.read(60000), null);
                 cache.clear();
@@ -643,7 +654,7 @@ describe('the status kept for the next page', () => {
 
         test('there is nothing to read where there is no storage at all', () => {
             // node, and a browser with no sessionStorage. write() and clear() must also pass.
-            const cache = createCache({ storage: null, url: STATUS_URL });
+            const cache = cacheFor(null);
             cache.write(healthy(), Date.now());
             cache.clear();
             assert.equal(cache.read(60000), null);
@@ -791,18 +802,19 @@ describe('the module as a page loads it', () => {
 
     test('it finds the box and fills it, with nothing else on the page to help', async () => {
         const window = setupDom();
+        let module = null;
         try {
             window.document.body.innerHTML = noticeBoxHtml({ note: 'Standing note.', showqueue: true });
             global.fetch = () => Promise.resolve({
                 ok: true, status: 200, json: () => Promise.resolve(healthy({ slots_busy: 5 })),
             });
 
-            const module = await loadPageModule('bootstrap');
+            module = await loadPageModule('bootstrap');
             await settle();
 
             assert.match(window.document.getElementById('runnerstatus').textContent, /5 of 16 slots busy/);
-            module.stopPageStore();
         } finally {
+            module?.stopPageStore();
             delete global.fetch;
             await teardownDom(window);
         }
@@ -812,20 +824,25 @@ describe('the module as a page loads it', () => {
         // The property of the kept status, through sessionStorage and the box, as a page load
         // reaches it. The tests above make the same point against a storage of their own.
         const window = setupDom();
+        let module = null;
         try {
+            // No reader: setupDom renders no atlas-reader tag, as a page for a reader who is not
+            // signed in does not.
             window.sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-                url: STATUS_URL, saved: Date.now() - 2000, status: healthy({ slots_busy: 7 }),
+                url: STATUS_URL, reader: '', saved: Date.now() - 2000, status: healthy({ slots_busy: 7 }),
             }));
             window.document.body.innerHTML = noticeBoxHtml({ showqueue: true });
             // A request that never answers: what the box shows here it shows from the record.
             global.fetch = () => new Promise(() => {});
 
-            const module = await loadPageModule('kept');
+            module = await loadPageModule('kept');
 
             assert.match(window.document.getElementById('runnerstatus').textContent, /7 of 16 slots busy/);
             assert.equal(window.document.getElementById('sitenotice').classList.contains('sitenotice-noline'), false);
-            module.stopPageStore();
         } finally {
+            // In the finally, and not after the assertions: a failure here would otherwise leave
+            // the poll of this copy of the module running for the remainder of the test run.
+            module?.stopPageStore();
             delete global.fetch;
             await teardownDom(window);
         }
