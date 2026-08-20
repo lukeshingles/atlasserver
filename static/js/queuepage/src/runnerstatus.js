@@ -174,9 +174,12 @@ function browserStorage() {
  * The outage sentence gives the age of the status file, and that age grows while no page of this
  * site is open. To report the age as it was kept would move the start of the outage forward by the
  * time the reader spent on the page before, once for each page they open.
+ *
+ * That sentence is the one reader of the field, and thus a status that is not stale is returned as
+ * it is. runnerStatusEqual ignores the age of a status that is not stale for the same reason.
  */
 function advanceAge(status, seconds) {
-    if (typeof status.status_age_seconds !== 'number') {
+    if (!status.stale || typeof status.status_age_seconds !== 'number') {
         return status;
     }
 
@@ -207,15 +210,20 @@ function advanceAge(status, seconds) {
  * counts. The counts themselves are the same for everybody, and the queue page gives them to any
  * reader who asks.
  *
+ * This is not the first status that a page could have. The server renders the box, and it could
+ * render the status into it, which would fill the box of the first page of a session as well. That
+ * is a larger change than the one this fixes: the endpoint's answer holds a count for this reader
+ * and a set of medians, and the context processor of the box is written to keep those off the
+ * render of every page. So the first page of a session waits for its answer, as every page did
+ * before, and each page after it starts from the answer that page got.
+ *
  * `storage` is a parameter so that the tests can pass their own, and `url` guards against a status
  * kept by another endpoint on the same origin, such as a second instance under another prefix.
  */
-export function createCache({ storage = browserStorage(), url = '', key = CACHE_KEY } = {}) {
+export function createCache({ storage = browserStorage(), url }) {
     function clear() {
         try {
-            if (storage != null) {
-                storage.removeItem(key);
-            }
+            storage?.removeItem(CACHE_KEY);
         } catch (error) {
             console.debug('Could not discard the kept task runner status', error);
         }
@@ -228,13 +236,10 @@ export function createCache({ storage = browserStorage(), url = '', key = CACHE_
      * file: those are two different things, and only the outage sentence gives the second one.
      */
     function read(maxage) {
-        if (storage == null) {
-            return null;
-        }
-
         let record = null;
         try {
-            const text = storage.getItem(key);
+            // No storage gives undefined here, which reads as no record, as an empty one does.
+            const text = storage?.getItem(CACHE_KEY);
             record = text == null ? null : JSON.parse(text);
         } catch (error) {
             // Refused storage, or a value that another version of this file wrote. Neither is
@@ -242,17 +247,21 @@ export function createCache({ storage = browserStorage(), url = '', key = CACHE_
             record = null;
         }
 
-        if (record == null || typeof record !== 'object' || record.status == null
-            || typeof record.status !== 'object' || record.url !== url
-            || typeof record.saved !== 'number') {
+        // A record that this file did not write fails one of these: a value of any other shape
+        // has no `url` in it, and thus no `url` that is this one.
+        if (record == null || record.url !== url || record.status == null
+            || typeof record.status !== 'object') {
             return null;
         }
 
         // A negative age means the clock moved back between the two pages, and thus that the age
-        // of this record is not known. Such a record is discarded with the ones that are too old.
+        // of this record is not known. Such a record is left with the ones that are too old, as is
+        // a `saved` that is not a number, which gives NaN here and fails both comparisons.
+        //
+        // Nothing is removed: the next answer overwrites this record, and until that answer comes
+        // each read makes this same judgement of it.
         const elapsed = Date.now() - record.saved;
         if (!(elapsed >= 0 && elapsed <= maxage)) {
-            clear();
             return null;
         }
 
@@ -261,12 +270,8 @@ export function createCache({ storage = browserStorage(), url = '', key = CACHE_
 
     /** Keep `status`, as confirmed by a response that arrived at `at`. */
     function write(status, at) {
-        if (storage == null) {
-            return;
-        }
-
         try {
-            storage.setItem(key, JSON.stringify({ url, saved: at, status }));
+            storage?.setItem(CACHE_KEY, JSON.stringify({ url, saved: at, status }));
         } catch (error) {
             // A storage that is full or refused must not stop the poll. The cost of a failure
             // here is the empty second that this cache is here to remove.
@@ -283,10 +288,17 @@ export function createCache({ storage = browserStorage(), url = '', key = CACHE_
  * This function is exported for the tests. Each test makes its own store, with a test fetch
  * function and a short interval. A page uses the store below, which all of its readers share.
  */
-export function createStore({ url, poll = POLL_MS, cache = createCache({ url }) }) {
+export function createStore({ url, poll = POLL_MS, storage = browserStorage() }) {
+    const cache = createCache({ storage, url });
     // What the page before this one last heard, which is what the box drew as that page closed.
     // Thus the box of this page is filled at its first paint, and the response that arrives a
     // moment later is usually equal to this status and redraws nothing. See createCache.
+    //
+    // One poll interval, which is a rule about this box and not the freshness of the endpoint.
+    // The endpoint declares its own, and it is shorter: a browser may answer a request of its own
+    // from its cache for one write interval of the task runner. This window is the longer one
+    // because it asks a different question, which is how long an open tab would have gone on
+    // showing this sentence without a new answer.
     const kept = cache.read(poll);
     let status = kept == null ? null : kept.status;
     // The time of the last request that reached the endpoint. A kept status carries the time of
@@ -369,12 +381,13 @@ export function createStore({ url, poll = POLL_MS, cache = createCache({ url }) 
                 }
                 answered = asked;
                 lastgoodfetch = Date.now();
-                // At each confirmation, and not at each change. A status that holds its value
-                // while a reader spends ten minutes on one page must not become too old for the
-                // next page to start from: what is kept here is the time of this answer, and the
-                // next page reads that time to judge the age of what it finds.
-                cache.write(body, lastgoodfetch);
                 publish(body);
+                // After the readers of this page, because no reader of this page waits on it: the
+                // record is for the next one. It is written at each confirmation and not at each
+                // change, because a status that holds its value while a reader spends ten minutes
+                // on one page must not become too old for the page they open next. The time in it
+                // is the time of this answer, which is the time the next page judges its age from.
+                cache.write(body, lastgoodfetch);
             })
             .catch(error => {
                 if (asked <= answered) {

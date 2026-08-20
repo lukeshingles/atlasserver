@@ -24,6 +24,54 @@ async function settle() {
     }
 }
 
+// Where the box reads the status, in the form that setupDom's meta tag gives, and the one name
+// the module keeps its record under.
+const STATUS_URL = '/taskrunnerstatus.json';
+const CACHE_KEY = 'atlas-runnerstatus';
+
+/**
+ * A fetch that answers from `bodies` in turn, and records each URL it was called with.
+ *
+ * Each entry is `{ body, status }`, as the endpoint answers: `status` is for the 503 that reports
+ * an outage. An empty queue rejects, which is a request that did not reach the endpoint.
+ */
+function queuedFetch(bodies, fetched) {
+    return (url) => {
+        fetched.push(url.toString());
+        const next = bodies.shift();
+        if (next == null) {
+            return Promise.reject(new Error('unreachable'));
+        }
+        // A new object at each poll, as response.json() gives. One shared object would make
+        // the comparison in the store invisible, because both results are then that object.
+        return Promise.resolve({ ok: next.status !== 503, status: next.status || 200, json: () => Promise.resolve(next.body) });
+    };
+}
+
+/**
+ * The box as sitenotice.html renders it.
+ *
+ * `note` gives the standing note about the data, and `showqueue` the attribute that marks the
+ * queue page. A box with no sentence in it carries sitenotice-noline, as a fresh page load does.
+ */
+function noticeBoxHtml({ note = null, showqueue = false } = {}) {
+    return `
+        <div class="sitenotice sitenotice-noline" id="sitenotice"${showqueue ? ' data-showqueue' : ''}>
+          ${note == null ? '' : `<p class="sitenotice-note">${note}</p>`}
+          <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
+        </div>`;
+}
+
+/**
+ * Load a copy of the module, as a page load reaches it.
+ *
+ * A new copy at each call: the module reads the document and subscribes as node evaluates it, and
+ * node holds one copy of a module for each URL. The caller calls stopPageStore() on the result.
+ */
+function loadPageModule(tag) {
+    return import(`./runnerstatus.js?${tag}=${Date.now()}`);
+}
+
 const healthy = (overrides = {}) => ({
     stale: false,
     maintenance: false,
@@ -174,16 +222,7 @@ describe('the store', () => {
     beforeEach(() => {
         fetched = [];
         bodies = [];
-        global.fetch = (url) => {
-            fetched.push(url.toString());
-            const next = bodies.shift();
-            if (next == null) {
-                return Promise.reject(new Error('unreachable'));
-            }
-            // A new object at each poll, as response.json() gives. One shared object would make
-            // the comparison in the store invisible, because both results are then that object.
-            return Promise.resolve({ ok: next.status !== 503, status: next.status || 200, json: () => Promise.resolve(next.body) });
-        };
+        global.fetch = queuedFetch(bodies, fetched);
     });
 
     afterEach(() => {
@@ -512,32 +551,37 @@ describe('the store', () => {
  * record is for: a page that starts from a kept status draws the sentence at once, and the
  * response that follows a moment later changes nothing.
  *
- * As with the store above, these tests use a storage of their own rather than a document. Only
- * the last test, of the module as a page loads it, needs sessionStorage itself.
+ * As with the store above, these tests use a storage of their own rather than a document. The
+ * page that reaches sessionStorage itself is tested with the rest of the page load, below.
  */
 describe('the status kept for the next page', () => {
-    /** A storage of the shape that the cache uses, holding its items in an object. */
-    function fakeStorage(items = {}) {
+    /**
+     * A storage of the shape that the cache uses, holding its items in an object.
+     *
+     * `refuse` gives the storage of a browser that is set to refuse site data, which throws from
+     * each of these rather than giving null.
+     */
+    function fakeStorage(items = {}, { refuse = false } = {}) {
+        const guard = () => { if (refuse) { throw new Error('refused'); } };
         return {
             items,
-            getItem: (key) => (key in items ? items[key] : null),
-            setItem: (key, value) => { items[key] = String(value); },
-            removeItem: (key) => { delete items[key]; },
+            getItem: (key) => { guard(); return key in items ? items[key] : null; },
+            setItem: (key, value) => { guard(); items[key] = String(value); },
+            removeItem: (key) => { guard(); delete items[key]; },
         };
     }
 
-    /** A record as a page would have left it `ago` milliseconds ago. */
-    function kept(status, ago, url = '/taskrunnerstatus.json') {
-        return { 'atlas-runnerstatus': JSON.stringify({ url, saved: Date.now() - ago, status }) };
+    /** The items of a storage holding a record as a page would have left it `ago` ms ago. */
+    function kept(status, ago, url = STATUS_URL) {
+        return { [CACHE_KEY]: JSON.stringify({ url, saved: Date.now() - ago, status }) };
     }
 
     describe('the record', () => {
         test('what one page writes, the next one reads', () => {
             const storage = fakeStorage();
-            const cache = createCache({ storage, url: '/taskrunnerstatus.json' });
-            cache.write(healthy({ slots_busy: 7 }), Date.now());
+            createCache({ storage, url: STATUS_URL }).write(healthy({ slots_busy: 7 }), Date.now());
 
-            const read = createCache({ storage, url: '/taskrunnerstatus.json' }).read(60000);
+            const read = createCache({ storage, url: STATUS_URL }).read(60000);
             assert.equal(read.status.slots_busy, 7);
         });
 
@@ -546,7 +590,7 @@ describe('the status kept for the next page', () => {
             // move the start of the outage forward by the reading time of every page before it.
             const cache = createCache({
                 storage: fakeStorage(kept({ stale: true, status_age_seconds: 3540 }, 90000)),
-                url: '/taskrunnerstatus.json',
+                url: STATUS_URL,
             });
 
             assert.match(runnerMessage(cache.read(300000).status), /1 hour ago/);
@@ -555,17 +599,13 @@ describe('the status kept for the next page', () => {
         test('a status that no poll confirmed for a full interval is not worth showing', () => {
             // For as long as the page that kept it would have shown it, and no longer: an open
             // tab would have replaced this sentence by now.
-            const storage = fakeStorage(kept(healthy(), 61000));
-            const cache = createCache({ storage, url: '/taskrunnerstatus.json' });
+            const cache = createCache({ storage: fakeStorage(kept(healthy(), 61000)), url: STATUS_URL });
 
             assert.equal(cache.read(60000), null);
-            assert.deepEqual(storage.items, {}, 'and it is discarded rather than read again');
         });
 
         test('a clock that moved back leaves a record of unknown age, which is no use', () => {
-            const cache = createCache({
-                storage: fakeStorage(kept(healthy(), -5000)), url: '/taskrunnerstatus.json',
-            });
+            const cache = createCache({ storage: fakeStorage(kept(healthy(), -5000)), url: STATUS_URL });
 
             assert.equal(cache.read(60000), null);
         });
@@ -573,7 +613,7 @@ describe('the status kept for the next page', () => {
         test('a record from another endpoint on this origin is not this page\'s status', () => {
             const cache = createCache({
                 storage: fakeStorage(kept(healthy(), 1000, '/other/taskrunnerstatus.json')),
-                url: '/taskrunnerstatus.json',
+                url: STATUS_URL,
             });
 
             assert.equal(cache.read(60000), null);
@@ -582,25 +622,17 @@ describe('the status kept for the next page', () => {
         test('a value that this file did not write is ignored rather than thrown over', () => {
             for (const item of ['', 'not json', 'null', '"a string"', '{"saved":1}',
                 '{"saved":"soon","status":{}}']) {
-                const cache = createCache({
-                    storage: fakeStorage({ 'atlas-runnerstatus': item }), url: '/taskrunnerstatus.json',
-                });
+                const cache = createCache({ storage: fakeStorage({ [CACHE_KEY]: item }), url: STATUS_URL });
                 assert.equal(cache.read(60000), null, item);
             }
         });
 
         test('a storage that refuses to hold anything is not a failure of the page', () => {
-            // A browser set to refuse site data throws from each of these. The page then does
-            // what it did before this cache existed, which is to start empty.
-            const refusing = {
-                getItem: () => { throw new Error('refused'); },
-                setItem: () => { throw new Error('refused'); },
-                removeItem: () => { throw new Error('refused'); },
-            };
+            // The page then does what it did before this cache existed, which is to start empty.
             const debug = console.debug;
             console.debug = () => {};
             try {
-                const cache = createCache({ storage: refusing, url: '/taskrunnerstatus.json' });
+                const cache = createCache({ storage: fakeStorage({}, { refuse: true }), url: STATUS_URL });
                 cache.write(healthy(), Date.now());
                 assert.equal(cache.read(60000), null);
                 cache.clear();
@@ -611,7 +643,7 @@ describe('the status kept for the next page', () => {
 
         test('there is nothing to read where there is no storage at all', () => {
             // node, and a browser with no sessionStorage. write() and clear() must also pass.
-            const cache = createCache({ storage: null, url: '/taskrunnerstatus.json' });
+            const cache = createCache({ storage: null, url: STATUS_URL });
             cache.write(healthy(), Date.now());
             cache.clear();
             assert.equal(cache.read(60000), null);
@@ -620,19 +652,10 @@ describe('the status kept for the next page', () => {
 
     describe('the store that starts from it', () => {
         let bodies;
-        let fetched;
 
         beforeEach(() => {
-            fetched = [];
             bodies = [];
-            global.fetch = (url) => {
-                fetched.push(url.toString());
-                const next = bodies.shift();
-                if (next == null) {
-                    return Promise.reject(new Error('unreachable'));
-                }
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(next) });
-            };
+            global.fetch = queuedFetch(bodies, []);
         });
 
         afterEach(() => {
@@ -640,30 +663,25 @@ describe('the status kept for the next page', () => {
             mock.timers.reset();
         });
 
-        const storeWith = (storage, poll = 60000) => createStore({
-            url: '/taskrunnerstatus.json',
-            poll,
-            cache: createCache({ storage, url: '/taskrunnerstatus.json' }),
-        });
+        const storeWith = (storage, poll = 60000) => createStore({ url: STATUS_URL, poll, storage });
 
-        test('the first reader is told the kept status before any response', async () => {
+        test('the first reader is told the kept status before any response', () => {
             // The point of the whole thing. The box is filled at the first paint of the page,
-            // rather than one request later.
-            bodies.push(healthy({ slots_busy: 2 }));
+            // rather than one request later. No response is staged: there is nothing to wait for.
             const store = storeWith(fakeStorage(kept(healthy({ slots_busy: 7 }), 5000)));
 
             const seen = [];
             const unsubscribe = store.subscribe((status) => seen.push(status));
 
             assert.equal(seen.length, 1);
-            assert.equal(seen[0].slots_busy, 7, 'and it arrives without waiting for the response');
+            assert.equal(seen[0].slots_busy, 7);
             unsubscribe();
         });
 
         test('the response that follows redraws nothing when it says the same thing', async () => {
             // Without this, the box would be drawn twice at each page load: once from the kept
             // status and once from the response. The queue page would render twice as well.
-            bodies.push(healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 8 }));
+            bodies.push({ body: healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 8 }) });
             const store = storeWith(fakeStorage(kept(healthy(), 5000)));
 
             const seen = [];
@@ -675,7 +693,7 @@ describe('the status kept for the next page', () => {
         });
 
         test('a response that says something else replaces the kept status', async () => {
-            bodies.push(healthy({ slots_busy: 11 }));
+            bodies.push({ body: healthy({ slots_busy: 11 }) });
             const store = storeWith(fakeStorage(kept(healthy({ slots_busy: 7 }), 5000)));
 
             const seen = [];
@@ -692,7 +710,7 @@ describe('the status kept for the next page', () => {
             // answer, so an unchanged answer is worth keeping.
             mock.timers.enable({ apis: ['setInterval', 'Date'] });
             const storage = fakeStorage();
-            bodies.push(healthy(), healthy({ written: 'later' }));
+            bodies.push({ body: healthy() }, { body: healthy({ written: 'later' }) });
             const store = storeWith(storage, 1000);
             const unsubscribe = store.subscribe(() => {});
             await settle();
@@ -700,7 +718,7 @@ describe('the status kept for the next page', () => {
             mock.timers.tick(1000);
             await settle();
 
-            const record = JSON.parse(storage.items['atlas-runnerstatus']);
+            const record = JSON.parse(storage.items[CACHE_KEY]);
             assert.equal(record.saved, Date.now(), 'the second poll changed nothing and still counts');
             unsubscribe();
         });
@@ -710,11 +728,11 @@ describe('the status kept for the next page', () => {
             // after it must not bring that status back.
             mock.timers.enable({ apis: ['setInterval', 'Date'] });
             const storage = fakeStorage();
-            bodies.push(healthy());
+            bodies.push({ body: healthy() });
             const store = storeWith(storage, 1000);
             const unsubscribe = store.subscribe(() => {});
             await settle();
-            assert.ok('atlas-runnerstatus' in storage.items);
+            assert.ok(CACHE_KEY in storage.items);
 
             for (let i = 0; i < 6; i += 1) {
                 mock.timers.tick(1000);
@@ -752,32 +770,6 @@ describe('the status kept for the next page', () => {
             unsubscribe();
         });
     });
-
-    test('a page fills its box from the kept status with no response at all', async () => {
-        // The same property as the first store test above, through sessionStorage and the box,
-        // as a page load reaches it.
-        const window = setupDom();
-        try {
-            window.sessionStorage.setItem('atlas-runnerstatus', JSON.stringify({
-                url: '/taskrunnerstatus.json', saved: Date.now() - 2000, status: healthy({ slots_busy: 7 }),
-            }));
-            window.document.body.innerHTML = `
-                <div class="sitenotice sitenotice-noline" id="sitenotice" data-showqueue>
-                  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
-                </div>`;
-            // A request that never answers: what the box shows here it shows from the record.
-            global.fetch = () => new Promise(() => {});
-
-            const module = await import(`./runnerstatus.js?kept=${Date.now()}`);
-
-            assert.match(window.document.getElementById('runnerstatus').textContent, /7 of 16 slots busy/);
-            assert.equal(window.document.getElementById('sitenotice').classList.contains('sitenotice-noline'), false);
-            module.stopPageStore();
-        } finally {
-            delete global.fetch;
-            await teardownDom(window);
-        }
-    });
 });
 
 /*
@@ -800,21 +792,38 @@ describe('the module as a page loads it', () => {
     test('it finds the box and fills it, with nothing else on the page to help', async () => {
         const window = setupDom();
         try {
-            window.document.body.innerHTML = `
-                <div class="sitenotice" id="sitenotice" data-showqueue>
-                  <p class="sitenotice-note">Standing note.</p>
-                  <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
-                </div>`;
+            window.document.body.innerHTML = noticeBoxHtml({ note: 'Standing note.', showqueue: true });
             global.fetch = () => Promise.resolve({
                 ok: true, status: 200, json: () => Promise.resolve(healthy({ slots_busy: 5 })),
             });
 
-            // A new copy. The module reads the document and subscribes as node evaluates it,
-            // and node holds one copy of a module for each URL.
-            const module = await import(`./runnerstatus.js?bootstrap=${Date.now()}`);
+            const module = await loadPageModule('bootstrap');
             await settle();
 
             assert.match(window.document.getElementById('runnerstatus').textContent, /5 of 16 slots busy/);
+            module.stopPageStore();
+        } finally {
+            delete global.fetch;
+            await teardownDom(window);
+        }
+    });
+
+    test('it fills the box from the status the page before left, with no response at all', async () => {
+        // The property of the kept status, through sessionStorage and the box, as a page load
+        // reaches it. The tests above make the same point against a storage of their own.
+        const window = setupDom();
+        try {
+            window.sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+                url: STATUS_URL, saved: Date.now() - 2000, status: healthy({ slots_busy: 7 }),
+            }));
+            window.document.body.innerHTML = noticeBoxHtml({ showqueue: true });
+            // A request that never answers: what the box shows here it shows from the record.
+            global.fetch = () => new Promise(() => {});
+
+            const module = await loadPageModule('kept');
+
+            assert.match(window.document.getElementById('runnerstatus').textContent, /7 of 16 slots busy/);
+            assert.equal(window.document.getElementById('sitenotice').classList.contains('sitenotice-noline'), false);
             module.stopPageStore();
         } finally {
             delete global.fetch;
@@ -828,11 +837,7 @@ describe('the box', () => {
 
     beforeEach(() => {
         window = setupDom();
-        window.document.body.innerHTML = `
-            <div class="sitenotice sitenotice-noline" id="sitenotice">
-              <p class="sitenotice-note">Standing note about the data.</p>
-              <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
-            </div>`;
+        window.document.body.innerHTML = noticeBoxHtml({ note: 'Standing note about the data.' });
     });
 
     afterEach(async () => {
