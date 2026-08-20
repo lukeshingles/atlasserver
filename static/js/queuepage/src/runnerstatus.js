@@ -2,32 +2,37 @@
 
 // The task runner status, as it reaches every page.
 //
-// One module owns the poll of /taskrunnerstatus.json, the wording of the line it produces, and the
-// update of the box that shows it. The queue page reads the same response for its wait estimates,
-// so it subscribes here instead of polling the endpoint a second time.
+// This module does three things:
 //
-// It imports nothing. A page that carries no import map can therefore load it as
-// <script type="module">, which is what puts the status on the pages that run no other JavaScript.
+// - it polls /taskrunnerstatus.json;
+// - it writes the sentence that gives the status;
+// - it puts that sentence into the site notice box.
+//
+// The queue page reads the same response for its wait estimates. It subscribes to this module, so
+// the two readers share one request each minute.
+//
+// This module imports no other module. A page with no import map can thus load it as
+// <script type="module">. This is how the status gets to a page that runs no other JavaScript.
 
 export const POLL_MS = 60000;
 
-// where base.html and the browsable API template put the endpoint URL. A meta tag rather than a
-// global, because {% url %} must supply the script prefix and only a template knows it.
+// Where base.html and the browsable API template put the URL of the endpoint. A meta tag, and not
+// a global value, because {% url %} must supply the script prefix. Only a template knows it.
 const URL_META = 'meta[name="atlas-runnerstatus-url"]';
 
 /**
- * Describe an age in seconds in the largest unit that still reads as a number of things.
+ * Describe an age in seconds. Use the largest unit that gives a small number.
  *
- * The outage line gives an age, and "6401 minutes ago" is the one thing a reader of that sentence
- * has to work out for themselves: whether this started moments ago or days ago.
+ * The outage sentence gives an age. A reader of "6401 minutes ago" must do the arithmetic to learn
+ * whether the outage started a moment ago or some days ago.
  */
 export function describeAge(seconds) {
     const units = [['day', 86400], ['hour', 3600], ['minute', 60]];
     for (const [name, size] of units) {
         if (seconds >= size) {
-            // floor, not round: an age is a count of completed units, and rounding up would
-            // cross the boundary the unit was chosen by — 3599 seconds would come out as
-            // "60 minutes ago" instead of "59 minutes ago"
+            // Round down, and do not round up. An age is a count of complete units. A value
+            // that rounds up crosses the boundary that selected the unit. For example, 3599
+            // seconds would give "60 minutes ago" in the place of "59 minutes ago".
             const count = Math.floor(seconds / size);
             return count + ' ' + name + (count == 1 ? '' : 's') + ' ago';
         }
@@ -36,30 +41,31 @@ export function describeAge(seconds) {
 }
 
 /*
- * Fields of the runner status that move on their own and are not read for their value.
+ * Fields of the status that change on their own. No reader uses their values.
  *
- * A denylist rather than a list of the fields that matter: a field added to the endpoint later is
- * then compared by default, so the worst it can do is cost a re-render. Under an allowlist it would
- * be silently invisible to every reader, with nothing failing to say so.
+ * This is a list of the fields to ignore, and not a list of the fields that are of use. A field
+ * that the endpoint gains later is thus compared by default. Such a field can then cost an
+ * unnecessary render, which is a small cost. In a list of the fields to compare, a new field would
+ * be invisible to every reader, and nothing would fail to show the mistake.
  */
 const RUNNERSTATUS_VOLATILE_FIELDS = ['written', 'pid', 'running_taskids', 'status_age_seconds'];
 
 /**
- * Whether two runner status responses say the same thing to everything that reads one.
+ * Whether two status responses tell every reader the same thing.
  *
- * The store publishes only a response that differs by this measure, so it decides both whether the
- * box is rewritten and whether the queue page re-renders. Neither leaves a mark that an assertion
- * on the page could tell from an unchanged one, which is why this is exported and tested directly.
+ * The store publishes a response only when this function reports a difference. The result thus
+ * controls two things: whether the box changes, and whether the queue page renders again. Neither
+ * result is visible in the page, so this function is exported and has its own tests.
  */
 export function runnerStatusEqual(previous, next) {
     if (previous == null || next == null) {
         return previous === next;
     }
 
-    // The age advances on every poll by construction, so comparing it always would make this gate
-    // useless. It is rendered in one place, the outage line -- and that is exactly the case where
-    // every other field has stopped moving, because a runner that is not writing its status file is
-    // not changing any of them. Excluded when the runner is healthy, compared when it is not.
+    // The age increases at each poll. To compare it always would report a difference always, and
+    // this function would then be of no use. One sentence gives the age: the outage sentence. In
+    // an outage, the task runner does not write its status file, and thus every other field holds
+    // its value. Compare the age when the status is stale, and ignore it when the status is fresh.
     if ((previous.stale || next.stale) && previous.status_age_seconds !== next.status_age_seconds) {
         return false;
     }
@@ -73,9 +79,9 @@ export function runnerStatusEqual(previous, next) {
         if (before === after) {
             continue;
         }
-        // typical_runtime_seconds is the one nested value: a handful of request types to a number
-        // each. Serialising is enough to compare it, because the server builds it by iterating the
-        // declared request types, so a given set of medians has one spelling.
+        // typical_runtime_seconds is the one field with a value in it: a few request types, each
+        // with a number. A comparison of the two JSON texts is sufficient. The server builds the
+        // field from the declared request types in one order, so one set of medians gives one text.
         if (JSON.stringify(before) !== JSON.stringify(after)) {
             return false;
         }
@@ -85,14 +91,15 @@ export function runnerStatusEqual(previous, next) {
 }
 
 /**
- * The sentence for a status, or null when the runner has nothing to report.
+ * The sentence for a status, or null when the task runner has nothing to report.
  *
- * A string rather than markup, so that the one caller which touches the DOM is renderInto below.
+ * This function returns a string, and not markup. Thus renderInto below is the one function that
+ * changes the page.
  *
- * `showQueue` is whether the queue counts are of use to this reader. The outage sentence is for
- * everybody, because it changes what to expect of every page. How many slots are busy is not: it
- * is an answer to "when does my task start", so a reader with nothing queued, on a page that is
- * not the queue, is told nothing at all.
+ * `showQueue` tells whether the queue counts are of use to this reader. Every reader gets the
+ * outage sentence, because an outage changes what to expect of every page. Not every reader gets
+ * the queue counts. Those counts answer the question "when does my task start". A reader with no
+ * queued task, on a page that is not the queue page, gets no sentence at all.
  */
 export function runnerMessage(status, { showQueue = true } = {}) {
     if (status == null) {
@@ -108,13 +115,13 @@ export function runnerMessage(status, { showQueue = true } = {}) {
     }
 
     if (!status.queued_task_count || !showQueue) {
-        // an idle runner with an empty queue is the normal case and needs no commentary
+        // An idle task runner with an empty queue is the usual condition. It needs no sentence.
         return null;
     }
 
-    // during the hourly maintenance sweep the slot counts are frozen (nothing is dispatched or
-    // reaped while it runs), so say what is happening rather than reporting numbers that are
-    // temporarily meaningless
+    // During the hourly maintenance operation, the slot counts hold their values. The task runner
+    // starts no task and completes no task while that operation runs. Thus the sentence names the
+    // operation, and does not give numbers that have no meaning at that time.
     const activity = status.maintenance
         ? 'maintenance sweep in progress;'
         : status.slots_busy + ' of ' + status.numslots + ' slots busy,';
@@ -124,16 +131,16 @@ export function runnerMessage(status, { showQueue = true } = {}) {
 }
 
 /**
- * Whether polling is to be skipped for now.
+ * Whether to skip the poll at this time.
  *
- * A hidden tab is not polled. Nor is a tab whose reader has gone away: the queue page runs an
- * inactivity timer and publishes the answer as `user_is_active`, which the poll on that page
- * honoured before this module took it over. No other page sets the global, so no other page pauses
- * for it.
+ * Do not poll for a hidden tab. Do not poll for a tab whose reader is away. The queue page has a
+ * timer that measures inactivity and gives the result as `user_is_active`. The poll on that page
+ * used that value before this module became the owner of the poll. No other page sets the value,
+ * and thus no other page stops the poll for it.
  */
 function pollingPaused() {
-    // typeof for both, because the store also runs under `node --test` with no DOM at all, and a
-    // bare reference to a name that is not there is a ReferenceError rather than undefined
+    // Use typeof for both names. The store also runs under `node --test`, which has no document.
+    // A direct reference to a name that does not exist gives a ReferenceError.
     if (typeof document === 'undefined') {
         return false;
     }
@@ -142,45 +149,48 @@ function pollingPaused() {
 }
 
 /**
- * A poller of one status URL, and the readers it reports to.
+ * A poll of one status URL, and the readers that the poll reports to.
  *
- * Exported for the tests, which drive a store of their own with a stubbed fetch and a short
- * interval. Pages use the one below, which every subscriber shares.
+ * This function is exported for the tests. Each test makes its own store, with a test fetch
+ * function and a short interval. A page uses the store below, which all of its readers share.
  */
 export function createStore({ url, poll = POLL_MS }) {
     let status = null;
-    // when the endpoint was last actually reachable
+    // The time of the last request that reached the endpoint.
     let lastgoodfetch = null;
     let interval = null;
-    // counts the requests, so that an answer can tell whether its question is still the newest one
+    // A count of the requests. An answer uses it to find whether its question is the newest.
     let generation = 0;
     const listeners = new Set();
 
     function publish(next) {
-        // The response is a freshly parsed object every poll, so its identity always differs. On
-        // the queue page this state belongs to TaskPage, and taking it unconditionally re-renders
-        // the whole page -- every row's estimate, two URL parses -- to redraw an unchanged line.
+        // Each poll parses the response into a new object, and thus each response is a different
+        // object. On the queue page this value is the state of TaskPage. To accept every response
+        // would render the full page again, with the estimate of each row, to draw one unchanged
+        // sentence.
         if (runnerStatusEqual(status, next)) {
             return;
         }
 
         status = next;
-        // One value for the whole round, and a copy of the set. A listener is free to unsubscribe
-        // from inside its own call, which both shortens the set and can stop the store -- and
-        // stop() sets `status` to null, which the listeners after it must not be told.
+        // One value for the full round, and a copy of the set. A reader can cancel its
+        // subscription during its own call. Such a call makes the set shorter, and it can also
+        // stop the store. Then stop() sets `status` to null, and the readers after it in the round
+        // must not get that null.
         const published = status;
         for (const listener of [...listeners]) {
             tell(listener, published);
         }
     }
 
-    /** Hand one status to one reader, and keep that reader's faults to itself. */
+    /** Give one status to one reader. Contain a failure of that reader. */
     function tell(listener, published) {
-        // A reader that throws is a bug in that reader. Left to propagate, it would reach the
-        // fetch's catch below, which reads any throw as an unreachable endpoint. The readers after
-        // it would never hear this status, nor -- since the next equal poll is suppressed -- any
-        // later one. The box renderer subscribes first and the queue page second, so that is every
-        // wait estimate frozen for the life of the page.
+        // An exception from a reader is a fault in that reader. Such an exception would go to the
+        // catch of the fetch below, which reads every exception as an endpoint that it cannot
+        // reach. The readers after the fault would not get this status. They would not get a later
+        // status either, because the store ignores a poll that is equal to the last one. The box
+        // is the first reader and the queue page is the second. A fault in the box would thus hold
+        // every wait estimate at its value for the life of the page.
         try {
             listener(published);
         } catch (error) {
@@ -189,22 +199,23 @@ export function createStore({ url, poll = POLL_MS }) {
     }
 
     /**
-     * Ask the endpoint, and report the answer if it is still the answer to the newest question.
+     * Ask the endpoint. Report the answer while it is the answer to the most recent question.
      *
-     * `fresh` skips the browser's cache. The response is cacheable for one write interval of the
-     * runner, which is what stops several tabs opening at once from asking several times; a reader
-     * coming back to a tab has to be told what is true now, and a cached answer from before they
-     * left is the one thing that reader must not get.
+     * `fresh` makes the browser ignore its cache. The response is cacheable for one write interval
+     * of the task runner. That cache stops several tabs that open together from several requests.
+     * But a reader who comes back to a tab must get the status at that moment. Such a reader must
+     * not get an answer from before the tab became hidden.
      */
     function refresh({ fresh = false } = {}) {
-        // Which question this is. Requests can overlap -- the interval and a return to the tab can
-        // fall in the same second -- and they can answer in any order, so an answer to a question
-        // that has since been asked again is dropped. Without this the older reading wins and
-        // stands for a whole poll, and on the queue page it moves every row's wait estimate.
+        // The number of this question. Two requests can overlap, because the interval and a
+        // return to the tab can occur in the same second. The two answers can arrive in any order.
+        // Thus the store discards the answer to a question that it asked again. Without this
+        // number, the store keeps the older value for a full poll. That value also changes the
+        // wait estimate of each row on the queue page.
         const asked = (generation += 1);
 
-        // a stale runner is reported with HTTP 503 and a body, so the status is read from the
-        // body rather than from the status code
+        // The endpoint reports a stale task runner with HTTP status 503 and a body. Thus the store
+        // reads the status from the body, and not from the HTTP status code.
         return fetch(url, {
             credentials: 'same-origin',
             headers: { 'Accept': 'application/json' },
@@ -222,10 +233,11 @@ export function createStore({ url, poll = POLL_MS }) {
                 if (asked !== generation) {
                     return;
                 }
-                // Our own failed request says nothing about the runner, so this claims no outage.
-                // But a status that several polls have not confirmed is no longer worth asserting,
-                // in either direction: a frozen "3 slots busy" line outlives a dead runner, and a
-                // frozen outage line outlives a recovered one.
+                // A failed request of our own tells us nothing about the task runner. Thus this
+                // code reports no outage. But the store must also stop to give a status that
+                // several polls did not confirm. An unchanged "3 slots busy" sentence can stay
+                // after a task runner stops. An unchanged outage sentence can stay after a task
+                // runner starts again.
                 console.debug('Could not read the task runner status', error);
                 if (lastgoodfetch != null && (Date.now() - lastgoodfetch) > poll * 5) {
                     publish(null);
@@ -239,56 +251,58 @@ export function createStore({ url, poll = POLL_MS }) {
         }
     }
 
-    /** Stop polling, and forget the last reading. */
+    /** Stop the poll, and discard the last status. */
     function stop() {
         clearInterval(interval);
         interval = null;
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', refreshIfVisible);
         }
-        // A store with no readers has no way to know how old its answer will be when somebody
-        // subscribes again, so it keeps none. The next subscriber gets null and a fresh request,
-        // which is what a first subscriber gets. A page that draws the box never reaches this: its
-        // renderer stays subscribed for the life of the page.
+        // A store with no reader cannot know the age of its answer at the time of the next
+        // subscription. Thus it keeps no answer. The next reader gets null and a new request,
+        // which is what the first reader gets. A page that draws the box does not come here,
+        // because the box keeps its subscription for the life of the page.
         //
-        // The generation moves as well, which drops whatever is in flight. Without that fence the
-        // request started before the stop lands after it and puts back the reading just forgotten.
+        // The question number also increases, which discards each request that is in progress.
+        // Without that step, a request that started before the stop arrives after it, and it puts
+        // back the status that stop() just discarded.
         generation += 1;
         status = null;
         lastgoodfetch = null;
     }
 
     /**
-     * Report every status to `listener` until the returned function is called.
+     * Report each status to `listener`, until a call of the returned function.
      *
-     * The listener is called at once with the current status, so a subscriber which arrives after
-     * the first response needs no separate way to ask for it, and one which arrives before gets
-     * null -- the value React holds until its first response either way.
+     * This function calls the listener immediately with the current status. Thus a reader that
+     * subscribes after the first response needs no other way to get that response. A reader that
+     * subscribes before the first response gets null, which is the value React holds until its
+     * first response.
      */
     function subscribe(listener) {
         listeners.add(listener);
 
         if (interval == null) {
-            // The mount fetch runs whether or not polling is paused: it is the one that fills the
-            // box, not a repeat of it. A tab opened in the background would otherwise show no
-            // outage line until the interval first fired.
+            // This first request runs even when the poll is paused. It fills the box, and it is
+            // not a repeat of an earlier request. Without it, a tab that opens in the background
+            // would show no outage sentence until the first interval.
             refresh();
             interval = setInterval(() => { if (!pollingPaused()) { refresh(); } }, poll);
-            // A hidden tab is not polled, so what it shows is as old as the moment it was hidden.
-            // The reader who comes back to it is the one person looking at that line, and an
-            // outage that started, or ended, while they were away is exactly what it gets wrong.
+            // A hidden tab gets no poll, and thus its sentence has the age of the moment when the
+            // tab became hidden. The reader who comes back to that tab is the one person who looks
+            // at the sentence. An outage that started, or stopped, in that time makes it wrong.
             if (typeof document !== 'undefined') {
                 document.addEventListener('visibilitychange', refreshIfVisible);
             }
         }
 
-        // through tell(), because this call runs from the module's own bootstrap: a throw here
-        // would take the whole module with it, and the queue page imports it for its estimates
+        // Through tell(), because the start of this module makes this call. An exception here
+        // would stop the full module, and the queue page imports the module for its estimates.
         tell(listener, status);
 
         let subscribed = true;
         return () => {
-            // once only: a second call must not stop a poll that a later subscriber has restarted
+            // One call only. A second call must not stop a poll that a later reader started.
             if (!subscribed) {
                 return;
             }
@@ -303,14 +317,14 @@ export function createStore({ url, poll = POLL_MS }) {
     return { subscribe, refresh, stop, current: () => status };
 }
 
-// The page's own store, built on first use. Lazy, because the URL comes from the document.
+// The store of this page. It is made at the first use, because the URL comes from the document.
 let pagestore = null;
 
 function pageStore() {
     if (pagestore == null) {
         const meta = document.querySelector(URL_META);
-        // No meta tag means no page told us where the endpoint is. Answering null for ever is the
-        // right reading of that: a path written here instead would be missing the script prefix.
+        // No meta tag means that no page gave the address of the endpoint. This store then gives
+        // null always. A path in this file would be wrong, because it would have no script prefix.
         pagestore = meta != null
             ? createStore({ url: meta.content })
             : { subscribe: (listener) => { listener(null); return () => {}; }, refresh: () => {}, stop: () => {}, current: () => null };
@@ -319,18 +333,19 @@ function pageStore() {
     return pagestore;
 }
 
-/** Report every status of this page's runner to `listener`. Returns the unsubscribe function. */
+/** Report each status of the task runner to `listener`. Return the function that cancels this. */
 export function subscribe(listener) {
     return pageStore().subscribe(listener);
 }
 
 /**
- * The warning mark that goes in front of the outage sentence.
+ * The warning mark in front of the outage sentence.
  *
- * Drawn here rather than written into the template, because it belongs to a state the template
- * cannot know. It is aria-hidden: the sentence beside it already says that the runner is down, and
- * a screen reader announcing "warning" first would only delay it. What the mark is for is the
- * reader who cannot tell the yellow panel from the grey one, and the page printed in black.
+ * This function draws the mark, and the template does not hold it, because the mark belongs to a
+ * condition that the template cannot know. The mark has aria-hidden. The sentence next to it
+ * already reports that the task runner stopped, and a screen reader that speaks "warning" first
+ * would only delay that sentence. The mark is for the reader who cannot see the difference between
+ * the yellow box and the grey box.
  */
 function warningMark(document) {
     const ns = 'http://www.w3.org/2000/svg';
@@ -364,12 +379,12 @@ function warningMark(document) {
 }
 
 /**
- * Put a status into the box: the runner line, and the panel the whole box becomes when stale.
+ * Put a status into the box. This gives the runner sentence, and the warning colours of the box.
  *
- * Nothing is written when the sentence and the state are the ones already on screen. The runner
- * line is a live region, and rewriting it announces it again: during an outage the age moves on
- * every poll while the wording stays the same for an hour at a time, which is the same sentence
- * read out sixty times over.
+ * This function writes nothing when the sentence and the condition are the ones on the screen. The
+ * runner sentence is in a live region, and a second write of it makes a screen reader speak it
+ * again. In an outage, the age changes at each poll, but the words stay the same for an hour. A
+ * write at each poll would thus speak one sentence sixty times.
  */
 export function renderInto(box, status) {
     const line = box.querySelector('.sitenotice-runner');
@@ -377,18 +392,18 @@ export function renderInto(box, status) {
         return;
     }
 
-    // Whether this page's reader is one of the people the queue counts are for; see runnerMessage.
-    // Read off the box, because the server is what knows it -- who is signed in, and what they
-    // have queued.
+    // Whether the queue counts are of use to the reader of this page; see runnerMessage. The
+    // value comes from the box, because the server knows it: who has signed in, and what that
+    // reader has in the queue.
     const message = runnerMessage(status, { showQueue: box.hasAttribute('data-showqueue') });
     const stale = status != null && Boolean(status.stale);
     const drawn = message == null ? '' : message;
 
-    // First, and outside the guard below, because they are what the box is drawn from: a box that
-    // opens empty and stays empty still has to carry the class that collapses it. Setting a class
-    // to the value it already has changes nothing, so this costs a comparison.
+    // These two classes come first, and before the test below, because the box is drawn from
+    // them. A box that opens empty and stays empty must also get the class that collapses it. To
+    // set a class to the value that it has changes nothing, and thus this costs one comparison.
     box.classList.toggle('stale', stale);
-    // the other half of the collapse; js/sitenotice.js owns sitenotice-nonote. See main.css.
+    // The second part of the collapse. js/sitenotice.js sets sitenotice-nonote. See main.css.
     box.classList.toggle('sitenotice-noline', message == null);
 
     if (line.textContent === drawn) {
@@ -396,18 +411,18 @@ export function renderInto(box, status) {
     }
 
     /*
-     * What is announced, and what is only shown.
+     * What a screen reader speaks, and what it does not speak.
      *
-     * The outage sentence changes what to expect of every page, so a reader who cannot see it is
-     * told. The queue counts are an answer to "when does my task start", and this box is on every
-     * page of the site: read out once a minute over whatever the reader is doing, they are an
-     * interruption nobody asked for. The attribute is set before the text, because a live region
-     * is read as it stood when its content changed.
+     * An outage changes what to expect of every page, and thus a screen reader speaks the outage
+     * sentence. The queue counts answer the question "when does my task start", and this box is on
+     * every page. Spoken each minute over the work of the reader, those counts interrupt a reader
+     * who did not ask for them. This code sets the attribute before the text. A screen reader
+     * reads a live region in the condition that the region had at the change of its content.
      */
     line.setAttribute('aria-live', stale ? 'polite' : 'off');
 
-    // Text nodes and one drawn element, never innerHTML: the sentence is built here, and the box
-    // also holds the standing note, which this must not be able to rewrite.
+    // Text nodes and one drawn element, and never innerHTML. This function makes the sentence,
+    // and the box also holds the note. This function must not be able to change that note.
     if (message == null) {
         line.textContent = '';
     } else if (stale) {
@@ -418,22 +433,22 @@ export function renderInto(box, status) {
 
 }
 
-/** Keep `box` showing the runner status. Returns the unsubscribe function. */
+/** Keep the status of the task runner in `box`. Return the function that cancels this. */
 export function start(box) {
     return subscribe((status) => renderInto(box, status));
 }
 
-// Every page that draws the box gets the status; a page without one (a test harness, an email
-// body) starts nothing. The same guard shape as tasklist.jsx uses for #taskpage.
+// Each page that draws the box gets the status. A page with no box starts no poll. A test
+// harness and the body of an email are such pages. tasklist.jsx makes the same test for #taskpage.
 const sitenotice = typeof document !== 'undefined' ? document.getElementById('sitenotice') : null;
 const stopbootstrap = sitenotice != null ? start(sitenotice) : () => {};
 
 /**
- * End the subscription made above.
+ * Cancel the subscription above.
  *
- * For the tests, which load this module against a document of their own and would otherwise leave
- * its poll running for the rest of the run. A page never calls it: the box is drawn for as long as
- * the page is open.
+ * This function is for the tests. A test loads this module with a document of its own. Without
+ * this function, the poll would continue for the remainder of the test run. A page does not call
+ * it, because the page shows the box for as long as it is open.
  */
 export function stopPageStore() {
     stopbootstrap();

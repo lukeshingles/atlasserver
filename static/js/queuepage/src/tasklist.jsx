@@ -725,17 +725,17 @@ const tasklist_pollcache = new PollCache();
 let historynavigations = 0;
 
 /*
- * The task runner's status, as the shared poll last reported it.
+ * The status of the task runner, as the shared poll last reported it.
  *
- * Owned by TaskPage rather than by a component of its own, because the wait estimates read this
- * response -- numslots, distinct_queued_users, slots_busy and the typical run times. The sentence
- * about the runner is drawn by runnerstatus.js into the box above the content, on every page of the
- * site; this page reads the same store, so the two share one request a minute.
+ * TaskPage holds this status, and no smaller component holds it, because the wait estimates read
+ * this response. They read numslots, distinct_queued_users, slots_busy and the typical run times.
+ * runnerstatus.js draws the sentence about the task runner in the box above the content, on each
+ * page of the site. This page reads the same store, and thus the two share one request each minute.
  */
 function useRunnerStatus() {
     const [status, setStatus] = React.useState(null);
 
-    // subscribe() returns its own unsubscribe function, which is what the effect has to clean up
+    // subscribe() returns the function that cancels the subscription, which this effect must call
     React.useEffect(() => subscribe(setStatus), []);
 
     return status;
@@ -805,7 +805,7 @@ export function TaskPage() {
         ownqueued: null,
     });
 
-    // read by the wait estimates, and by the site notice box through the same store
+    // The wait estimates read this status, and the site notice box reads it from the same store.
     const runnerstatus = useRunnerStatus();
 
     /*

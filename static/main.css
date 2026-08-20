@@ -105,12 +105,12 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-top: 0em;
 } */
 
-/* The one box above the content, on every page: the standing note about the data, and the task
-   runner's account of itself from /taskrunnerstatus.json. As a panel rather than a line of small
-   grey text: what it carries is a caveat about the measurements themselves, which is worth more
-   than the smallest type on the page. The edge is the warm orange of the mark's trail, which is
-   the site's colour for "read this", and it is quiet enough at this width not to compete with the
-   heading below it. */
+/* The one box above the content, on every page. It holds the note about the data, and the status
+   of the task runner from /taskrunnerstatus.json. It is a box, and not a line of small grey text.
+   The note gives a limit of the measurements, which is of more importance than the smallest type
+   on the page. The edge is the warm orange of the trail of the mark, which is the colour of this
+   site for "read this". At this width the edge is quiet, and it does not compete with the heading
+   below it. */
 .sitenotice {
   background-color: var(--bs-tertiary-bg);
   border-left: 3px solid var(--atlas-ember);
@@ -129,27 +129,27 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-bottom: 0;
 }
 
-/* The runner line is in the page before there is anything to say, so that it is a live region a
-   screen reader announces into. Empty, it draws no line box; this takes away the margin as well,
-   so it holds no space until it is filled. */
+/* The runner sentence is in the page before there is a sentence to give. Thus it is a live region
+   that a screen reader speaks from. An empty paragraph draws no line, and this rule also removes
+   the margin. The paragraph then holds no space until this code fills it. */
 .sitenotice-runner:empty {
   margin: 0;
 }
 
-/* Nothing to say, so nothing to draw: no standing note (dismissed, or a notice.txt with no words
-   in it) and a runner with no news. Without this the page carries a padded panel with nothing in
-   it.
+/* Nothing to give, and thus nothing to draw. The box has no note, because the reader removed it
+   or because notice.txt has no words in it. The task runner also has nothing to report. Without
+   this rule the page holds a box with space in it and no words.
 
-   The two classes come from the two files that know the answer -- js/sitenotice.js and
-   js/runnerstatus.min.js -- rather than from a :has() test of the box. A browser without :has()
-   drops such a rule as invalid, which would leave every reader who dismissed the note with an
-   empty panel on every page for ever; Safari gained :has() only in 15.4, and this stylesheet
-   still supports older ones.
+   The two classes come from the two files that know the answer: js/sitenotice.js and
+   js/runnerstatus.min.js. This rule does not examine the contents of the box with :has(). A
+   browser without :has() ignores such a rule, and each reader who removed the note would then see
+   an empty box on each page always. Safari supports :has() from version 15.4, and this stylesheet
+   supports earlier versions.
 
-   The box collapses rather than leaves the page, because the runner line inside it is a live
-   region: a screen reader is not reliably told about a change inside a display:none subtree, and
-   an outage that starts while the box is quiet is exactly such a change. With no border, no
-   background and no space, an empty box draws nothing and stays announceable. */
+   The box collapses, and it stays in the page, because the runner sentence in it is a live region.
+   A screen reader does not reliably speak a change inside a subtree with display:none, and an
+   outage that starts while the box is quiet makes such a change. With no border, no background and
+   no space, an empty box draws nothing, and a screen reader can still speak from it. */
 .sitenotice.sitenotice-nonote.sitenotice-noline {
   background-color: transparent;
   border: 0;
@@ -157,9 +157,10 @@ in the query, the -webkit- form included, since that is the only form Safari has
   padding: 0;
 }
 
-/* The control that puts the standing note away. Bootstrap's own close button, which carries its
-   mark as a background image, so the note beside it stays a paragraph of words. Small, and beside
-   the note rather than over it: on this box it is not the thing to reach for first. */
+/* The control that removes the note. This is the close button of Bootstrap, which holds its mark
+   as a background image. Thus the note next to it stays a paragraph of words. The control is
+   small, and it is next to the note and not over it. On this box it is not the first control that
+   a reader needs. */
 .sitenotice-dismiss {
   float: right;
   font-size: 0.7em;
@@ -167,33 +168,34 @@ in the query, the -webkit- form included, since that is the only form Safari has
   margin-top: 0.2em;
 }
 
-/* The outage mark, in front of the sentence about the runner. The panel's colour says the same
-   thing, and this is for the reader who cannot use the colour. Drawn by js/runnerstatus.min.js,
-   so it exists only in the state it belongs to. */
+/* The outage mark, in front of the sentence about the task runner. The colour of the box gives
+   the same information, and this mark is for the reader who cannot use that colour.
+   js/runnerstatus.min.js draws the mark, and thus it exists only in the condition it belongs to.
+   */
 .sitenotice-warnmark {
   height: 1.1em;
-  /* the gap belongs here rather than in the sentence, which is then exactly what it reads as */
+  /* The space belongs to the mark, and not to the sentence. The sentence is then only words. */
   margin-right: 0.3em;
   vertical-align: -0.2em;
   width: 1.1em;
 }
 
-/* The box changes state under the reader, on a poll they did not ask for, so the colours move
-   rather than snap. Only the colours: a size or a position that animates would move the text
-   under a reader who is part-way through it. */
+/* The box changes its condition while the reader reads it, at a poll that the reader did not ask
+   for. Thus the colours change slowly. Only the colours change in this way. A change of size or of
+   position would move the text while the reader reads it. */
 @media (prefers-reduced-motion: no-preference) {
   .sitenotice {
     transition: background-color 0.4s ease, border-color 0.4s ease, color 0.4s ease;
   }
 }
 
-/* While the runner is down, the same box in Bootstrap's own warning colours. The -subtle and
-   -emphasis variables have a dark value as well as a light one, so the panel stays a warning on
-   the dark theme rather than a pale yellow block. The border shorthand replaces the orange edge
-   above with a yellow rule on all four sides, which is what makes this read as a different state
-   of the box and not as the box with another line in it. It is on the box rather than on the
-   runner line, so that the panel holds the standing note too: while the runner is down, both
-   lines are things the reader has to know before they read the page. */
+/* While the task runner is down, the same box takes the warning colours of Bootstrap. The -subtle
+   and -emphasis variables have a dark value and a light value. Thus the box stays a warning on the
+   dark theme, and it is not a pale yellow block. The border property replaces the orange edge
+   above with a yellow line on all four sides. The reader then sees a different condition of the
+   box, and not the box with one more sentence in it. The rule is on the box, and not on the runner
+   sentence, so that the warning colours hold the note as well. While the task runner is down, the
+   reader must know both sentences before they read the page. */
 .sitenotice.stale {
   background-color: var(--bs-warning-bg-subtle);
   border: 1px solid var(--bs-warning-border-subtle);
@@ -202,11 +204,11 @@ in the query, the -webkit- form included, since that is the only form Safari has
   font-size: 1em;
 }
 
-/* On paper the runner line is wrong before the ink is dry, and the box has no state to be in. The
-   note is a caveat about the measurements, so it stays with them.
+/* On paper the runner sentence is out of date immediately, and the box has no condition to show.
+   The note gives a limit of the measurements, and thus it stays with them.
 
-   After .sitenotice.stale, not before it: a media query adds no specificity, so the same selector
-   later in the file wins even in print. */
+   These rules come after .sitenotice.stale, and not before it. A media query adds no specificity,
+   and thus the same selector later in the file wins, in print as on the screen. */
 @media print {
   .sitenotice,
   .sitenotice.stale {

@@ -1,29 +1,30 @@
-{# The one box above the content, on every page. It holds the standing note about the data, and #}
-{# the task runner's own account of itself. A reader needs both before they trust what the page #}
-{# below shows, so the two share one place and one treatment. #}
+{# The one box above the content, on every page. It holds the note about the data, and the status #}
+{# of the task runner. A reader needs both before they can use what the page below shows. Thus #}
+{# the two share one place and one treatment. #}
 {# #}
-{# js/runnerstatus.min.js writes the second line and makes the box a warning panel while the #}
-{# runner is down. js/sitenotice.js reveals the dismiss control and remembers what was dismissed. #}
-{# The first line comes from the server, so it shows with no JavaScript. #}
+{# js/runnerstatus.min.js writes the second sentence, and it gives the box the warning colours #}
+{# while the task runner is down. js/sitenotice.js shows the control that removes the note, and #}
+{# it stores which note the reader removed. The server writes the first sentence, and thus that #}
+{# sentence shows with no JavaScript. #}
 {# #}
-{# data-showqueue says that the queue counts are of use to this reader. The reader waits on a #}
-{# task, or this is the queue page, which includes this file with alwaysshowqueue. The outage #}
-{# sentence does not depend on it. See runnerMessage. #}
+{# data-showqueue tells that the queue counts are of use to this reader. The reader has a task in #}
+{# the queue, or this is the queue page, which includes this file with alwaysshowqueue. The #}
+{# outage sentence does not use this attribute. See runnerMessage. #}
 <div class="sitenotice" id="sitenotice"{% if alwaysshowqueue or queued_task_count %} data-showqueue{% endif %}>
-  {# A child of the box, and not of the paragraph below. The paragraph must be able to become #}
-  {# empty, because main.css collapses the box when both of its lines are empty, and an element #}
-  {# inside a paragraph keeps that paragraph full. js/sitenotice.js removes the two together. #}
-  {# The control stays hidden until that file runs, so a page without JavaScript offers nothing #}
-  {# that would do nothing. #}
+  {# This control is a child of the box, and not of the paragraph below. That paragraph must be #}
+  {# able to become empty, because main.css collapses the box when both paragraphs are empty. An #}
+  {# element in a paragraph keeps that paragraph full. js/sitenotice.js removes the #}
+  {# two together. The control stays hidden until that file runs. Thus a page without #}
+  {# JavaScript shows the note, and it shows a control only when that control can remove it. #}
   <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>
 
-  {# notice.txt is inline text inside this paragraph. Keep it that way. A block element in that #}
-  {# file would nest inside a <p>, and the browser would close the paragraph before it. #}
+  {# notice.txt gives text in this paragraph. Keep it as text. A block element in that file would #}
+  {# be inside a <p>, and the browser would close the paragraph in front of it. #}
   <p class="sitenotice-note">{% include "notice.txt" %}</p>
 
-  {# Present and empty, rather than added when there is something to say. A live region must be in #}
-  {# the page before its content changes for a screen reader to announce the change. An empty #}
-  {# paragraph draws no line box, and main.css takes away its margin, so it occupies nothing. #}
-  {# renderInto turns the announcement on for the outage sentence alone. #}
+  {# This paragraph is present and empty, and this code does not add it when there is a sentence #}
+  {# to give. A live region must be in the page before its content changes, or a screen reader #}
+  {# does not speak the change. An empty paragraph draws no line, and main.css removes its margin. #}
+  {# Thus it holds no space. renderInto starts the speech for the outage sentence only. #}
   <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"></p>
 </div>

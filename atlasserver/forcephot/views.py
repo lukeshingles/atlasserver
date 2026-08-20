@@ -930,12 +930,12 @@ def queuepositions(request):
     )
 
 
-# Let a browser answer a repeat request from its own cache, for one write interval of the runner.
-# Every page of the site asks for this status on load, so several tabs opened at once would
-# otherwise ask several times for a file that changes every fifteen seconds. The window stops
-# there. A longer one would need stale-while-revalidate, and that is the one thing this must not
-# do: runnerstatus.js re-asks when a hidden tab comes back, and the answer that reader needs is the
-# one that is true now, not the one from before they left.
+# A browser can answer a second request from its cache, for one write interval of the task runner.
+# Each page of the site asks for this status at load. Thus several tabs that open together would
+# make several requests for a file that changes every fifteen seconds. The interval stops there. A
+# longer interval would need stale-while-revalidate, and this endpoint must not give that
+# directive. runnerstatus.js asks again when a hidden tab becomes visible. That reader needs the
+# status at that moment, and not the status from before the tab became hidden.
 @cache_control(private=True, max_age=int(runnerstatus.STATUS_WRITE_SECONDS))
 def taskrunnerstatus(request):
     """Report whether the task runner is alive and what it is doing.

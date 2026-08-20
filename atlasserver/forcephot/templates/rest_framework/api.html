@@ -22,7 +22,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
 
-  {# see base.html: where js/runnerstatus.min.js reads the endpoint to poll #}
+  {# See base.html. This is where js/runnerstatus.min.js reads the address to poll. #}
   <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
 {% endblock %}
 
@@ -47,9 +47,9 @@
 {% block navbar %}{% include "navbar.html" %}{% endblock %}
 
 {% block breadcrumbs %}
-  {# The site notice, in the block DRF gives above the content. This is the only block between the #}
-  {# navigation and the page, and it is where base.html puts the box as well, so the browsable API #}
-  {# carries the same note and the same runner status as every other page. #}
+  {# The site notice box, in the block that DRF gives above the content. This is the only block #}
+  {# between the navigation and the page. base.html puts the box in the same position. Thus the #}
+  {# browsable API shows the same note and the same status as each other page. #}
   {% include "sitenotice.html" %}
 
   {% comment %}
@@ -83,9 +83,10 @@
   {# the navbar included above is the site's, so it gets the site's navbar behaviour too #}
   <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
 
-  {# see base.html: the dismiss control for the standing note #}
+  {# See base.html. This file shows the control that removes the note. #}
   <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
 
-  {# fills the runner line of the box above. It imports nothing, so this page needs no import map #}
+  {# This module writes the runner sentence in the box above. It imports no other module, and #}
+  {# thus this page needs no import map. #}
   <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>
 {% endblock %}

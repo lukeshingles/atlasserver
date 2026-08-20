@@ -76,13 +76,13 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     Object.defineProperty(global, 'navigator', { value: window.navigator, configurable: true });
 
     /*
-     * Where runnerstatus.js reads its endpoint, as base.html gives it.
+     * Where runnerstatus.js reads its endpoint, in the form that base.html gives.
      *
-     * The box itself (#sitenotice) is deliberately absent. The module starts its poll when it is
-     * given a box or when something subscribes, so without one here the first fetch happens as
-     * TaskPage mounts -- which is after each test has installed its fetch stub. Adding the box for
-     * realism would fetch at importComponent() time with no stub in place, and the response the
-     * wait estimates need would be lost.
+     * The box (#sitenotice) is absent here, and that is the intent. The module starts its poll
+     * when it gets a box, or when a reader subscribes. Without a box here, the first request
+     * occurs as TaskPage mounts, which is after each test installs its test fetch function. A box
+     * here would make a request at the time of importComponent(), with no test function in
+     * place. The wait estimates would then lose the response that they need.
      */
     window.document.head.insertAdjacentHTML(
         'beforeend', '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json">');
@@ -104,19 +104,18 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
 }
 
 /**
- * Tear down a window created by setupDom.
+ * Close a window that setupDom made, and remove the global values with it.
  *
- * The globals go as well as the window. A closed jsdom window still answers -- its document
- * reports visibilityState "visible" and still takes listeners -- so a `typeof document` test in
- * the code under test would go on finding the dead document from the test before. runnerstatus.js
- * branches on exactly that.
+ * A closed jsdom window continues to answer. Its document gives visibilityState "visible", and it
+ * accepts listeners. Thus a `typeof document` test in the code under test would find the closed
+ * document of the test before it. runnerstatus.js makes such a test.
  */
 export async function teardownDom(window) {
     window.close();
 
-    // `window` itself stays: a poll or a promise from the page under test can still be settling
-    // as this runs, and those read window.location and window.history directly, where a missing
-    // binding is a ReferenceError that fails the suite from outside any test.
+    // `window` stays. A poll or a promise from the page under test can complete while this
+    // function runs. Such code reads window.location and window.history directly. A name that
+    // does not exist gives a ReferenceError, which fails the suite from outside every test.
     for (const name of ['document', 'localStorage', 'HTMLElement', 'Event',
         'requestAnimationFrame', 'cancelAnimationFrame', 'navigator']) {
         delete global[name];

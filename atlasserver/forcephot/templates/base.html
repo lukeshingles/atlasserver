@@ -19,9 +19,10 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="NONE,NOARCHIVE" />
 
-        {# where js/runnerstatus.min.js reads the endpoint to poll. In the page rather than in the #}
-        {# script, because {% url %} carries the /forcedphot script prefix and only a template #}
-        {# knows it. A relative URL is enough for a same-origin fetch. #}
+        {# Where js/runnerstatus.min.js reads the address of the endpoint to poll. The address #}
+        {# is in the page, and not in the script. {% url %} gives the /forcedphot script prefix, #}
+        {# and only a template knows that prefix. A relative URL is sufficient for a fetch of the #}
+        {# same origin. #}
         <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
       {% endblock %}
 
@@ -59,10 +60,11 @@
         <script src="{% static "js/theme.js" %}?ver={{ static_version }}"></script>
       {% endblock %}
 
-      {# The queue page's import map; every other page leaves this empty. A map has to come before #}
-      {# every module script in the document, and the runner status module at the foot of this page #}
-      {# is one, so the map cannot sit down there with it. A page that fills this block defines it #}
-      {# at its own top level, so that the map renders once and in this position. #}
+      {# The import map of the queue page. Each other page leaves this block empty. A map must #}
+      {# come before each module script in the document. The runner status module at the foot of #}
+      {# this page is such a script, and thus the map cannot be at the foot with it. A page that #}
+      {# fills this block declares it at the top level of that page. The map then renders one #}
+      {# time, and in this position. #}
       {% block importmap %}{% endblock %}
 
     {% endblock %}
@@ -90,13 +92,14 @@
       {# deciding a colour, so it has nothing to say before the first paint. #}
       <script src="{% static "js/navbar.js" %}?ver={{ static_version }}"></script>
 
-      {# Reveals the control that puts the standing note away, and keeps it away until the note #}
-      {# changes. At the foot of the page with the others: it reads the note, which is above it. #}
+      {# This file shows the control that removes the note. It keeps the note away until the #}
+      {# words of the note change. It is at the foot of the page with the other scripts, because #}
+      {# it reads the note, which is above it. #}
       <script src="{% static "js/sitenotice.js" %}?ver={{ static_version }}"></script>
 
-      {# Fills the runner line of the box above the content, and polls for it once a minute. The #}
-      {# queue page imports this same URL through its import map, so the browser instantiates the #}
-      {# module once and both readers share its one poll. #}
+      {# This module writes the runner sentence in the box above the content, and it polls each #}
+      {# minute. The queue page imports the same URL through its import map. Thus the browser #}
+      {# makes one instance of the module, and the two readers share its one poll. #}
       <script type="module" src="{% static "js/runnerstatus.min.js" %}?ver={{ static_version }}"></script>
     {% endblock %}
 

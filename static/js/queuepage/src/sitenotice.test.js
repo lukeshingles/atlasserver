@@ -1,9 +1,9 @@
-// Tests for static/js/sitenotice.js, which reveals the control that puts the standing note away
-// and remembers which note was put away.
+// Tests for static/js/sitenotice.js. That file shows the control that removes the note, and it
+// stores which note the reader removed.
 //
-// Under jsdom rather than in a browser because both inputs have to be controlled: what is in
-// storage from an earlier visit, and a browser set to refuse site data, which throws on access
-// rather than answering.
+// These tests use jsdom, and not a browser, because they must control two inputs. The first is
+// the value that an earlier visit put in storage. The second is a browser that refuses site data,
+// which gives an exception at each access.
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -17,8 +17,8 @@ const SITENOTICE_JS = join(SRC, '..', '..', 'sitenotice.js');
 
 const NOTE = 'Forced photometry is now available from the Southern Telescopes.';
 
-// the box as sitenotice.html renders it: the note with the hidden control inside it, and the
-// runner line, which this file must not touch
+// The box, in the form that sitenotice.html renders. It holds the hidden control, the note, and
+// the runner sentence. The file under test must not change that sentence.
 const box = (note) => `
   <div class="sitenotice" id="sitenotice">
     <button type="button" class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden></button>
@@ -27,8 +27,8 @@ const box = (note) => `
   </div>`;
 
 let source;
-// every load opens a window, and an open jsdom window holds the node event loop after the suite
-// has finished; theme.test.js and navbar.test.js keep the same book
+// Each load opens a window, and an open jsdom window holds the node event loop after the tests
+// finish. theme.test.js and navbar.test.js keep the same list.
 const open = [];
 
 before(async () => {
@@ -42,8 +42,9 @@ after(() => {
 /**
  * Load sitenotice.js into a fresh window.
  *
- * `stored` is what an earlier visit left in localStorage, and `storage` is 'working' or
- * 'unavailable' (every access throws, as when a browser is set to refuse site data).
+ * `stored` is the value that an earlier visit left in localStorage. `storage` is 'working' or
+ * 'unavailable'. With 'unavailable', each access gives an exception, as in a browser that refuses
+ * site data.
  */
 async function load({ note = NOTE, stored = null, storage = 'working' } = {}) {
   const dom = new JSDOM(`<!doctype html><html><body>${box(note)}</body></html>`, {
@@ -65,8 +66,8 @@ async function load({ note = NOTE, stored = null, storage = 'working' } = {}) {
     window.localStorage.setItem('atlas-notice-dismissed', stored);
   }
 
-  // jsdom fires DOMContentLoaded a tick after construction, and until then readyState is
-  // "loading". The script would take that branch and wait for an event that has already gone by.
+  // jsdom sends DOMContentLoaded one tick after it makes the window, and until then readyState
+  // is "loading". The script would then wait for an event that has already occurred.
   await new Promise((resolve) => {
     if (window.document.readyState === 'loading') {
       window.document.addEventListener('DOMContentLoaded', resolve);
@@ -117,8 +118,8 @@ describe('the standing note', () => {
   });
 
   test('a new notice is read once more, whatever was dismissed before', async () => {
-    // the whole reason for remembering the note rather than the dismissal: an edited notice is a
-    // new thing to say, and nobody has seen it yet
+    // This is why the file stores the note, and not the removal. An edited note gives new
+    // information, and no reader has seen it.
     const first = await load();
     first.dismiss();
 
@@ -129,7 +130,7 @@ describe('the standing note', () => {
   });
 
   test('the runner line is not this file\'s to touch', async () => {
-    // it is about right now, and nobody dismisses that
+    // That sentence gives the condition at this moment, and no reader removes it.
     const page = await load();
 
     page.dismiss();
@@ -146,8 +147,8 @@ describe('the standing note', () => {
   });
 
   test('the control goes with the note, so the box has nothing left to draw', async () => {
-    // the box collapses on the two classes rather than on the shape of its contents, because a
-    // browser without :has() would otherwise keep an empty panel on every page for ever
+    // The box collapses on the two classes, and not on the shape of its contents. A browser
+    // without :has() would keep an empty box on each page always.
     const page = await load();
 
     page.dismiss();
@@ -157,7 +158,7 @@ describe('the standing note', () => {
   });
 
   test('rewrapping the notice is not a new notice', async () => {
-    // the same words over three lines: textContent changes, and nothing the reader can see does
+    // The same words on three lines. textContent changes, and what the reader sees does not.
     const first = await load({ note: 'The southern telescopes are offline this week.' });
     first.dismiss();
 
@@ -170,7 +171,7 @@ describe('the standing note', () => {
   });
 
   test('a notice with no words in it is already dismissed', async () => {
-    // what an operator leaves behind when they empty notice.txt to take the notice down
+    // This is what an operator leaves when they empty notice.txt to remove the note.
     const page = await load({ note: '\n  ' });
 
     assert.equal(page.note(), null);
@@ -179,7 +180,7 @@ describe('the standing note', () => {
   });
 
   test('a page without the box is left alone', async () => {
-    // every page loads this file; a page whose template overrode the box away has no note to find
+    // Each page loads this file. A page whose template removed the box has no note in it.
     const dom = new JSDOM('<!doctype html><html><body><p>No box here.</p></body></html>', {
       runScripts: 'outside-only',
       url: 'http://testserver/',

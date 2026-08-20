@@ -1,18 +1,18 @@
 /*
-The standing note in the site notice box, and the control that puts it away.
+The note in the site notice box, and the control that removes it.
 
-The note is on every page of the site and says the same thing on every visit, which is the state a
-permanent banner ends in: the people who read the site most are the people who stopped seeing it
-soonest. So a reader can dismiss it, and it stays dismissed until the text changes.
+The note is on every page, and it gives the same words at each visit. A permanent note has one
+result: the readers who come most often are the readers who stop to see it first. Thus a reader can
+remove the note, and it stays away until its words change.
 
-What is remembered is a hash of the note itself, not the fact of a dismissal. A new note is a
-different hash, so it comes back and is read once more -- which is the whole reason for a notice
-that can be edited. The runner status line in the same box is untouched: it is about right now, and
-nobody dismisses that.
+This file stores a hash of the note, and not the fact of a removal. New words give a new hash, and
+thus a new note comes back and the reader reads it once more. That is the purpose of a note that an
+operator can edit. This file does not touch the runner sentence in the same box. That sentence
+gives the condition at this moment, and no reader removes it.
 
-The note is server-rendered and the button is not shown until this file runs, so a page without
-JavaScript keeps the note and offers nothing that would do nothing (the same arrangement as the
-theme control in navbar.html).
+The server renders the note, and this file shows the control. Thus a page without JavaScript keeps
+the note and shows no control that could do nothing. navbar.html shows the theme control in the
+same way.
 */
 
 (function () {
@@ -21,28 +21,27 @@ theme control in navbar.html).
   var STORAGE_KEY = 'atlas-notice-dismissed';
 
   /*
-  FNV-1a over the note text, as a hexadecimal string.
+  The FNV-1a hash of the text of the note, as a hexadecimal string.
 
-  Any function that changes when the text changes would do; this one is eight lines and has no
-  dependencies, where a real digest would mean SubtleCrypto, which is asynchronous and is only
-  available on a secure origin. Nothing here is a security decision: the worst a collision can do
-  is leave a new note dismissed.
+  Any function that changes with the text is sufficient. This one is eight lines and needs no other
+  code. A cryptographic digest would need SubtleCrypto, which is asynchronous and which a browser
+  supplies only on a secure origin. This code makes no security decision. If two notes give one
+  hash, the result is a new note that stays away, and no more than that.
   */
   function hashOf(text) {
     var hash = 0x811c9dc5;
     for (var i = 0; i < text.length; i += 1) {
       hash ^= text.charCodeAt(i);
-      // the FNV prime, by shift and add: hash * 16777619 overflows the 53 bits a number holds
-      // exactly, and Math.imul is the multiplication that wraps at 32 bits the way the algorithm
-      // expects
+      // Math.imul gives the multiplication of the FNV algorithm. A product of hash and 16777619
+      // is larger than the 53 bits that a number holds exactly, and Math.imul keeps 32 bits.
       hash = Math.imul(hash, 0x01000193);
     }
     return (hash >>> 0).toString(16);
   }
 
-  // localStorage throws rather than returning null where a browser is set to refuse site data, so
-  // both readers and writers are guarded. A visitor who has turned it off sees the note on every
-  // page load, which is the behaviour of the site before this file existed.
+  // A browser that refuses site data makes localStorage give an exception, and not null. Thus
+  // both functions below contain the exception. A reader who refuses site data sees the note at
+  // each page load, which is what the site did before this file.
   function storedHash() {
     try {
       return localStorage.getItem(STORAGE_KEY);
@@ -55,16 +54,16 @@ theme control in navbar.html).
     try {
       localStorage.setItem(STORAGE_KEY, hash);
     } catch (err) {
-      // the note returns on the next page load; it is gone from this one, which is what was asked
+      // The note comes back at the next page load. It is away from this page, as the reader asked.
     }
   }
 
   /**
-   * Take the note, and the control that dismissed it, out of the box.
+   * Remove the note, and the control that removes it, from the box.
    *
-   * The box collapses on its own once both of its lines are empty. main.css keys that off the
-   * class set here rather than off the shape of the box, because a browser without :has() would
-   * otherwise keep an empty panel on every page for ever.
+   * The box collapses when both of its sentences are empty. main.css uses the class that this
+   * function sets, and it does not examine the contents of the box. A browser without :has()
+   * ignores such an examination, and it would then show an empty box on each page always.
    */
   function removeNote(box, note, button) {
     note.remove();
@@ -84,13 +83,13 @@ theme control in navbar.html).
       return;
     }
 
-    // The words, and only the words. Runs of white space collapse to one space first. Rewrapping
-    // notice.txt onto three lines changes textContent and changes nothing a reader can see, and
-    // without this it would read as a new notice and come back for everybody who dismissed it.
+    // The words, and only the words. Each group of space characters becomes one space. To put
+    // notice.txt on three lines changes textContent, and it changes nothing that a reader sees.
+    // Without this step, such a change would give a new note to each reader who removed it.
     var text = note.textContent.replace(/\s+/g, ' ').trim();
 
-    // A notice with no words in it is already dismissed. The control would offer to put away what
-    // is not there, and the box must collapse rather than draw an empty panel.
+    // A note with no words in it is already away. The control would offer to remove nothing, and
+    // the box must collapse and not show an empty box.
     if (text === '') {
       removeNote(box, note, button);
       return;

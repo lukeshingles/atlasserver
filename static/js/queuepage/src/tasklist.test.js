@@ -1206,13 +1206,13 @@ describe('TaskPage', () => {
     /**
      * Render, then drive one more runner-status poll with a replacement body.
      *
-     * The replacement is a distinct object, as a real `response.json()` is on every poll — a stub
-     * that hands back one shared reference makes the comparison in the store unobservable, since
-     * both branches of it then yield the same reference.
+     * The second body is a different object, as `response.json()` gives at each poll. A test
+     * function that returns one object makes the comparison in the store invisible, because both
+     * results are then the same object.
      *
-     * What the line about the runner says is runnerstatus.test.js's subject: it is drawn into the
-     * site notice box, on every page, and not into this component. What is left here is the other
-     * reader of the same response, and the reason TaskPage subscribes at all -- the estimates.
+     * runnerstatus.test.js covers the words of the runner sentence. That sentence goes into
+     * the site notice box, on each page, and not into this component. This test covers the other
+     * reader of the same response, which is the reason that TaskPage subscribes: the estimates.
      */
     const repollRunnerStatus = async (results, positions, first, second) => {
         mock.timers.enable({ apis: ['setInterval'] });
@@ -1245,7 +1245,8 @@ describe('TaskPage', () => {
             { ...body, typical_runtime_seconds: { FP: 600 } },
             { ...body, typical_runtime_seconds: { FP: 1200 } });
 
-        // 20 ahead, none of them this user's, 5 users sharing the queue: 4 passes of the median
+        // 20 tasks in front, and no task of this user. 5 users share the queue, and thus the
+        // task waits for 4 passes of the median.
         assert.match(before, /~40 min/);
         assert.match(after, /~80 min/);
     });

@@ -1,8 +1,8 @@
 'use strict';
 
-// The shared runner status: the wording, the gate that decides what counts as news, the store that
-// polls, and the box it draws into. Every page loads this module, so these run without React and,
-// for everything but the last group, without a DOM.
+// The shared runner status. These tests cover the words, the test for a change, the store that
+// polls, and the box that the store draws into. Each page loads this module. Thus these tests run
+// without React, and, except for the last two groups, without a document.
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -17,7 +17,7 @@ import { setupDom, teardownDom } from './testing.js';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 
-/** Let the fetch chain settle. Works with the timers mocked, which a `setTimeout(0)` would not. */
+/** Let the promises of a fetch complete. This also works with test timers in place. */
 async function settle() {
     for (let i = 0; i < 10; i += 1) {
         await Promise.resolve();
@@ -47,7 +47,7 @@ test('describeAge', async (t) => {
         assert.equal(describeAge(60), '1 minute ago');
         assert.equal(describeAge(119), '1 minute ago');
         assert.equal(describeAge(120), '2 minutes ago');
-        // the boundary that motivated flooring: rounding reported this as "60 minutes ago"
+        // This value is the reason to round down. To round up gives "60 minutes ago".
         assert.equal(describeAge(3599), '59 minutes ago');
     });
 
@@ -55,27 +55,28 @@ test('describeAge', async (t) => {
         assert.equal(describeAge(3600), '1 hour ago');
         assert.equal(describeAge(7199), '1 hour ago');
         assert.equal(describeAge(7200), '2 hours ago');
-        // just under a day is still counted in hours, not rounded up into "24 hours ago"
+        // A value that is a little less than one day stays in hours. It does not become a day.
         assert.equal(describeAge(86399), '23 hours ago');
     });
 
     await t.test('days', () => {
         assert.equal(describeAge(86400), '1 day ago');
-        // the line that prompted the helper: 6401 minutes reads as days
+        // This value is the reason for the function. 6401 minutes reads better as days.
         assert.equal(describeAge(6401 * 60), '4 days ago');
     });
 });
 
 /*
- * The gate that decides whether a poll is news.
+ * The test that decides whether a poll gives new information.
  *
- * Tested directly rather than through the box: what it decides is whether anything is told, and a
- * status that produces identical wording leaves the box identical too, so no assertion on the page
- * can tell the two apart.
+ * These tests call the function directly, and not through the box. The function decides whether
+ * the store reports at all. A status with the same words leaves the box the same, and thus no test
+ * of the page can see the difference.
  */
 describe('runnerStatusEqual', () => {
     test('a poll that only moved the clock says nothing new', () => {
-        // what every healthy poll looks like, and the whole reason the volatile list exists
+        // Each healthy poll gives this difference. It is the reason for the list of fields to
+        // ignore.
         assert.equal(runnerStatusEqual(
             healthy(), healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 8.4 })), true);
     });
@@ -100,8 +101,8 @@ describe('runnerStatusEqual', () => {
     });
 
     test('a field the endpoint gains later is compared by default', () => {
-        // the point of listing what to ignore rather than what to read: a new field can cost a
-        // rewrite of the box, but it cannot go silently unnoticed by a reader that wants it
+        // This is why the module lists the fields to ignore, and not the fields to read. A new
+        // field can cost one rewrite of the box. But no reader that needs the field can miss it.
         assert.equal(runnerStatusEqual(healthy(), healthy({ future_field: 'a' })), false);
     });
 
@@ -179,8 +180,8 @@ describe('the store', () => {
             if (next == null) {
                 return Promise.reject(new Error('unreachable'));
             }
-            // a fresh object per poll, as response.json() gives: a shared reference would make the
-            // comparison in the store unobservable, since both branches then yield the same one
+            // A new object at each poll, as response.json() gives. One shared object would make
+            // the comparison in the store invisible, because both results are then that object.
             return Promise.resolve({ ok: next.status !== 503, status: next.status || 200, json: () => Promise.resolve(next.body) });
         };
     });
@@ -238,9 +239,10 @@ describe('the store', () => {
     });
 
     test('a stopped runner whose age moved is news', async () => {
-        // every other field is frozen while the runner is down -- the status file is not being
-        // rewritten, and the medians are withheld -- so the age is the only thing that moves. A
-        // store that skips it leaves the box reporting its first reading for the whole outage.
+        // Each other field holds its value while the task runner is down. The task runner does
+        // not write the status file, and the endpoint gives no medians. Thus the age is the one
+        // field that changes. A store that ignores it would keep the first status for the full
+        // outage.
         const down = (age) => ({ body: { stale: true, queued_task_count: 1, status_age_seconds: age, typical_runtime_seconds: {} } });
         bodies.push(down(61), down(7200));
         const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
@@ -276,14 +278,14 @@ describe('the store', () => {
         const unsubscribe = store.subscribe((status) => seen.push(status));
         await settle();
 
-        // four failed polls: our own connection says nothing about the runner
+        // Four failed polls. Our own connection tells us nothing about the task runner.
         for (let i = 0; i < 4; i += 1) {
             mock.timers.tick(1000);
             await settle();
         }
         assert.equal(store.current().slots_busy, 2, 'a status is not withdrawn on our own failures');
 
-        // by the sixth the reading is too old to keep asserting, in either direction
+        // At the sixth poll the status is too old to report, in either condition.
         mock.timers.tick(2000);
         await settle();
         assert.equal(store.current(), null);
@@ -292,9 +294,9 @@ describe('the store', () => {
     });
 
     test('a tab that comes back asks again rather than showing what it last heard', async () => {
-        // a hidden tab is not polled, so an outage that started or ended while the reader was away
-        // is exactly what its line gets wrong. A DOM of its own, because this is the one store
-        // test whose subject is an event: the rest need no document and are quicker without one.
+        // A hidden tab gets no poll. Thus its sentence is wrong for an outage that started or
+        // stopped while the reader was away. This test makes its own document, because it is the
+        // one store test of an event. The other tests need no document, and they are faster.
         const window = setupDom();
         try {
             bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
@@ -315,9 +317,9 @@ describe('the store', () => {
     });
 
     test('the answer to the newest question is the one that is kept', async () => {
-        // the interval and a return to the tab can fall in the same second, and the two requests
-        // can answer in either order. The older reading standing for a whole poll would take every
-        // queue row's wait estimate back with it.
+        // The interval and a return to the tab can occur in the same second, and the two
+        // answers can arrive in either order. An older value that holds for a full poll would also
+        // move the wait estimate of each row of the queue.
         const answers = [];
         global.fetch = () => new Promise((resolve) => {
             const body = { ...healthy(), queued_task_count: answers.length + 1 };
@@ -329,8 +331,8 @@ describe('the store', () => {
         store.refresh();
         await settle();
 
-        // the second question was asked last, so its answer is the one that counts, whichever
-        // order the two land in
+        // The store asked the second question last. Thus its answer is the one to keep, in
+        // either order of arrival.
         answers[1]();
         await settle();
         answers[0]();
@@ -355,9 +357,9 @@ describe('the store', () => {
     });
 
     test('one reader that fails does not silence the others', async () => {
-        // the box renderer subscribes first and the queue page second. A throw from the first used
-        // to reach the fetch's catch, which reads any throw as an unreachable endpoint, so the
-        // queue page was left with no status for the life of the page.
+        // The box subscribes first and the queue page subscribes second. An exception from the
+        // first reader went to the catch of the fetch, which reads each exception as an endpoint
+        // that it cannot reach. The queue page then had no status for the life of the page.
         bodies.push({ body: healthy() });
         const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
         const seen = [];
@@ -373,8 +375,8 @@ describe('the store', () => {
             await settle();
 
             assert.equal(seen.at(-1).slots_busy, 2, 'the second reader is told');
-            // twice: the reader throws on the status it is given when it subscribes, and again on
-            // the first response
+            // Two times. The reader fails on the status that it gets at the subscription, and
+            // it fails again on the first response.
             assert.equal(errors.length, 2, 'and the reader\'s own fault is reported');
         } finally {
             console.error = consoleError;
@@ -423,13 +425,13 @@ describe('the store', () => {
 });
 
 /*
- * The two things about this module that only hold outside it.
+ * The two properties of this module that hold only outside it.
  *
- * It is loaded as a bare <script type="module"> on every page of the site, and only the queue page
- * renders an import map. So the module must resolve nothing by name, and it must find the box on
- * its own. Neither shows up in a test of an exported function: an import added here keeps the
- * queue page working and silently empties the line everywhere else, and a bootstrap that stops
- * finding #sitenotice leaves every page quiet with every test still green.
+ * Each page loads the module as a <script type="module">, and only the queue page renders an
+ * import map. Thus the module must resolve no name, and it must find the box itself. A test of an
+ * exported function shows neither property. An import in this module keeps the queue page correct
+ * and empties the sentence on each other page. A start that stops to find #sitenotice leaves each
+ * page quiet, and each test continues to pass.
  */
 describe('the module as a page loads it', () => {
     test('it imports nothing, because most pages have no import map to resolve a name with', async () => {
@@ -451,8 +453,8 @@ describe('the module as a page loads it', () => {
                 ok: true, status: 200, json: () => Promise.resolve(healthy({ slots_busy: 5 })),
             });
 
-            // a fresh copy: the module reads the document and subscribes as it is evaluated, and
-            // node caches a module by URL
+            // A new copy. The module reads the document and subscribes as node evaluates it,
+            // and node holds one copy of a module for each URL.
             const module = await import(`./runnerstatus.js?bootstrap=${Date.now()}`);
             await settle();
 
@@ -515,8 +517,9 @@ describe('the box', () => {
     });
 
     test('an unchanged sentence is not written again', () => {
-        // the line is a live region: rewriting it announces it. During an outage the age moves on
-        // every poll while the wording stays the same for an hour at a time.
+        // The sentence is in a live region, and a second write makes a screen reader speak it
+        // again. In an outage the age changes at each poll, and the words stay the same for an
+        // hour.
         renderInto(box(), { stale: true, status_age_seconds: 7200 });
         const line = window.document.getElementById('runnerstatus');
         const mark = line.firstChild;
@@ -527,8 +530,8 @@ describe('the box', () => {
     });
 
     test('only the outage sentence is announced', () => {
-        // the queue counts are on every page of the site, and read out once a minute over
-        // whatever the reader is doing they are an interruption nobody asked for
+        // The queue counts are on each page of the site. Spoken each minute over the work of
+        // the reader, they interrupt a reader who did not ask for them.
         const line = () => window.document.getElementById('runnerstatus');
 
         box().setAttribute('data-showqueue', '');
@@ -540,9 +543,9 @@ describe('the box', () => {
     });
 
     test('a box with nothing to say collapses instead of leaving a panel', () => {
-        // both halves have to be empty: the note is dismissed or has no words in it, and the
-        // runner is healthy and quiet. A class from each side, so that no browser has to support
-        // :has() for an empty panel to go away.
+        // Both parts must be empty. The reader removed the note, or the note has no words in
+        // it, and the task runner is quiet. One class comes from each part. Thus a browser needs
+        // no support for :has() to remove an empty box.
         renderInto(box(), healthy({ queued_task_count: 0 }));
 
         assert.equal(box().classList.contains('sitenotice-noline'), true);
@@ -568,7 +571,7 @@ describe('the box', () => {
     });
 
     test('an outage makes the whole box the warning panel', () => {
-        // the class is on the box and not on the line, so that the panel holds the note as well
+        // The class is on the box, and not on the sentence, so that the colours hold the note.
         renderInto(box(), { stale: true, status_age_seconds: 3600 });
 
         assert.equal(box().classList.contains('stale'), true);

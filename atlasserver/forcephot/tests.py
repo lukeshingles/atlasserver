@@ -1685,8 +1685,9 @@ class TaskCreateResponseTests(TestCase):
         content = response.content.decode()
         assert "const api_url_base = 'http://testserver/queue/'" in content, content[:500]
         assert "const queuepositions_url = 'http://testserver/queuepositions.json'" in content
-        # the runner status endpoint reaches the page as a meta tag from base.html, which every
-        # page carries, so this render path gets it without the view context either
+        # The address of the runner status endpoint reaches the page as a meta tag from
+        # base.html, which each page holds. Thus this render path also gets it with no view
+        # context.
         assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
 
     def test_single_task_creation(self) -> None:
@@ -2257,7 +2258,7 @@ class QueuePositionsEndpointTests(TestCase):
 
 
 class TaskRunnerStatusTests(TestCase):
-    """Both the runner and the view read STATUS_PATH through atlasserver.taskrunner.status.
+    """The task runner and the view read STATUS_PATH through atlasserver.taskrunner.status.
 
     The view must not import atlasserver.taskrunner.main (which runs django.setup() and pulls in
     pandas), so patching the shared module is what makes one patch cover both sides.
@@ -2291,11 +2292,11 @@ class TaskRunnerStatusTests(TestCase):
         assert response.json()["running"] is False
 
     def test_a_status_is_cacheable_for_one_write_interval(self) -> None:
-        """Every page asks for this on load, so several tabs opened at once ask several times.
+        """Each page asks for this status at load, and thus several tabs ask several times.
 
-        The window is the interval the runner rewrites the file in. It carries no
-        stale-while-revalidate: runnerstatus.js asks again when a hidden tab comes back, and that
-        reader must not be given the answer from before they left.
+        The interval is the time in which the task runner writes the file again. The header gives
+        no stale-while-revalidate. runnerstatus.js asks again when a hidden tab becomes visible,
+        and that reader must not get the answer from before the tab became hidden.
         """
         response = self.status_response(procs_taskids={})
 
@@ -2303,7 +2304,7 @@ class TaskRunnerStatusTests(TestCase):
         assert response["Cache-Control"] == "private, max-age=15"
 
     def test_an_outage_is_cacheable_too(self) -> None:
-        # the same reasoning, and the case where every page in the site is asking at once
+        # The same reason. In an outage each page of the site asks at the same time.
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
@@ -4608,9 +4609,9 @@ class BrowsableApiBreadcrumbTests(TestCase):
 class SiteNoticeTests(TestCase):
     """The one box above the content, on every page.
 
-    It carries the standing note about the data and the task runner's own status. The note is
-    rendered by the server; js/runnerstatus.min.js fills the runner line and polls for it, so the
-    page has to supply the endpoint URL and the module as well as the markup.
+    The box holds the note about the data and the status of the task runner. The server renders the
+    note. js/runnerstatus.min.js writes the runner sentence and polls for it. Thus the page must
+    give the address of the endpoint, and the module, and the markup.
     """
 
     def setUp(self) -> None:
@@ -4620,8 +4621,8 @@ class SiteNoticeTests(TestCase):
         return self.client.get(url, HTTP_ACCEPT="text/html").content.decode()
 
     def test_every_page_carries_the_box_and_what_fills_it(self) -> None:
-        # a page the user is on during an outage is not necessarily the queue: the note and the
-        # runner status are the two things a reader needs before they trust any page of the site
+        # In an outage a reader can be on any page, and not only on the queue page. The note
+        # and the status of the task runner are the two items that a reader needs first.
         pagenames = ["index", "faq", "resultdesc", "apiguide", "stats", "login"]
 
         for name in pagenames:
@@ -4629,8 +4630,8 @@ class SiteNoticeTests(TestCase):
                 content = self.page(reverse(name))
 
                 assert '<div class="sitenotice" id="sitenotice">' in content
-                # the note itself, whatever notice.txt says today: asserting the words would put
-                # the text of a file an operator is expected to edit into the test suite
+                # The note, with the words that notice.txt gives today. A test of the words
+                # would put the text of an editable file into the test suite.
                 assert '<p class="sitenotice-note">' in content
                 assert '<p class="sitenotice-runner" id="runnerstatus" role="status"' in content
                 assert '<meta name="atlas-runnerstatus-url" content="/taskrunnerstatus.json" />' in content
@@ -4654,11 +4655,12 @@ class SiteNoticeTests(TestCase):
         assert "js/runnerstatus.min.js" in content
 
     def test_the_queue_page_reaches_one_copy_of_the_module(self) -> None:
-        """The import map and the script tag must name the same URL, character for character.
+        """The import map and the script tag must give the same URL, character for character.
 
-        A browser holds one instance of a module per resolved URL. The queue page loads the module
-        as a script and imports it again for its wait estimates, so two spellings of the URL would
-        give two instances, two polls a minute, and a page reading a store that nothing draws.
+        A browser holds one instance of a module for each resolved URL. The queue page loads the
+        module as a script, and it imports the module again for its wait estimates. Two forms of
+        the URL would thus give two instances, two polls each minute, and a page that reads a store
+        which draws nothing.
         """
         self.client.force_login(self.user)
         content = self.page(reverse("task-list"))
@@ -4671,23 +4673,24 @@ class SiteNoticeTests(TestCase):
         assert imported.group(1) == loaded.group(1)
 
     def test_the_module_is_built(self) -> None:
-        # the bundles are committed, and CI rebuilds them to prove they are current; this only
-        # catches the source file being added without its build
+        # The repository holds the built bundles, and the CI job builds them again to show that
+        # they are current. This test finds a source file that has no build.
         assert (settings.STATIC_ROOT / "js" / "runnerstatus.min.js").is_file()
 
     def test_the_dismiss_control_is_hidden_until_its_script_runs(self) -> None:
-        # a page without JavaScript keeps the note and offers no control that would do nothing
+        # A page without JavaScript keeps the note. It shows a control only when that control
+        # can remove the note.
         content = self.page(reverse("index"))
 
         assert 'class="btn-close sitenotice-dismiss" aria-label="Dismiss this notice" hidden' in content
         assert "js/sitenotice.js" in content
 
     def test_the_queue_counts_are_offered_to_a_reader_who_is_waiting(self) -> None:
-        """data-showqueue is what tells runnerstatus.js to draw the queue line.
+        """data-showqueue tells runnerstatus.js to write the queue sentence.
 
-        How many slots are busy answers "when does my task start". A reader with nothing queued has
-        not asked that, so the attribute is absent and the line is not drawn. The outage sentence
-        does not depend on it.
+        The count of busy slots answers the question "when does my task start". A reader with no
+        queued task did not ask that question. The attribute is then absent, and this code writes
+        no sentence. The outage sentence does not use the attribute.
         """
         assert "data-showqueue" not in self.page(reverse("index")), "an anonymous reader is waiting on nothing"
 
@@ -4698,7 +4701,7 @@ class SiteNoticeTests(TestCase):
         assert "data-showqueue" in self.page(reverse("index")), "this reader has something in the queue"
 
     def test_the_queue_page_always_asks_for_the_queue_counts(self) -> None:
-        # it is the page about the queue, whether or not this reader is waiting on anything
+        # This is the page about the queue, and it shows the counts to each reader.
         self.client.force_login(self.user)
 
         assert "data-showqueue" in self.page(reverse("task-list"))
