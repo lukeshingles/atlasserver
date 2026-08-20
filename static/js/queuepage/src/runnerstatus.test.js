@@ -316,6 +316,52 @@ describe('the store', () => {
         }
     });
 
+    test('a tab that comes back asks again, even after the reader went idle', async () => {
+        // The queue page reports an idle reader as user_is_active false, and it sets that flag
+        // from mouse and touch events only. A change of tab is neither. The reader is at the page,
+        // and the status they see is the one from before the tab became hidden.
+        const window = setupDom();
+        let unsubscribe = () => {};
+        try {
+            window.user_is_active = false;
+            bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
+            const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+            unsubscribe = store.subscribe(() => {});
+            await settle();
+
+            window.document.dispatchEvent(new window.Event('visibilitychange'));
+            await settle();
+
+            assert.equal(store.current().slots_busy, 9);
+        } finally {
+            unsubscribe();
+            await teardownDom(window);
+        }
+    });
+
+    test('an idle reader is not polled on the interval', async () => {
+        // the other half: the pause the queue page had before this module owned the poll
+        mock.timers.enable({ apis: ['setInterval', 'Date'] });
+        const window = setupDom();
+        let unsubscribe = () => {};
+        try {
+            window.user_is_active = false;
+            bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
+            const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+            unsubscribe = store.subscribe(() => {});
+            await settle();
+            assert.equal(fetched.length, 1, 'the first request fills the box either way');
+
+            mock.timers.tick(5000);
+            await settle();
+
+            assert.equal(fetched.length, 1, 'no interval request while the reader is away');
+        } finally {
+            unsubscribe();
+            await teardownDom(window);
+        }
+    });
+
     test('the answer to the newest question is the one that is kept', async () => {
         // The interval and a return to the tab can occur in the same second, and the two
         // answers can arrive in either order. An older value that holds for a full poll would also

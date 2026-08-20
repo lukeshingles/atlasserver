@@ -245,8 +245,17 @@ export function createStore({ url, poll = POLL_MS }) {
             });
     }
 
+    /*
+     * Ask again when the tab becomes visible.
+     *
+     * This function tests document.hidden alone, and it does not call pollingPaused(). A reader
+     * who brings the tab to the front is at the page, whatever the inactivity timer of the queue
+     * page reports. That timer measures mouse and touch events, and a change of tab is neither.
+     * A test of the timer here would thus skip the request for each tab that was hidden for more
+     * than two minutes, which is the condition that most needs a new status.
+     */
     function refreshIfVisible() {
-        if (!pollingPaused()) {
+        if (typeof document !== 'undefined' && !document.hidden) {
             refresh({ fresh: true });
         }
     }
