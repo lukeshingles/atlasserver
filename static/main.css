@@ -22,6 +22,9 @@ a {
    link and link-hover; the active item is the same blue as the rest, distinguished by the
    underline below, as it was before. */
 .navbar {
+  /* in step with the height the brand gives up, so the space the bar occupies stays constant
+     through the travel and not only at its two ends; see .navbar-stuck below */
+  transition: margin-bottom 200ms ease;
   --bs-navbar-color: var(--bs-link-color);
   --bs-navbar-hover-color: var(--bs-link-hover-color);
   --bs-navbar-active-color: var(--bs-link-color);
@@ -49,6 +52,37 @@ a {
 .navbar.navbar-stuck {
   border-bottom: var(--bs-border-width) solid var(--bs-border-color);
   box-shadow: var(--bs-box-shadow-sm, 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075));
+  /*
+  The height the mark gives up is handed straight back as margin, so the space the bar occupies in
+  the page does not change. This is what stops the shrink from arriving in jerks, and the reason is
+  a loop rather than anything about how the mark is drawn:
+
+  the bar is sticky, so its box is still page space. Shrinking it took 74px out of the document,
+  the browser's scroll anchoring pulled the scroll position back by about as much to hold the
+  content still, and that carried the sentinel above the bar back into view -- which is the one
+  thing that says the bar is not stuck. The class came off, the mark grew again, the document grew
+  with it, and the whole thing went round again. Measured on a slow scroll: nine stuck/unstuck
+  toggles, the mark growing again on thirteen frames, and the page moving under the reader
+  forty-eight times.
+
+  A fast scroll clears the sentinel in one movement and never gives the loop a second pass, which
+  is why this looked like a drawing fault rather than a loop, and why it only showed when scrolling
+  slowly.
+
+  With the space held constant there is nothing for scroll anchoring to correct and the loop cannot
+  start: the same slow scroll makes one toggle, and the page does not move at all. The alternative
+  -- overflow-anchor: none on the page -- also breaks the loop, but it gives up scroll anchoring
+  everywhere, and it still lets the document change height, so the page went on jumping by up to
+  26px. This keeps the feature, and the queue page filling itself in above the viewport is exactly
+  what the feature is for.
+
+  The consequence to know about: the page now reserves the tall bar's height at the top whether the
+  bar is stuck or not, so content sits where it sits at rest rather than sliding up under the bar
+  as soon as the bar shrinks. That is the point -- what used to move it is what was jerking.
+
+  74px is what the mark gives up, 118 - 44. The pair below the navbar breakpoint is 56 - 38.
+  */
+  margin-bottom: 74px;
 }
 
 /*
@@ -83,6 +117,65 @@ in the query, the -webkit- form included, since that is the only form Safari has
    Bootstrap centres them against the brand, so the bar closes up around them. */
 .navbar-stuck .navbar-brand .atlaslogo {
   height: 44px;
+}
+
+/*
+Where it is supported, the mark follows the scroll instead of playing at it.
+
+The stepped behaviour above is the fallback and stays exactly as it is: a class from navbar.js and
+a 200ms transition. It has one trigger point, measured at 2px with the release at 1px, so the
+smallest nudge spends the whole 74px and rocking over that one pixel replays it both ways. And it
+runs on a timer, so three pixels of scrolling cost the same 200ms as eight hundred.
+
+A scroll timeline has no trigger and no timer. The mark is simply a function of how far down the
+page is, so it tracks the scroll under the reader's finger, backwards as readily as forwards, and
+there is no state to toggle and nothing to interrupt.
+
+The range is the mark's own height: by the time the page has moved by as much as the mark is tall,
+the mark has finished shrinking. That is why the two numbers here are the two heights above.
+
+The margin is on the same timeline and the same linear easing, so margin = 118 - height holds at
+every point of the scroll and not only at the two ends. The space the bar occupies is therefore
+constant throughout, which is what keeps the loop described on .navbar-stuck from starting -- and
+it matters more here than it did there, because this drives the height on every frame of a scroll
+rather than twice a page.
+
+Animations beat normal declarations in the cascade, so these override the class-driven values
+without needing to know whether the class is on. navbar.js still adds it, and it still carries the
+border, the shadow and the blur, which belong to the bar being over content rather than to its
+size.
+*/
+@supports (animation-timeline: scroll()) {
+  @keyframes navbar-mark-shrink {
+    from { height: 118px; }
+    to { height: 44px; }
+  }
+
+  @keyframes navbar-space-hold {
+    from { margin-bottom: 0; }
+    to { margin-bottom: 74px; }
+  }
+
+  .navbar-brand .atlaslogo {
+    animation: navbar-mark-shrink linear both;
+    animation-range: 0 118px;
+    animation-timeline: scroll(root block);
+  }
+
+  .navbar {
+    animation: navbar-space-hold linear both;
+    animation-range: 0 118px;
+    animation-timeline: scroll(root block);
+  }
+
+  /* The travel is the decoration, here as above: without it the mark still ends up at both of its
+     sizes, by the class and with no transition. */
+  @media (prefers-reduced-motion: reduce) {
+    .navbar-brand .atlaslogo,
+    .navbar {
+      animation: none;
+    }
+  }
 }
 
 /* The mark carries no background of its own, so on the dark theme its one shape that touches the
@@ -1471,6 +1564,29 @@ table.countrystats th[scope="row"] {
     height: 38px;
   }
 
+  /* 56 - 38, the height the mark gives up at this width */
+  .navbar.navbar-stuck {
+    margin-bottom: 18px;
+  }
+
+  /* the same pair on the scroll timeline; see the block beside the desktop keyframes */
+  @supports (animation-timeline: scroll()) {
+    @keyframes navbar-mark-shrink {
+      from { height: 56px; }
+      to { height: 38px; }
+    }
+
+    @keyframes navbar-space-hold {
+      from { margin-bottom: 0; }
+      to { margin-bottom: 18px; }
+    }
+
+    .navbar-brand .atlaslogo,
+    .navbar {
+      animation-range: 0 56px;
+    }
+  }
+
   /* The collapsed menu opens inside the sticky bar, and it is a tall menu -- seven links, the
      account entries and the theme control. Stuck at the top of a phone screen it would otherwise
      run off the bottom with no way to reach the end of it. dvh rather than vh so that the mobile
@@ -1578,6 +1694,7 @@ ul.tasks li.task.task-collapsed > .taskinner {
 @media (prefers-reduced-motion: reduce) {
 
   li.task,
+  .navbar,
   .navbar-brand .atlaslogo,
   .navindicator-host.navindicator-animated .navindicator,
   li.task>.taskinner,
