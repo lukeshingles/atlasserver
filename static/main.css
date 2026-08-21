@@ -119,6 +119,65 @@ in the query, the -webkit- form included, since that is the only form Safari has
   height: 44px;
 }
 
+/*
+Where it is supported, the mark follows the scroll instead of playing at it.
+
+The stepped behaviour above is the fallback and stays exactly as it is: a class from navbar.js and
+a 200ms transition. It has one trigger point, measured at 2px with the release at 1px, so the
+smallest nudge spends the whole 74px and rocking over that one pixel replays it both ways. And it
+runs on a timer, so three pixels of scrolling cost the same 200ms as eight hundred.
+
+A scroll timeline has no trigger and no timer. The mark is simply a function of how far down the
+page is, so it tracks the scroll under the reader's finger, backwards as readily as forwards, and
+there is no state to toggle and nothing to interrupt.
+
+The range is the mark's own height: by the time the page has moved by as much as the mark is tall,
+the mark has finished shrinking. That is why the two numbers here are the two heights above.
+
+The margin is on the same timeline and the same linear easing, so margin = 118 - height holds at
+every point of the scroll and not only at the two ends. The space the bar occupies is therefore
+constant throughout, which is what keeps the loop described on .navbar-stuck from starting -- and
+it matters more here than it did there, because this drives the height on every frame of a scroll
+rather than twice a page.
+
+Animations beat normal declarations in the cascade, so these override the class-driven values
+without needing to know whether the class is on. navbar.js still adds it, and it still carries the
+border, the shadow and the blur, which belong to the bar being over content rather than to its
+size.
+*/
+@supports (animation-timeline: scroll()) {
+  @keyframes navbar-mark-shrink {
+    from { height: 118px; }
+    to { height: 44px; }
+  }
+
+  @keyframes navbar-space-hold {
+    from { margin-bottom: 0; }
+    to { margin-bottom: 74px; }
+  }
+
+  .navbar-brand .atlaslogo {
+    animation: navbar-mark-shrink linear both;
+    animation-range: 0 118px;
+    animation-timeline: scroll(root block);
+  }
+
+  .navbar {
+    animation: navbar-space-hold linear both;
+    animation-range: 0 118px;
+    animation-timeline: scroll(root block);
+  }
+
+  /* The travel is the decoration, here as above: without it the mark still ends up at both of its
+     sizes, by the class and with no transition. */
+  @media (prefers-reduced-motion: reduce) {
+    .navbar-brand .atlaslogo,
+    .navbar {
+      animation: none;
+    }
+  }
+}
+
 /* The mark carries no background of its own, so on the dark theme its one shape that touches the
    page background -- the leading "a", which sits outside the disc -- is lightened: the brand navy
    is about 2:1 against the dark background, so the wordmark otherwise reads "tlas". The value is
@@ -1508,6 +1567,24 @@ table.countrystats th[scope="row"] {
   /* 56 - 38, the height the mark gives up at this width */
   .navbar.navbar-stuck {
     margin-bottom: 18px;
+  }
+
+  /* the same pair on the scroll timeline; see the block beside the desktop keyframes */
+  @supports (animation-timeline: scroll()) {
+    @keyframes navbar-mark-shrink {
+      from { height: 56px; }
+      to { height: 38px; }
+    }
+
+    @keyframes navbar-space-hold {
+      from { margin-bottom: 0; }
+      to { margin-bottom: 18px; }
+    }
+
+    .navbar-brand .atlaslogo,
+    .navbar {
+      animation-range: 0 56px;
+    }
   }
 
   /* The collapsed menu opens inside the sticky bar, and it is a tall menu -- seven links, the
