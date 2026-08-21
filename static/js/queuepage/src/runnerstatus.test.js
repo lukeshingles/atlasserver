@@ -32,8 +32,9 @@ const CACHE_KEY = 'atlas-runnerstatus';
 /**
  * A fetch that answers from `bodies` in turn, and records each URL it was called with.
  *
- * Each entry is `{ body, status }`, as the endpoint answers: `status` is for the 503 that reports
- * an outage. An empty queue rejects, which is a request that did not reach the endpoint.
+ * Each entry is `{ body, status }`, as the endpoint answers. Every answer of the endpoint is 200,
+ * an outage included, so `status` is only for the tests that hand the store some other code. An
+ * empty queue rejects, which is a request that did not reach the endpoint.
  */
 function queuedFetch(bodies, fetched) {
     return (url) => {
@@ -298,7 +299,10 @@ describe('the store', () => {
         unsubscribe();
     });
 
-    test('a 503 is read for its body, because that is how an outage is reported', async () => {
+    test('an answer that is not 200 is still read for its body', async () => {
+        // The endpoint answers 200 for an outage, and the outage is in the body. This store does
+        // not take a status code for an answer either way, so a release that still answers 503 is
+        // read while it is being replaced.
         bodies.push({ status: 503, body: { stale: true, status_age_seconds: 300 } });
         const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
         const seen = [];

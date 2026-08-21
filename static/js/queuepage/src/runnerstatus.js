@@ -375,8 +375,11 @@ export function createStore({ url, poll = POLL_MS, reader = '', storage = browse
         // status also changes the wait estimate of each row on the queue page.
         const asked = (generation += 1);
 
-        // The endpoint reports a stale task runner with HTTP status 503 and a body. Thus the store
-        // reads the status from the body, and not from the HTTP status code.
+        // The endpoint answers 200 for an outage too, and carries the state in the body, in
+        // `stale` and `running`. Thus the store reads the status from the body, and not from the
+        // HTTP status code. It reads the body under any other code as well, so a release that
+        // still answers 503, or a request that a proxy answered with JSON of its own, is handled
+        // the same way: a body that says nothing about the runner draws no sentence.
         return fetch(url, {
             credentials: 'same-origin',
             headers: { 'Accept': 'application/json' },
