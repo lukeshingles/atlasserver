@@ -67,22 +67,69 @@ in the query, the -webkit- form included, since that is the only form Safari has
   }
 }
 
+/*
+The brand box owns the height the bar gives up; the mark inside it is scaled rather than resized.
+
+The mark used to animate its own `height`, and that is a layout property on an inline <svg>: every
+frame of the 200ms re-laid-out the bar, re-flowed the page under it, and re-rasterised the artwork
+at a size it would never be seen at again -- all of it behind the stuck bar's backdrop-filter,
+which then had to re-blur the moving content underneath. It arrived in steps rather than shrinking.
+
+So the <svg> keeps one height and one rasterisation, and `transform: scale()` does the shrinking on
+the compositor. The height that the layout actually needs moves on this box, which is an empty
+block and cheap to re-lay-out.
+
+The two stay locked together because the numbers agree: the box travels 118px -> 44px, and the mark
+is scaled by 44/118, so its drawn height is 118 x scale at every point of the same easing --
+118 x (1 - 44/118) = 74, which is exactly the distance the box falls. Change one of the four
+numbers and the mark leaves the box mid-travel.
+*/
 .navbar-brand {
-  height: auto;
+  align-items: center;
+  /* content-box, so these are the mark's own dimensions and not the mark's dimensions less
+     Bootstrap's vertical padding on the brand. Under the inherited border-box the bar came out
+     10px shorter than it was when the <svg> sized the box itself. */
+  box-sizing: content-box;
+  display: flex;
+  height: 118px;
+  /* The width has to be given as well as the height. A transform is not a layout, so the mark
+     inside keeps its full width however far it is scaled down, and the links beside it would sit
+     where the unscaled mark left them. Both numbers are the mark's viewBox, 246 x 214, at the
+     height above: 118 x 246/214 = 135.6449. The two below are 44 x 246/214 and the small-screen
+     pair further down are the same arithmetic on 56 and 38. Re-do all four if the artwork's
+     viewBox ever changes. */
+  transition: height 200ms ease, width 200ms ease;
+  width: 135.6449px;
 }
 
 /* width follows from the viewBox's aspect ratio, so only the height is given, as it was when this
    was an <img> */
 .navbar-brand .atlaslogo {
+  /* No shrinking. The mark is a flex item in the box above, and that box is narrowed to the
+     scaled-down width: left to flex, the mark's own width would be squeezed to fit it, the
+     artwork would letterbox itself down to the smaller size, and the scale below would then
+     shrink it a second time. Its box keeps the full size and the transform is the only thing
+     that resizes it. */
+  flex-shrink: 0;
   height: 118px;
-  transition: height 200ms ease;
+  /* the box it keeps is wider than the brand once scaled down, and it is decoration -- the link
+     around it is what a click is for, and the mark is aria-hidden. Without this the part of the
+     box hanging past the brand would take clicks meant for the navigation beside it. */
+  pointer-events: none;
+  transform-origin: left center;
+  transition: transform 200ms ease;
 }
 
 /* A 118px logo at the top of the window is most of a phone screen and a good deal of a laptop one,
    so once the bar is stuck it gives up its height to the content behind it. The links stay put:
    Bootstrap centres them against the brand, so the bar closes up around them. */
-.navbar-stuck .navbar-brand .atlaslogo {
+.navbar-stuck .navbar-brand {
   height: 44px;
+  width: 50.5794px;
+}
+
+.navbar-stuck .navbar-brand .atlaslogo {
+  transform: scale(0.3728813559322034);
 }
 
 /* The mark carries no background of its own, so on the dark theme its one shape that touches the
@@ -1462,13 +1509,24 @@ table.countrystats th[scope="row"] {
    block that used to be here worked around bootstrap 3 having no toggle at all, so the eight links
    plus a floated logo filled an entire screen before any content. */
 @media (max-width: 991.98px) {
+  .navbar-brand,
   .navbar-brand .atlaslogo {
     height: 56px;
   }
 
-  /* after the rule above, so it is this one that applies when both match */
-  .navbar-stuck .navbar-brand .atlaslogo {
+  .navbar-brand {
+    width: 64.3738px;
+  }
+
+  /* after the rule above, so it is this one that applies when both match. 56 x (1 - 38/56) = 18,
+     the distance the box falls, so the mark stays inside it for the whole travel here too. */
+  .navbar-stuck .navbar-brand {
     height: 38px;
+    width: 43.6822px;
+  }
+
+  .navbar-stuck .navbar-brand .atlaslogo {
+    transform: scale(0.6785714285714286);
   }
 
   /* The collapsed menu opens inside the sticky bar, and it is a tall menu -- seven links, the
@@ -1578,6 +1636,7 @@ ul.tasks li.task.task-collapsed > .taskinner {
 @media (prefers-reduced-motion: reduce) {
 
   li.task,
+  .navbar-brand,
   .navbar-brand .atlaslogo,
   .navindicator-host.navindicator-animated .navindicator,
   li.task>.taskinner,
