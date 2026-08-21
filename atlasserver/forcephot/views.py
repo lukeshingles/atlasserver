@@ -948,6 +948,20 @@ def taskrunnerstatus(request):
     A status file that cannot be interpreted is reported the same way as a missing one. This
     endpoint exists to say that something is wrong with the runner, so it must not be the thing that
     raises: a 500 here tells the caller nothing and mails the admins as well.
+
+    Every answer is 200, an outage included. The status code is about this endpoint, and not about
+    the task runner it reports on: a request that read the file, measured its age and found the
+    runner gone is a request that succeeded. An outage used to answer 503, and that made the one
+    state the box exists to show the one state a reader could not be shown. A 5xx body is the body
+    any intermediary is free to replace with an error page of its own, and this site is behind a
+    reverse proxy. runnerstatus.js then fails to parse the answer, and a request it cannot read
+    tells it nothing about the runner, so it draws no sentence and the box collapses -- an outage
+    rendered as though nothing were wrong. The healthy path answers 200 and was never affected,
+    which is why this survived: the fault could only appear while the runner was down.
+
+    `stale` and `running` in the body carry the state instead. They already did -- the docstring
+    above named `stale` as the field to alert on -- so no caller loses anything it was not already
+    reading, and a monitor that watched the status code should watch `stale` now.
     """
     try:
         status = json.loads(runnerstatus.STATUS_PATH.read_text())
@@ -968,7 +982,6 @@ def taskrunnerstatus(request):
                 "user_queued_task_count": 0,
                 "detail": f"no usable status file ({type(ex).__name__})",
             },
-            status=503,
         )
 
     # Some missed writes, and not one, so that one slow write does not give a false alarm.
@@ -1008,9 +1021,11 @@ def taskrunnerstatus(request):
             "typical_runtime_seconds": typical_runtimes,
             "user_queued_task_count": user_queued_task_count,
         },
-        status=503 if stale else 200,
     )
-    # No ETag on a 503. A browser does not revalidate an error, and an outage response is small.
+    # Still no ETag on an outage. The tag is the write time of the file, and while the runner is
+    # gone that value stands still: a browser holding it would revalidate into a 304 and keep
+    # showing the outage from its cache, which is right only until the runner comes back. An
+    # outage response is small, and it is answered again within the minute.
     if not stale:
         response["ETag"] = etag
     return response

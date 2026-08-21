@@ -2289,8 +2289,9 @@ class TaskRunnerStatusTests(TestCase):
         ):
             response = self.client.get(reverse("taskrunnerstatus"))
 
-        assert response.status_code == 503
+        assert response.status_code == 200
         assert response.json()["running"] is False
+        assert response.json()["stale"] is True
 
     def test_the_response_counts_the_tasks_of_the_signed_in_reader(self) -> None:
         """RenderInto shows the queue counts to a reader who waits on the queue.
@@ -2327,14 +2328,14 @@ class TaskRunnerStatusTests(TestCase):
         assert not again.content
 
     def test_an_outage_response_has_no_etag(self) -> None:
-        # A browser does not revalidate an error response, and thus an ETag on it is of no use.
+        # The tag is the write time of the file, which stands still while the runner is gone: a
+        # browser holding it would revalidate into a 304 and go on showing the outage from cache.
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
         ):
             response = self.client.get(reverse("taskrunnerstatus"))
 
-        assert response.status_code == 503
         assert "ETag" not in response.headers
 
     def test_a_status_is_cacheable_for_one_write_interval(self) -> None:
@@ -2357,7 +2358,6 @@ class TaskRunnerStatusTests(TestCase):
         ):
             response = self.client.get(reverse("taskrunnerstatus"))
 
-        assert response.status_code == 503
         assert "max-age=15" in response["Cache-Control"]
         assert "stale-while-revalidate" not in response["Cache-Control"]
 
@@ -2459,7 +2459,7 @@ class TaskRunnerStatusTests(TestCase):
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
 
-        assert response.status_code == 503
+        assert response.status_code == 200
         assert response.json()["stale"] is True
         assert response.json()["typical_runtime_seconds"] == {}
 
@@ -2484,8 +2484,39 @@ class TaskRunnerStatusTests(TestCase):
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
 
-        assert response.status_code == 503
+        assert response.status_code == 200
         assert response.json()["stale"] is True
+
+    def test_an_outage_is_answered_with_a_success_code(self) -> None:
+        """An outage is an answer, and thus it must not be dressed as a failure to answer.
+
+        The status code is about this endpoint, not about the runner it reports on. A 5xx body is
+        the body an intermediary is free to replace with an error page of its own, and this site is
+        behind a reverse proxy. runnerstatus.js cannot parse such a page, and a request it cannot
+        read tells it nothing about the runner, so it draws no sentence and the box collapses: the
+        outage renders as though nothing were wrong. The healthy path always answered 200, so this
+        could only ever go wrong while the runner was down -- the one time the box has a job.
+
+        Both outage branches are covered: a file that is readable but old, and no file at all.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            written = timezone.now() - datetime.timedelta(hours=1)
+            statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}))
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                old = self.client.get(reverse("taskrunnerstatus"))
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")):
+                missing = self.client.get(reverse("taskrunnerstatus"))
+
+        for description, response in (("stale file", old), ("no file", missing)):
+            assert response.status_code == 200, f"{description}: {response.status_code}"
+            assert response["Content-Type"] == "application/json", description
+            # the state is in the body, which is where a caller reads it and where no intermediary
+            # rewrites it
+            assert response.json()["stale"] is True, description
+            assert response.json()["running"] is False, description
 
     def test_unusable_status_files_report_stale_rather_than_raising(self) -> None:
         # this endpoint exists to say that the runner is in trouble, so it must not be the thing
@@ -2506,7 +2537,7 @@ class TaskRunnerStatusTests(TestCase):
                 with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                     response = self.client.get(reverse("taskrunnerstatus"))
 
-            assert response.status_code == 503, f"{description}: {response.content!r}"
+            assert response.status_code == 200, f"{description}: {response.content!r}"
             assert response.json()["stale"] is True, description
             assert response.json()["running"] is False, description
 
