@@ -161,30 +161,36 @@ in the query, the -webkit- form included, since that is the only form Safari has
   width: 1.1em;
 }
 
-/* The box changes its condition while the reader reads it, at a poll that the reader did not ask
-   for. Thus the colours change slowly. Only the colours change in this way. A change of size or of
-   position would move the text while the reader reads it. */
-@media (prefers-reduced-motion: no-preference) {
-  .sitenotice {
-    transition: background-color 0.4s ease, border-color 0.4s ease, color 0.4s ease;
-  }
-}
-
 /* While the task runner is down, the same box takes the warning colours of Bootstrap. The -subtle
    and -emphasis variables have a dark value and a light value. Thus the box stays a warning on the
    dark theme, and it is not a pale yellow block.
 
-   Only the colours change: the ground, the edge, and the text. The size and the borders keep
-   their values, because this condition arrives at a poll that the reader did not ask for, and a
-   change of size moves the text while the reader reads it. The warning mark and the outage
-   sentence carry the change of condition for the reader who cannot use the colours.
+   The border closes around all four sides, in the ember orange the left edge carries when the
+   runner is well, so that the warning state is a bordered panel rather than a tinted one. One
+   colour on all four sides, and not the warning border colour: ember against the warning ground
+   is the pairing the rest of the site reads as "attention", and a yellow edge on a yellow ground
+   is barely an edge at all.
+
+   That does move the text below it down by the width of the new top and bottom edges. It is the
+   one thing here that changes size, and it is affordable because the state now arrives with the
+   page: the server renders `stale` into the box, so the common case is a border that was there at
+   the first paint. What is left is the rare real change, when the runner stops or starts while
+   the page is open, and there the box has to be noticed. The warning mark and the outage sentence
+   still carry the state for a reader who cannot use the colours.
 
    The rule is on the box, and not on the runner sentence, so that the warning colours hold the
    note as well. While the task runner is down, the reader must know both sentences before they
-   read the page. */
+   read the page.
+
+   The colours change instantly, and there is no transition on them. A transition here animates
+   the arrival of the state as well as a change of it, and the arrival is the common case: the
+   server renders these colours, and js/runnerstatus.min.js confirms them. Anything that does not
+   line up exactly -- a status the module withdraws, a poll that crosses the stale threshold --
+   is then a slow wash across the box rather than a change the reader can miss. A state this box
+   holds for hours does not need to announce that it changed. */
 .sitenotice.stale {
   background-color: var(--bs-warning-bg-subtle);
-  border-left-color: var(--bs-warning-border-subtle);
+  border: 3px solid var(--atlas-ember);
   color: var(--bs-warning-text-emphasis);
 }
 
@@ -197,7 +203,10 @@ in the query, the -webkit- form included, since that is the only form Safari has
   .sitenotice,
   .sitenotice.stale {
     background-color: transparent;
-    border-left-color: var(--atlas-ember);
+    /* the left edge alone, as the healthy box has on screen: paper shows no runner state, so the
+       box that closed its border around an outage has nothing to close it around here */
+    border: 0;
+    border-left: 3px solid var(--atlas-ember);
     color: var(--bs-secondary-color);
   }
 
