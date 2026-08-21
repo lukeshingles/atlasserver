@@ -1750,20 +1750,24 @@ takes no aria-hidden to say otherwise. A mask has no text to read, and it keeps 
 /* ---- the New request card ---- */
 
 /*
-An accent edge along the top, so the one panel on the page that makes something happen is marked as
-such. The card clips it, or its corners would sit outside the radius.
+A quiet card, outlined on all four sides in the same light grey. This panel used to carry an accent
+edge along its top -- a 4px orange gradient, as a background layer pinned to the top of the card,
+sitting in the space of a transparent border-top -- to mark it as the one panel on the page that
+makes something happen. It says that well enough by being the form, and the edge was the loudest
+thing above the fold.
 
-A border cannot be a gradient, so the edge is a background layer pinned to the top of the card and
-the border is only the 4px of space it sits in. The two oranges run the width of the panel, left to
-right, the same way the trail under a page heading does.
+--bs-border-color, and not the --bs-secondary-color that .task carries. That stronger grey is there
+for the task list, where the outline is the only thing separating one card in a stack from the next
+(see .task). This card stands alone beside that list, so it needs no more than Bootstrap's own
+border grey -- which follows the theme, and so stays a light grey on the light theme and a low
+contrast one on the dark, rather than a fixed value that would glare on one of them.
+
+The clip that held the accent edge inside the radius went with the edge, so a focus ring inside the
+card is no longer cut off at its corners. The lift on :focus-within below is unchanged: it is the
+panel answering the field being typed in, and it is not an edge.
 */
 div.newrequest .task {
-  background-image: linear-gradient(90deg, var(--atlas-accent), var(--atlas-ember));
-  background-position: top left;
-  background-repeat: no-repeat;
-  background-size: 100% 4px;
-  border-top: 4px solid transparent;
-  overflow: hidden;
+  border-color: var(--bs-border-color);
   transition: box-shadow 200ms ease;
 }
 
