@@ -171,12 +171,17 @@ in the query, the -webkit- form included, since that is the only form Safari has
    is the pairing the rest of the site reads as "attention", and a yellow edge on a yellow ground
    is barely an edge at all.
 
-   That does move the text below it down by the width of the new top and bottom edges. It is the
-   one thing here that changes size, and it is affordable because the state now arrives with the
-   page: the server renders `stale` into the box, so the common case is a border that was there at
-   the first paint. What is left is the rare real change, when the runner stops or starts while
-   the page is open, and there the box has to be noticed. The warning mark and the outage sentence
-   still carry the state for a reader who cannot use the colours.
+   One pixel, and not the three the healthy left edge carries. A closed rectangle reads as a
+   panel at any weight, and it has the whole perimeter to say so where the healthy state has one
+   side; matching that side's weight on all four made a box heavier than what it holds. The
+   ground, the mark and the sentence carry the state, and the edge only has to close it.
+
+   The size does change: the box gains a top and a bottom edge, and its left edge thins. That is
+   affordable because the state now arrives with the page -- the server renders `stale`, so the
+   common case is a border that was there at the first paint. What is left is the rare real
+   change, when the runner stops or starts while the page is open, and there the box has to be
+   noticed. The warning mark and the outage sentence still carry the state for a reader who
+   cannot use the colours.
 
    The rule is on the box, and not on the runner sentence, so that the warning colours hold the
    note as well. While the task runner is down, the reader must know both sentences before they
@@ -190,7 +195,7 @@ in the query, the -webkit- form included, since that is the only form Safari has
    holds for hours does not need to announce that it changed. */
 .sitenotice.stale {
   background-color: var(--bs-warning-bg-subtle);
-  border: 3px solid var(--atlas-ember);
+  border: 1px solid var(--atlas-ember);
   color: var(--bs-warning-text-emphasis);
 }
 
