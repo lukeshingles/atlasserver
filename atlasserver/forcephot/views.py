@@ -4,7 +4,6 @@ import datetime
 import functools
 import hashlib
 import ipaddress
-import json
 import logging
 import os
 import statistics
@@ -964,11 +963,8 @@ def taskrunnerstatus(request):
     reading, and a monitor that watched the status code should watch `stale` now.
     """
     try:
-        status = json.loads(runnerstatus.STATUS_PATH.read_text())
-        # this doubles as the check that the payload is an object at all: subscripting a JSON list,
-        # string or number raises TypeError, which is caught below along with everything else
-        written = datetime.datetime.fromisoformat(status["written"])
-        age_seconds = (datetime.datetime.now(datetime.UTC) - written).total_seconds()
+        # Shared with the page render, which colours the box from the same read; see status.py.
+        status, age_seconds = runnerstatus.read_status()
     except (OSError, KeyError, TypeError, ValueError) as ex:
         # never written, unreadable, half-written despite the atomic rename, or written by a
         # version that recorded something else. A naive `written` lands here as a TypeError.
@@ -984,8 +980,7 @@ def taskrunnerstatus(request):
             },
         )
 
-    # Some missed writes, and not one, so that one slow write does not give a false alarm.
-    stale = age_seconds > (runnerstatus.STATUS_WRITE_SECONDS * 4)
+    stale = age_seconds > runnerstatus.STALE_AFTER_SECONDS
 
     # The version of this response, from the one field that changes with each write of the file.
     # The medians and the count below can change while `written` does not. But the task runner

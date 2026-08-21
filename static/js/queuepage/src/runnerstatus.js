@@ -595,9 +595,28 @@ export function renderInto(box, status) {
     text.textContent = drawn;
 }
 
-/** Keep the status of the task runner in `box`. Return the function that cancels this. */
+/**
+ * Keep the status of the task runner in `box`. Return the function that cancels this.
+ *
+ * The box arrives with the colours the server rendered into it, and this leaves them alone until
+ * it has a status of its own. A store with no kept record reports null to a new reader, and null
+ * is "not known yet" and not "the runner is well": drawing it would take the warning colours off
+ * an outage the server had already told the reader about, and put them back a second later when
+ * the first response arrived. That is the flash this avoids, and it is worst on the first page of
+ * a session, which is the one page with no record to start from.
+ *
+ * A null after a status is the other thing: the store withdrawing an answer that repeated polls
+ * could not confirm. That one is drawn, which empties the box -- see the withdrawal in refresh().
+ */
 export function start(box) {
-    return subscribe((status) => renderInto(box, status));
+    let known = false;
+    return subscribe((status) => {
+        if (status == null && !known) {
+            return;
+        }
+        known = known || status != null;
+        renderInto(box, status);
+    });
 }
 
 // Each page that draws the box gets the status. A page with no box starts no poll. A test

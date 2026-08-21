@@ -53,11 +53,12 @@ function queuedFetch(bodies, fetched) {
  * The box as sitenotice.html renders it.
  *
  * `note` gives the standing note about the data, and `showqueue` the attribute that marks the
- * queue page. A box with no sentence in it carries sitenotice-noline, as a fresh page load does.
+ * queue page. `stale` gives the warning colours that the server renders while the task runner is
+ * down. A box with no sentence in it carries sitenotice-noline, as a fresh page load does.
  */
-function noticeBoxHtml({ note = null, showqueue = false } = {}) {
+function noticeBoxHtml({ note = null, showqueue = false, stale = false } = {}) {
     return `
-        <div class="sitenotice sitenotice-noline" id="sitenotice"${showqueue ? ' data-showqueue' : ''}>
+        <div class="sitenotice sitenotice-noline${stale ? ' stale' : ''}" id="sitenotice"${showqueue ? ' data-showqueue' : ''}>
           ${note == null ? '' : `<p class="sitenotice-note">${note}</p>`}
           <p class="sitenotice-runner" id="runnerstatus" role="status" aria-live="off"><svg class="sitenotice-warnmark" aria-hidden="true" hidden></svg><span class="sitenotice-runnertext"></span></p>
         </div>`;
@@ -846,6 +847,60 @@ describe('the module as a page loads it', () => {
         } finally {
             // In the finally, and not after the assertions: a failure here would otherwise leave
             // the poll of this copy of the module running for the remainder of the test run.
+            module?.stopPageStore();
+            delete global.fetch;
+            await teardownDom(window);
+        }
+    });
+
+    test('it keeps the warning colours the server rendered, until it has a status of its own', async () => {
+        /*
+         * The flash this prevents. The server paints the box for an outage it already knows about.
+         * A store with no kept record reports null to its first reader, and drawing that null
+         * would take the colours off and put them back when the answer came: orange, then yellow,
+         * on every page load of an outage. The first page of a session is the case, because it is
+         * the one page with no record to start from.
+         */
+        const window = setupDom();
+        let module = null;
+        try {
+            window.document.body.innerHTML = noticeBoxHtml({ note: 'Standing note.', stale: true });
+            let answer = null;
+            global.fetch = () => new Promise((resolve) => { answer = resolve; });
+
+            module = await loadPageModule('serverstale');
+
+            const box = window.document.getElementById('sitenotice');
+            assert.equal(box.classList.contains('stale'), true, 'the box lost the colours before any answer');
+
+            // and the answer that follows agrees, so nothing is redrawn and nothing transitions
+            answer({ ok: true, status: 200, json: () => Promise.resolve({ stale: true, status_age_seconds: 4000 }) });
+            await settle();
+            assert.equal(box.classList.contains('stale'), true);
+            assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
+        } finally {
+            module?.stopPageStore();
+            delete global.fetch;
+            await teardownDom(window);
+        }
+    });
+
+    test('a runner that came back while the page was rendered takes the colours off', async () => {
+        // The server is not the last word: it read the file as it rendered, and the first answer
+        // of this page is newer than that. A box rendered stale must still clear.
+        const window = setupDom();
+        let module = null;
+        try {
+            window.document.body.innerHTML = noticeBoxHtml({ note: 'Standing note.', stale: true });
+            global.fetch = () => Promise.resolve({
+                ok: true, status: 200, json: () => Promise.resolve(healthy({ queued_task_count: 0 })),
+            });
+
+            module = await loadPageModule('serverstale-recovered');
+            await settle();
+
+            assert.equal(window.document.getElementById('sitenotice').classList.contains('stale'), false);
+        } finally {
             module?.stopPageStore();
             delete global.fetch;
             await teardownDom(window);

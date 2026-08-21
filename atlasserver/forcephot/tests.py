@@ -4807,6 +4807,61 @@ class SiteNoticeTests(TestCase):
 
         assert '<p class="sitenotice-note">a <strong>changed</strong> template</p>' in content
 
+    def fresh_status_file(self) -> t.Any:
+        """Patch STATUS_PATH at a snapshot the runner has just written."""
+        tmpdir = tempfile.mkdtemp()
+        statuspath = Path(tmpdir, "taskrunner_status.json")
+        statuspath.write_text(json.dumps({"written": timezone.now().isoformat(), "slots_busy": 0}))
+        return mock.patch.object(runnerstatus, "STATUS_PATH", statuspath)
+
+    def test_the_box_is_painted_in_its_warning_colours_by_the_server(self) -> None:
+        """The colours are on the box before the browser paints it, and not a moment after.
+
+        js/runnerstatus.min.js cannot run until the page is parsed, so a box that took its warning
+        colours only from the module was painted healthy first and turned warning-coloured after:
+        an orange-to-yellow flash on every page load for as long as an outage lasted.
+        """
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+        ):
+            content = self.page(reverse("index"))
+
+        assert '<div class="sitenotice sitenotice-noline stale"' in content
+
+    def test_a_healthy_runner_leaves_the_warning_colours_off(self) -> None:
+        with self.fresh_status_file():
+            content = self.page(reverse("index"))
+
+        assert '<div class="sitenotice sitenotice-noline" id="sitenotice"' in content
+
+    def test_an_old_snapshot_is_an_outage_to_the_page_as_well_as_to_the_endpoint(self) -> None:
+        # One definition of stale for both, in status.py: the endpoint saying the runner is down
+        # while the page paints the box as though it were up is the fault that split them.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            written = timezone.now() - datetime.timedelta(hours=1)
+            statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}))
+
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                content = self.page(reverse("index"))
+                endpoint = self.client.get(reverse("taskrunnerstatus"))
+
+        assert '<div class="sitenotice sitenotice-noline stale"' in content
+        assert endpoint.json()["stale"] is True
+
+    def test_the_note_is_exposed_under_a_name_a_view_cannot_take(self) -> None:
+        """The box renders its note with `|safe`, so the name it reads must be the processor's own.
+
+        Under the short name `notice`, any view whose context happened to use that word would win
+        over the context processor and have its value put into the site-wide box unescaped.
+        """
+        with self.fresh_status_file():
+            response = self.client.get(reverse("index"), HTTP_ACCEPT="text/html")
+
+        assert response.context["site_notice"] == "A standing note about the data."
+        assert "notice" not in response.context, "the box is reachable under a name a view could hold"
+
     def test_the_queue_counts_travel_in_the_response_and_not_in_the_page(self) -> None:
         """data-showqueue marks the queue page alone.
 

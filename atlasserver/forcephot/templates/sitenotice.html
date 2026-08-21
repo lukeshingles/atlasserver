@@ -2,12 +2,17 @@
 {# of the task runner. A reader needs both before they can use what the page below shows. Thus #}
 {# the two share one place and one treatment. #}
 {# #}
-{# js/runnerstatus.min.js writes the runner sentence, and it gives the box the warning colours #}
-{# while the task runner is down. The server renders the note, and thus the note shows with no #}
-{# JavaScript. There is no control that removes or folds the note: the note gives a limit of the #}
-{# measurements, and a reader who put it away would read their measurements without it. The #}
-{# server omits the note when ATLASSERVER_SITE_NOTICE has no words; see #}
+{# js/runnerstatus.min.js writes the runner sentence. The server renders the note, and thus the #}
+{# note shows with no JavaScript. There is no control that removes or folds the note: the note #}
+{# gives a limit of the measurements, and a reader who put it away would read their measurements #}
+{# without it. The server omits the note when ATLASSERVER_SITE_NOTICE has no words; see #}
 {# context_processors.sitenotice. #}
+{# #}
+{# The server also renders `stale`, and thus the box is painted in its warning colours at the #}
+{# first paint rather than turning that colour once the module has run. renderInto keeps the #}
+{# class correct from the first status on, and it leaves this one alone until it has a status: a #}
+{# module that has not heard from the endpoint yet knows less about the runner than the server #}
+{# that rendered this page did. #}
 {# #}
 {# data-showqueue tells that the queue counts are of use to each reader of this page. Only the #}
 {# queue page sets it, through alwaysshowqueue. For each other page, the status response tells #}
@@ -16,13 +21,13 @@
 {# sitenotice-noline starts on the box, because the runner paragraph starts empty. Thus a box #}
 {# with no note collapses from the first paint. renderInto keeps the class correct from the #}
 {# first response on. #}
-<div class="sitenotice sitenotice-noline{% if not notice %} sitenotice-nonote{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
-{% if notice %}
+<div class="sitenotice sitenotice-noline{% if not site_notice %} sitenotice-nonote{% endif %}{% if runner_stale %} stale{% endif %}" id="sitenotice"{% if alwaysshowqueue %} data-showqueue{% endif %}>
+{% if site_notice %}
   {# ATLASSERVER_SITE_NOTICE gives the words in this paragraph, as markup: safe keeps inline #}
   {# HTML such as <strong> working, as the old notice.txt include did. Keep the value to text #}
   {# and inline elements. A block element in it would be inside a <p>, and the browser would #}
   {# close the paragraph in front of it. #}
-  <p class="sitenotice-note">{{ notice|safe }}</p>
+  <p class="sitenotice-note">{{ site_notice|safe }}</p>
 {% endif %}
 
   {# This paragraph is present and empty, and no code adds it when there is a sentence to give. A #}
