@@ -165,11 +165,17 @@ in the query, the -webkit- form included, since that is the only form Safari has
    and -emphasis variables have a dark value and a light value. Thus the box stays a warning on the
    dark theme, and it is not a pale yellow block.
 
-   The border closes around all four sides, in the ember orange the left edge carries when the
-   runner is well, so that the warning state is a bordered panel rather than a tinted one. One
-   colour on all four sides, and not the warning border colour: ember against the warning ground
-   is the pairing the rest of the site reads as "attention", and a yellow edge on a yellow ground
-   is barely an edge at all.
+   The border closes around all four sides, so that the warning state is a bordered panel rather
+   than a tinted one, and it takes the dark yellow of the box's own text rather than the ember
+   orange the left edge carries when the runner is well. Ember made the panel a second accent on a
+   page that already has one; the text colour makes the ground, the words and the edge one warning.
+
+   --bs-warning-text-emphasis and not --bs-warning-border-subtle, which is what Bootstrap would
+   normally put on this edge: on the light theme that value is a pale yellow on a pale yellow
+   ground and is barely an edge at all. The emphasis value is the dark end of the same hue, so it
+   reads as an edge, and like every other variable here it has a light value and a dark one -- so
+   the edge is a dark yellow against the light theme's pale ground, and a light one against the
+   dark theme's, rather than a fixed colour that would disappear into one of them.
 
    One pixel, and not the three the healthy left edge carries. A closed rectangle reads as a
    panel at any weight, and it has the whole perimeter to say so where the healthy state has one
@@ -195,7 +201,7 @@ in the query, the -webkit- form included, since that is the only form Safari has
    holds for hours does not need to announce that it changed. */
 .sitenotice.stale {
   background-color: var(--bs-warning-bg-subtle);
-  border: 1px solid var(--atlas-ember);
+  border: 1px solid var(--bs-warning-text-emphasis);
   color: var(--bs-warning-text-emphasis);
 }
 
@@ -1761,18 +1767,20 @@ sitting in the space of a transparent border-top -- to mark it as the one panel 
 makes something happen. It says that well enough by being the form, and the edge was the loudest
 thing above the fold.
 
---bs-border-color, and not the --bs-secondary-color that .task carries. That stronger grey is there
-for the task list, where the outline is the only thing separating one card in a stack from the next
-(see .task). This card stands alone beside that list, so it needs no more than Bootstrap's own
-border grey -- which follows the theme, and so stays a light grey on the light theme and a low
-contrast one on the dark, rather than a fixed value that would glare on one of them.
+--bs-tertiary-color, which sits between the two greys already in the file. --bs-secondary-color is
+what .task carries, and it is there for the task list, where the outline is the only thing
+separating one card in a stack from the next; this card stands alone beside that list and does not
+need that weight. --bs-border-color, Bootstrap's own border grey, went the other way and left the
+card barely drawn. The tertiary value is the same ink at half strength: enough to hold the card
+against the page, and still lighter than the stack beside it. It follows the theme, so it does not
+glare on one of them the way a fixed grey would.
 
 The clip that held the accent edge inside the radius went with the edge, so a focus ring inside the
 card is no longer cut off at its corners. The lift on :focus-within below is unchanged: it is the
 panel answering the field being typed in, and it is not an edge.
 */
 div.newrequest .task {
-  border-color: var(--bs-border-color);
+  border-color: var(--bs-tertiary-color);
   transition: box-shadow 200ms ease;
 }
 
