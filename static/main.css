@@ -166,16 +166,17 @@ in the query, the -webkit- form included, since that is the only form Safari has
    dark theme, and it is not a pale yellow block.
 
    The border closes around all four sides, so that the warning state is a bordered panel rather
-   than a tinted one, and it takes the dark yellow of the box's own text rather than the ember
-   orange the left edge carries when the runner is well. Ember made the panel a second accent on a
-   page that already has one; the text colour makes the ground, the words and the edge one warning.
+   than a tinted one, and it is one quiet step off the ground it encloses rather than a frame
+   around it: --bs-warning-border-subtle is the value Bootstrap pairs with --bs-warning-bg-subtle
+   for exactly that, a little darker than the ground on the light theme. It is not the ember the
+   healthy left edge carries, which made the panel a second accent on a page that already has one,
+   and not the --bs-warning-text-emphasis of the words inside, which drew a hard edge around a
+   state the ground and the sentence already report.
 
-   --bs-warning-text-emphasis and not --bs-warning-border-subtle, which is what Bootstrap would
-   normally put on this edge: on the light theme that value is a pale yellow on a pale yellow
-   ground and is barely an edge at all. The emphasis value is the dark end of the same hue, so it
-   reads as an edge, and like every other variable here it has a light value and a dark one -- so
-   the edge is a dark yellow against the light theme's pale ground, and a light one against the
-   dark theme's, rather than a fixed colour that would disappear into one of them.
+   Like the other -subtle values it has a light value and a dark one, so the separation survives
+   the theme: on the dark theme the edge is lighter than the ground rather than darker, because a
+   step further down from that ground would be no edge at all. A fixed colour would hold on one
+   theme and vanish on the other.
 
    One pixel, and not the three the healthy left edge carries. A closed rectangle reads as a
    panel at any weight, and it has the whole perimeter to say so where the healthy state has one
@@ -201,7 +202,7 @@ in the query, the -webkit- form included, since that is the only form Safari has
    holds for hours does not need to announce that it changed. */
 .sitenotice.stale {
   background-color: var(--bs-warning-bg-subtle);
-  border: 1px solid var(--bs-warning-text-emphasis);
+  border: 1px solid var(--bs-warning-border-subtle);
   color: var(--bs-warning-text-emphasis);
 }
 
