@@ -1079,13 +1079,9 @@ text between tokens, so on the dark theme it is simply the body colour.
 
 li.task .btn:not(.btn-sm) {
   margin-right: 0.2em;
-  /* background-color: #6BA3E8; */
   color: white;
-  /* display: block; */
-  margin-top: 1em;
-  /* width: 9em; */
+  margin-top: 0.35em;
   padding: 0.4em 1.8em;
-  /* margin-right: 0.5em; */
 }
 
 ul {
@@ -2003,12 +1999,14 @@ ul.tasks li.task:nth-child(n+5) {
    to the right of it. */
 .plotbox {
   position: relative;
-  margin-top: 1em;
+  margin-top: 0.35em;
 }
 
 .plotunits {
   position: absolute;
-  left: 0;
+  /* the left margin of the plot, set by lightcurveplotly.js, so that the buttons start on the
+     same line as the plot frame. The fallback is for a plot that has not been drawn yet. */
+  left: var(--plot-frame-left, 0px);
   bottom: 0;
   z-index: 1;
   /* opaque, because .btn-outline-* has a transparent background: on a narrow screen the leftmost

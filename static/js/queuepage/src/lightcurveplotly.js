@@ -368,6 +368,17 @@
             }, theme.axis)
         }
 
+        /*
+        Line the flux/magnitude buttons up with the left edge of the plot frame.
+
+        The frame starts at the left margin, which this file sets, so the stylesheet is told the
+        margin rather than repeating the number. The two would otherwise have to be kept in step
+        by hand.
+        */
+        if (plotdiv.parentNode) {
+            plotdiv.parentNode.style.setProperty('--plot-frame-left', layout.margin.l + 'px');
+        }
+
         Plotly.react(divid, data, layout, { displayModeBar: false, responsive: true });
     }
 
