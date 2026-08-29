@@ -1997,13 +1997,21 @@ ul.tasks li.task:nth-child(n+5) {
   }
 }
 
-/* The flux/magnitude buttons above a light curve. The row sits between the task buttons and the
-   plot, so it carries the space above itself and lets the plot start immediately below it. */
-.plotunits {
-  display: flex;
-  align-items: center;
-  gap: 0.75em;
-  flex-wrap: wrap;
+/* The flux/magnitude buttons sit over the bottom left corner of the light curve, so that they
+   cost the task row no height of their own. That corner is the one part of the plot Plotly leaves
+   empty: the y axis title runs up the middle of the left margin, and the x axis tick labels start
+   to the right of it. */
+.plotbox {
+  position: relative;
   margin-top: 1em;
-  margin-bottom: 0.25em;
+}
+
+.plotunits {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 1;
+  /* opaque, because .btn-outline-* has a transparent background: on a narrow screen the leftmost
+     tick label reaches the buttons, and it should pass behind them rather than through them */
+  background-color: var(--bs-body-bg);
 }

@@ -308,12 +308,15 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
     }, [unit, divid]);
 
     return (
-        <React.Fragment>
+        <div className="plotbox">
             <div className="plotunits">
                 <div className="btn-group btn-group-sm" role="group" aria-label="Plot units">
                     {[['flux', 'Flux'], ['mag', 'AB Mag']].map(([value, label]) => (
+                        // btn-sm on the button itself, not only btn-group-sm on the group: the
+                        // task row styles every .btn that is not btn-sm for its big action
+                        // buttons, which would paint these white on white
                         <button key={value} type="button"
-                            className={'btn btn-outline-secondary' + (unit === value ? ' active' : '')}
+                            className={'btn btn-sm btn-outline-secondary' + (unit === value ? ' active' : '')}
                             aria-pressed={unit === value}
                             onClick={() => setUnit(value)}>{label}</button>
                     ))}
@@ -321,7 +324,7 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
             </div>
             <div id={divid} className="plot" data-unit={unit}
                 style={{ width: '100%', height: '300px' }}></div>
-        </React.Fragment>
+        </div>
     );
 });
 

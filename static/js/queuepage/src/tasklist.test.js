@@ -189,6 +189,18 @@ describe('TaskPage', () => {
         assert.deepEqual(buttons.map((b) => b.textContent), ['Flux', 'AB Mag']);
         assert.equal(buttons[0].getAttribute('aria-pressed'), 'true');
 
+        // btn-sm on each button, not only btn-group-sm on the group: the stylesheet paints every
+        // .btn in a task row that is not btn-sm white, for the big action buttons, which left the
+        // unpressed one white on white and so invisible
+        for (const button of buttons) {
+            assert.ok(button.classList.contains('btn-sm'), `${button.textContent} needs btn-sm`);
+        }
+
+        // the buttons sit over the plot, so they must be inside the positioned box with it
+        const box = container.querySelector('.plotbox');
+        assert.ok(box, 'the plot and its buttons share a positioned box');
+        assert.ok(box.querySelector('.plotunits') && box.querySelector('div.plot'));
+
         buttons[1].click();
         await flush(20);
 
