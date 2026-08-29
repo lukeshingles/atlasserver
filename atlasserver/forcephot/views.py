@@ -763,7 +763,7 @@ def statsusagechart(request):
         ["waitingtaskcount_api", "dayfinished_api_counts", "dayfinished_apiimg_counts"],
         x="queueday",
         source=datasource,
-        color=["red", "lightgrey", "blue"],
+        color=["red", "green", "blue"],
         legend_label=["Waiting (API)", "Finished (API FP)", "Finished (API images)"],
         line_width=0.0,
         width=0.3,
