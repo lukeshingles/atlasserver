@@ -638,14 +638,18 @@ export const Task = React.memo(function Task(props) {
             return text != null ? label + ' ' + text : null;
         };
 
-        // The wait is only reported for a task that ran once. starttimestamp moves to each new
-        // attempt, so after a retry the span from submission to it covers the earlier attempts and
-        // the pauses between them as well as the queue -- and calling that "queued" blames the
-        // queue for time the task spent failing, which is the one distinction this line is for.
-        // The run time is unaffected: it is the attempt that produced the result either way.
+        /*
+        The queued time runs from the submission to the start of the attempt that produced the
+        result. starttimestamp moves to each new attempt, so after a retry that span also covers
+        the earlier attempts and the pauses between them. It is reported all the same: the task
+        was not computing the result the visitor received during any of it, and the Attempts line
+        above says why it is long.
+
+        The computation time is the attempt that produced the result, whichever attempt that was.
+        */
         const timings = [
-            task.attempt_count > 1 ? null : timing('queued', task.waittime),
-            timing('ran', task.runtime),
+            timing('queued', task.waittime),
+            timing('computation', task.runtime),
         ].filter((part) => part != null);
 
         if (timings.length > 0) {

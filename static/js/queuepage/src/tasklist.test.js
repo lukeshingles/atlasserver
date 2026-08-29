@@ -1193,9 +1193,10 @@ describe('TaskPage', () => {
         assert.equal(rowMeta(container)['Attempts:'], '4');
     });
 
-    test('a retried task does not blame the queue for time it spent failing', async () => {
+    test('a retried task still reports the time before the attempt that produced the result', async () => {
         // starttimestamp moves to each new attempt, so the span from submission to it covers the
-        // earlier attempts as well as the queue -- which is not a wait
+        // earlier attempts as well as the queue. It is still time the visitor waited, and the
+        // Attempts line is what explains its length.
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:02:50Z',
             waittime: 2400.0,
@@ -1203,7 +1204,8 @@ describe('TaskPage', () => {
             attempt_count: 3,
         })]);
 
-        assert.equal(rowMeta(container)['Wait time:'], 'ran 2m 10s');
+        assert.equal(rowMeta(container)['Wait time:'], 'queued 40m 00s · computation 2m 10s');
+        assert.equal(rowMeta(container)['Attempts:'], '3');
     });
 
     test('a task that ran first time does not mention attempts', async () => {
@@ -1215,7 +1217,7 @@ describe('TaskPage', () => {
         assert.ok(!('Attempts:' in rowMeta(container)), 'one attempt is the ordinary case and needs no line');
     });
 
-    test('a finished task reports how long it was queued and how long it ran', async () => {
+    test('a finished task reports how long it was queued and how long it computed', async () => {
         const { container } = await renderPage([task(1, {
             starttimestamp: '2026-01-01T00:00:40Z',
             finishtimestamp: '2026-01-01T00:02:50Z',
@@ -1223,7 +1225,7 @@ describe('TaskPage', () => {
             runtime: 130.0,
         })]);
 
-        assert.equal(rowMeta(container)['Wait time:'], 'queued 40s · ran 2m 10s');
+        assert.equal(rowMeta(container)['Wait time:'], 'queued 40s · computation 2m 10s');
     });
 
     test('a task cancelled before it ran reports only the half that happened', async () => {
