@@ -648,12 +648,12 @@ export const Task = React.memo(function Task(props) {
         The computation time is the attempt that produced the result, whichever attempt that was.
         */
         const timings = [
-            timing('queued', task.waittime),
+            timing('queue', task.waittime),
             timing('computation', task.runtime),
         ].filter((part) => part != null);
 
         if (timings.length > 0) {
-            meta.push(['timings', 'Wait time:', timings.join(' · ')]);
+            meta.push(['timings', 'Timing:', timings.join(' · ')]);
         }
     }
 

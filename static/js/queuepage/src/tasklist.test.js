@@ -1204,7 +1204,7 @@ describe('TaskPage', () => {
             attempt_count: 3,
         })]);
 
-        assert.equal(rowMeta(container)['Wait time:'], 'queued 40m 00s · computation 2m 10s');
+        assert.equal(rowMeta(container)['Timing:'], 'queue 40m 00s · computation 2m 10s');
         assert.equal(rowMeta(container)['Attempts:'], '3');
     });
 
@@ -1225,11 +1225,11 @@ describe('TaskPage', () => {
             runtime: 130.0,
         })]);
 
-        assert.equal(rowMeta(container)['Wait time:'], 'queued 40s · computation 2m 10s');
+        assert.equal(rowMeta(container)['Timing:'], 'queue 40s · computation 2m 10s');
     });
 
     test('a task cancelled before it ran reports only the half that happened', async () => {
-        // waittime is null when the task never started, and rendering "queued null" or dropping the
+        // waittime is null when the task never started, and rendering "queue null" or dropping the
         // whole line would both be worse than showing the half that is known
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:00:40Z',
@@ -1237,7 +1237,7 @@ describe('TaskPage', () => {
             runtime: null,
         })]);
 
-        assert.equal(rowMeta(container)['Wait time:'], 'queued 40s');
+        assert.equal(rowMeta(container)['Timing:'], 'queue 40s');
     });
 
     /*
