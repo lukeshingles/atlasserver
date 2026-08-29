@@ -266,10 +266,15 @@
                     marker: {
                         color: filtercolor,
                         opacity: 0.4,
-                        // a bar with an arrow below it, which is how an upper limit is drawn
+                        // an arrow standing on a bar, which is how an upper limit is drawn
                         symbol: 'arrow-bar-down',
                         line: {
-                            width: 0,
+                            /*
+                            The bar of this symbol is a line rather than a shape, so it is drawn
+                            with the stroke and not with the fill. At width 0 the marker loses its
+                            bar and reads as a plain triangle. The arrow keeps its fill either way.
+                            */
+                            width: 1.5,
                             color: filtercolor
                         },
                         size: arrowsize
