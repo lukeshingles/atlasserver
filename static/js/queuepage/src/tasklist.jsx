@@ -267,6 +267,10 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
         script.src = plot_url;
         document.head.appendChild(script);
 
+        // taken now, while the div is still in the document. React removes it before the cleanup
+        // below runs, and Plotly.purge throws when it is given the id of a div it cannot find.
+        const plotnode = document.getElementById(divid);
+
         return () => {
             debug_log('Unmounting plot for task ', taskid);
             // the node too, not just the globals: jQuery's script transport removed it after
@@ -274,9 +278,10 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
             // dead <script> in head per plot it has ever shown
             script.remove();
             // Plotly keeps the drawn traces on the div itself, and a responsive plot keeps a
-            // resize listener; purge drops both, which removing the node alone does not.
-            if (window.Plotly) {
-                window.Plotly.purge(divid);
+            // resize listener; purge drops both, which removing the node alone does not. It is
+            // given the node rather than the id, which it accepts after the node is detached.
+            if (window.Plotly && plotnode) {
+                window.Plotly.purge(plotnode);
             }
             const key = '#' + divid;
             delete jslimitsglobal[key];

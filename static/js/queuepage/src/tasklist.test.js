@@ -141,6 +141,43 @@ describe('TaskPage', () => {
         result_url: `http://testserver/queue/${id}/resultfile.txt`,
     });
 
+    test('unmounting a plot releases its data, even with Plotly on the page', async () => {
+        /*
+        React takes the div out of the document before this cleanup runs, and Plotly.purge throws
+        when it is given the id of a div it cannot find. A throw there would skip the deletes that
+        follow it, and the page would hold the data of every plot it had ever shown.
+        */
+        const purged = [];
+        window.Plotly = {
+            purge(gd) {
+                if (typeof gd === 'string' && !document.getElementById(gd)) {
+                    throw new Error(`No DOM element with id '${gd}' exists on the page.`);
+                }
+                purged.push(typeof gd === 'string' ? gd : gd.id);
+            },
+        };
+
+        const rendered = await renderPage([plottedtask(1)]);
+        assert.ok(rendered.container.querySelector('div.plot'), 'the task should have a plot');
+
+        // what the data script would have left behind
+        const key = '#plotforcedflux-task-1';
+        jslcdataglobal[key] = [[59000, 100, 10, 18.0, 0.05]];
+        jslimitsglobal[key] = {};
+        jslabelsglobal[key] = [];
+        window.atlasLightcurves = { 'plotforcedflux-task-1': () => {} };
+
+        mounted.splice(mounted.indexOf(rendered.root), 1);
+        rendered.root.unmount();
+        await flush(40);
+
+        assert.deepEqual(purged, ['plotforcedflux-task-1'], 'the plot was purged without throwing');
+        assert.equal(jslcdataglobal[key], undefined);
+        assert.equal(jslimitsglobal[key], undefined);
+        assert.equal(jslabelsglobal[key], undefined);
+        assert.equal(window.atlasLightcurves['plotforcedflux-task-1'], undefined);
+    });
+
     test('a plot opens in flux, and the button switches the div to magnitudes', async () => {
         const { container } = await renderPage([plottedtask(1)]);
 

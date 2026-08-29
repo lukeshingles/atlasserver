@@ -196,8 +196,12 @@
                         it writes where the flux is zero. Zero is not a magnitude this survey can
                         measure -- it would be one of the brightest objects in the sky -- and
                         drawing it would pull the axis down and flatten every real point.
+
+                        A point the server could not give a magnitude for carries null, which is
+                        not a number and so does not pass the same test.
                         */
-                        if (ismag && (pointmag === 0 || (pointmag < 0) !== isnegative)) {
+                        if (ismag && (!Number.isFinite(pointmag) || pointmag === 0
+                                || (pointmag < 0) !== isnegative)) {
                             continue;
                         }
 

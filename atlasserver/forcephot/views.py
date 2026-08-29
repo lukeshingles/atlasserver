@@ -5,6 +5,7 @@ import functools
 import hashlib
 import ipaddress
 import logging
+import math
 import os
 import statistics
 import time
@@ -1523,9 +1524,15 @@ def plotpoint(mjd: float, uJy: float, duJy: float, m: float, dm: float, mag5sig:
 
     An image with no recorded depth leaves the point as it was measured, because there is nothing to
     draw a limit at.
+
+    Every magnitude is tested with math.isfinite, because "nan" and "inf" are not JavaScript
+    literals: one of them in this string stops the whole plotting script with a ReferenceError. A
+    point with no usable magnitude is sent with none, and the magnitude plot leaves it out.
     """
-    if pd.notna(mag5sig) and (uJy <= 0 or m > mag5sig):
+    if math.isfinite(mag5sig) and (uJy <= 0 or m > mag5sig):
         return f"[{mjd},{uJy},{duJy},{mag5sig},null]"
+    if not (math.isfinite(m) and math.isfinite(dm)):
+        return f"[{mjd},{uJy},{duJy},null,null]"
     return f"[{mjd},{uJy},{duJy},{m},{dm}]"
 
 
@@ -1605,15 +1612,16 @@ def resultplotdatajs(request, taskid):
                 # a plain ValueError
                 dfforcedphot = None
             else:
-                ujy_min = int(-1e10)
-                ujy_max = int(1e10)
-                dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
-
                 # A file that is well formed but has no column this view reads is treated the same
-                # way as one that does not parse: an empty plot rather than a server error.
+                # way as one that does not parse: an empty plot rather than a server error. This
+                # comes first, because every line below reads one of those columns.
                 if not PLOTCOLUMNS.issubset(dfforcedphot.columns):
                     dfforcedphot = None
                 else:
+                    ujy_min = int(-1e10)
+                    ujy_max = int(1e10)
+                    dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
+
                     # The cut that plot_atlas_fp.py makes before it draws the PDF plot, applied here
                     # so that the interactive plot shows the same points. A very large flux error or
                     # a poor profile fit means the measurement is not usable.
