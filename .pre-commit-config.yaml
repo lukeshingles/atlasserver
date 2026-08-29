@@ -42,20 +42,20 @@ repos:
           - id: yamlfmt
 
     - repo: https://github.com/astral-sh/ruff-pre-commit
-      rev: v0.16.4
+      rev: v0.16.5
       hooks:
           - id: ruff-check
             args: [--fix]
           - id: ruff-format
 
     - repo: https://github.com/astral-sh/uv-pre-commit
-      rev: 0.12.5
+      rev: 0.12.7
       hooks:
           - id: uv-lock
           - id: uv-sync
 
     - repo: https://github.com/astral-sh/ty-pre-commit
-      rev: v0.0.74
+      rev: v0.0.75
       hooks:
           - id: ty
             name: ty
