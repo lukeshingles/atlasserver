@@ -1205,6 +1205,56 @@ class FromApiDetectionTests(TestCase):
         assert Task.objects.get(id=response.json()["id"]).from_api is True
 
 
+class UsageChartTests(TestCase):
+    """The usage chart splits every series by from_api, so each figure counts its own submitters."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="usagechart", email="uc@example.com", password=None)
+        caches["usagestats"].clear()
+
+    def make_task(self, *, from_api: bool, request_type: str) -> Task:
+        return Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            request_type=request_type,
+            from_api=from_api,
+            finishtimestamp=timezone.now(),
+        )
+
+    def test_the_chart_renders_with_tasks_of_every_origin(self) -> None:
+        for from_api in (True, False):
+            for request_type in ("FP", "IMGZIP"):
+                self.make_task(from_api=from_api, request_type=request_type)
+
+        response = self.client.get(reverse("statsusagechart"))
+
+        assert response.status_code == 200, response.status_code
+        chart = response.json()
+        assert chart["script"]
+        assert chart["div"]
+
+    def test_an_api_image_request_is_counted_on_the_api_figure(self) -> None:
+        # an unfiltered IMGZIP series put every image request on the web figure, so a task that
+        # waited as an API bar moved to the other plot when it finished
+        self.make_task(from_api=True, request_type="IMGZIP")
+
+        response = self.client.get(reverse("statsusagechart"))
+
+        assert response.status_code == 200, response.status_code
+        script = response.json()["script"]
+
+        # the counts reach the browser inside the ColumnDataSource that the script builds. Bokeh
+        # writes each series as a ["name",[...]] pair, and the last column of a series is today
+        def today_count(series: str) -> float:
+            marker = f'["{series}",'
+            assert marker in script, series
+            return json.loads(script.split(marker)[1].split("]")[0] + "]")[-1]
+
+        assert today_count("dayfinished_apiimg_counts") == 1
+        assert today_count("dayfinished_img_counts") == 0
+
+
 # the header line of a forced photometry result file. Module level because two unrelated test
 # classes build result files from it, and reaching across for another class's attribute made the
 # coupling invisible to a reader of either one.
@@ -1518,7 +1568,7 @@ class RequestImagesTests(TestCase):
         answer is an IntegrityError rather than a validation error.
         """
         parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
-        child = parent.new_imagerequest(user=self.user)
+        child = parent.new_imagerequest(user=self.user, from_api=False)
         child.save()
 
         self.client.force_login(self.user)
@@ -1555,11 +1605,34 @@ class RequestImagesTests(TestCase):
         assert response.status_code == 302, response.status_code
         imagerequest = Task.objects.get(parent_task_id=task.id)
         assert imagerequest.request_type == "IMGZIP"
-        # from_api selects the retention sweep (31 days for API tasks against 183), so an image
-        # request must stay a web request however its parent was submitted
+        # force_login authenticates with a session cookie, which is what the queue page sends
         assert imagerequest.from_api is False
         assert imagerequest.user_id == self.user.pk
         assert imagerequest.finishtimestamp is None
+
+    def test_a_token_authenticated_image_request_is_from_api(self) -> None:
+        # this endpoint accepts a token like the rest of the API, so it used to file every image
+        # request a script made as a web task: the API figure of the usage chart lost them, and
+        # they were kept for 183 days rather than the 31 days that API tasks get
+        from rest_framework.authtoken.models import Token
+
+        token = Token.objects.create(user=self.user)
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.touch()
+
+            response = self.client.post(
+                reverse("requestimages", args=[task.id]),
+                HTTP_ACCEPT="application/json",
+                HTTP_AUTHORIZATION=f"Token {token.key}",
+            )
+
+        assert response.status_code == 302, response.status_code
+        imagerequest = Task.objects.get(parent_task_id=task.id)
+        assert imagerequest.request_type == "IMGZIP"
+        assert imagerequest.from_api is True
 
     def test_the_parents_completion_callback_is_not_inherited(self) -> None:
         # model_to_dict copies every editable field of the parent, so the image request used to

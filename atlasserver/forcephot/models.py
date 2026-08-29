@@ -385,7 +385,7 @@ class Task(models.Model):
             to_attr="live_imagerequests",
         )
 
-    def new_imagerequest(self, user: User) -> "Task":
+    def new_imagerequest(self, user: User, *, from_api: bool) -> "Task":
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
 
         Here rather than in the view, so that the decision of which fields a child inherits sits
@@ -413,11 +413,11 @@ class Task(models.Model):
             # decides which image directory the remote script reads, so it has to match
             use_reduced=self.use_reduced,
             comment=self.comment,
-            # deliberately False regardless of how the parent was submitted: from_api decides
-            # which maintenance sweep collects the row (31 days for API tasks, 183 otherwise), so
-            # classifying a token-authenticated image request as API would delete it five months
-            # early
-            from_api=False,
+            # the origin of this request, not of the parent: the caller knows which authenticator
+            # accepted the request. from_api selects the maintenance sweep that collects the row
+            # (31 days for API tasks, 183 otherwise); send_email=False below already stops the
+            # result email that from_api would otherwise suppress
+            from_api=from_api,
             send_email=False,
             # the parent's location, kept when the caller cannot place the new request itself
             country_code=self.country_code,

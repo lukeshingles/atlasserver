@@ -615,7 +615,7 @@ class RequestImages(APIView):
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
             # which fields the child inherits is the model's decision; see Task.new_imagerequest
-            newtask = parent_task.new_imagerequest(user=request.user)
+            newtask = parent_task.new_imagerequest(user=request.user, from_api=request_is_from_api(request))
             for field, value in client_location_fields(self.request).items():
                 setattr(newtask, field, value)
             newtask.queuepos_relative = next_queuepos_relative()
@@ -719,7 +719,11 @@ def statsusagechart(request):
 
     dayfinished_web_counts = get_days_ago_counts(finishedtasks.filter(from_api=False, request_type="FP"))
     dayfinished_api_counts = get_days_ago_counts(finishedtasks.filter(from_api=True, request_type="FP"))
-    dayfinished_img_counts = get_days_ago_counts(finishedtasks.filter(request_type="IMGZIP"))
+    # each figure shows the image requests that its own submitters made. An unfiltered IMGZIP
+    # series put every image request on the web figure, so a task that waited as a red bar on the
+    # API figure moved to the other plot when it finished
+    dayfinished_img_counts = get_days_ago_counts(finishedtasks.filter(from_api=False, request_type="IMGZIP"))
+    dayfinished_apiimg_counts = get_days_ago_counts(finishedtasks.filter(from_api=True, request_type="IMGZIP"))
 
     data = {
         "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))],
@@ -728,6 +732,7 @@ def statsusagechart(request):
         "dayfinished_web_counts": dayfinished_web_counts,
         "dayfinished_api_counts": dayfinished_api_counts,
         "dayfinished_img_counts": dayfinished_img_counts,
+        "dayfinished_apiimg_counts": dayfinished_apiimg_counts,
     }
 
     datasource = bokeh.plotting.ColumnDataSource(data=data)
@@ -738,7 +743,8 @@ def statsusagechart(request):
         tools=[
             bokeh.models.HoverTool(
                 tooltips=[
-                    ("Finished (API)", "@dayfinished_api_counts"),
+                    ("Finished (API images)", "@dayfinished_apiimg_counts"),
+                    ("Finished (API FP)", "@dayfinished_api_counts"),
                     ("Waiting (API)", "@waitingtaskcount_api"),
                 ],
             )
@@ -754,11 +760,11 @@ def statsusagechart(request):
     fig_api.grid.visible = False
 
     fig_api.vbar_stack(
-        ["waitingtaskcount_api", "dayfinished_api_counts"],
+        ["waitingtaskcount_api", "dayfinished_api_counts", "dayfinished_apiimg_counts"],
         x="queueday",
         source=datasource,
-        color=["red", "lightgrey"],
-        legend_label=["Waiting (API)", "Finished (API)"],
+        color=["red", "lightgrey", "blue"],
+        legend_label=["Waiting (API)", "Finished (API FP)", "Finished (API images)"],
         line_width=0.0,
         width=0.3,
     )
