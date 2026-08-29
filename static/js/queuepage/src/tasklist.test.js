@@ -1203,7 +1203,7 @@ describe('TaskPage', () => {
             attempt_count: 3,
         })]);
 
-        assert.equal(rowMeta(container)['Took:'], 'ran 2m 10s');
+        assert.equal(rowMeta(container)['Wait time:'], 'ran 2m 10s');
     });
 
     test('a task that ran first time does not mention attempts', async () => {
@@ -1215,7 +1215,7 @@ describe('TaskPage', () => {
         assert.ok(!('Attempts:' in rowMeta(container)), 'one attempt is the ordinary case and needs no line');
     });
 
-    test('a finished task reports how long it waited and how long it ran', async () => {
+    test('a finished task reports how long it was queued and how long it ran', async () => {
         const { container } = await renderPage([task(1, {
             starttimestamp: '2026-01-01T00:00:40Z',
             finishtimestamp: '2026-01-01T00:02:50Z',
@@ -1223,11 +1223,11 @@ describe('TaskPage', () => {
             runtime: 130.0,
         })]);
 
-        assert.equal(rowMeta(container)['Took:'], 'waited 40s · ran 2m 10s');
+        assert.equal(rowMeta(container)['Wait time:'], 'queued 40s · ran 2m 10s');
     });
 
     test('a task cancelled before it ran reports only the half that happened', async () => {
-        // waittime is null when the task never started, and rendering "waited null" or dropping the
+        // waittime is null when the task never started, and rendering "queued null" or dropping the
         // whole line would both be worse than showing the half that is known
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:00:40Z',
@@ -1235,7 +1235,7 @@ describe('TaskPage', () => {
             runtime: null,
         })]);
 
-        assert.equal(rowMeta(container)['Took:'], 'waited 40s');
+        assert.equal(rowMeta(container)['Wait time:'], 'queued 40s');
     });
 
     /*

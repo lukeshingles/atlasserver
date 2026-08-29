@@ -640,16 +640,16 @@ export const Task = React.memo(function Task(props) {
 
         // The wait is only reported for a task that ran once. starttimestamp moves to each new
         // attempt, so after a retry the span from submission to it covers the earlier attempts and
-        // the pauses between them as well as the queue -- and calling that "waited" blames the
+        // the pauses between them as well as the queue -- and calling that "queued" blames the
         // queue for time the task spent failing, which is the one distinction this line is for.
         // The run time is unaffected: it is the attempt that produced the result either way.
         const timings = [
-            task.attempt_count > 1 ? null : timing('waited', task.waittime),
+            task.attempt_count > 1 ? null : timing('queued', task.waittime),
             timing('ran', task.runtime),
         ].filter((part) => part != null);
 
         if (timings.length > 0) {
-            meta.push(['timings', 'Took:', timings.join(' · ')]);
+            meta.push(['timings', 'Wait time:', timings.join(' · ')]);
         }
     }
 
