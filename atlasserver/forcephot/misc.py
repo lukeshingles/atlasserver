@@ -130,7 +130,7 @@ def resultplotdatajs_cachekey(taskid: int) -> str:
     payload, and the cache timeout is long enough (30 days) that they would otherwise be served
     for weeks after a deployment; bumping the suffix makes them be ignored immediately.
     """
-    return f"task{taskid}_resultplotdatajs_v2"
+    return f"task{taskid}_resultplotdatajs_v3"
 
 
 def datetime_to_mjd(dt: datetime.datetime) -> float:

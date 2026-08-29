@@ -114,6 +114,10 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
       return;
     }
 
+    // Not window.atlasLightcurves[divid](), which lightcurveplotly.js publishes to redraw a plot
+    // in the other unit: that redraw passes an explicit range and would discard the pan and zoom.
+
+
     var colors = plotlyColors();
 
     document.querySelectorAll('div.plot').forEach(function (div) {

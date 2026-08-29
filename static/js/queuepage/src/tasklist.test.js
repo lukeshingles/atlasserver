@@ -130,6 +130,54 @@ describe('TaskPage', () => {
         return meta;
     };
 
+    /*
+    A finished forced photometry task with a result file, which is what makes TaskPage mount a
+    plot. The plot itself is drawn by lightcurveplotly.js, which the browser fetches with the data
+    and which is not loaded here; these tests cover the controls around it.
+    */
+    const plottedtask = (id = 1) => task(id, {
+        finishtimestamp: '2026-01-01T01:00:00Z',
+        starttimestamp: '2026-01-01T00:30:00Z',
+        result_url: `http://testserver/queue/${id}/resultfile.txt`,
+    });
+
+    test('a plot opens in flux, and the button switches the div to magnitudes', async () => {
+        const { container } = await renderPage([plottedtask(1)]);
+
+        const plot = container.querySelector('div.plot');
+        assert.ok(plot, 'the task should have a plot');
+        assert.equal(plot.dataset.unit, 'flux');
+
+        const buttons = [...container.querySelectorAll('.plotunits button')];
+        assert.deepEqual(buttons.map((b) => b.textContent), ['Flux', 'AB Mag']);
+        assert.equal(buttons[0].getAttribute('aria-pressed'), 'true');
+
+        buttons[1].click();
+        await flush(20);
+
+        assert.equal(plot.dataset.unit, 'mag');
+        assert.equal(buttons[1].getAttribute('aria-pressed'), 'true');
+        assert.equal(buttons[0].getAttribute('aria-pressed'), 'false');
+    });
+
+    test('choosing a unit redraws that plot, and only that plot', async () => {
+        const { container } = await renderPage([plottedtask(1), plottedtask(2)]);
+
+        const redrawn = [];
+        window.atlasLightcurves = {
+            'plotforcedflux-task-1': () => redrawn.push(1),
+            'plotforcedflux-task-2': () => redrawn.push(2),
+        };
+
+        const firstrow = container.querySelector('li#task-1');
+        firstrow.querySelectorAll('.plotunits button')[1].click();
+        await flush(20);
+
+        assert.deepEqual(redrawn, [1]);
+        assert.equal(container.querySelector('li#task-1 div.plot').dataset.unit, 'mag');
+        assert.equal(container.querySelector('li#task-2 div.plot').dataset.unit, 'flux');
+    });
+
     test('fetches the task list on mount and renders a row per task', async () => {
         const { container } = await renderPage([task(1), task(2)]);
 

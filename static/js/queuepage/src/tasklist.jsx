@@ -249,11 +249,17 @@ function CopyIcon() {
 }
 
 const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
+    const divid = 'plotforcedflux-task-' + taskid;
+    // Flux is what the result file holds, so it is what the plot opens in. The choice belongs to
+    // one plot and lasts as long as it is on screen.
+    const [unit, setUnit] = React.useState('flux');
+
     React.useEffect(() => {
         debug_log('activating plot', taskid);
         const plot_url = new URL(taskurl);
         plot_url.pathname += 'resultplotdata.js';
         plot_url.search = '';
+
         // was $.ajax({dataType: 'script'}), which fetches and evals. A <script> element does the
         // same thing, and unlike jQuery's version it is served from the browser's HTTP cache
         // (which the endpoint's ETag is there to make use of) rather than fetched every mount.
@@ -267,15 +273,50 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
             // evaluating, and without this a session that pages through finished tasks leaves one
             // dead <script> in head per plot it has ever shown
             script.remove();
-            const key = '#plotforcedflux-task-' + taskid;
+            // Plotly keeps the drawn traces on the div itself, and a responsive plot keeps a
+            // resize listener; purge drops both, which removing the node alone does not.
+            if (window.Plotly) {
+                window.Plotly.purge(divid);
+            }
+            const key = '#' + divid;
             delete jslimitsglobal[key];
             delete jslcdataglobal[key];
             delete jslabelsglobal[key];
+            if (window.atlasLightcurves) {
+                delete window.atlasLightcurves[divid];
+            }
         };
-    }, [taskid, taskurl]);
+    }, [taskid, taskurl, divid]);
+
+    /*
+    Redraw in the unit the buttons now ask for.
+
+    This runs after React has written data-unit onto the div, which is where the plot script reads
+    the choice from. There is nothing to redraw until that script has arrived: it draws the first
+    plot itself, in the unit the div already carries.
+    */
+    React.useEffect(() => {
+        const redraw = window.atlasLightcurves && window.atlasLightcurves[divid];
+        if (redraw) {
+            redraw();
+        }
+    }, [unit, divid]);
 
     return (
-        <div key='plot' id={'plotforcedflux-task-' + taskid} className="plot" style={{ width: '100%', height: '300px' }}></div>
+        <React.Fragment>
+            <div className="plotunits">
+                <div className="btn-group btn-group-sm" role="group" aria-label="Plot units">
+                    {[['flux', 'Flux'], ['mag', 'AB Mag']].map(([value, label]) => (
+                        <button key={value} type="button"
+                            className={'btn btn-outline-secondary' + (unit === value ? ' active' : '')}
+                            aria-pressed={unit === value}
+                            onClick={() => setUnit(value)}>{label}</button>
+                    ))}
+                </div>
+            </div>
+            <div id={divid} className="plot" data-unit={unit}
+                style={{ width: '100%', height: '300px' }}></div>
+        </React.Fragment>
     );
 });
 
