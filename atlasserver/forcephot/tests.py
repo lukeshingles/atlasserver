@@ -1815,8 +1815,45 @@ class ResultPlotDataTests(TestCase):
             # parsed decides whether these reach the plotting script as `100` or `100.0`, and the
             # column dtypes are the only thing that says which
             content = response.content.decode()
-            assert "jslcdata.push([[59000.0,100.0,10.0], [59001.0,101.0,10.0]]);" in content, content[:400]
+            # mjd, flux, flux error, magnitude, magnitude error: the magnitude columns are
+            # taken from the result file rather than computed from the flux
+            assert "jslcdata.push([[59000.0,100.0,10.0,18.0,0.05], [59001.0,101.0,10.0,18.0,0.05]]);" in content, (
+                content[:400]
+            )
             assert '"ymin": 100, "ymax": 101,' in content, content[:400]
+
+    def test_a_point_fainter_than_the_image_depth_is_sent_as_an_upper_limit(self) -> None:
+        """A limit carries the 5 sigma depth and no magnitude error, and keeps its measured flux.
+
+        The plotting script draws an arrow for a point whose error is null. The flux stays as it was
+        measured, because a flux means something at any depth; only the magnitude stops meaning
+        anything, so only the magnitude becomes a limit.
+        """
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            Path(tmpdir, "js").mkdir(exist_ok=True)
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n")
+            Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True, exist_ok=True)
+            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text("// plot script\n")
+
+            # mag5sig is 19.0 in every row. m=18.0 is brighter than that, so it is a measurement;
+            # m=20.0 is fainter, and a negative flux is no measurement at any depth.
+            detected = "59000.00000 18.0 0.05 100 10 o 0 1.0 10.0 20.0 100 100 2 2 0 -0.5 19.0 18.0 01a00000o0235o"
+            toofaint = "59001.00000 20.0 0.90 20 10 o 0 1.0 10.0 20.0 100 100 2 2 0 -0.5 19.0 18.0 01a00001o0235o"
+            negative = "59002.00000 -21.0 1.50 -8 10 o 0 1.0 10.0 20.0 100 100 2 2 0 -0.5 19.0 18.0 01a00002o0235o"
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + detected + "\n" + toofaint + "\n" + negative + "\n")
+
+            response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
+            assert response.status_code == 200
+            content = response.content.decode()
+
+            assert (
+                "jslcdata.push([[59000.0,100.0,10.0,18.0,0.05], "
+                "[59001.0,20.0,10.0,19.0,null], "
+                "[59002.0,-8.0,10.0,19.0,null]]);" in content
+            ), content[:600]
 
     @override_settings(DEBUG=False)
     def test_a_redeployed_plot_script_invalidates_the_cached_response(self) -> None:

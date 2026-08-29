@@ -130,6 +130,103 @@ describe('TaskPage', () => {
         return meta;
     };
 
+    /*
+    A finished forced photometry task with a result file, which is what makes TaskPage mount a
+    plot. The plot itself is drawn by lightcurveplotly.js, which the browser fetches with the data
+    and which is not loaded here; these tests cover the controls around it.
+    */
+    const plottedtask = (id = 1) => task(id, {
+        finishtimestamp: '2026-01-01T01:00:00Z',
+        starttimestamp: '2026-01-01T00:30:00Z',
+        result_url: `http://testserver/queue/${id}/resultfile.txt`,
+    });
+
+    test('unmounting a plot releases its data, even with Plotly on the page', async () => {
+        /*
+        React takes the div out of the document before this cleanup runs, and Plotly.purge throws
+        when it is given the id of a div it cannot find. A throw there would skip the deletes that
+        follow it, and the page would hold the data of every plot it had ever shown.
+        */
+        const purged = [];
+        window.Plotly = {
+            purge(gd) {
+                if (typeof gd === 'string' && !document.getElementById(gd)) {
+                    throw new Error(`No DOM element with id '${gd}' exists on the page.`);
+                }
+                purged.push(typeof gd === 'string' ? gd : gd.id);
+            },
+        };
+
+        const rendered = await renderPage([plottedtask(1)]);
+        assert.ok(rendered.container.querySelector('div.plot'), 'the task should have a plot');
+
+        // what the data script would have left behind
+        const key = '#plotforcedflux-task-1';
+        jslcdataglobal[key] = [[59000, 100, 10, 18.0, 0.05]];
+        jslimitsglobal[key] = {};
+        jslabelsglobal[key] = [];
+        window.atlasLightcurves = { 'plotforcedflux-task-1': () => {} };
+
+        mounted.splice(mounted.indexOf(rendered.root), 1);
+        rendered.root.unmount();
+        await flush(40);
+
+        assert.deepEqual(purged, ['plotforcedflux-task-1'], 'the plot was purged without throwing');
+        assert.equal(jslcdataglobal[key], undefined);
+        assert.equal(jslimitsglobal[key], undefined);
+        assert.equal(jslabelsglobal[key], undefined);
+        assert.equal(window.atlasLightcurves['plotforcedflux-task-1'], undefined);
+    });
+
+    test('a plot opens in flux, and the button switches the div to magnitudes', async () => {
+        const { container } = await renderPage([plottedtask(1)]);
+
+        const plot = container.querySelector('div.plot');
+        assert.ok(plot, 'the task should have a plot');
+        assert.equal(plot.dataset.unit, 'flux');
+
+        const buttons = [...container.querySelectorAll('.plotunits button')];
+        assert.deepEqual(buttons.map((b) => b.textContent), ['Flux', 'AB Mag']);
+        assert.equal(buttons[0].getAttribute('aria-pressed'), 'true');
+
+        // btn-sm on each button, not only btn-group-sm on the group: the stylesheet paints every
+        // .btn in a task row that is not btn-sm white, for the big action buttons, which left the
+        // unpressed one white on white and so invisible
+        for (const button of buttons) {
+            assert.ok(button.classList.contains('btn-sm'), `${button.textContent} needs btn-sm`);
+        }
+
+        // the buttons sit over the plot, so they must be inside the positioned box with it
+        const box = container.querySelector('.plotbox');
+        assert.ok(box, 'the plot and its buttons share a positioned box');
+        assert.ok(box.querySelector('.plotunits') && box.querySelector('div.plot'));
+
+        buttons[1].click();
+        await flush(20);
+
+        assert.equal(plot.dataset.unit, 'mag');
+        assert.equal(buttons[1].getAttribute('aria-pressed'), 'true');
+        assert.equal(buttons[0].getAttribute('aria-pressed'), 'false');
+    });
+
+    test('choosing a unit redraws that plot, and only that plot', async () => {
+        const { container } = await renderPage([plottedtask(1), plottedtask(2)]);
+
+        const redrawn = [];
+        window.atlasLightcurves = {
+            'plotforcedflux-task-1': () => redrawn.push(1),
+            'plotforcedflux-task-2': () => redrawn.push(2),
+        };
+
+        const firstrow = container.querySelector('li#task-1');
+        firstrow.querySelectorAll('.plotunits button')[1].click();
+        await flush(20);
+
+        assert.deepEqual(redrawn, [1]);
+        assert.equal(container.querySelector('li#task-1 div.plot').dataset.unit, 'mag');
+        assert.equal(container.querySelector('li#task-2 div.plot').dataset.unit, 'flux');
+    });
+
     test('fetches the task list on mount and renders a row per task', async () => {
         const { container } = await renderPage([task(1), task(2)]);
 
@@ -1096,9 +1193,10 @@ describe('TaskPage', () => {
         assert.equal(rowMeta(container)['Attempts:'], '4');
     });
 
-    test('a retried task does not blame the queue for time it spent failing', async () => {
+    test('a retried task still reports the time before the attempt that produced the result', async () => {
         // starttimestamp moves to each new attempt, so the span from submission to it covers the
-        // earlier attempts as well as the queue -- which is not a wait
+        // earlier attempts as well as the queue. It is still time the visitor waited, and the
+        // Attempts line is what explains its length.
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:02:50Z',
             waittime: 2400.0,
@@ -1106,7 +1204,8 @@ describe('TaskPage', () => {
             attempt_count: 3,
         })]);
 
-        assert.equal(rowMeta(container)['Took:'], 'ran 2m 10s');
+        assert.equal(rowMeta(container)['Timing:'], 'queue 40m 00s · computation 2m 10s');
+        assert.equal(rowMeta(container)['Attempts:'], '3');
     });
 
     test('a task that ran first time does not mention attempts', async () => {
@@ -1118,7 +1217,7 @@ describe('TaskPage', () => {
         assert.ok(!('Attempts:' in rowMeta(container)), 'one attempt is the ordinary case and needs no line');
     });
 
-    test('a finished task reports how long it waited and how long it ran', async () => {
+    test('a finished task reports how long it was queued and how long it computed', async () => {
         const { container } = await renderPage([task(1, {
             starttimestamp: '2026-01-01T00:00:40Z',
             finishtimestamp: '2026-01-01T00:02:50Z',
@@ -1126,11 +1225,11 @@ describe('TaskPage', () => {
             runtime: 130.0,
         })]);
 
-        assert.equal(rowMeta(container)['Took:'], 'waited 40s · ran 2m 10s');
+        assert.equal(rowMeta(container)['Timing:'], 'queue 40s · computation 2m 10s');
     });
 
     test('a task cancelled before it ran reports only the half that happened', async () => {
-        // waittime is null when the task never started, and rendering "waited null" or dropping the
+        // waittime is null when the task never started, and rendering "queue null" or dropping the
         // whole line would both be worse than showing the half that is known
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:00:40Z',
@@ -1138,7 +1237,7 @@ describe('TaskPage', () => {
             runtime: null,
         })]);
 
-        assert.equal(rowMeta(container)['Took:'], 'waited 40s');
+        assert.equal(rowMeta(container)['Timing:'], 'queue 40s');
     });
 
     /*

@@ -5,6 +5,7 @@ import functools
 import hashlib
 import ipaddress
 import logging
+import math
 import os
 import statistics
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from typing import override
 
+import pandas as pd
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
@@ -1501,6 +1503,38 @@ def api_token(request):
 
 _plotscript_cache: dict[Path, tuple[float, int, str]] = {}
 
+# The result file columns that the light curve plot is built from. "m" and "dm" are the pipeline's
+# own magnitude and its error: the plot shows those rather than converting the flux itself, so that
+# it agrees with the file the visitor downloads. "mag5sig" is the 5 sigma depth of the image, which
+# is what a point too faint to measure is drawn at. "chi/N" is read by the quality cut below.
+PLOTCOLUMNS = frozenset({"#MJD", "uJy", "duJy", "m", "dm", "mag5sig", "chi/N"})
+
+
+# the arguments are named for the result file columns they carry, which is why they are not all
+# lowercase
+def plotpoint(mjd: float, uJy: float, duJy: float, m: float, dm: float, mag5sig: float) -> str:  # noqa: N803
+    """Return one light curve point, as the JavaScript literal the plotting script reads.
+
+    A point is an upper limit when the image was not deep enough to measure it: either the flux is
+    zero or below, or the magnitude is fainter than the 5 sigma depth of that image. Such a point is
+    drawn at the depth, with no error, which is what tells the plotting script to draw an arrow.
+
+    The flux and its error are kept whatever the point is. A flux is a measurement at any depth, and
+    the flux plot shows it; only the magnitude stops meaning anything.
+
+    An image with no recorded depth leaves the point as it was measured, because there is nothing to
+    draw a limit at.
+
+    Every magnitude is tested with math.isfinite, because "nan" and "inf" are not JavaScript
+    literals: one of them in this string stops the whole plotting script with a ReferenceError. A
+    point with no usable magnitude is sent with none, and the magnitude plot leaves it out.
+    """
+    if math.isfinite(mag5sig) and (uJy <= 0 or m > mag5sig):
+        return f"[{mjd},{uJy},{duJy},{mag5sig},null]"
+    if not (math.isfinite(m) and math.isfinite(dm)):
+        return f"[{mjd},{uJy},{duJy},null,null]"
+    return f"[{mjd},{uJy},{duJy},{m},{dm}]"
+
 
 def read_plotscript(path: Path) -> str:
     """Return the contents of the light curve plotting script, re-reading it only when it changes.
@@ -1556,8 +1590,6 @@ def resultplotdatajs(request, taskid):
 
         dfforcedphot = None
         if resultfilepath is not None:
-            import pandas as pd
-
             try:
                 dfforcedphot = pd.read_csv(
                     resultfilepath,
@@ -1580,9 +1612,24 @@ def resultplotdatajs(request, taskid):
                 # a plain ValueError
                 dfforcedphot = None
             else:
-                ujy_min = int(-1e10)
-                ujy_max = int(1e10)
-                dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
+                # A file that is well formed but has no column this view reads is treated the same
+                # way as one that does not parse: an empty plot rather than a server error. This
+                # comes first, because every line below reads one of those columns.
+                if not PLOTCOLUMNS.issubset(dfforcedphot.columns):
+                    dfforcedphot = None
+                else:
+                    ujy_min = int(-1e10)
+                    ujy_max = int(1e10)
+                    dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
+
+                    # The cut that plot_atlas_fp.py makes before it draws the PDF plot, applied here
+                    # so that the interactive plot shows the same points. A very large flux error or
+                    # a poor profile fit means the measurement is not usable.
+                    #
+                    # The PDF plot also sigma clips with a rolling window. That is not done here: it
+                    # removes points that the result file does contain, and this plot is read beside
+                    # that file.
+                    dfforcedphot = dfforcedphot[(dfforcedphot["duJy"] <= 4000) & (dfforcedphot["chi/N"] <= 100)]
 
         # with no rows, the limits below would be NaN, which is not a JavaScript literal
         if dfforcedphot is not None and not dfforcedphot.empty:
@@ -1609,8 +1656,10 @@ def resultplotdatajs(request, taskid):
                         "jslcdata.push(["
                         + ", ".join(
                             [
-                                f"[{mjd},{uJy},{duJy}]"
-                                for _, (mjd, uJy, duJy) in dffilter[["#MJD", "uJy", "duJy"]].iterrows()
+                                plotpoint(mjd, uJy, duJy, m, dm, mag5sig)
+                                for _, (mjd, uJy, duJy, m, dm, mag5sig) in dffilter[
+                                    ["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]
+                                ].iterrows()
                             ]
                         )
                         + "]);\n",

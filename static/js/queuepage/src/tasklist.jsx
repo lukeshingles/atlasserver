@@ -249,11 +249,17 @@ function CopyIcon() {
 }
 
 const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
+    const divid = 'plotforcedflux-task-' + taskid;
+    // Flux is what the result file holds, so it is what the plot opens in. The choice belongs to
+    // one plot and lasts as long as it is on screen.
+    const [unit, setUnit] = React.useState('flux');
+
     React.useEffect(() => {
         debug_log('activating plot', taskid);
         const plot_url = new URL(taskurl);
         plot_url.pathname += 'resultplotdata.js';
         plot_url.search = '';
+
         // was $.ajax({dataType: 'script'}), which fetches and evals. A <script> element does the
         // same thing, and unlike jQuery's version it is served from the browser's HTTP cache
         // (which the endpoint's ETag is there to make use of) rather than fetched every mount.
@@ -261,21 +267,64 @@ const TaskPlot = React.memo(function TaskPlot({ taskid, taskurl }) {
         script.src = plot_url;
         document.head.appendChild(script);
 
+        // taken now, while the div is still in the document. React removes it before the cleanup
+        // below runs, and Plotly.purge throws when it is given the id of a div it cannot find.
+        const plotnode = document.getElementById(divid);
+
         return () => {
             debug_log('Unmounting plot for task ', taskid);
             // the node too, not just the globals: jQuery's script transport removed it after
             // evaluating, and without this a session that pages through finished tasks leaves one
             // dead <script> in head per plot it has ever shown
             script.remove();
-            const key = '#plotforcedflux-task-' + taskid;
+            // Plotly keeps the drawn traces on the div itself, and a responsive plot keeps a
+            // resize listener; purge drops both, which removing the node alone does not. It is
+            // given the node rather than the id, which it accepts after the node is detached.
+            if (window.Plotly && plotnode) {
+                window.Plotly.purge(plotnode);
+            }
+            const key = '#' + divid;
             delete jslimitsglobal[key];
             delete jslcdataglobal[key];
             delete jslabelsglobal[key];
+            if (window.atlasLightcurves) {
+                delete window.atlasLightcurves[divid];
+            }
         };
-    }, [taskid, taskurl]);
+    }, [taskid, taskurl, divid]);
+
+    /*
+    Redraw in the unit the buttons now ask for.
+
+    This runs after React has written data-unit onto the div, which is where the plot script reads
+    the choice from. There is nothing to redraw until that script has arrived: it draws the first
+    plot itself, in the unit the div already carries.
+    */
+    React.useEffect(() => {
+        const redraw = window.atlasLightcurves && window.atlasLightcurves[divid];
+        if (redraw) {
+            redraw();
+        }
+    }, [unit, divid]);
 
     return (
-        <div key='plot' id={'plotforcedflux-task-' + taskid} className="plot" style={{ width: '100%', height: '300px' }}></div>
+        <div className="plotbox">
+            <div className="plotunits">
+                <div className="btn-group btn-group-sm" role="group" aria-label="Plot units">
+                    {[['flux', 'Flux'], ['mag', 'AB Mag']].map(([value, label]) => (
+                        // btn-sm on the button itself, not only btn-group-sm on the group: the
+                        // task row styles every .btn that is not btn-sm for its big action
+                        // buttons, which would paint these white on white
+                        <button key={value} type="button"
+                            className={'btn btn-sm btn-outline-secondary' + (unit === value ? ' active' : '')}
+                            aria-pressed={unit === value}
+                            onClick={() => setUnit(value)}>{label}</button>
+                    ))}
+                </div>
+            </div>
+            <div id={divid} className="plot" data-unit={unit}
+                style={{ width: '100%', height: '300px' }}></div>
+        </div>
     );
 });
 
@@ -589,18 +638,22 @@ export const Task = React.memo(function Task(props) {
             return text != null ? label + ' ' + text : null;
         };
 
-        // The wait is only reported for a task that ran once. starttimestamp moves to each new
-        // attempt, so after a retry the span from submission to it covers the earlier attempts and
-        // the pauses between them as well as the queue -- and calling that "waited" blames the
-        // queue for time the task spent failing, which is the one distinction this line is for.
-        // The run time is unaffected: it is the attempt that produced the result either way.
+        /*
+        The queued time runs from the submission to the start of the attempt that produced the
+        result. starttimestamp moves to each new attempt, so after a retry that span also covers
+        the earlier attempts and the pauses between them. It is reported all the same: the task
+        was not computing the result the visitor received during any of it, and the Attempts line
+        above says why it is long.
+
+        The computation time is the attempt that produced the result, whichever attempt that was.
+        */
         const timings = [
-            task.attempt_count > 1 ? null : timing('waited', task.waittime),
-            timing('ran', task.runtime),
+            timing('queue', task.waittime),
+            timing('computation', task.runtime),
         ].filter((part) => part != null);
 
         if (timings.length > 0) {
-            meta.push(['timings', 'Took:', timings.join(' · ')]);
+            meta.push(['timings', 'Timing:', timings.join(' · ')]);
         }
     }
 
