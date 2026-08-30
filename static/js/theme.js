@@ -164,6 +164,8 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
     var styles = getComputedStyle(document.documentElement);
     var textcolor = styles.getPropertyValue('--bs-body-color').trim() || '#212529';
     var linecolor = styles.getPropertyValue('--bs-border-color').trim() || '#DEE2E6';
+    // lighter than the rest: a gridline is read past rather than looked at
+    var gridcolor = styles.getPropertyValue('--bs-border-color-translucent').trim() || 'rgba(0, 0, 0, 0.175)';
 
     var axis = {
       axis_label_text_color: textcolor,
@@ -186,7 +188,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
       // the name of each half of the usage chart, in the corner of its own side
       Label: { text_color: textcolor },
       // the gridlines of the usage chart, and the zero line the two halves are mirrored about
-      Grid: { grid_line_color: linecolor },
+      Grid: { grid_line_color: gridcolor },
       Span: { line_color: linecolor },
       LinearAxis: axis,
       CategoricalAxis: axis
@@ -203,6 +205,23 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
   The page does this before it calls Bokeh.embed.embed_item, so bokeh draws the chart in the right
   colours the first time.
   */
+  /*
+  The properties of `attrs` that `current` has not turned off.
+
+  A chart says it wants no line by giving that line no colour: the usage chart has no box around
+  its frame and no rule along either axis. Without this the table below would colour those lines
+  in, and put them back.
+  */
+  function stillDrawn(attrs, current) {
+    var wanted = {};
+    Object.keys(attrs).forEach(function (property) {
+      if (current[property] !== null) {
+        wanted[property] = attrs[property];
+      }
+    });
+    return wanted;
+  }
+
   function themeBokehItem(item) {
     var colors = bokehColors();
 
@@ -215,7 +234,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
         return;
       }
       if (node.type === 'object' && colors[node.name]) {
-        node.attributes = Object.assign(node.attributes || {}, colors[node.name]);
+        node.attributes = Object.assign(node.attributes || {}, stillDrawn(colors[node.name], node.attributes || {}));
       }
       Object.keys(node).forEach(function (key) {
         paint(node[key]);
@@ -243,7 +262,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
     window.Bokeh.documents.forEach(function (doc) {
       doc.all_models.forEach(function (model) {
         if (colors[model.type]) {
-          model.setv(colors[model.type]);
+          model.setv(stillDrawn(colors[model.type], model));
         }
       });
     });

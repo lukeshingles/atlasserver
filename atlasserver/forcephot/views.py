@@ -710,6 +710,10 @@ USAGE_SERIES = (
 # two arms meet, and one day reads as a single bar through the axis rather than as two.
 USAGE_ARM_SPLIT = 0.045
 
+# The page left between one segment of a stack and the next, in the same units. About two pixels at
+# the height the chart is drawn at.
+USAGE_SEGMENT_GAP = 0.012
+
 
 def _usage_arm_ticks(peak: float) -> list[float]:
     """Return the tick values from 0 to the first round number at or above `peak`, in tasks.
@@ -799,15 +803,33 @@ def statsusagechart(request):
         top = armticks[origin][-1]
         # the axis units that one task is worth in this half, after the gap at the zero line
         unit = (1.0 - USAGE_ARM_SPLIT) / top if top else 0.0
-        running = [USAGE_ARM_SPLIT] * days_back
 
+        # the hover tool reads the tasks, and the bars read the axis units they are drawn in
         for key, _label, _color in USAGE_SERIES:
-            below = running
-            running = [edge + count * unit for edge, count in zip(below, counts[origin][key], strict=True)]
-            # the hover tool reads the tasks, and the bars read the axis units they are drawn in
             data[f"{origin}_{key}"] = counts[origin][key]
-            data[f"{origin}_{key}_near"] = [direction * edge for edge in below]
-            data[f"{origin}_{key}_far"] = [direction * edge for edge in running]
+            data[f"{origin}_{key}_near"] = []
+            data[f"{origin}_{key}_far"] = []
+
+        for day in range(days_back):
+            edge = USAGE_ARM_SPLIT
+            drawn = False
+
+            for key, _label, _color in USAGE_SERIES:
+                count = counts[origin][key][day]
+                start, edge = edge, edge + count * unit
+
+                if count <= 0:
+                    # nothing to draw, and no gap either: the next segment starts where this one did
+                    near = far = start
+                else:
+                    # a strip of page between one segment and the last, so that a boundary between
+                    # two of them is never colour straight onto colour
+                    near = min(start + USAGE_SEGMENT_GAP, edge) if drawn else start
+                    far = edge
+                    drawn = True
+
+                data[f"{origin}_{key}_near"].append(direction * near)
+                data[f"{origin}_{key}_far"].append(direction * far)
 
     datasource = bokeh.plotting.ColumnDataSource(data=data)
 
@@ -832,10 +854,21 @@ def statsusagechart(request):
     # the day boundaries do not
     plot.xgrid.visible = False
 
+    # No box around the frame, and no rule or ticks along either axis: the gridlines carry the
+    # scale, and a second set of lines around them marks nothing. theme.js colours the lines a
+    # chart draws and leaves alone the ones it is given no colour for, so these stay off.
+    plot.outline_line_color = None
+    plot.axis.axis_line_color = None
+    plot.axis.major_tick_line_color = None
+    plot.axis.minor_tick_line_color = None
+
     # the bars of each half, in the order they stack away from the zero line
     bars: dict[str, list[Any]] = {}
 
     for origin in ("api", "web"):
+        # the corners of a segment that face away from the zero line, which are the ones the end of
+        # a stack is capped with
+        outer = "top" if origin == "api" else "bottom"
         bars[origin] = [
             plot.vbar(
                 x="queueday",
@@ -844,7 +877,8 @@ def statsusagechart(request):
                 source=datasource,
                 color=color,
                 line_width=0.0,
-                width=0.52,
+                width=0.55,
+                border_radius={f"{outer}_left": 3, f"{outer}_right": 3},
             )
             for key, _label, color in USAGE_SERIES
         ]
@@ -901,7 +935,7 @@ def statsusagechart(request):
     legend = bokeh.models.Legend(location="top_left", orientation="horizontal", border_line_width=0)
     legend.items = [
         bokeh.models.LegendItem(label=label, renderers=[bar])
-        for (_key, label, _color), bar in zip(USAGE_SERIES, bars["api"], strict=True)
+        for (_key, label, _color), bar in zip(reversed(USAGE_SERIES), reversed(bars["api"]), strict=True)
     ]
     plot.add_layout(legend)
 
