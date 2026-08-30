@@ -1341,9 +1341,9 @@ class UsageChartTests(TestCase):
 
         item = self.chart()
 
-        # only the photometry series has tasks here, so its far edge is the end of the stack
-        assert abs(self.today_count(item, "api_fp_far") - 1.0) < 1e-9
-        assert abs(self.today_count(item, "web_fp_far") + 1.0) < 1e-9
+        # the cap is the last stretch of a stack, so its far edge is where the stack ends
+        assert abs(self.today_count(item, "api_cap_far") - 1.0) < 1e-9
+        assert abs(self.today_count(item, "web_cap_far") + 1.0) < 1e-9
 
     def test_the_tallest_bar_stops_below_the_top_gridline(self) -> None:
         # the room this leaves at the top of each half is where the name of that half is written
@@ -1354,6 +1354,30 @@ class UsageChartTests(TestCase):
 
         # 90 tasks against a top gridline of 100
         assert self.today_count(item, "api_fp_far") < 0.95
+
+    def test_the_outermost_segment_is_drawn_by_the_cap(self) -> None:
+        # only then can the corners the stack ends with be rounded. A cap over part of that segment
+        # would round its corners onto the square end underneath, which is the same colour.
+        for _ in range(100):
+            self.make_task(from_api=True)
+
+        item = self.chart()
+
+        # photometry is the only series here, so the cap is the whole of that day's stack
+        assert self.today_count(item, "api_fp_near") == self.today_count(item, "api_fp_far")
+        assert self.today_count(item, "api_cap_near") == self.today_count(item, "api_fp_near")
+
+    def test_the_cap_is_the_outermost_segment_and_no_more(self) -> None:
+        # a taller one would cover the segment below as well, and show its colour for that day
+        for _ in range(100):
+            self.make_task(from_api=True, request_type="FP")
+        self.make_task(from_api=True, request_type="IMGZIP")
+
+        item = self.chart()
+
+        # the image series is outermost, so the photometry beneath it is drawn in full
+        assert self.today_count(item, "api_cap_near") == self.today_count(item, "api_img_near")
+        assert self.today_count(item, "api_fp_far") == self.today_count(item, "api_img_near")
 
     def test_the_two_halves_do_not_meet_at_the_zero_line(self) -> None:
         # without the gap a day reads as one bar through the axis rather than as two

@@ -710,9 +710,7 @@ USAGE_SERIES = (
 # two arms meet, and one day reads as a single bar through the axis rather than as two.
 USAGE_ARM_SPLIT = 0.031
 
-# The end of a stack is drawn a second time, in the colour of its outermost series, so that its
-# corners can be rounded. This is the height of that cap and the radius of those corners.
-USAGE_CAP = 0.04
+# The radius of the corners a stack ends with.
 USAGE_CAP_RADIUS = 3
 
 
@@ -805,39 +803,53 @@ def statsusagechart(request):
         # the axis units that one task is worth in this half, after the gap at the zero line
         unit = (1.0 - USAGE_ARM_SPLIT) / top if top else 0.0
 
-        running = [USAGE_ARM_SPLIT] * days_back
-
+        # the hover tool reads the tasks, and the bars read the axis units they are drawn in
         for key, _label, _color in USAGE_SERIES:
-            below = running
-            running = [edge + count * unit for edge, count in zip(below, counts[origin][key], strict=True)]
-            # the hover tool reads the tasks, and the bars read the axis units they are drawn in
             data[f"{origin}_{key}"] = counts[origin][key]
-            data[f"{origin}_{key}_near"] = [direction * edge for edge in below]
-            data[f"{origin}_{key}_far"] = [direction * edge for edge in running]
+            data[f"{origin}_{key}_near"] = []
+            data[f"{origin}_{key}_far"] = []
 
-        # The end of the stack, in the colour of the outermost series that has any tasks that day.
-        # bokeh gives a renderer one border_radius for all of its bars, so a stack cannot be capped
-        # by rounding whichever of its four segments happens to be the outermost one that day. It
-        # is capped by drawing that segment's end again, over the square end beneath it.
+        # The outermost segment of a stack is drawn by a bar of its own, so that the corners it
+        # ends with can be rounded: bokeh gives a renderer one border_radius for all of its bars,
+        # and which of the four series is outermost changes from day to day.
+        #
+        # It is the whole segment and not the last stretch of it. A bar that covered only the end
+        # would round its corners onto the square end underneath, which is the same colour, and the
+        # stack would still end square; a bar that stopped just short of it would leave a hairline
+        # of page between the two.
         capcolor: list[str] = []
         capnear: list[float] = []
+        capfar: list[float] = []
+
         for day in range(days_back):
-            cap = 0.0
-            color = USAGE_SERIES[0][2]
+            edge = USAGE_ARM_SPLIT
+            outermost = None
 
-            for key, _label, seriescolor in reversed(USAGE_SERIES):
+            for key, _label, seriescolor in USAGE_SERIES:
                 count = counts[origin][key][day]
-                if count > 0:
-                    # no taller than the segment it caps, or it would paint over the one below
-                    color, cap = seriescolor, min(USAGE_CAP, count * unit)
-                    break
+                start, edge = edge, edge + count * unit
+                data[f"{origin}_{key}_near"].append(direction * start)
+                data[f"{origin}_{key}_far"].append(direction * edge)
 
-            capcolor.append(color)
-            capnear.append(direction * (running[day] - cap))
+                if count > 0:
+                    outermost = (key, start, seriescolor)
+
+            if outermost is None:
+                # a day with no tasks at all: there is no segment to end, and nothing is drawn
+                capcolor.append(USAGE_SERIES[0][2])
+                capnear.append(direction * edge)
+                capfar.append(direction * edge)
+                continue
+
+            key, start, seriescolor = outermost
+            data[f"{origin}_{key}_far"][day] = direction * start
+            capcolor.append(seriescolor)
+            capnear.append(direction * start)
+            capfar.append(direction * edge)
 
         data[f"{origin}_cap_color"] = capcolor
         data[f"{origin}_cap_near"] = capnear
-        data[f"{origin}_cap_far"] = [direction * edge for edge in running]
+        data[f"{origin}_cap_far"] = capfar
 
     datasource = bokeh.plotting.ColumnDataSource(data=data)
 
@@ -851,7 +863,10 @@ def statsusagechart(request):
         # the chart drew as a legend over an axis. A height it is given needs no solving.
         sizing_mode="stretch_width",
         height=430,
-        output_backend="svg",
+        # canvas rather than svg: bokeh's svg backend raises "not implemented" from roundRect, so
+        # the cap that rounds the end of a stack draws as a square corner there. Nothing here asks
+        # for vector output -- this figure has no toolbar, and so no save button
+        output_backend="canvas",
         # transparent, so the figure sits on the page and follows the theme with it. theme.js
         # colours the axes, the gridlines, the legend, the names of the halves and the zero line
         background_fill_color=None,
