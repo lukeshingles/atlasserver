@@ -708,17 +708,18 @@ USAGE_SERIES = (
 
 # The part of each half of statsusagechart that is left empty next to the zero line. Without it the
 # two arms meet, and one day reads as a single bar through the axis rather than as two.
-USAGE_ARM_SPLIT = 0.045
+USAGE_ARM_SPLIT = 0.031
 
-# The page left between one segment of a stack and the next, in the same units. About two pixels at
-# the height the chart is drawn at.
-USAGE_SEGMENT_GAP = 0.012
+# The end of a stack is drawn a second time, in the colour of its outermost series, so that its
+# corners can be rounded. This is the height of that cap and the radius of those corners.
+USAGE_CAP = 0.04
+USAGE_CAP_RADIUS = 3
 
 
 def _usage_arm_ticks(peak: float) -> list[float]:
     """Return the tick values from 0 to the first round number at or above `peak`, in tasks.
 
-    The step is 1, 2, 2.5 or 5 times a power of ten, whichever first gives four or fewer steps.
+    The step is 1, 2, 2.5 or 5 times a power of ten, whichever first gives three or fewer steps.
 
     A step must be a whole number of tasks, so the magnitude stops at one and a step of 2.5 is
     passed over. A fraction of a task cannot be labelled: the labels are written to no decimal
@@ -730,9 +731,9 @@ def _usage_arm_ticks(peak: float) -> list[float]:
     if peak <= 0:
         return [0.0]
 
-    magnitude = 10 ** max(0, math.floor(math.log10(peak / 4)))
+    magnitude = 10 ** max(0, math.floor(math.log10(peak / 3)))
     step = next(
-        m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= peak / 4 and float(m * magnitude).is_integer()
+        m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= peak / 3 and float(m * magnitude).is_integer()
     )
 
     return [n * step for n in range(math.ceil(peak / step) + 1)]
@@ -804,38 +805,45 @@ def statsusagechart(request):
         # the axis units that one task is worth in this half, after the gap at the zero line
         unit = (1.0 - USAGE_ARM_SPLIT) / top if top else 0.0
 
-        # the hover tool reads the tasks, and the bars read the axis units they are drawn in
+        running = [USAGE_ARM_SPLIT] * days_back
+
         for key, _label, _color in USAGE_SERIES:
+            below = running
+            running = [edge + count * unit for edge, count in zip(below, counts[origin][key], strict=True)]
+            # the hover tool reads the tasks, and the bars read the axis units they are drawn in
             data[f"{origin}_{key}"] = counts[origin][key]
-            data[f"{origin}_{key}_near"] = []
-            data[f"{origin}_{key}_far"] = []
+            data[f"{origin}_{key}_near"] = [direction * edge for edge in below]
+            data[f"{origin}_{key}_far"] = [direction * edge for edge in running]
 
+        # The end of the stack, in the colour of the outermost series that has any tasks that day.
+        # bokeh gives a renderer one border_radius for all of its bars, so a stack cannot be capped
+        # by rounding whichever of its four segments happens to be the outermost one that day. It
+        # is capped by drawing that segment's end again, over the square end beneath it.
+        capcolor: list[str] = []
+        capnear: list[float] = []
         for day in range(days_back):
-            edge = USAGE_ARM_SPLIT
-            drawn = False
+            cap = 0.0
+            color = USAGE_SERIES[0][2]
 
-            for key, _label, _color in USAGE_SERIES:
+            for key, _label, seriescolor in reversed(USAGE_SERIES):
                 count = counts[origin][key][day]
-                start, edge = edge, edge + count * unit
+                if count > 0:
+                    # no taller than the segment it caps, or it would paint over the one below
+                    color, cap = seriescolor, min(USAGE_CAP, count * unit)
+                    break
 
-                if count <= 0:
-                    # nothing to draw, and no gap either: the next segment starts where this one did
-                    near = far = start
-                else:
-                    # a strip of page between one segment and the last, so that a boundary between
-                    # two of them is never colour straight onto colour
-                    near = min(start + USAGE_SEGMENT_GAP, edge) if drawn else start
-                    far = edge
-                    drawn = True
+            capcolor.append(color)
+            capnear.append(direction * (running[day] - cap))
 
-                data[f"{origin}_{key}_near"].append(direction * near)
-                data[f"{origin}_{key}_far"].append(direction * far)
+        data[f"{origin}_cap_color"] = capcolor
+        data[f"{origin}_cap_near"] = capnear
+        data[f"{origin}_cap_far"] = [direction * edge for edge in running]
 
     datasource = bokeh.plotting.ColumnDataSource(data=data)
 
     plot = bokeh.plotting.figure(
         x_range=bokeh.models.FactorRange(factors=data["queueday"]),
-        y_range=bokeh.models.Range1d(start=-1.2, end=1.2),
+        y_range=bokeh.models.Range1d(start=-1.08, end=1.42),
         tools=[],
         toolbar_location=None,
         # A height in pixels rather than a ratio. The container gives a width and no height, and
@@ -866,9 +874,14 @@ def statsusagechart(request):
     bars: dict[str, list[Any]] = {}
 
     for origin in ("api", "web"):
-        # the corners of a segment that face away from the zero line, which are the ones the end of
-        # a stack is capped with
-        outer = "top" if origin == "api" else "bottom"
+        # The corners of a bar that face away from the zero line, which are the ones a stack is
+        # capped with. In the order bokeh takes them, which is the order CSS takes them: top left,
+        # top right, bottom right, bottom left. A radius is a whole number of pixels.
+        radius = (
+            (USAGE_CAP_RADIUS, USAGE_CAP_RADIUS, 0, 0)
+            if origin == "api"
+            else (0, 0, USAGE_CAP_RADIUS, USAGE_CAP_RADIUS)
+        )
         bars[origin] = [
             plot.vbar(
                 x="queueday",
@@ -877,18 +890,33 @@ def statsusagechart(request):
                 source=datasource,
                 color=color,
                 line_width=0.0,
-                width=0.55,
-                border_radius={f"{outer}_left": 3, f"{outer}_right": 3},
+                width=0.58,
             )
             for key, _label, color in USAGE_SERIES
         ]
 
-        # one hover per half, so a day reports the counts of the half the pointer is over
+        cap = plot.vbar(
+            x="queueday",
+            bottom=f"{origin}_cap_near",
+            top=f"{origin}_cap_far",
+            source=datasource,
+            color=f"{origin}_cap_color",
+            line_width=0.0,
+            width=0.58,
+        )
+        # Through update() rather than as a keyword of vbar() or an assignment on the glyph.
+        # bokeh's own signature for vbar() does not name border_radius, and its type stub gives the
+        # glyph's border_radius the type of the property that holds it rather than the type of a
+        # value for it, so both spellings are rejected by a type checker.
+        cap.glyph.update(border_radius=radius)
+
+        # one hover per half, so a day reports the counts of the half the pointer is over. The cap
+        # answers for the end of the stack, which is the part of a bar a pointer meets first
         plot.add_tools(
             bokeh.models.HoverTool(
                 tooltips=[("Day", "@queueday")]
                 + [(label, f"@{origin}_{key}") for key, label, _color in reversed(USAGE_SERIES)],
-                renderers=bars[origin],
+                renderers=[*bars[origin], cap],
             )
         )
 
@@ -912,22 +940,39 @@ def statsusagechart(request):
     # rather than as the axis of either one.
     plot.add_layout(bokeh.models.Span(location=0.0, dimension="width", line_width=1.5))
 
-    # Each half names itself and its own peak, in the room its top gridline leaves. This is what
-    # keeps a reader from taking the two heights as comparable, so it is not decoration.
-    for origin, name, corner, offset in (("api", "API", "top_right", -6), ("web", "Web", "bottom_right", 6)):
-        plot.add_layout(
-            bokeh.models.Label(
-                x=bokeh.models.Node(target="frame", symbol=corner),
-                y=bokeh.models.Node(target="frame", symbol=corner),
-                x_offset=-6,
-                y_offset=offset,
-                text=f"{name} \u2014 peak {peaks[origin]:,.0f}/day",
-                text_align="right",
-                text_baseline="top" if origin == "api" else "bottom",
-                text_font_size="11px",
-                text_font_style="bold",
-            )
+    # Each half names itself and its own peak. This is what keeps a reader from taking the two
+    # heights as comparable, so it is not decoration.
+    #
+    # The upper name sits in the room the top gridline leaves inside the frame, beside the legend.
+    # The lower one goes under the day labels, which is the axis label's own place: below the
+    # bottom gridline there is only a margin, and a name written in it would sit on the lowest
+    # bars.
+    plot.add_layout(
+        bokeh.models.Label(
+            x=bokeh.models.Node(target="frame", symbol="top_right"),
+            y=bokeh.models.Node(target="frame", symbol="top_right"),
+            x_offset=-6,
+            y_offset=-6,
+            text=f"API \u2014 peak {peaks['api']:,.0f}/day",
+            text_align="right",
+            text_baseline="top",
+            text_font_size="11px",
+            text_font_style="bold",
         )
+    )
+
+    # A title in the panel below the frame, which is the one place under the day labels that text
+    # can go: bokeh clips an annotation to the frame, so a Label here is not drawn at all, and an
+    # axis label is centred on the end of the axis and runs off the right of the chart.
+    plot.add_layout(
+        bokeh.models.Title(
+            text=f"Web \u2014 peak {peaks['web']:,.0f}/day",
+            align="right",
+            text_font_size="11px",
+            text_font_style="bold",
+        ),
+        "below",
+    )
 
     # One legend for the pair, built from the bars of the upper half. It lies along the top of the
     # frame: moved to the panel above the frame it left the frame no height at all, and the chart
