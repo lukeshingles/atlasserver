@@ -1304,12 +1304,12 @@ class UsageChartTests(TestCase):
         assert self.today_count(item, "api_fp") == 1
         assert self.today_count(item, "api_stall") == 0
 
-    def test_each_half_is_drawn_against_its_own_peak(self) -> None:
+    def test_each_half_is_drawn_against_its_own_scale(self) -> None:
         """The two halves are on their own scales, so neither flattens the other.
 
-        Both reach the same distance from the zero line on their busiest day, however many tasks
-        that day held. The tick labels are what say that those two distances are not the same
-        number of tasks.
+        A hundred API tasks and one web task both land on a round top tick, so both halves reach
+        the same distance from the zero line on their busiest day. The tick labels are what say
+        that those two distances are not the same number of tasks.
         """
         for _ in range(100):
             self.make_task(from_api=True)
@@ -1320,6 +1320,16 @@ class UsageChartTests(TestCase):
         # only the photometry series has tasks here, so its far edge is the end of the stack
         assert abs(self.today_count(item, "api_fp_far") - 1.0) < 1e-9
         assert abs(self.today_count(item, "web_fp_far") + 1.0) < 1e-9
+
+    def test_the_tallest_bar_stops_below_the_top_gridline(self) -> None:
+        # the room this leaves at the top of each half is where the name of that half is written
+        for _ in range(90):
+            self.make_task(from_api=True)
+
+        item = self.chart()
+
+        # 90 tasks against a top gridline of 100
+        assert self.today_count(item, "api_fp_far") < 0.95
 
     def test_the_two_halves_do_not_meet_at_the_zero_line(self) -> None:
         # without the gap a day reads as one bar through the axis rather than as two
@@ -1347,10 +1357,14 @@ class UsageChartTickTests(SimpleTestCase):
             labels = [f"{tick:,.0f}" for tick in ticks]
             assert len(labels) == len(set(labels)), (peak, labels)
 
-    def test_no_tick_is_drawn_past_the_peak_of_its_half(self) -> None:
-        # a tick above the peak sits beyond the end of the half, where the y range does not reach
+    def test_the_top_tick_is_the_first_round_number_above_the_peak(self) -> None:
+        # the half is drawn against its top tick, so that tick has to hold the peak, and it has to
+        # stay near it or the tallest bar of the half is drawn as a stub
         for peak in range(1, 400):
-            assert _usage_arm_ticks(peak)[-1] <= peak, peak
+            top = _usage_arm_ticks(peak)[-1]
+
+            assert top >= peak, peak
+            assert top < 2 * peak, peak
 
     def test_the_ladder_is_coarse_enough_to_read(self) -> None:
         for peak in range(1, 10000):

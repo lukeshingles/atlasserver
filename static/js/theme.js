@@ -183,7 +183,10 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
         background_fill_color: styles.getPropertyValue('--bs-body-bg').trim() || '#FFFFFF',
         border_line_color: linecolor
       },
-      // the zero line the two halves of the usage chart are mirrored about
+      // the name of each half of the usage chart, in the corner of its own side
+      Label: { text_color: textcolor },
+      // the gridlines of the usage chart, and the zero line the two halves are mirrored about
+      Grid: { grid_line_color: linecolor },
       Span: { line_color: linecolor },
       LinearAxis: axis,
       CategoricalAxis: axis

@@ -712,7 +712,7 @@ USAGE_ARM_SPLIT = 0.045
 
 
 def _usage_arm_ticks(peak: float) -> list[float]:
-    """Return the tick values from 0 up to `peak`, in tasks.
+    """Return the tick values from 0 to the first round number at or above `peak`, in tasks.
 
     The step is 1, 2, 2.5 or 5 times a power of ten, whichever first gives four or fewer steps.
 
@@ -720,8 +720,8 @@ def _usage_arm_ticks(peak: float) -> list[float]:
     passed over. A fraction of a task cannot be labelled: the labels are written to no decimal
     place, which put "2" on the tick at 2.5 and "8" on the tick at 7.5.
 
-    The last tick is at or below the peak. A tick above it falls beyond the end of its half of the
-    chart, where the y range does not reach and no label is drawn.
+    The last tick is what its half of the chart is drawn against, and it is at or above the peak.
+    Thus the tallest bar of a half stops below the top gridline rather than at the frame.
     """
     if peak <= 0:
         return [0.0]
@@ -731,7 +731,7 @@ def _usage_arm_ticks(peak: float) -> list[float]:
         m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= peak / 4 and float(m * magnitude).is_integer()
     )
 
-    return [n * step for n in range(int(peak // step) + 1)]
+    return [n * step for n in range(math.ceil(peak / step) + 1)]
 
 
 # the same 15 minutes as statsshortterm, which windows over the same data. This was 30 seconds,
@@ -782,20 +782,23 @@ def statsusagechart(request):
 
     # The API carries about a hundred times the traffic of the web form, so the two halves cannot
     # share a scale: on one axis the web bars are a line on the floor. Each half is therefore drawn
-    # against its own peak, and the tick labels below name the tasks that each half stands for.
+    # against its own gridlines, and their labels name the tasks that each half stands for.
     peaks = {
         origin: max(sum(series[day] for series in counts[origin].values()) for day in range(days_back))
         for origin in counts
     }
+    armticks = {origin: _usage_arm_ticks(peak) for origin, peak in peaks.items()}
 
     data: dict[str, Any] = {
         "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))]
     }
 
     for origin, direction in (("api", 1.0), ("web", -1.0)):
-        peak = peaks[origin]
+        # A half is scaled to its top gridline and not to its peak, which is what leaves the room
+        # above the tallest bar that the name of the half is written in.
+        top = armticks[origin][-1]
         # the axis units that one task is worth in this half, after the gap at the zero line
-        unit = (1.0 - USAGE_ARM_SPLIT) / peak if peak else 0.0
+        unit = (1.0 - USAGE_ARM_SPLIT) / top if top else 0.0
         running = [USAGE_ARM_SPLIT] * days_back
 
         for key, _label, _color in USAGE_SERIES:
@@ -809,16 +812,10 @@ def statsusagechart(request):
     datasource = bokeh.plotting.ColumnDataSource(data=data)
 
     plot = bokeh.plotting.figure(
-        # the three blank days at the end are the room the legend sits in, so that it covers no
-        # bars. The same trick held the legend of the two figures this replaced
-        x_range=bokeh.models.FactorRange(factors=[*data["queueday"], " ", "  ", "   "]),
-        y_range=bokeh.models.Range1d(start=-1.06, end=1.06),
+        x_range=bokeh.models.FactorRange(factors=data["queueday"]),
+        y_range=bokeh.models.Range1d(start=-1.2, end=1.2),
         tools=[],
         toolbar_location=None,
-        # Each half names its own peak here rather than in a corner of the frame. The halves are on
-        # their own scales, so a reader who takes the two heights as comparable reads the chart
-        # wrong; this line, and the tick labels, are what say that they are not.
-        title=(f"API above, peak {peaks['api']:,.0f}/day    \u00b7    Web below, peak {peaks['web']:,.0f}/day"),
         # A height in pixels rather than a ratio. The container gives a width and no height, and
         # bokeh solved the first layout of a ratio against it with a frame of no height at all:
         # the chart drew as a legend over an axis. A height it is given needs no solving.
@@ -826,12 +823,14 @@ def statsusagechart(request):
         height=430,
         output_backend="svg",
         # transparent, so the figure sits on the page and follows the theme with it. theme.js
-        # colours the title, the axes, the legend and the zero line to match
+        # colours the axes, the gridlines, the legend, the names of the halves and the zero line
         background_fill_color=None,
         border_fill_color=None,
     )
 
-    plot.grid.visible = False
+    # the gridlines of one half are the ticks of that half alone, so they run across the frame and
+    # the day boundaries do not
+    plot.xgrid.visible = False
 
     # the bars of each half, in the order they stack away from the zero line
     bars: dict[str, list[Any]] = {}
@@ -860,14 +859,14 @@ def statsusagechart(request):
         )
 
     # The ticks of the two halves are the same line of code twice over, but they are not the same
-    # numbers: each half is scaled to its own peak, so a tick at the same height means about a
-    # hundred times more tasks above the axis than below it.
+    # numbers: each half is scaled to its own gridlines, so a tick at the same height means about
+    # a hundred times more tasks above the axis than below it.
     tickpositions = [0.0]
     ticklabels: dict[float | str, Any] = {0.0: "0"}
     for origin, direction in (("api", 1.0), ("web", -1.0)):
-        peak = peaks[origin]
-        unit = (1.0 - USAGE_ARM_SPLIT) / peak if peak else 0.0
-        for value in _usage_arm_ticks(peak)[1:]:
+        ticks = armticks[origin]
+        unit = (1.0 - USAGE_ARM_SPLIT) / ticks[-1] if ticks[-1] else 0.0
+        for value in ticks[1:]:
             position = direction * (USAGE_ARM_SPLIT + value * unit)
             tickpositions.append(position)
             ticklabels[position] = f"{value:,.0f}"
@@ -879,10 +878,27 @@ def statsusagechart(request):
     # rather than as the axis of either one.
     plot.add_layout(bokeh.models.Span(location=0.0, dimension="width", line_width=1.5))
 
-    # One legend for the pair, built from the bars of the upper half. It stays inside the frame,
-    # in the blank days the x range ends with: moved to the panel above the frame it left the
-    # frame no height at all, and the chart drew as a legend over an axis.
-    legend = bokeh.models.Legend(location="top_right", border_line_width=0)
+    # Each half names itself and its own peak, in the room its top gridline leaves. This is what
+    # keeps a reader from taking the two heights as comparable, so it is not decoration.
+    for origin, name, corner, offset in (("api", "API", "top_right", -6), ("web", "Web", "bottom_right", 6)):
+        plot.add_layout(
+            bokeh.models.Label(
+                x=bokeh.models.Node(target="frame", symbol=corner),
+                y=bokeh.models.Node(target="frame", symbol=corner),
+                x_offset=-6,
+                y_offset=offset,
+                text=f"{name} \u2014 peak {peaks[origin]:,.0f}/day",
+                text_align="right",
+                text_baseline="top" if origin == "api" else "bottom",
+                text_font_size="11px",
+                text_font_style="bold",
+            )
+        )
+
+    # One legend for the pair, built from the bars of the upper half. It lies along the top of the
+    # frame: moved to the panel above the frame it left the frame no height at all, and the chart
+    # drew as a legend over an axis.
+    legend = bokeh.models.Legend(location="top_left", orientation="horizontal", border_line_width=0)
     legend.items = [
         bokeh.models.LegendItem(label=label, renderers=[bar])
         for (_key, label, _color), bar in zip(USAGE_SERIES, bars["api"], strict=True)
