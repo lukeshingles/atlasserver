@@ -12,8 +12,9 @@ deferred or end-of-body script would let the browser paint a light page first an
 dark, which is a visible flash on every navigation.
 
 window.atlasTheme is the interface for the parts of the page that are drawn rather than styled:
-lightcurveplotly.js asks plotlyColors() for the colours to build a plot with, and the "atlas:theme"
-event fires whenever the mode changes so an existing plot can be recoloured in place.
+lightcurveplotly.js asks plotlyColors() for the colours to build a plot with, stats.html asks
+themeBokehItem() to colour a bokeh chart before it is built, and the "atlas:theme" event fires
+whenever the mode changes so an existing plot or chart can be recoloured in place.
 */
 
 (function () {
@@ -147,6 +148,126 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
     });
   }
 
+  /*
+  Colours for the two stats charts. bokeh paints a chart into a canvas from the properties of the
+  models it is given, so -- as with the light curves -- the stylesheet cannot reach it.
+
+  The table is keyed by the bokeh model each set of properties belongs to. The two functions below
+  both work from it: one colours the models a response carries, the other the models of a chart
+  that is already drawn.
+
+  A figure is itself transparent (see forcephot/views.py) and sits on the page background, so only
+  its outline is named here. The colours of the bars and of the sky are the data, and views.py
+  keeps them with the data.
+  */
+  function bokehColors() {
+    var styles = getComputedStyle(document.documentElement);
+    var textcolor = styles.getPropertyValue('--bs-body-color').trim() || '#212529';
+    var linecolor = styles.getPropertyValue('--bs-border-color').trim() || '#DEE2E6';
+    // lighter than the rest: a gridline is read past rather than looked at
+    var gridcolor = styles.getPropertyValue('--bs-border-color-translucent').trim() || 'rgba(0, 0, 0, 0.175)';
+
+    var axis = {
+      axis_label_text_color: textcolor,
+      major_label_text_color: textcolor,
+      axis_line_color: linecolor,
+      major_tick_line_color: linecolor,
+      minor_tick_line_color: linecolor
+    };
+
+    return {
+      Figure: { outline_line_color: linecolor },
+      Title: { text_color: textcolor },
+      // the legend sits on a transparent figure, so the page background is what separates it from
+      // the bars behind it
+      Legend: {
+        label_text_color: textcolor,
+        background_fill_color: styles.getPropertyValue('--bs-body-bg').trim() || '#FFFFFF',
+        border_line_color: linecolor
+      },
+      // the name of each half of the usage chart, in the corner of its own side
+      Label: { text_color: textcolor },
+      // the gridlines of the usage chart, and the zero line the two halves are mirrored about
+      Grid: { grid_line_color: gridcolor },
+      Span: { line_color: linecolor },
+      LinearAxis: axis,
+      CategoricalAxis: axis
+    };
+  }
+
+  /*
+  Colour the models in the JSON of a statsusagechart or statscoordchart response.
+
+  bokeh writes a model as an object that gives the name of its type and the properties which
+  differ from the defaults. Each later mention of that model is its id alone. Thus the colours go
+  on the one object that carries `attributes`.
+
+  The page does this before it calls Bokeh.embed.embed_item, so bokeh draws the chart in the right
+  colours the first time.
+  */
+  /*
+  The properties of `attrs` that `current` has not turned off.
+
+  A chart says it wants no line by giving that line no colour: the usage chart has no box around
+  its frame and no rule along either axis. Without this the table below would colour those lines
+  in, and put them back.
+  */
+  function stillDrawn(attrs, current) {
+    var wanted = {};
+    Object.keys(attrs).forEach(function (property) {
+      if (current[property] !== null) {
+        wanted[property] = attrs[property];
+      }
+    });
+    return wanted;
+  }
+
+  function themeBokehItem(item) {
+    var colors = bokehColors();
+
+    (function paint(node) {
+      if (Array.isArray(node)) {
+        node.forEach(paint);
+        return;
+      }
+      if (node === null || typeof node !== 'object') {
+        return;
+      }
+      if (node.type === 'object' && colors[node.name]) {
+        node.attributes = Object.assign(node.attributes || {}, stillDrawn(colors[node.name], node.attributes || {}));
+      }
+      Object.keys(node).forEach(function (key) {
+        paint(node[key]);
+      });
+    })(item);
+
+    return item;
+  }
+
+  /*
+  Recolour the stats charts that are already on screen. Every chart bokeh has built is a document
+  in Bokeh.documents. A change to a property redraws the part of the chart that shows it, and thus
+  keeps whatever the visitor has panned or zoomed to.
+
+  setv throws on a property that the model does not have, so a model is only given the properties
+  of its own type.
+  */
+  function recolourBokehCharts() {
+    if (!window.Bokeh || !window.Bokeh.documents) {
+      return;
+    }
+
+    var colors = bokehColors();
+
+    window.Bokeh.documents.forEach(function (doc) {
+      doc.all_models.forEach(function (model) {
+        if (colors[model.type]) {
+          model.setv(stillDrawn(colors[model.type], model));
+        }
+      });
+    });
+  }
+
   function applyMode(mode) {
     document.documentElement.setAttribute('data-bs-theme', resolve(mode));
     document.dispatchEvent(new CustomEvent('atlas:theme', { detail: { theme: currentTheme() } }));
@@ -191,6 +312,7 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
     });
 
     document.addEventListener('atlas:theme', recolourPlots);
+    document.addEventListener('atlas:theme', recolourBokehCharts);
   }
 
   /*
@@ -204,7 +326,7 @@ event fires whenever the mode changes so an existing plot can be recoloured in p
     }
   }
 
-  window.atlasTheme = { current: currentTheme, plotlyColors: plotlyColors };
+  window.atlasTheme = { current: currentTheme, plotlyColors: plotlyColors, themeBokehItem: themeBokehItem };
 
   applyMode(chosenMode);
 

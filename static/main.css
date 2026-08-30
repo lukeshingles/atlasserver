@@ -1431,22 +1431,13 @@ table.countrystats th[scope="row"] {
   font-weight: normal !important;
 }
 
-.bk-logo {
-  display: none !important;
-}
+/* The toolbar of the coordinate chart. bokeh draws each button as a mask that it fills with one
+   colour, and it reads that colour from --bokeh-icon-color on the page. A grey of its own is used
+   if the page does not set it, which on the dark theme is almost the background.
 
-/* The two stats charts are drawn by bokeh on the server, into a white figure with dark text, and
-   both endpoints are cached and served to every visitor alike -- so unlike the light curves, which
-   Plotly draws in the browser, they cannot be asked to follow a preference held in the browser.
-   They stay as they are and get a light card to sit on, so on the dark theme they read as panels
-   rather than as two bare white rectangles. */
-[data-bs-theme="dark"] #statsusagechart,
-[data-bs-theme="dark"] #statscoordchart {
-  background-color: #f8f9fa;
-  /* the "Loading..." placeholder and the message left behind if the fetch fails are ordinary text
-     in these containers, so they need the colour that goes with the card rather than the page's */
-  color: #212529;
-  border-radius: 0.5em;
+   This is all a stylesheet can reach: the chart itself is a canvas, which theme.js colours. */
+:root {
+  --bokeh-icon-color: var(--bs-secondary-color);
 }
 
 #submitrequest.submitting {

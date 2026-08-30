@@ -55,6 +55,7 @@ from atlasserver.forcephot.queue import calculate_queue_positions
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import is_finite_float
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
+from atlasserver.forcephot.views import _usage_arm_ticks
 from atlasserver.forcephot.views import geoip_reader
 from atlasserver.forcephot.views import geoip_reader_forget
 from atlasserver.forcephot.webhooks import CallbackUrlError
@@ -1206,21 +1207,45 @@ class FromApiDetectionTests(TestCase):
 
 
 class UsageChartTests(TestCase):
-    """The usage chart splits every series by from_api, so each figure counts its own submitters."""
+    """The usage chart mirrors two halves about a day axis, each on its own scale.
+
+    Every series is split by from_api, so each half counts its own submitters, and the unfinished
+    tasks are split again on attempt_count.
+    """
 
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="usagechart", email="uc@example.com", password=None)
         caches["usagestats"].clear()
 
-    def make_task(self, *, from_api: bool, request_type: str) -> Task:
+    def make_task(self, *, from_api: bool, request_type: str = "FP", finished: bool = True, attempts: int = 0) -> Task:
         return Task.objects.create(
             user=self.user,
             ra=1.0,
             dec=2.0,
             request_type=request_type,
             from_api=from_api,
-            finishtimestamp=timezone.now(),
+            attempt_count=attempts,
+            finishtimestamp=timezone.now() if finished else None,
         )
+
+    def chart(self) -> str:
+        """Return the chart as the page receives it, as one string to search."""
+        response = self.client.get(reverse("statsusagechart"))
+
+        assert response.status_code == 200, response.status_code
+
+        return json.dumps(response.json()["item"])
+
+    def today_count(self, item: str, series: str) -> float:
+        """Return today's value of one series of the ColumnDataSource.
+
+        Bokeh writes each series as a ["name", [...]] pair, and the last column of a series is
+        today.
+        """
+        marker = f'["{series}", '
+        assert marker in item, series
+
+        return json.loads(item.split(marker, maxsplit=1)[1].split("]", maxsplit=1)[0] + "]")[-1]
 
     def test_the_chart_renders_with_tasks_of_every_origin(self) -> None:
         for from_api in (True, False):
@@ -1230,29 +1255,171 @@ class UsageChartTests(TestCase):
         response = self.client.get(reverse("statsusagechart"))
 
         assert response.status_code == 200, response.status_code
-        chart = response.json()
-        assert chart["script"]
-        assert chart["div"]
+        item = response.json()["item"]
+        assert item["doc"]
+        assert item["root_id"]
 
-    def test_an_api_image_request_is_counted_on_the_api_figure(self) -> None:
-        # an unfiltered IMGZIP series put every image request on the web figure, so a task that
-        # waited as an API bar moved to the other plot when it finished
-        self.make_task(from_api=True, request_type="IMGZIP")
+    def legend_labels(self, item: str) -> list[str]:
+        """Return the series the legend names, in the order it names them."""
+        return [
+            block.split('"value": "', maxsplit=1)[1].split('"', maxsplit=1)[0]
+            for block in item.split('"name": "LegendItem"')[1:]
+        ]
 
+    def test_a_series_with_no_tasks_is_not_named_in_the_legend(self) -> None:
+        # on a healthy fortnight nothing has been attempted and left unfinished, and a colour that
+        # is nowhere on the chart is not a key to the chart
+        self.make_task(from_api=True, request_type="FP")
+
+        labels = self.legend_labels(self.chart())
+
+        assert labels == ["Finished, photometry"], labels
+
+    def test_a_series_the_other_half_has_tasks_for_is_still_named(self) -> None:
+        self.make_task(from_api=True, request_type="FP")
+        self.make_task(from_api=False, finished=False, attempts=2)
+
+        labels = self.legend_labels(self.chart())
+
+        assert labels == ["Attempted, unfinished", "Finished, photometry"], labels
+
+    def test_the_chart_renders_with_no_tasks_at_all(self) -> None:
+        # every peak is then zero, which is the divisor each half is scaled by
         response = self.client.get(reverse("statsusagechart"))
 
         assert response.status_code == 200, response.status_code
-        script = response.json()["script"]
 
-        # the counts reach the browser inside the ColumnDataSource that the script builds. Bokeh
-        # writes each series as a ["name",[...]] pair, and the last column of a series is today
-        def today_count(series: str) -> float:
-            marker = f'["{series}",'
-            assert marker in script, series
-            return json.loads(script.split(marker)[1].split("]")[0] + "]")[-1]
+    def test_an_api_image_request_is_counted_on_the_api_half(self) -> None:
+        # an unfiltered IMGZIP series put every image request on the web half, so a task that
+        # waited on the API side moved across when it finished
+        self.make_task(from_api=True, request_type="IMGZIP")
 
-        assert today_count("dayfinished_apiimg_counts") == 1
-        assert today_count("dayfinished_img_counts") == 0
+        item = self.chart()
+
+        assert self.today_count(item, "api_img") == 1
+        assert self.today_count(item, "web_img") == 0
+
+    def test_a_finished_solar_system_stack_stays_on_the_chart(self) -> None:
+        # The two unfinished series count a task of any type. A type that no finished series
+        # counted would therefore leave the queued band and reappear nowhere, and the total of
+        # that day would fall as its tasks finished.
+        self.make_task(from_api=True, request_type="SSOSTACK")
+
+        item = self.chart()
+
+        assert self.today_count(item, "api_img") == 1
+
+    def test_a_task_the_runner_gave_up_on_is_told_from_one_that_is_waiting_its_turn(self) -> None:
+        # the two say different things about the server: a queue is busy, a task the runner started
+        # and did not finish is a fault
+        self.make_task(from_api=True, finished=False, attempts=0)
+        self.make_task(from_api=True, finished=False, attempts=3)
+
+        item = self.chart()
+
+        assert self.today_count(item, "api_queue") == 1
+        assert self.today_count(item, "api_stall") == 1
+
+    def test_a_finished_task_counts_as_finished_however_many_attempts_it_took(self) -> None:
+        self.make_task(from_api=True, finished=True, attempts=4)
+
+        item = self.chart()
+
+        assert self.today_count(item, "api_fp") == 1
+        assert self.today_count(item, "api_stall") == 0
+
+    def test_each_half_is_drawn_against_its_own_scale(self) -> None:
+        """The two halves are on their own scales, so neither flattens the other.
+
+        A hundred API tasks and one web task both land on a round top tick, so both halves reach
+        the same distance from the zero line on their busiest day. The tick labels are what say
+        that those two distances are not the same number of tasks.
+        """
+        for _ in range(100):
+            self.make_task(from_api=True)
+        self.make_task(from_api=False)
+
+        item = self.chart()
+
+        # the cap is the last stretch of a stack, so its far edge is where the stack ends
+        assert abs(self.today_count(item, "api_cap_far") - 1.0) < 1e-9
+        assert abs(self.today_count(item, "web_cap_far") + 1.0) < 1e-9
+
+    def test_the_tallest_bar_stops_below_the_top_gridline(self) -> None:
+        # the room this leaves at the top of each half is where the name of that half is written
+        for _ in range(90):
+            self.make_task(from_api=True)
+
+        item = self.chart()
+
+        # 90 tasks against a top gridline of 100
+        assert self.today_count(item, "api_fp_far") < 0.95
+
+    def test_the_outermost_segment_is_drawn_by_the_cap(self) -> None:
+        # only then can the corners the stack ends with be rounded. A cap over part of that segment
+        # would round its corners onto the square end underneath, which is the same colour.
+        for _ in range(100):
+            self.make_task(from_api=True)
+
+        item = self.chart()
+
+        # photometry is the only series here, so the cap is the whole of that day's stack
+        assert self.today_count(item, "api_fp_near") == self.today_count(item, "api_fp_far")
+        assert self.today_count(item, "api_cap_near") == self.today_count(item, "api_fp_near")
+
+    def test_the_cap_is_the_outermost_segment_and_no_more(self) -> None:
+        # a taller one would cover the segment below as well, and show its colour for that day
+        for _ in range(100):
+            self.make_task(from_api=True, request_type="FP")
+        self.make_task(from_api=True, request_type="IMGZIP")
+
+        item = self.chart()
+
+        # the image series is outermost, so the photometry beneath it is drawn in full
+        assert self.today_count(item, "api_cap_near") == self.today_count(item, "api_img_near")
+        assert self.today_count(item, "api_fp_far") == self.today_count(item, "api_img_near")
+
+    def test_the_two_halves_do_not_meet_at_the_zero_line(self) -> None:
+        # without the gap a day reads as one bar through the axis rather than as two
+        self.make_task(from_api=True)
+        self.make_task(from_api=False)
+
+        item = self.chart()
+
+        assert self.today_count(item, "api_fp_near") > 0.0
+        assert self.today_count(item, "web_fp_near") < 0.0
+
+
+class UsageChartTickTests(SimpleTestCase):
+    """The y ticks of one half of the usage chart.
+
+    The labels are written to no decimal place, and they name a number of tasks, so every tick has
+    to be a whole number. The chart is drawn to the peak of its half, so no tick may exceed it.
+    """
+
+    def test_a_step_is_always_a_whole_number_of_tasks(self) -> None:
+        for peak in range(1, 400):
+            ticks = _usage_arm_ticks(peak)
+
+            assert all(float(tick).is_integer() for tick in ticks), (peak, ticks)
+            labels = [f"{tick:,.0f}" for tick in ticks]
+            assert len(labels) == len(set(labels)), (peak, labels)
+
+    def test_the_top_tick_is_the_first_round_number_above_the_peak(self) -> None:
+        # the half is drawn against its top tick, so that tick has to hold the peak, and it has to
+        # stay near it or the tallest bar of the half is drawn as a stub
+        for peak in range(1, 400):
+            top = _usage_arm_ticks(peak)[-1]
+
+            assert top >= peak, peak
+            assert top < 2 * peak, peak
+
+    def test_the_ladder_is_coarse_enough_to_read(self) -> None:
+        for peak in range(1, 10000):
+            assert len(_usage_arm_ticks(peak)) <= 6, peak
+
+    def test_a_half_with_no_tasks_has_only_its_zero(self) -> None:
+        assert _usage_arm_ticks(0) == [0.0]
 
 
 # the header line of a forced photometry result file. Module level because two unrelated test

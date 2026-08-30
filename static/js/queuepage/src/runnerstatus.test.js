@@ -74,6 +74,26 @@ function loadPageModule(tag) {
     return import(`./runnerstatus.js?${tag}=${Date.now()}`);
 }
 
+/**
+ * A storage of the shape that the cache uses, holding its items in an object.
+ *
+ * Every group that reaches a storage takes one of these. The store and the cache must not read
+ * the storage of the process: node gives a working sessionStorage of its own, so a test would
+ * start from the record that the test before it wrote.
+ *
+ * `refuse` gives the storage of a browser that is set to refuse site data, which throws from each
+ * of these rather than giving null.
+ */
+function fakeStorage(items = {}, { refuse = false } = {}) {
+    const guard = () => { if (refuse) { throw new Error('refused'); } };
+    return {
+        items,
+        getItem: (key) => { guard(); return key in items ? items[key] : null; },
+        setItem: (key, value) => { guard(); items[key] = String(value); },
+        removeItem: (key) => { guard(); delete items[key]; },
+    };
+}
+
 const healthy = (overrides = {}) => ({
     stale: false,
     maintenance: false,
@@ -220,21 +240,40 @@ describe('runnerMessage', () => {
 describe('the store', () => {
     let bodies;
     let fetched;
+    let storage;
+    let stores;
 
     beforeEach(() => {
         fetched = [];
         bodies = [];
+        storage = fakeStorage();
+        stores = [];
         global.fetch = queuedFetch(bodies, fetched);
     });
 
     afterEach(() => {
+        // A failed assertion skips the unsubscribe at the end of its test, and the poll of that
+        // store then holds the process open. The suite reports nothing at all in that case: it
+        // runs to the end and then waits for a timer that no test can reach.
+        stores.forEach((store) => store.stop());
         delete global.fetch;
         mock.timers.reset();
     });
 
+    /**
+     * A store of the endpoint, on the empty storage of this test.
+     *
+     * Each store made here is stopped in afterEach, whether its test ended or failed.
+     */
+    const storeOf = (poll = 1000) => {
+        const store = createStore({ url: STATUS_URL, poll, storage });
+        stores.push(store);
+        return store;
+    };
+
     test('the first response reaches a subscriber', async () => {
         bodies.push({ body: healthy() });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
         const seen = [];
 
         const unsubscribe = store.subscribe((status) => seen.push(status));
@@ -249,7 +288,7 @@ describe('the store', () => {
 
     test('a subscriber that arrives later is told the current status at once', async () => {
         bodies.push({ body: healthy() });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
         const first = store.subscribe(() => {});
         await settle();
 
@@ -264,7 +303,7 @@ describe('the store', () => {
 
     test('a poll that says the same thing tells nobody', async () => {
         bodies.push({ body: healthy() }, { body: healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 9 }) });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
         const seen = [];
         const unsubscribe = store.subscribe((status) => seen.push(status));
 
@@ -286,7 +325,7 @@ describe('the store', () => {
         // outage.
         const down = (age) => ({ body: { stale: true, queued_task_count: 1, status_age_seconds: age, typical_runtime_seconds: {} } });
         bodies.push(down(61), down(7200));
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
         const seen = [];
         const unsubscribe = store.subscribe((status) => seen.push(status));
 
@@ -305,7 +344,7 @@ describe('the store', () => {
         // not take a status code for an answer either way, so a release that still answers 503 is
         // read while it is being replaced.
         bodies.push({ status: 503, body: { stale: true, status_age_seconds: 300 } });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
         const seen = [];
         const unsubscribe = store.subscribe((status) => seen.push(status));
 
@@ -317,7 +356,7 @@ describe('the store', () => {
     test('an unreachable endpoint is not an outage, until it has been unreachable for a while', async () => {
         mock.timers.enable({ apis: ['setInterval', 'Date'] });
         bodies.push({ body: healthy() });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
         const seen = [];
         const unsubscribe = store.subscribe((status) => seen.push(status));
         await settle();
@@ -344,7 +383,7 @@ describe('the store', () => {
         const window = setupDom();
         try {
             bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
-            const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+            const store = storeOf();
             const unsubscribe = store.subscribe(() => {});
             await settle();
             assert.equal(fetched.length, 1);
@@ -369,7 +408,7 @@ describe('the store', () => {
         try {
             window.user_is_active = false;
             bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
-            const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+            const store = storeOf(100000);
             unsubscribe = store.subscribe(() => {});
             await settle();
 
@@ -391,7 +430,7 @@ describe('the store', () => {
         try {
             window.user_is_active = false;
             bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
-            const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+            const store = storeOf();
             unsubscribe = store.subscribe(() => {});
             await settle();
             assert.equal(fetched.length, 1, 'the first request fills the box either way');
@@ -416,7 +455,7 @@ describe('the store', () => {
             answers.push((slow) => resolve({ ok: true, status: 200, json: () => Promise.resolve(body) }));
         });
 
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const store = storeOf(100000);
         const unsubscribe = store.subscribe(() => {});
         store.refresh();
         await settle();
@@ -451,7 +490,7 @@ describe('the store', () => {
             });
         };
 
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const store = storeOf(100000);
         const unsubscribe = store.subscribe(() => {});
         try {
             store.refresh();
@@ -472,7 +511,7 @@ describe('the store', () => {
             answer = () => resolve({ ok: true, status: 200, json: () => Promise.resolve(healthy()) });
         });
 
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const store = storeOf(100000);
         store.subscribe(() => {})();
         answer();
         await settle();
@@ -485,7 +524,7 @@ describe('the store', () => {
         // first reader went to the catch of the fetch, which reads each exception as an endpoint
         // that it cannot reach. The queue page then had no status for the life of the page.
         bodies.push({ body: healthy() });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 100000 });
+        const store = storeOf(100000);
         const seen = [];
         const errors = [];
         const consoleError = console.error;
@@ -512,7 +551,7 @@ describe('the store', () => {
     test('the last reader to leave stops the poll', async () => {
         mock.timers.enable({ apis: ['setInterval', 'Date'] });
         bodies.push({ body: healthy() }, { body: healthy({ slots_busy: 9 }) });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
 
         const first = store.subscribe(() => {});
         const second = store.subscribe(() => {});
@@ -533,7 +572,7 @@ describe('the store', () => {
     test('unsubscribing twice does not stop a poll somebody else started', async () => {
         mock.timers.enable({ apis: ['setInterval', 'Date'] });
         bodies.push({ body: healthy() }, { body: healthy() }, { body: healthy() });
-        const store = createStore({ url: '/taskrunnerstatus.json', poll: 1000 });
+        const store = storeOf();
 
         const first = store.subscribe(() => {});
         first();
@@ -560,22 +599,6 @@ describe('the store', () => {
  * page that reaches sessionStorage itself is tested with the rest of the page load, below.
  */
 describe('the status kept for the next page', () => {
-    /**
-     * A storage of the shape that the cache uses, holding its items in an object.
-     *
-     * `refuse` gives the storage of a browser that is set to refuse site data, which throws from
-     * each of these rather than giving null.
-     */
-    function fakeStorage(items = {}, { refuse = false } = {}) {
-        const guard = () => { if (refuse) { throw new Error('refused'); } };
-        return {
-            items,
-            getItem: (key) => { guard(); return key in items ? items[key] : null; },
-            setItem: (key, value) => { guard(); items[key] = String(value); },
-            removeItem: (key) => { guard(); delete items[key]; },
-        };
-    }
-
     /**
      * The items of a storage holding a record as a page would have left it `ago` ms ago.
      *
