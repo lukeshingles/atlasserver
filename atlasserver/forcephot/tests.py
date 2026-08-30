@@ -1259,6 +1259,30 @@ class UsageChartTests(TestCase):
         assert item["doc"]
         assert item["root_id"]
 
+    def legend_labels(self, item: str) -> list[str]:
+        """Return the series the legend names, in the order it names them."""
+        return [
+            block.split('"value": "', maxsplit=1)[1].split('"', maxsplit=1)[0]
+            for block in item.split('"name": "LegendItem"')[1:]
+        ]
+
+    def test_a_series_with_no_tasks_is_not_named_in_the_legend(self) -> None:
+        # on a healthy fortnight nothing has been attempted and left unfinished, and a colour that
+        # is nowhere on the chart is not a key to the chart
+        self.make_task(from_api=True, request_type="FP")
+
+        labels = self.legend_labels(self.chart())
+
+        assert labels == ["Finished, photometry"], labels
+
+    def test_a_series_the_other_half_has_tasks_for_is_still_named(self) -> None:
+        self.make_task(from_api=True, request_type="FP")
+        self.make_task(from_api=False, finished=False, attempts=2)
+
+        labels = self.legend_labels(self.chart())
+
+        assert labels == ["Attempted, unfinished", "Finished, photometry"], labels
+
     def test_the_chart_renders_with_no_tasks_at_all(self) -> None:
         # every peak is then zero, which is the divisor each half is scaled by
         response = self.client.get(reverse("statsusagechart"))

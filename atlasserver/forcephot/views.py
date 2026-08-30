@@ -978,9 +978,14 @@ def statsusagechart(request):
     # frame: moved to the panel above the frame it left the frame no height at all, and the chart
     # drew as a legend over an axis.
     legend = bokeh.models.Legend(location="top_left", orientation="horizontal", border_line_width=0)
+    # A series with no tasks in the fortnight is left out of it. On a healthy fortnight the runner
+    # has attempted nothing and left it unfinished, and a colour that is nowhere on the chart is
+    # not a key to the chart. Both halves are counted: a series the web form has no tasks for is
+    # still named while the API has some.
     legend.items = [
         bokeh.models.LegendItem(label=label, renderers=[bar])
-        for (_key, label, _color), bar in zip(reversed(USAGE_SERIES), reversed(bars["api"]), strict=True)
+        for (key, label, _color), bar in zip(reversed(USAGE_SERIES), reversed(bars["api"]), strict=True)
+        if any(sum(counts[origin][key]) for origin in counts)
     ]
     plot.add_layout(legend)
 
