@@ -1431,10 +1431,6 @@ table.countrystats th[scope="row"] {
   font-weight: normal !important;
 }
 
-.bk-logo {
-  display: none !important;
-}
-
 /* The toolbar of the coordinate chart. bokeh draws each button as a mask that it fills with one
    colour, and it reads that colour from --bokeh-icon-color on the page. A grey of its own is used
    if the page does not set it, which on the dark theme is almost the background.

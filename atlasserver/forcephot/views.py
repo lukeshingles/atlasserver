@@ -667,6 +667,10 @@ def statscoordchart(request):
 
     plot.grid.visible = False
 
+    # The toolbar of this figure is inside a shadow root, which no rule in main.css can reach. The
+    # logo therefore goes here, where bokeh builds the toolbar.
+    plot.toolbar.logo = None
+
     rcirc = plot.circle(
         "ra", "dec", source=source, color="white", radius=0.05, hover_color="orange", alpha=0.7, hover_alpha=1.0
     )
@@ -776,13 +780,9 @@ def statsusagechart(request):
             "stall": get_days_ago_counts(unfinished.filter(from_api=from_api, attempt_count__gte=1)),
         }
 
-    # The two halves do not share a scale. Each is drawn against its own peak, and the tick labels
-    # below name the tasks that each half stands for.
-    #
-    # The API side is the larger of the two, and by a margin that moves: it carries about a hundred
-    # times the forced photometry of the web form, but only about four times the tasks of all types,
-    # because most image requests come from the web form. A shared scale would therefore be legible
-    # on some fortnights and flatten the web half on others.
+    # The API carries about a hundred times the traffic of the web form, so the two halves cannot
+    # share a scale: on one axis the web bars are a line on the floor. Each half is therefore drawn
+    # against its own peak, and the tick labels below name the tasks that each half stands for.
     peaks = {
         origin: max(sum(series[day] for series in counts[origin].values()) for day in range(days_back))
         for origin in counts
