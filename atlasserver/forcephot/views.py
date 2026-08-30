@@ -636,7 +636,7 @@ def statscoordchart(request):
     # serve this endpoint and statsusagechart, both of which are cached for a day
     import bokeh.models
     import bokeh.plotting
-    from bokeh.embed import components
+    from bokeh.embed import json_item
 
     tasks = list(Task.objects.all().order_by("-timestamp")[:20000].select_related("user"))
 
@@ -651,7 +651,10 @@ def statscoordchart(request):
     plot = bokeh.plotting.figure(
         tools="pan,wheel_zoom,box_zoom,reset",
         aspect_ratio=2,
+        # the sky is dark on both themes, but the margin around it takes the colour of the page.
+        # theme.js gives the title, the axes and the outline the colours that go with that page
         background_fill_color="#040154",
+        border_fill_color=None,
         active_scroll="wheel_zoom",
         title="Recently requested coordinates",
         x_axis_label="Right ascension (deg)",
@@ -677,9 +680,54 @@ def statscoordchart(request):
         )
     )
 
-    script, strhtml = components(plot)
+    # json_item rather than components: the page builds the chart itself with
+    # Bokeh.embed.embed_item, which lets theme.js colour the models before bokeh draws them
+    return JsonResponse({"item": json_item(plot)})
 
-    return JsonResponse({"script": script, "div": strhtml})
+
+# The colours of the four series of statsusagechart, from the bottom of a stack outward.
+#
+# These are the data, so they are held here rather than in theme.js with the colours of the frame.
+# One step of each hue serves both themes: each clears the lightness band, the chroma floor and the
+# 3:1 contrast floor against the white page and against the #212529 dark one, and each touching
+# pair separates by dE 8.4 or more under protanopia and deuteranopia.
+#
+# The red is a state and not a fourth series. It marks work the task runner picked up and did not
+# finish, which is a fact about the server rather than a busier version of the queue, so it is held
+# apart from the three hues that carry the ordinary series.
+USAGE_SERIES = (
+    ("fp", "Finished, photometry", "#3987e5"),
+    ("img", "Finished, images", "#199e70"),
+    ("queue", "Queued", "#c98500"),
+    ("stall", "Attempted, unfinished", "#d03b3b"),
+)
+
+# The part of each half of statsusagechart that is left empty next to the zero line. Without it the
+# two arms meet, and one day reads as a single bar through the axis rather than as two.
+USAGE_ARM_SPLIT = 0.045
+
+
+def _usage_arm_ticks(peak: float) -> list[float]:
+    """Return the tick values from 0 up to `peak`, in tasks.
+
+    The step is 1, 2, 2.5 or 5 times a power of ten, whichever first gives four or fewer steps.
+
+    A step must be a whole number of tasks, so the magnitude stops at one and a step of 2.5 is
+    passed over. A fraction of a task cannot be labelled: the labels are written to no decimal
+    place, which put "2" on the tick at 2.5 and "8" on the tick at 7.5.
+
+    The last tick is at or below the peak. A tick above it falls beyond the end of its half of the
+    chart, where the y range does not reach and no label is drawn.
+    """
+    if peak <= 0:
+        return [0.0]
+
+    magnitude = 10 ** max(0, math.floor(math.log10(peak / 4)))
+    step = next(
+        m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= peak / 4 and float(m * magnitude).is_integer()
+    )
+
+    return [n * step for n in range(int(peak // step) + 1)]
 
 
 # the same 15 minutes as statsshortterm, which windows over the same data. This was 30 seconds,
@@ -688,10 +736,9 @@ def statscoordchart(request):
 @cache_page(60 * 15, cache="usagestats")
 def statsusagechart(request):
     # deferred: see statscoordchart
-    import bokeh.layouts
     import bokeh.models
     import bokeh.plotting
-    from bokeh.embed import components
+    from bokeh.embed import json_item
 
     days_back = 14
 
@@ -704,116 +751,147 @@ def statsusagechart(request):
         return [dictcounts.get(d, 0.0) for d in reversed(range(days_back))]
 
     today = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    windowstart = today - datetime.timedelta(days=days_back)
 
-    waitingtasks = Task.objects.filter(
-        timestamp__gt=today - datetime.timedelta(days=days_back), finishtimestamp__isnull=True
-    )
+    unfinished = Task.objects.filter(timestamp__gt=windowstart, finishtimestamp__isnull=True)
+    finished = Task.objects.filter(timestamp__gt=windowstart, finishtimestamp__isnull=False)
 
-    waitingtasks_api = waitingtasks.filter(from_api=True)
-    waitingtasks_nonapi = waitingtasks.filter(from_api=False)
+    # A task the runner has started at least once and has not finished is a different fact from a
+    # task that is waiting its turn: the first says the runner is letting go of work it picked up.
+    # main.py increments attempt_count as it starts a task, so a count above zero is that signal.
+    counts = {}
+    for origin, from_api in (("api", True), ("web", False)):
+        # Each half of the chart counts the image requests of its own submitters. An unfiltered
+        # IMGZIP series put every image request on the web side, so a task that waited on the API
+        # side moved across when it finished.
+        #
+        # The image series covers every request type that is not forced photometry, which is what
+        # keeps a day's total from falling as its tasks finish: the two unfinished series count a
+        # task of any type, so a type that no finished series counted would leave the queued band
+        # and reappear nowhere. Task.RequestType has a third member, the Solar System image stack.
+        counts[origin] = {
+            "fp": get_days_ago_counts(finished.filter(from_api=from_api, request_type="FP")),
+            "img": get_days_ago_counts(finished.filter(from_api=from_api).exclude(request_type="FP")),
+            "queue": get_days_ago_counts(unfinished.filter(from_api=from_api, attempt_count=0)),
+            "stall": get_days_ago_counts(unfinished.filter(from_api=from_api, attempt_count__gte=1)),
+        }
 
-    daywaitingcounts_api = get_days_ago_counts(waitingtasks_api)
-    daywaitingcounts_nonapi = get_days_ago_counts(waitingtasks_nonapi)
-
-    finishedtasks = Task.objects.filter(
-        timestamp__gt=today - datetime.timedelta(days=days_back), finishtimestamp__isnull=False
-    )
-
-    dayfinished_web_counts = get_days_ago_counts(finishedtasks.filter(from_api=False, request_type="FP"))
-    dayfinished_api_counts = get_days_ago_counts(finishedtasks.filter(from_api=True, request_type="FP"))
-    # each figure shows the image requests that its own submitters made. An unfiltered IMGZIP
-    # series put every image request on the web figure, so a task that waited as a red bar on the
-    # API figure moved to the other plot when it finished
-    dayfinished_img_counts = get_days_ago_counts(finishedtasks.filter(from_api=False, request_type="IMGZIP"))
-    dayfinished_apiimg_counts = get_days_ago_counts(finishedtasks.filter(from_api=True, request_type="IMGZIP"))
-
-    data = {
-        "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))],
-        "waitingtaskcount_api": daywaitingcounts_api,
-        "waitingtaskcount_nonapi": daywaitingcounts_nonapi,
-        "dayfinished_web_counts": dayfinished_web_counts,
-        "dayfinished_api_counts": dayfinished_api_counts,
-        "dayfinished_img_counts": dayfinished_img_counts,
-        "dayfinished_apiimg_counts": dayfinished_apiimg_counts,
+    # The two halves do not share a scale. Each is drawn against its own peak, and the tick labels
+    # below name the tasks that each half stands for.
+    #
+    # The API side is the larger of the two, and by a margin that moves: it carries about a hundred
+    # times the forced photometry of the web form, but only about four times the tasks of all types,
+    # because most image requests come from the web form. A shared scale would therefore be legible
+    # on some fortnights and flatten the web half on others.
+    peaks = {
+        origin: max(sum(series[day] for series in counts[origin].values()) for day in range(days_back))
+        for origin in counts
     }
+
+    data: dict[str, Any] = {
+        "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))]
+    }
+
+    for origin, direction in (("api", 1.0), ("web", -1.0)):
+        peak = peaks[origin]
+        # the axis units that one task is worth in this half, after the gap at the zero line
+        unit = (1.0 - USAGE_ARM_SPLIT) / peak if peak else 0.0
+        running = [USAGE_ARM_SPLIT] * days_back
+
+        for key, _label, _color in USAGE_SERIES:
+            below = running
+            running = [edge + count * unit for edge, count in zip(below, counts[origin][key], strict=True)]
+            # the hover tool reads the tasks, and the bars read the axis units they are drawn in
+            data[f"{origin}_{key}"] = counts[origin][key]
+            data[f"{origin}_{key}_near"] = [direction * edge for edge in below]
+            data[f"{origin}_{key}_far"] = [direction * edge for edge in running]
 
     datasource = bokeh.plotting.ColumnDataSource(data=data)
 
-    fig_api = bokeh.plotting.figure(
+    plot = bokeh.plotting.figure(
+        # the three blank days at the end are the room the legend sits in, so that it covers no
+        # bars. The same trick held the legend of the two figures this replaced
         x_range=bokeh.models.FactorRange(factors=[*data["queueday"], " ", "  ", "   "]),
-        y_range=bokeh.models.DataRange1d(start=0.0),
-        tools=[
-            bokeh.models.HoverTool(
-                tooltips=[
-                    ("Finished (API images)", "@dayfinished_apiimg_counts"),
-                    ("Finished (API FP)", "@dayfinished_api_counts"),
-                    ("Waiting (API)", "@waitingtaskcount_api"),
-                ],
-            )
-        ],
+        y_range=bokeh.models.Range1d(start=-1.06, end=1.06),
+        tools=[],
         toolbar_location=None,
-        aspect_ratio=5,
-        title="API",
-        sizing_mode="stretch_both",
+        # Each half names its own peak here rather than in a corner of the frame. The halves are on
+        # their own scales, so a reader who takes the two heights as comparable reads the chart
+        # wrong; this line, and the tick labels, are what say that they are not.
+        title=(f"API above, peak {peaks['api']:,.0f}/day    \u00b7    Web below, peak {peaks['web']:,.0f}/day"),
+        # A height in pixels rather than a ratio. The container gives a width and no height, and
+        # bokeh solved the first layout of a ratio against it with a frame of no height at all:
+        # the chart drew as a legend over an axis. A height it is given needs no solving.
+        sizing_mode="stretch_width",
+        height=430,
         output_backend="svg",
-        y_axis_label="API tasks per day",
+        # transparent, so the figure sits on the page and follows the theme with it. theme.js
+        # colours the title, the axes, the legend and the zero line to match
+        background_fill_color=None,
+        border_fill_color=None,
     )
 
-    fig_api.grid.visible = False
+    plot.grid.visible = False
 
-    fig_api.vbar_stack(
-        ["waitingtaskcount_api", "dayfinished_api_counts", "dayfinished_apiimg_counts"],
-        x="queueday",
-        source=datasource,
-        color=["red", "green", "blue"],
-        legend_label=["Waiting (API)", "Finished (API FP)", "Finished (API images)"],
-        line_width=0.0,
-        width=0.3,
-    )
+    # the bars of each half, in the order they stack away from the zero line
+    bars: dict[str, list[Any]] = {}
 
-    fig_nonapi = bokeh.plotting.figure(
-        x_range=bokeh.models.FactorRange(factors=[*data["queueday"], " ", "  ", "   "]),
-        y_range=bokeh.models.DataRange1d(start=0.0),
-        tools=[
-            bokeh.models.HoverTool(
-                tooltips=[
-                    ("Finished (web images)", "@dayfinished_img_counts"),
-                    ("Finished (web FP)", "@dayfinished_web_counts"),
-                    ("Waiting (web)", "@waitingtaskcount_nonapi"),
-                ],
+    for origin in ("api", "web"):
+        bars[origin] = [
+            plot.vbar(
+                x="queueday",
+                bottom=f"{origin}_{key}_near",
+                top=f"{origin}_{key}_far",
+                source=datasource,
+                color=color,
+                line_width=0.0,
+                width=0.52,
             )
-        ],
-        toolbar_location=None,
-        aspect_ratio=5,
-        title="Web",
-        sizing_mode="stretch_both",
-        output_backend="svg",
-        y_axis_label="Web tasks per day",
-    )
+            for key, _label, color in USAGE_SERIES
+        ]
 
-    fig_nonapi.vbar_stack(
-        ["waitingtaskcount_nonapi", "dayfinished_web_counts", "dayfinished_img_counts"],
-        x="queueday",
-        source=datasource,
-        color=["red", "green", "blue"],
-        legend_label=["Waiting (web)", "Finished (web FP)", "Finished (web images)"],
-        line_width=0.0,
-        width=0.3,
-    )
+        # one hover per half, so a day reports the counts of the half the pointer is over
+        plot.add_tools(
+            bokeh.models.HoverTool(
+                tooltips=[("Day", "@queueday")]
+                + [(label, f"@{origin}_{key}") for key, label, _color in reversed(USAGE_SERIES)],
+                renderers=bars[origin],
+            )
+        )
 
-    fig_nonapi.legend[0].border_line_width = 0
+    # The ticks of the two halves are the same line of code twice over, but they are not the same
+    # numbers: each half is scaled to its own peak, so a tick at the same height means about a
+    # hundred times more tasks above the axis than below it.
+    tickpositions = [0.0]
+    ticklabels: dict[float | str, Any] = {0.0: "0"}
+    for origin, direction in (("api", 1.0), ("web", -1.0)):
+        peak = peaks[origin]
+        unit = (1.0 - USAGE_ARM_SPLIT) / peak if peak else 0.0
+        for value in _usage_arm_ticks(peak)[1:]:
+            position = direction * (USAGE_ARM_SPLIT + value * unit)
+            tickpositions.append(position)
+            ticklabels[position] = f"{value:,.0f}"
 
-    fig_nonapi.grid.visible = False
+    plot.yaxis.ticker = bokeh.models.FixedTicker(ticks=tickpositions)
+    plot.yaxis.major_label_overrides = ticklabels
 
-    plot = bokeh.layouts.column(
-        [fig_api, fig_nonapi],
-        sizing_mode="stretch_both",
-        aspect_ratio=2.5,
-    )
+    # The zero line is the one thing the two halves share, so it is drawn once and for the pair
+    # rather than as the axis of either one.
+    plot.add_layout(bokeh.models.Span(location=0.0, dimension="width", line_width=1.5))
 
-    script, strhtml = components(plot)
+    # One legend for the pair, built from the bars of the upper half. It stays inside the frame,
+    # in the blank days the x range ends with: moved to the panel above the frame it left the
+    # frame no height at all, and the chart drew as a legend over an axis.
+    legend = bokeh.models.Legend(location="top_right", border_line_width=0)
+    legend.items = [
+        bokeh.models.LegendItem(label=label, renderers=[bar])
+        for (_key, label, _color), bar in zip(USAGE_SERIES, bars["api"], strict=True)
+    ]
+    plot.add_layout(legend)
 
-    return JsonResponse({"script": script, "div": strhtml})
+    # json_item rather than components: the page builds the chart itself with
+    # Bokeh.embed.embed_item, which lets theme.js colour the models before bokeh draws them
+    return JsonResponse({"item": json_item(plot)})
 
 
 @cache_page(60 * 60 * 4, cache="usagestats")

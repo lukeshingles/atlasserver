@@ -215,6 +215,108 @@ describe('theme.js', () => {
     });
   });
 
+  /*
+  The two stats charts. bokeh paints them into a canvas from the properties of the models it is
+  given, so their colours are set on those models rather than in the stylesheet: on the payload
+  the server sends, before the chart is built, and on the models of a chart already on screen.
+
+  Bootstrap is not here to write the custom properties the colours are read from, so the test
+  writes them onto <html> itself.
+  */
+  describe('the stats charts', () => {
+    const DARK = {
+      '--bs-body-color': '#dee2e6',
+      '--bs-border-color': '#495057',
+      '--bs-body-bg': '#212529'
+    };
+
+    const paintPage = (page, values) => {
+      for (const [property, value] of Object.entries(values)) {
+        page.window.document.documentElement.style.setProperty(property, value);
+      }
+    };
+
+    // a chart as the server sends it. bokeh writes each model as the name of its type and the
+    // properties that differ from the defaults, and an axis that is left at the defaults
+    // therefore arrives with no attributes at all
+    const item = () => ({
+      root_id: 'p1',
+      doc: {
+        roots: [
+          {
+            type: 'object',
+            name: 'Figure',
+            id: 'p1',
+            attributes: {
+              title: { type: 'object', name: 'Title', id: 'p2', attributes: { text: 'API' } },
+              below: [{ type: 'object', name: 'CategoricalAxis', id: 'p3' }],
+              renderers: [
+                {
+                  type: 'object',
+                  name: 'GlyphRenderer',
+                  id: 'p4',
+                  attributes: {
+                    glyph: { type: 'object', name: 'VBar', id: 'p5', attributes: { fill_color: 'red' } }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    });
+
+    const model = (type) => ({
+      type,
+      colors: {},
+      setv(attrs) {
+        Object.assign(this.colors, attrs);
+      }
+    });
+
+    test('the payload is coloured before bokeh builds the chart', async () => {
+      const page = await start({ systemDark: true });
+      paintPage(page, DARK);
+
+      const figure = page.window.atlasTheme.themeBokehItem(item()).doc.roots[0];
+
+      assert.equal(figure.attributes.outline_line_color, '#495057');
+      assert.equal(figure.attributes.title.attributes.text_color, '#dee2e6');
+      assert.equal(figure.attributes.below[0].attributes.major_label_text_color, '#dee2e6');
+      assert.equal(figure.attributes.below[0].attributes.axis_line_color, '#495057');
+    });
+
+    test('the colours that are the data are left alone', async () => {
+      const page = await start({ systemDark: true });
+      paintPage(page, DARK);
+
+      const figure = page.window.atlasTheme.themeBokehItem(item()).doc.roots[0];
+
+      assert.equal(figure.attributes.renderers[0].attributes.glyph.attributes.fill_color, 'red');
+    });
+
+    test('a chart on screen is recoloured when the mode changes', async () => {
+      const page = await start({ stored: 'light' });
+      const title = model('Title');
+      const bar = model('VBar');
+      page.window.Bokeh = { documents: [{ all_models: new Set([title, bar]) }] };
+
+      paintPage(page, DARK);
+      page.click('dark');
+
+      assert.equal(title.colors.text_color, '#dee2e6');
+      assert.deepEqual(bar.colors, {}, 'a type the chart theme does not name is left alone');
+    });
+
+    test('a page with no chart on it still changes mode', async () => {
+      const page = await start({ stored: 'light' });
+
+      page.click('dark');
+
+      assert.equal(page.theme(), 'dark');
+    });
+  });
+
   describe('when the system preference changes', () => {
     test('auto follows it', async () => {
       const page = await start({ systemDark: false });

@@ -10,8 +10,6 @@
 
     <p>There {%if queuedtaskcount != 1 %}are {{ queuedtaskcount }} unfinished tasks{% else %}is {{ queuedtaskcount }} unfinished task{% endif %} in the queue with the most recent completion at <span id="lastfinishtime">{{ lastfinishtime }}</span> (as of <span id="pagetime">{% now "H:i:s" %}</span>).</p>
     <div id="statsshortterm">Loading short term stats...</div>
-    {# margin rather than padding for the spacing above and below: on the dark theme the chart #}
-    {# container is given a background of its own (see main.css), and padding would be inside it #}
     <div id="statsusagechart" style="max-width: 60em; margin-top: 1em; margin-bottom: 2em;">Loading usage chart...</div>
     <div id="statslongterm">Loading long term stats...</div>
     <div style="clear: both">&nbsp;</div>
@@ -51,19 +49,13 @@
       fetch(url, { credentials: 'same-origin' })
         .then((response) => response.ok ? response.json() : Promise.reject(response.status))
         .then((result) => {
-          document.getElementById(elementid).innerHTML = result.div;
-          // The payload's script tag has to be rebuilt rather than assigned as innerHTML: a
-          // <script> inserted that way is inert, so the chart would never draw. jQuery did this
-          // rebuilding internally, which is why the version this replaced could just pass a string.
-          const parsed = new DOMParser().parseFromString(result.script, 'text/html');
-          for (const source of parsed.querySelectorAll('script')) {
-            const script = document.createElement('script');
-            for (const attr of source.attributes) {
-              script.setAttribute(attr.name, attr.value);
-            }
-            script.textContent = source.textContent;
-            document.head.appendChild(script);
-          }
+          const element = document.getElementById(elementid);
+          // the "Loading..." placeholder: embed_item adds the chart to this element, and does not
+          // empty it first
+          element.textContent = '';
+          // bokeh draws the chart into a canvas and takes its colours from the models in the
+          // payload, so the theme has to reach it before it is built
+          return Bokeh.embed.embed_item(window.atlasTheme.themeBokehItem(result.item), elementid);
         })
         .catch((err) => { document.getElementById(elementid).textContent = 'Could not load this chart.'; console.log(url, err); });
     }
