@@ -13,9 +13,12 @@ the request is sent.
 import email.message
 import json
 import socket
+import threading
+import time
 import typing as t
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from typing import override
 from urllib.parse import urlparse
 
@@ -34,22 +37,123 @@ CALLBACK_TIMEOUT_SECONDS = 10
 
 MAX_CALLBACK_URL_LENGTH = 500
 
+# socket.getaddrinfo takes no timeout, so it blocks for as long as the resolver does. The name is
+# the caller's, and production serves the whole site with four single-threaded workers, so one
+# name whose server stalls could take a worker out of service for minutes.
+CALLBACK_RESOLVE_TIMEOUT_SECONDS = 5.0
+
+# How long a successful validation may be reused, and by how many URLs.
+#
+# One submission validates the same URL over and over: a radeclist copies callback_url into every
+# row, splitradeclist validates each row, and views.create validates the whole list again -- 200
+# resolutions for one 100-line request. Only the submission path opts in, with allow_memo. The
+# check made before the request is sent must be current, because that is the one that has to
+# notice a name which has moved since (see send_task_callback).
+#
+# Bounded as well as short, because the keys are URLs a caller chose.
+CALLBACK_VALIDATION_MEMO_SECONDS = 30.0
+CALLBACK_VALIDATION_MEMO_MAXSIZE = 128
+
+# url -> the monotonic time at which its answer stops being reusable. Oldest first, so the entry
+# to drop when the map is full is the one at the front. Guarded by a lock rather than relying on
+# the GIL: this project supports the free-threaded build.
+_validation_memo: OrderedDict[str, float] = OrderedDict()
+_validation_memo_lock = threading.Lock()
+
 
 class CallbackUrlError(ValueError):
     """Raised when a callback URL is missing, malformed or points somewhere it must not."""
 
 
-def validate_callback_url(url: str) -> str:
+def _memo_holds(url: str) -> bool:
+    """Return whether this URL passed validation recently enough to skip the checks."""
+    with _validation_memo_lock:
+        expiry = _validation_memo.get(url)
+        if expiry is None:
+            return False
+
+        if expiry <= time.monotonic():
+            del _validation_memo[url]
+            return False
+
+        # deliberately no move_to_end: every entry is given the same lifetime, so insertion order
+        # is expiry order, and re-ordering on a read would make the map evict a younger entry than
+        # the one at the front while keeping an almost expired one.
+        return True
+
+
+def _memo_store(url: str) -> None:
+    """Remember that this URL passed, and drop the oldest entries once the map is full."""
+    with _validation_memo_lock:
+        _validation_memo[url] = time.monotonic() + CALLBACK_VALIDATION_MEMO_SECONDS
+        _validation_memo.move_to_end(url)
+
+        while len(_validation_memo) > CALLBACK_VALIDATION_MEMO_MAXSIZE:
+            _validation_memo.popitem(last=False)
+
+
+def forget_validated_urls() -> None:
+    """Drop every remembered validation, so that nothing inherits an answer it did not ask for."""
+    with _validation_memo_lock:
+        _validation_memo.clear()
+
+
+def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
+    """Return what getaddrinfo answers for the name, or raise CallbackUrlError if it is too slow.
+
+    A thread, because a blocking libc call cannot be interrupted any other way. It is a daemon and
+    is never joined a second time: an abandoned resolver thread costs a stack until the resolver
+    gives up, where waiting for it costs the request that is holding a worker.
+    """
+    answer: list[t.Any] = []
+    failure: list[BaseException] = []
+
+    def resolve() -> None:
+        try:
+            answer.extend(socket.getaddrinfo(hostname, port))
+        except Exception as ex:  # noqa: BLE001  # re-raised by the caller below, never swallowed
+            failure.append(ex)
+
+    thread = threading.Thread(target=resolve, name="callback-url-resolve", daemon=True)
+    thread.start()
+    thread.join(CALLBACK_RESOLVE_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        msg = f"callback_url hostname could not be resolved within {CALLBACK_RESOLVE_TIMEOUT_SECONDS:.0f} seconds"
+        raise CallbackUrlError(msg)
+
+    if failure:
+        # Only the classes that describe the address itself become a rejection. Anything else is a
+        # fault of this server -- getaddrinfo raises a plain OSError when the process is out of
+        # file descriptors -- and must reach the error handler and the administrators, rather than
+        # telling a caller with a perfectly good webhook that their hostname is wrong.
+        if not isinstance(failure[0], (socket.gaierror, UnicodeError, ValueError)):
+            raise failure[0]
+
+        msg = f"callback_url hostname could not be resolved: {failure[0]}"
+        raise CallbackUrlError(msg) from failure[0]
+
+    return answer
+
+
+def validate_callback_url(url: str, *, allow_memo: bool = False) -> str:
     """Return the URL if it is a safe public https endpoint, otherwise raise CallbackUrlError.
 
     Resolution happens here and again just before the request is sent. That does not close the
     window entirely — a name can resolve differently between the two checks (DNS rebinding) — so
     the request itself is also sent without following redirects and without credentials, and its
     body is never surfaced to the user.
+
+    `allow_memo` lets a recent answer for the same URL stand, and is for the submission path only:
+    it validates one URL many times per request. The send path must not pass it, because noticing
+    a name that has moved is what that second check is for.
     """
     if not url:
         msg = "callback_url must not be empty"
         raise CallbackUrlError(msg)
+
+    if allow_memo and _memo_holds(url):
+        return url
 
     if len(url) > MAX_CALLBACK_URL_LENGTH:
         msg = f"callback_url must be at most {MAX_CALLBACK_URL_LENGTH} characters"
@@ -72,26 +176,33 @@ def validate_callback_url(url: str) -> str:
         raise CallbackUrlError(msg)
 
     try:
-        addrinfo = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-    except (socket.gaierror, UnicodeError, ValueError) as ex:
-        msg = f"callback_url hostname could not be resolved: {ex}"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as ex:
+        # urlsplit resolves the port lazily and raises for one that is not a number or is out of
+        # range, and Django's URLValidator accepts both. Guarded here because the caller reports
+        # only CallbackUrlError, so a bare ValueError would be a server error over a bad address.
+        msg = f"callback_url has an invalid port: {ex}"
         raise CallbackUrlError(msg) from ex
 
-    if settings.DEBUG:
-        # a developer's callback target is usually on their own machine
-        return url
+    addrinfo = resolve_within_timeout(parsed.hostname, port)
 
-    for family, _type, _proto, _canonname, sockaddr in addrinfo:
-        if family not in (socket.AF_INET, socket.AF_INET6):
-            continue
-        # sockaddr is (host, port) for IPv4 and (host, port, flowinfo, scopeid) for IPv6; the
-        # stubs type the first element as str | int because of AF_UNIX
-        host = sockaddr[0]
-        # the same definition of "public" as the GeoIP lookup in views.client_location_fields,
-        # which must skip exactly the addresses this refuses; see the note on drift in netaddr
-        if isinstance(host, str) and not address_is_public(host):
-            msg = "callback_url must resolve to a public address"
-            raise CallbackUrlError(msg)
+    # skipped in development, where a developer's callback target is usually on their own machine.
+    # Written as a guarded block rather than an early return, so that both paths reach the memo.
+    if not settings.DEBUG:
+        for family, _type, _proto, _canonname, sockaddr in addrinfo:
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            # sockaddr is (host, port) for IPv4 and (host, port, flowinfo, scopeid) for IPv6; the
+            # stubs type the first element as str | int because of AF_UNIX
+            host = sockaddr[0]
+            # the same definition of "public" as the GeoIP lookup in views.client_location_fields,
+            # which must skip exactly the addresses this refuses; see the note on drift in netaddr
+            if isinstance(host, str) and not address_is_public(host):
+                msg = "callback_url must resolve to a public address"
+                raise CallbackUrlError(msg)
+
+    if allow_memo:
+        _memo_store(url)
 
     return url
 

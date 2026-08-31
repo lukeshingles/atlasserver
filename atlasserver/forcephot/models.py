@@ -254,8 +254,15 @@ class Task(models.Model):
 
     @property
     def localresultpreviewimagefile(self) -> str | None:
-        """Return the full local path to the image file if it exists, otherwise None."""
-        if self.finishtimestamp:
+        """Return the relative path to the preview image if it exists, otherwise None.
+
+        An image request shares its parent's preview, so this resolves to another row's file. That
+        row is checked as well: the views filter on the id they were asked for, so without this an
+        archived parent's image was still served through a live child's id, which is the reach
+        Task.live() is there to close. delete_result_files keeps the .jpg only because the child
+        needs the parent's data file beside it, not because the image is still meant to be public.
+        """
+        if self.finishtimestamp and not (self.parent_task is not None and self.parent_task.is_archived):
             imagefile = f"{self.localresultfileprefix(use_parent=True)}.jpg"
             if Path(settings.STATIC_ROOT, imagefile).exists():
                 return imagefile
@@ -314,6 +321,17 @@ class Task(models.Model):
         return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
 
     @staticmethod
+    def live() -> "models.QuerySet[Task]":
+        """Return the tasks that have not been archived: everything a reader may still be shown.
+
+        delete() archives a finished task instead of removing it, so archived means the owner
+        deleted it. One definition, because the API, the result file views and the plot views all
+        have to agree: a reader that misses this rule serves data the owner asked to have removed,
+        and rebuilds the derived files and cache entries that archiving reclaimed.
+        """
+        return Task.objects.filter(is_archived=False)
+
+    @staticmethod
     def queued() -> "models.QuerySet[Task]":
         """Return the tasks that are waiting or running: everything the queue positions cover.
 
@@ -322,7 +340,7 @@ class Task(models.Model):
         same set. Changing what counts as queued in one place only would give a submitted task a
         position measured against a differently scoped baseline.
         """
-        return Task.objects.filter(finishtimestamp__isnull=True, is_archived=False)
+        return Task.live().filter(finishtimestamp__isnull=True)
 
     @staticmethod
     def min_queuepos_relative() -> int:
@@ -344,6 +362,23 @@ class Task(models.Model):
             return None
 
         return self.queuepos_relative - Task.min_queuepos_relative()
+
+    def is_owned_by(self, user: t.Any) -> bool:
+        """Return whether this user may act on the task: its owner, or any staff member.
+
+        One definition, because three places apply it -- ForcePhotPermission, the image request
+        view, and the serializer when it decides who may read back the submitter's callback URL.
+        Each used to spell it out again, so a change to one of them reached only that one.
+
+        user is Any because the type checkers disagree about it: django-stubs declares is_staff on
+        the concrete User, while ty reads Django's own source, where request.user is typed as
+        AbstractBaseUser. AUTH_USER_MODEL is swappable in principle and is not swapped here.
+        """
+        return bool(
+            user is not None
+            and getattr(user, "is_authenticated", False)
+            and (getattr(user, "is_staff", False) or self.user_id == user.pk)
+        )
 
     def finished(self) -> bool:
         return bool(self.finishtimestamp)

@@ -915,6 +915,18 @@ export function TaskPage() {
      */
     const awayRequestRef = React.useRef(0);
 
+    /*
+     * The same again for the task list itself, which had no such counter at all.
+     *
+     * Two of these can be in flight at once: a user-triggered fetch skips the
+     * tasklist_api_request_active guard, and that flag is cleared when the response headers arrive
+     * rather than when the body is parsed. The url check at the apply site cannot tell them apart,
+     * because both are requests for the same url. So the older answer landing second put back the
+     * rows from before -- and, worse, wrote its body into both caches, after which a 304 restores
+     * that stale copy for as long as the tag holds, rather than for one poll.
+     */
+    const tasklistRequestRef = React.useRef(0);
+
     /* Ticks skipped since the queue was last reported empty; see EMPTY_QUEUE_TICKS. */
     const emptyticksRef = React.useRef(0);
 
@@ -1277,6 +1289,9 @@ export function TaskPage() {
 
         tasklist_api_request_active = true;
         const get_url = window.location.href;
+        const requestnumber = ++tasklistRequestRef.current;
+        // held until the body is applied below; see the note at the storeEtag call
+        let responseetag = null;
         debug_log('Fetching task list from', get_url);
         const request_headers = tasklist_pollcache.requestHeaders(get_url, {
             ...csrfHeader(),
@@ -1294,8 +1309,13 @@ export function TaskPage() {
             })
             .then((response) => {
                 tasklist_api_request_active = false;
-                if (tasklist_pollcache.noteResponse(get_url, response.status, response.headers.get('ETag'))
-                    === NOT_MODIFIED) {
+                responseetag = response.headers.get('ETag');
+                // Deliberately not handed to noteResponse: the tag is recorded with the body
+                // below, so that a response this call goes on to discard leaves neither. A tag
+                // held without its body makes the next poll send an If-None-Match for a page the
+                // cache cannot restore, and the 304 then re-applies the older body for as long as
+                // the server's tag stands. A 304 carries no tag of its own, so nothing is lost.
+                if (tasklist_pollcache.noteResponse(get_url, response.status, null) === NOT_MODIFIED) {
                     debug_log('Task list unchanged (304)', get_url);
                     setState({ tasklist_api_error: '' });
                     return NOT_MODIFIED;
@@ -1351,6 +1371,15 @@ export function TaskPage() {
                     tasklist_refresh_queued = false;
                     setTimeout(() => { if (!pollingPaused()) { fetchData(false); } }, 0);
                 }
+
+                // A newer request for the task list has started since this one, so this answer is
+                // already out of date; see tasklistRequestRef. Placed above every write below it,
+                // the two caches included: a stale body stored there outlives the response itself.
+                if (requestnumber != tasklistRequestRef.current) {
+                    debug_log('discarding a task list response overtaken by a later request');
+                    return;
+                }
+
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
                     // nothing changed server-side, but the poll did succeed, so the "last updated"
@@ -1398,8 +1427,10 @@ export function TaskPage() {
                     // and let an If-None-Match be sent for a page we do not actually hold
                     tasklist_fetchcache[get_url] = statechanges;
                     // an If-None-Match is only worth sending once a rendered copy exists to fall
-                    // back on, since a 304 carries no body
+                    // back on, since a 304 carries no body. The tag goes in beside it, never
+                    // before it: the two describe one page and have to move together.
                     tasklist_pollcache.storeBody(get_url, statechanges);
+                    tasklist_pollcache.storeEtag(get_url, responseetag);
                     if (get_url == window.location.href) {
                         debug_log('Applying results from', get_url);
                         // the flag goes on a copy: statechanges was just stored in both caches,

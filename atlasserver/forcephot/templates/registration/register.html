@@ -25,6 +25,12 @@
   <div class="form-row">{{ form.non_field_errors }}</div>
   {% endif %}
 
+  {# Not a form error: on the rate-limited path the form is deliberately left unbound, so that #}
+  {# clean_email never runs and never answers "is this address registered here?". #}
+  {% if limitmessage %}
+  <div class="form-row"><ul class="errorlist nonfield"><li>{{ limitmessage }}</li></ul></div>
+  {% endif %}
+
   <fieldset class="module aligned wide">
   {# visible_fields, not the whole form: iterating a form yields hidden fields too, and this #}
   {# markup would give each one a label and an empty row. form.as_p, which this replaced, #}

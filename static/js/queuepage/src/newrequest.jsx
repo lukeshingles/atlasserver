@@ -46,14 +46,41 @@ const STORED_FIELDS = {
     send_email: { fallback: true },
 };
 
+/*
+ * Every one of the three below is guarded, because localStorage throws rather than answering when
+ * a browser is set to refuse site data. These values are a convenience: a visitor who has turned
+ * it off gets the defaults on every visit, which is a working form. An exception is not -- the
+ * read runs inside the useState initialiser of the first render, so it would propagate out of
+ * render, and with no error boundary above it React tears the whole queue page down: no rows, no
+ * pager, no form, no message. theme.js and runnerstatus.js guard the same call for the same reason.
+ */
+
 /** Remember a field's value for the next visit. localStorage stringifies whatever it is given. */
 function storeValue(name, value) {
-    localStorage.setItem(name, value);
+    try {
+        localStorage.setItem(name, value);
+    } catch (err) {
+        // not carried to the next visit; this one still holds it in React state
+    }
+}
+
+/** Forget a remembered value, so that the next visit takes the field's default. */
+function forgetValue(name) {
+    try {
+        localStorage.removeItem(name);
+    } catch (err) {
+        // nothing was stored, so there is nothing to forget
+    }
 }
 
 function storedValue(name) {
     const field = STORED_FIELDS[name];
-    const stored = localStorage.getItem(name);
+    let stored = null;
+    try {
+        stored = localStorage.getItem(name);
+    } catch (err) {
+        // read as "nothing remembered", which is what the fallbacks below are for
+    }
 
     // a checkbox round-trips as the string "true"/"false"; which fields those are is already said
     // by the type of their fallback, so it does not need saying twice in the table
@@ -114,7 +141,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
     function resetForm() {
         for (const [name, field] of Object.entries(STORED_FIELDS)) {
             if (field.clearedOnSubmit) {
-                localStorage.removeItem(name);
+                forgetValue(name);
             }
         }
         setValues(defaultFormValues());
@@ -257,7 +284,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
                 <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={values.mjd_min} onChange={setField('mjd_min')} />
                 {/* the emoji is the whole of this control, so without a label there is nothing
                     for a screen reader (or a hover) to say about it */}
-                <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { localStorage.removeItem('mjd_min'); setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() })); }}>↩️</button>
+                <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { forgetValue('mjd_min'); setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() })); }}>↩️</button>
                 <p className="inputisodate" id='id_mjd_min_isoformat'>{mjd_min_isoformat}</p>
             </li>
             <li key="mjd_max">

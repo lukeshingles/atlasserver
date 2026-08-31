@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import datetime
 import hashlib
@@ -47,6 +48,7 @@ from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
+from atlasserver.forcephot import webhooks
 from atlasserver.forcephot.context_processors import queued_task_count
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
@@ -1073,6 +1075,66 @@ class TaskUpdateTests(TestCase):
         assert task.comment == "just a comment"
         assert task.ra == 1.0
 
+    def test_a_patch_does_not_revert_a_concurrent_runner_write(self) -> None:
+        """The row is loaded at the start of the request and saved at the end of it.
+
+        ModelSerializer.update() ended in a bare instance.save(), which wrote every column from
+        that stale copy. The task runner writes the same row with queryset updates throughout, so
+        a PATCH landing after one of those reverted it -- and a finished task whose finishtimestamp
+        goes back to NULL is dispatched, and emailed, all over again.
+        """
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, comment="before")
+        original_validate = ForcePhotTaskSerializer.validate
+
+        def runner_finishes_it_first(serializer: t.Any, attrs: t.Any) -> t.Any:
+            # runs after get_object() loaded the row and before perform_update saves it, which is
+            # exactly the window. The same statements as taskrunner.main.mark_started/mark_finished
+            Task.objects.filter(pk=task.id).update(
+                starttimestamp=timezone.now(),
+                finishtimestamp=timezone.now(),
+                error_msg="remote failure",
+                attempt_count=1,
+                queuepos_relative=None,
+            )
+            return original_validate(serializer, attrs)
+
+        self.client.force_login(self.owner)
+
+        with mock.patch.object(ForcePhotTaskSerializer, "validate", runner_finishes_it_first):
+            response = self.client.patch(
+                reverse("task-detail", args=[task.id]),
+                data=json.dumps({"comment": "after"}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.comment == "after", "the change the user asked for was lost"
+        assert task.finishtimestamp is not None, "the PATCH reverted the runner's finishtimestamp"
+        assert task.error_msg == "remote failure", "the PATCH reverted the runner's error_msg"
+        assert task.attempt_count == 1, "the PATCH reverted the runner's attempt_count"
+        assert not Task.queued().filter(pk=task.id).exists(), "a finished task went back into the queue"
+
+    def test_a_patch_still_moves_the_modified_time(self) -> None:
+        # task_modified_datetime is auto_now, and Django only refreshes such a field when
+        # update_fields names it. The task list's entity tag is built from it, so a change that
+        # left it alone would be invisible to every polling browser.
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0)
+        before = task.task_modified_datetime
+        self.client.force_login(self.owner)
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"comment": "edited"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.task_modified_datetime > before, "the entity tag would not have moved"
+
 
 class PermissionResponseTests(TestCase):
     """A refused API request must say so, rather than being redirected to the login page.
@@ -1426,6 +1488,8 @@ class UsageChartTickTests(SimpleTestCase):
 # classes build result files from it, and reaching across for another class's attribute made the
 # coupling invisible to a reader of either one.
 RESULTFILE_HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
+# one row the plot view keeps: duJy is under its 4000 limit and chi/N under its 100
+RESULTFILE_DATAROW = "59000.0 19.0 0.1 100 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
 
 
 class ClientLocationTests(TestCase):
@@ -1657,6 +1721,74 @@ class TaskDetailIsPublicTests(TestCase):
         response = self.get_detail(accept="text/html")
         assert response.status_code == 200, response.status_code
 
+    def test_the_callback_url_is_kept_to_the_submitter(self) -> None:
+        """What is public is the measurement, not the submitter's webhook endpoint.
+
+        The callback carries no signature and no shared secret, so its URL is the whole credential
+        for whatever it points at -- and such URLs routinely hold a secret in the path or query.
+        Task ids are sequential, so a reader who could see this field could walk them and collect
+        every API user's.
+        """
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+
+        for caller, expected in (
+            (None, None),
+            (self.other, None),
+            (self.owner, "https://hooks.example.com/t/secret-token"),
+            (self.staff, "https://hooks.example.com/t/secret-token"),
+        ):
+            with self.subTest(caller=caller and caller.username):
+                self.client.logout()
+                if caller is not None:
+                    self.client.force_login(caller)
+
+                body = self.get_detail().json()
+
+                # the key is always present, so the shape does not depend on who is asking
+                assert "callback_url" in body
+                assert body["callback_url"] == expected, body["callback_url"]
+
+    def test_the_entity_tag_distinguishes_the_two_bodies(self) -> None:
+        # the body now depends on who is asking, so a single tag for both would let a caller
+        # presenting the other one's tag be answered 304 with a body never meant for them
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+
+        self.client.force_login(self.owner)
+        owneretag = self.get_detail()["ETag"]
+
+        self.client.logout()
+        anonetag = self.get_detail()["ETag"]
+
+        assert owneretag
+        assert anonetag
+        assert owneretag != anonetag, "one tag describes two different bodies"
+
+    def test_the_owner_still_reads_it_back_from_the_task_list(self) -> None:
+        # the list is scoped to the requesting user, so it cannot leak; what it must not do is
+        # hide the field from the one caller who is allowed to see it
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+        self.client.force_login(self.owner)
+
+        body = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").json()
+
+        assert body["results"][0]["callback_url"] == "https://hooks.example.com/t/secret-token"
+
+    def test_a_list_render_blanks_it_for_a_non_owner(self) -> None:
+        # the rule belongs to the serializer rather than to one view, so it has to hold under
+        # many=True as well: the list view is scoped to the requester today, and this is what
+        # keeps the field safe if that ever stops being true
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+        request = RequestFactory().get("/")
+        request.user = self.other
+
+        data = ForcePhotTaskSerializer([self.task], many=True, context={"request": request}).data
+
+        assert data[0]["callback_url"] is None
+
     def test_the_same_caller_may_read_but_not_change(self) -> None:
         # the boundary this class exists to describe, asserted on one caller in one test: the
         # refusal on its own is PermissionResponseTests' subject, the contrast is this one's
@@ -1722,9 +1854,234 @@ class TaskResultsArePublicTests(TestCase):
                     assert self.client.get(url).status_code == 200, url
 
 
+class ResultPlotDataColumnTests(TestCase):
+    """A result file this view cannot read must give an empty plot, not a server error.
+
+    The guard turns an unusable file into a blank plot, and the handler around the parse catches
+    ValueError. df.query("F == @filterband") resolves "F" by name, and pandas raises
+    UndefinedVariableError for a name it cannot find -- a NameError, so neither the guard (which
+    did not name the column) nor the handler (which catches a different class) stopped it.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="plotcols", email="pc@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
+        )
+        caches["taskderived"].clear()
+
+    def tearDown(self) -> None:
+        caches["taskderived"].clear()
+
+    def request_plot(self, header: str, rows: str = "") -> t.Any:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, self.task.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text(header + "\n" + rows)
+
+            # the view appends the plotting script to any response that carries data, and reads
+            # it from STATIC_ROOT. Both names are written because which one it asks for depends on
+            # DEBUG, and Django's test runner turns that off whatever the settings module says.
+            for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
+                plotscript = Path(tmpdir, name)
+                plotscript.parent.mkdir(parents=True, exist_ok=True)
+                plotscript.write_text("/* stub */\n")
+
+            return self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
+
+    def test_a_file_with_no_filter_column_gives_an_empty_plot(self) -> None:
+        # every column the view reads except F, so the old guard let it through
+        header = "###MJD m dm uJy duJy err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
+        rows = "59000.0 19.0 0.1 100 10 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+
+        response = self.request_plot(header, rows)
+
+        assert response.status_code == 200, response.status_code
+        assert b"jslcdataglobal" not in response.content, "a file with no F column was plotted anyway"
+
+    def test_a_complete_file_is_still_plotted(self) -> None:
+        response = self.request_plot(RESULTFILE_HEADER, RESULTFILE_DATAROW)
+
+        assert response.status_code == 200, response.status_code
+        assert b"jslcdataglobal" in response.content, "a readable file produced no plot data"
+
+
+class ArchivedTaskResultTests(TestCase):
+    """Deleting a finished task must put its results out of reach, not only out of the list.
+
+    delete() archives the row and reclaims what it can, but delete_result_files keeps the .txt and
+    the .jpg while a live image request still needs them as its input. The result file and plot
+    views read the row by id, and without Task.live() they went on serving a deleted task's
+    photometry to anyone -- while taskpdfplot and resultplotdatajs rebuilt the .pdf and the cached
+    plot data that the same delete had just removed. ForcePhotTaskViewSet.retrieve already
+    answered 404 for the very same task.
+    """
+
+    def setUp(self) -> None:
+        self.owner = User.objects.create_user(username="archowner", email="ao@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
+        )
+        # the live child is what makes delete_result_files keep the .txt and the .jpg
+        self.child = self.task.new_imagerequest(user=self.owner, from_api=False)
+        self.child.save()
+        caches["taskderived"].clear()
+
+    def tearDown(self) -> None:
+        caches["taskderived"].clear()
+
+    def urls(self) -> list[str]:
+        return [
+            reverse("taskresultdata", args=[self.task.id]),
+            reverse("taskpreviewimage", args=[self.task.id]),
+            reverse("taskpdfplot", args=[self.task.id]),
+            reverse("resultplotdatajs", args=[self.task.id]),
+        ]
+
+    def write_result_files(self, tmpdir: str) -> None:
+        prefix = Path(tmpdir, self.task.localresultfileprefix())
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        # a real data row, not just the header: the plot view writes nothing to its cache for a
+        # file with no rows, so a header-only fixture would make the cache assertion below hold
+        # whether or not the archived task was refused
+        prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n" + RESULTFILE_DATAROW)
+        for suffix in (".jpg", ".pdf"):
+            prefix.with_suffix(suffix).write_text("results")
+
+        for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
+            plotscript = Path(tmpdir, name)
+            plotscript.parent.mkdir(parents=True, exist_ok=True)
+            plotscript.write_text("/* stub */\n")
+
+    def test_a_live_task_is_still_served(self) -> None:
+        # the filter must not lock the data that is public on purpose
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+
+            for url in self.urls():
+                with self.subTest(url=url):
+                    assert self.client.get(url).status_code == 200, url
+
+    def test_the_results_of_a_deleted_task_are_not_served(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+            self.task.delete()
+
+            # the input file really does outlive the delete, so these views are the only guard
+            assert Path(tmpdir, self.task.localresultfileprefix()).with_suffix(".txt").is_file()
+            assert Task.objects.get(id=self.task.id).is_archived
+
+            for url in self.urls():
+                with self.subTest(url=url):
+                    assert self.client.get(url).status_code == 404, url
+
+    def test_the_child_id_does_not_reach_a_deleted_parent_preview(self) -> None:
+        # the preview belongs to the parent and the child shares it, so filtering on the id in the
+        # URL is not enough: the archived parent's image was still served under the child's id,
+        # which is trivially guessable because the ids are sequential
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+            self.child.finishtimestamp = timezone.now()
+            self.child.save()
+
+            assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 200
+
+            self.task.delete()
+
+            assert Path(tmpdir, self.task.localresultfileprefix()).with_suffix(".jpg").is_file()
+            assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
+
+    def test_the_plot_cache_is_not_repopulated_after_a_delete(self) -> None:
+        # forget_derived_cache() drops the entry as part of the delete; a reader with no filter
+        # re-read the surviving .txt and wrote it straight back, for another thirty days
+        cachekey = misc.resultplotdatajs_cachekey(self.task.id)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+
+            # the control: this fixture really does produce something worth caching, so the
+            # assertion after the delete is about the delete and not about an empty plot
+            self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
+            assert caches["taskderived"].get(cachekey) is not None, "the fixture caches nothing"
+
+            self.task.delete()
+            assert caches["taskderived"].get(cachekey) is None, "the delete left the entry behind"
+
+            self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
+
+            assert caches["taskderived"].get(cachekey) is None
+
+
 class RequestImagesTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
+
+    def test_creating_an_imgzip_through_the_api_names_the_endpoint_that_does_it(self) -> None:
+        """The old message asked for parent_task_id, which this serializer will not accept.
+
+        parent_task_id is neither a model field name nor a relation name, so ModelSerializer builds
+        it as a ReadOnlyField and to_internal_value drops it. Every such request was therefore a
+        400 the client could not satisfy, for a request type the generated schema advertises.
+        """
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "IMGZIP", "parent_task_id": parent.id, "ra": 1.0, "dec": 2.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        body = json.dumps(response.json())
+        assert "requestimages" in body, body
+        assert "parent_task_id" not in body, "the error still asks for a field this serializer drops"
+        assert not Task.objects.filter(request_type="IMGZIP").exists()
+
+    def test_an_mpc_name_cannot_smuggle_an_imgzip_task_past_the_refusal(self) -> None:
+        """The refusal used to sit inside the branch that handles ra/dec targets only.
+
+        An IMGZIP task carries whichever target its parent had, so a request naming an mpc_name
+        took the other branch and created a row with no parent. The runner cannot name a result
+        file for one -- it formats parent_task_id, which is NULL -- so the worker dies before it
+        can record a finish time, and the task is dispatched again on every pass forever.
+        """
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "IMGZIP", "mpc_name": "Makemake"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        assert "requestimages" in json.dumps(response.json()), response.content
+        assert not Task.objects.filter(request_type="IMGZIP").exists()
+
+    def test_an_existing_image_request_can_still_be_edited(self) -> None:
+        # the refusal above is for creation only: RequestImages makes the row, and its owner must
+        # still be able to change the ordinary fields of it
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.save()
+        self.client.force_login(self.user)
+
+        response = self.client.patch(
+            reverse("task-detail", args=[child.id]),
+            json.dumps({"comment": "edited"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
+        child.refresh_from_db()
+        assert child.comment == "edited"
+        # via the relation, not the attname: parent_task_id is the implicit column Django adds,
+        # and the type checkers do not see it -- which is the same quirk that made the serializer
+        # build it as a read-only field
+        assert child.parent_task == parent
 
     def test_clearing_the_target_of_an_image_request_is_a_400(self) -> None:
         """An IMGZIP task needs a target like any other, and the database says so.
@@ -2245,6 +2602,48 @@ class AllowedHostsTests(TestCase):
         assert "fallingstar-data.com" in django_mail.outbox[0].body
 
 
+class PasswordResetLinkOriginTests(TestCase):
+    """The mailed reset link must name SITE_ORIGIN, not the Host header.
+
+    django.contrib.sites is not installed, so Django builds the link from the request. Restricting
+    ALLOWED_HOSTS is not enough on its own: it legitimately holds wildcard entries, so a host that
+    passes validation is not necessarily one this site is served from. Anyone who can serve a
+    subdomain of qub.ac.uk could otherwise have this mail a victim a valid link to their own
+    server, which discloses the token when the victim opens it.
+
+    verification.absolute_url applies this rule to the mail the project sends itself. The reset
+    mail is the one Django owns, and it was left out.
+    """
+
+    def setUp(self) -> None:
+        User.objects.create_user(username="victim3", email="victim3@example.com", password="pw12345678")
+        django_mail.outbox.clear()
+
+    @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
+    def test_a_wildcard_host_does_not_reach_the_link(self) -> None:
+        # .qub.ac.uk is in ALLOWED_HOSTS, so Django accepts this host and only the pinned origin
+        # keeps it out of the mail
+        response = self.client.post(
+            reverse("password_reset"), {"email": "victim3@example.com"}, HTTP_HOST="takeover.qub.ac.uk"
+        )
+
+        assert response.status_code == 302, response.status_code
+        body = str(django_mail.outbox[0].body)
+        assert "https://fallingstar-data.com/" in body, body
+        assert "takeover.qub.ac.uk" not in body, body
+
+    @override_settings(SITE_ORIGIN="")
+    def test_an_unset_origin_falls_back_to_the_request(self) -> None:
+        # what development and the tests want; settings.py makes the variable mandatory when DEBUG
+        # is off. Set explicitly, because CI exports ATLASSERVER_SITE_ORIGIN for its deploy check.
+        response = self.client.post(
+            reverse("password_reset"), {"email": "victim3@example.com"}, HTTP_HOST="fallingstar-data.com"
+        )
+
+        assert response.status_code == 302, response.status_code
+        assert "fallingstar-data.com" in str(django_mail.outbox[0].body)
+
+
 @override_settings(DEBUG=False)
 class BrokenLinkEmailTests(TestCase):
     """A 404 must never mail the managers, whatever the referrer.
@@ -2265,6 +2664,89 @@ class BrokenLinkEmailTests(TestCase):
 
         assert response.status_code == 404, response.status_code
         assert not django_mail.outbox, django_mail.outbox[0].subject
+
+
+class CallbackUrlResolutionTests(TestCase):
+    """Resolving the caller's hostname is blocking work on a request thread, so it has to be bounded.
+
+    socket.getaddrinfo takes no timeout of its own, and one submission used to run it once per row
+    and then once more per row: a radeclist copies callback_url into every row, splitradeclist
+    validates each row, and views.create validates the whole list again. That is 200 blocking
+    lookups for a 100-line request, on a site served by four single-threaded workers.
+    """
+
+    def setUp(self) -> None:
+        webhooks.forget_validated_urls()
+        self.user = User.objects.create_user(username="cbcost", email="cbc@example.com", password=None)
+
+    def tearDown(self) -> None:
+        webhooks.forget_validated_urls()
+
+    def test_a_multi_target_submission_resolves_the_name_once(self) -> None:
+        self.client.force_login(self.user)
+        radeclist = "\n".join(f"{ra}.0 2.0" for ra in range(1, 21))
+
+        with mock.patch(
+            "socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]
+        ) as resolve:
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"radeclist": radeclist, "callback_url": "https://example.com/hook"}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+        assert Task.objects.filter(user_id=self.user.pk).count() == 20
+        assert resolve.call_count == 1, f"{resolve.call_count} lookups for one submission"
+
+    def test_a_resolver_that_never_answers_does_not_hold_the_request(self) -> None:
+        def never_answers(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            time.sleep(5)
+            msg = "the caller should have given up long before this"
+            raise AssertionError(msg)
+
+        with (
+            mock.patch("socket.getaddrinfo", side_effect=never_answers),
+            mock.patch.object(webhooks, "CALLBACK_RESOLVE_TIMEOUT_SECONDS", 0.1),
+        ):
+            started = time.monotonic()
+            try:
+                validate_callback_url("https://slow.example.com/hook")
+            except CallbackUrlError:
+                elapsed = time.monotonic() - started
+            else:
+                msg = "a resolver that never answers was allowed through"
+                raise AssertionError(msg)
+
+        assert elapsed < 2.0, f"the request waited {elapsed:.1f}s on the resolver"
+
+    def test_a_fault_of_this_server_is_not_reported_as_a_bad_address(self) -> None:
+        # getaddrinfo raises a plain OSError when the process is out of file descriptors. Reporting
+        # that as "your hostname could not be resolved" rejects a perfectly good webhook with a 400
+        # and tells the operators nothing, so anything that is not about the address propagates.
+        with mock.patch("socket.getaddrinfo", side_effect=OSError(24, "Too many open files")):
+            try:
+                validate_callback_url("https://example.com/hook")
+            except CallbackUrlError as ex:
+                msg = f"a server fault was reported to the caller as a bad address: {ex}"
+                raise AssertionError(msg) from ex
+            except OSError:
+                pass
+
+    def test_the_send_path_never_reuses_a_remembered_answer(self) -> None:
+        # the check made before the request is sent is the one that has to notice a name that has
+        # moved since the task was submitted, so it must not be served from the memo
+        url = "https://example.com/hook"
+        public = [(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]
+
+        with mock.patch("socket.getaddrinfo", return_value=public):
+            validate_callback_url(url, allow_memo=True)
+
+        with mock.patch("socket.getaddrinfo", return_value=public) as resolve:
+            validate_callback_url(url)
+
+        assert resolve.call_count == 1, "the send path took a remembered answer"
 
 
 @override_settings(DEBUG=False)
@@ -2316,6 +2798,14 @@ class CallbackUrlValidationTests(TestCase):
     def test_unresolvable_host_is_rejected(self) -> None:
         with mock.patch("socket.getaddrinfo", side_effect=socket.gaierror("nope")):
             self.assert_rejected("https://does-not-exist.example/hook")
+
+    def test_an_invalid_port_is_rejected_rather_than_raised(self) -> None:
+        # urlsplit resolves the port lazily and raises ValueError for one out of range, and
+        # Django's URLValidator accepts it -- so without a guard this was a 500 and an admin
+        # email rather than a message naming the field
+        for url in ("https://example.com:99999/hook", "https://example.com:abc/hook"):
+            with self.subTest(url=url):
+                self.assert_rejected(url)
 
     def test_overlong_url_is_rejected(self) -> None:
         self.assert_rejected("https://example.com/" + "a" * 600)
@@ -3453,6 +3943,36 @@ class RemoveOldTasksTests(TestCase):
 
         assert list(Task.objects.values_list("id", flat=True)) == [keep.id]
 
+    def test_a_hard_delete_batch_does_not_scale_its_queries_with_the_batch(self) -> None:
+        """The batch is read with select_related and a prefetch so the sweep costs a few queries.
+
+        The reclamation passes re-read the rows, and a plain queryset there gives back the per-row
+        relation lookups the batch exists to avoid: one image-request query per parent, and a
+        parent lookup per child.
+        """
+
+        def sweep_queries(taskcount: int) -> int:
+            for index in range(taskcount):
+                parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+                child = parent.new_imagerequest(user=self.user, from_api=True)
+                child.finishtimestamp = timezone.now()
+                child.comment = f"child {index}"
+                child.save()
+
+            with CaptureQueriesContext(connection) as queries:
+                taskrunner_main.remove_old_tasks(
+                    days_ago=31, harddeleterecord=True, from_api=True, logfunc=lambda _msg: None
+                )
+
+            return len(queries)
+
+        small = sweep_queries(1)
+        large = sweep_queries(6)
+
+        # a constant number of statements per batch, so five more parents (and five more children)
+        # must not add anything like ten more queries
+        assert large - small <= 2, f"{small} queries for one task, {large} for six"
+
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
@@ -3460,6 +3980,36 @@ class RemoveOldTasksTests(TestCase):
 
         queued.refresh_from_db()
         assert not queued.is_archived
+
+    def test_a_hard_delete_reclaims_the_files_of_its_cascaded_children(self) -> None:
+        """parent_task cascades, and the collector never calls delete_result_files().
+
+        The sweep reclaims the files of the rows it selected, then removes them with a queryset
+        delete. Django issues bulk SQL for the cascade, so an image request's .zip was left on the
+        results volume with no row that could ever name it again -- and the parent's .txt and .jpg,
+        which delete_result_files() keeps while a live image request needs them, went the same way.
+        """
+        # a parent that is NOT archived, which is what do_maintenance's own hard-delete sweeps
+        # select: an archived one lets the child's cleanup reclaim the parent's files by itself,
+        # so the pass that re-reads the parents would never be exercised
+        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+        child = parent.new_imagerequest(user=self.user, from_api=True)
+        child.finishtimestamp = timezone.now()
+        child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            for suffix in (".txt", ".jpg", ".zip"):
+                prefix.with_suffix(suffix).write_text("results")
+
+            taskrunner_main.remove_old_tasks(
+                days_ago=31, harddeleterecord=True, from_api=True, logfunc=lambda _msg: None
+            )
+
+            assert not Task.objects.filter(id__in=[parent.id, child.id]).exists(), "the rows survived the sweep"
+            left = sorted(path.name for path in prefix.parent.iterdir())
+            assert not left, f"files left behind with no row that can ever name them: {left}"
 
     def test_archiving_is_a_bounded_number_of_queries(self) -> None:
         # the old loop cost a query for the image request plus a full-row save() per task
@@ -3905,6 +4455,51 @@ class RegistrationVerificationTests(TestCase):
         count, started = caches["throttle"].get(clientkey)
         assert count == 1, count
         assert started <= time.time(), "the window still starts in the future"
+
+    def test_the_taken_address_answer_is_rate_limited(self) -> None:
+        """The "that address is already registered" reply is an enumeration oracle.
+
+        The limiter used to sit inside `if form.is_valid():`, and RegistrationForm.clean_email is
+        what makes the form invalid -- so the one reply worth probing for was the one reply that
+        never spent the budget.
+        """
+        User.objects.create_user(username="already", email="taken@example.com", password=None)
+
+        for attempt in range(views.REGISTRATION_ATTEMPT_LIMIT):
+            response = self.register(email="taken@example.com")
+            assert "already exists" in response.content.decode(), attempt
+
+        blocked = self.register(email="taken@example.com")
+        page = blocked.content.decode()
+
+        assert "Too many registration attempts" in page, page
+        assert "already exists" not in page, "the rate-limited page still answers the probe"
+
+    def test_the_attempt_limit_answers_429_and_keeps_what_was_typed(self) -> None:
+        # a 200 reads as an ordinary page render in the access log, and a blank form makes a
+        # caller behind a shared institute address retype everything
+        User.objects.create_user(username="already2", email="taken2@example.com", password=None)
+        for _ in range(views.REGISTRATION_ATTEMPT_LIMIT):
+            self.register(email="taken2@example.com")
+
+        blocked = self.register(email="taken2@example.com")
+        page = blocked.content.decode()
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(views.REGISTRATION_WINDOW_SECONDS))
+        assert "taken2@example.com" in page, "the address the caller typed was thrown away"
+        assert "already exists" not in page, "the rate-limited page still answers the probe"
+
+    def test_a_rejected_submission_does_not_spend_the_mail_budget(self) -> None:
+        # the two budgets bound different things: one the outgoing mail, one the probes. A
+        # mistyped password must not use up a colleague's registration.
+        for _ in range(views.REGISTRATION_WINDOW_LIMIT + 1):
+            self.client.post(reverse("register"), {**self.credentials, "password2": "mismatch", "email": "a@b.com"})
+
+        response = self.register(email="fresh@example.com")
+
+        assert "wait a few minutes" not in response.content.decode().lower()
+        assert User.objects.filter(username="newcomer").exists()
 
     def test_losing_the_race_for_a_username_says_so(self) -> None:
         # username is unique too, and the handler used to report every integrity error as an email
@@ -4516,6 +5111,129 @@ class ReadThrottleTests(TestCase):
             )
 
         assert response.status_code == 201, response.content
+
+
+class LoginThrottleTests(TestCase):
+    """The endpoint that takes a password was the only unmetered one on the site.
+
+    DRF's ObtainAuthToken sets throttle_classes = (), which overrides DEFAULT_THROTTLE_CLASSES
+    entirely. A success returns a token that does not expire, so an unbounded guessing loop is
+    worth more here than against a session cookie.
+    """
+
+    def setUp(self) -> None:
+        User.objects.create_user(username="tokenuser", email="tokenuser@example.com", password="pw12345678")
+        caches["throttle"].clear()
+
+    def tearDown(self) -> None:
+        caches["throttle"].clear()
+
+    def test_the_login_scope_is_configured(self) -> None:
+        # a scope with no rate is not throttled at all, so a typo here silently restores the old
+        # unmetered behaviour
+        assert "forcephotlogin" in ForcedPhotRateThrottle.THROTTLE_RATES
+
+    def test_password_guessing_is_throttled(self) -> None:
+        # SimpleRateThrottle binds THROTTLE_RATES at class-definition time, so override_settings
+        # does not reach it; patch the attribute the throttle actually reads (see ReadThrottleTests)
+        with mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephotlogin": "3/min"}):
+            statuses = [
+                self.client.post(reverse("api-token-auth"), {"username": "tokenuser", "password": "wrong"}).status_code
+                for _ in range(5)
+            ]
+
+        assert statuses[:3] == [400, 400, 400], statuses
+        assert 429 in statuses, statuses
+
+    def test_an_authorization_header_does_not_turn_the_limit_off(self) -> None:
+        """DRF authenticates before it throttles, and BasicAuthentication is enabled site-wide.
+
+        A wrong password in an Authorization header therefore answered 401 from the authenticator,
+        before the throttle ran, so the counter never moved: one extra header turned the whole
+        limit off. The view declares no authenticators of its own now, because it reads the
+        credentials from the body and never looks at request.user.
+        """
+        header = base64.b64encode(b"tokenuser:wrong").decode()
+
+        with mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephotlogin": "3/min"}):
+            statuses = [
+                self.client.post(
+                    reverse("api-token-auth"),
+                    {"username": "tokenuser", "password": "wrong"},
+                    HTTP_AUTHORIZATION=f"Basic {header}",
+                ).status_code
+                for _ in range(5)
+            ]
+
+        assert 429 in statuses, statuses
+
+    def test_a_correct_password_still_returns_a_token(self) -> None:
+        response = self.client.post(reverse("api-token-auth"), {"username": "tokenuser", "password": "pw12345678"})
+
+        assert response.status_code == 200, response.content
+        assert "token" in response.json()
+
+
+class PdfPlotRenderSlotTests(TestCase):
+    """A render holds a request thread for up to two minutes, and the site has four of them.
+
+    The per-task lock stops a herd on one task and says nothing about requests for other tasks, so
+    nothing bounded the total. taskpdfplot needs no credentials and is not a DRF view, so no
+    throttle reaches it either: a few requests for distinct tasks with no .pdf yet could occupy
+    every worker at once and stop the site answering anything, the login page included.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="pdfslot", email="ps@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
+        )
+        caches["default"].clear()
+
+    def tearDown(self) -> None:
+        caches["default"].clear()
+
+    def write_result_file(self, tmpdir: str) -> None:
+        prefix = Path(tmpdir, self.task.localresultfileprefix())
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n")
+
+    def request_plot(self) -> t.Any:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_file(tmpdir)
+            with mock.patch.object(views, "make_pdf_plot", return_value=True) as render:
+                return self.client.get(reverse("taskpdfplot", args=[self.task.id])), render
+
+    def test_a_render_starts_while_a_slot_is_free(self) -> None:
+        _response, render = self.request_plot()
+
+        assert render.called, "no render was attempted with every slot free"
+
+    def test_no_render_starts_when_every_slot_is_taken(self) -> None:
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            caches["default"].add(f"pdfplot-slot-{slot}", True, timeout=60)
+
+        response, render = self.request_plot()
+
+        assert not render.called, "a render started with no slot free"
+        assert response.status_code == 503, response.status_code
+        assert response["Retry-After"] == "30"
+
+    def test_a_slot_is_released_once_the_render_is_done(self) -> None:
+        self.request_plot()
+
+        held = [slot for slot in range(views.PDF_PLOT_RENDER_SLOTS) if caches["default"].get(f"pdfplot-slot-{slot}")]
+        assert not held, f"slots still held after the render: {held}"
+
+    def test_the_per_task_lock_is_released_even_when_no_slot_is_free(self) -> None:
+        # the lock is claimed before the slot, so an early return must still give it back or the
+        # task cannot be rendered again until the lock times out
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            caches["default"].add(f"pdfplot-slot-{slot}", True, timeout=60)
+
+        self.request_plot()
+
+        assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None, "the per-task lock was left behind"
 
 
 class ThirdPartyScriptTests(TestCase):

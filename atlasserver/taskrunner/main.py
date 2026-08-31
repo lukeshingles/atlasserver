@@ -106,6 +106,12 @@ def run_rsync(copycommand: list[str], logfunc: t.Callable[[t.Any], None]) -> int
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",
+        # replace, not the default strict: one byte of non-UTF-8 in the remote output
+        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
+        # UnicodeDecodeError out of the worker, which then died before mark_finished.
+        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
+        # pass, forever, with no error_msg to say why.
+        errors="replace",
         bufsize=1,
         universal_newlines=True,
     )
@@ -307,6 +313,12 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",
+        # replace, not the default strict: one byte of non-UTF-8 in the remote output
+        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
+        # UnicodeDecodeError out of the worker, which then died before mark_finished.
+        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
+        # pass, forever, with no error_msg to say why.
+        errors="replace",
         bufsize=1,
         universal_newlines=True,
     )
@@ -792,6 +804,45 @@ def remove_old_tasks(
                     heartbeat()
 
             if harddeleterecord:
+                # Image requests go with their parents, because parent_task cascades -- and the
+                # collector issues bulk SQL deletes, which never reach Task.delete() or
+                # delete_result_files(). A child's .zip was therefore left on the results volume
+                # with no row that could ever name it again, so no later sweep could find it.
+                children = list(
+                    Task.objects.filter(parent_task_id__in=taskids)
+                    .exclude(id__in=taskids)
+                    .select_related("parent_task")
+                )
+
+                # heartbeats inside these loops as well as between them, for the reason given on
+                # the loop above: each iteration is several filesystem operations, and a batch of
+                # them can alone outlast the staleness window on a slow results mount
+                for childindex, child in enumerate(children):
+                    child.delete_result_files()
+                    child.forget_derived_cache()
+                    if heartbeat is not None and childindex % 50 == 49:
+                        heartbeat()
+
+                Task.objects.filter(id__in=[child.id for child in children]).delete()
+
+                if heartbeat is not None:
+                    heartbeat()
+
+                # A parent keeps its .txt and .jpg while a live image request still needs them as
+                # its input, so the pass above left those two behind. Every such request has just
+                # gone. Read again rather than reusing the instances: they memoised the image
+                # request they had, and the batch prefetched it, so they would still report one.
+                # The prefetch is repeated here, and now answers "none", which is the point.
+                reread = (
+                    Task.objects.filter(id__in=taskids)
+                    .select_related("parent_task")
+                    .prefetch_related(Task.prefetch_imagerequests())
+                )
+                for taskindex, task in enumerate(reread):
+                    task.delete_result_files()
+                    if heartbeat is not None and taskindex % 50 == 49:
+                        heartbeat()
+
                 # the rows are about to go, so there is no point marking them archived first
                 Task.objects.filter(id__in=taskids).delete()
             else:

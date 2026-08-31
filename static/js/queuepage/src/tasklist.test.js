@@ -482,6 +482,128 @@ describe('TaskPage', () => {
         return control;
     };
 
+    test('a task list response overtaken by a later one is discarded', async () => {
+        /*
+         * Two task-list requests can be in flight for the same url: tasklist_api_request_active is
+         * cleared when the response *headers* arrive, not when the body is parsed, and a
+         * user-triggered fetch skips that flag entirely. The apply site compares urls, which
+         * cannot tell two requests for the same url apart, so the older answer landing second put
+         * the earlier rows back -- and wrote its body into both caches, where a later 304 restores
+         * it again. The queue-position poll, the away poll and runnerstatus.js all already carry
+         * the request counter this needed.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+
+        let releaseOvertaken;
+        const overtaken = new Promise((resolve) => { releaseOvertaken = resolve; });
+        const page = (comment) => ({
+            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+        });
+        // the second body is held: its headers still arrive at once, which is exactly what frees
+        // the in-flight flag and lets the third request start while this one is still on its way
+        const bodies = [() => Promise.resolve(page('commentfirst')), () => overtaken, () => Promise.resolve(page('commentnewest'))];
+        let listcall = 0;
+
+        global.fetch = (url) => {
+            const href = url.toString();
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
+            }
+            const body = bodies[Math.min(listcall++, bodies.length - 1)];
+            return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: body });
+        };
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            assert.match(rendered.container.textContent, /commentfirst/);
+
+            mock.timers.tick(6000);   // starts the request whose body is held
+            await flush(60);
+
+            mock.timers.tick(6000);   // starts a newer one, which answers straight away
+            await flush(60);
+            assert.match(rendered.container.textContent, /commentnewest/, 'the newer answer was not applied');
+
+            releaseOvertaken(page('commentovertaken'));
+            await flush(60);
+
+            assert.match(rendered.container.textContent, /commentnewest/, 'an overtaken answer overwrote a newer one');
+            assert.doesNotMatch(rendered.container.textContent, /commentovertaken/);
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    test('a discarded response does not leave its ETag behind', async () => {
+        /*
+         * The tag and the body describe one page, so they have to move together. The tag was
+         * recorded when the response headers arrived, above the guard that later discards the
+         * body: the next poll then sent If-None-Match for a page the cache could not restore, the
+         * server answered 304 because its representation really had not changed, and the 304
+         * branch re-applied the older body -- for as long as that tag stood, not for one poll.
+         *
+         * The stub below is the server: it answers 304 to a request that already carries its
+         * current tag, which is the whole point.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+
+        let releaseHeld;
+        const held = new Promise((resolve) => { releaseHeld = resolve; });
+        const page = (comment) => ({
+            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+        });
+        // the second call is the one whose body is held while a third starts behind it
+        const calls = [
+            { etag: '"v1"', body: () => Promise.resolve(page('commentfirst')) },
+            { etag: '"v2"', body: () => held },
+            { etag: '"v2"', body: () => Promise.resolve(page('commentsecond')) },
+        ];
+        let listcall = 0;
+
+        global.fetch = (url, init) => {
+            const href = url.toString();
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
+            }
+            const call = calls[Math.min(listcall++, calls.length - 1)];
+            const asked = (init && init.headers && init.headers['If-None-Match']) || null;
+            const headers = { get: (name) => (name === 'ETag' ? call.etag : null) };
+            if (asked === call.etag) {
+                return Promise.resolve({ ok: true, status: 304, headers, json: () => Promise.resolve(null) });
+            }
+            return Promise.resolve({ ok: true, status: 200, headers, json: call.body });
+        };
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            assert.match(rendered.container.textContent, /commentfirst/);
+
+            mock.timers.tick(6000);   // the rows change server-side; headers arrive, body is held
+            await flush(60);
+
+            mock.timers.tick(6000);   // the next poll goes out while that body is still in flight
+            await flush(60);
+
+            releaseHeld(page('commentsecond'));
+            await flush(60);
+
+            assert.match(rendered.container.textContent, /commentsecond/,
+                'the new rows were lost, and a 304 restored the old body from a tag whose body was discarded');
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
     test('the tab title counts tasks that left the queue while the tab was hidden', async () => {
         // the away poll runs on an interval an hour of test time would not reach
         mock.timers.enable({ apis: ['setInterval'] });

@@ -136,11 +136,19 @@ if not filecacheroot.is_dir():
 
 
 CACHES = {
-    # file-based rather than locmem, because the DRF throttle counters live in the default cache
-    # and each mod_wsgi process would otherwise keep its own, multiplying the effective rate limit
+    # File-based rather than locmem, because the entries here coordinate the mod_wsgi processes
+    # with each other and with the task runner: each process would otherwise keep its own copy.
+    #
+    # MAX_ENTRIES is raised well above the default of 300 because every write culls a third of the
+    # directory at random once that many files are present, and this directory holds control state
+    # rather than a cache of results -- the queue-recalc counter, the PDF render slots and the
+    # per-task render locks. Losing one of those to a cull is not a slower answer but a wrong one:
+    # a render slot deleted while it is held lets a further render start and lets its holder then
+    # release a slot that belongs to somebody else.
     "default": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "default",
+        "OPTIONS": {"MAX_ENTRIES": 10000},
     },
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
@@ -352,6 +360,9 @@ REST_FRAMEWORK = {
         # someone hammering it. Applied to GET/HEAD/OPTIONS, which used to bypass the throttle
         # entirely -- see forcephot.throttles.
         "forcephotread": "600/min",
+        # Credential checks. The endpoint hands back a token that does not expire, so this bounds
+        # password guessing; a legitimate client asks for a token once and then reuses it.
+        "forcephotlogin": "10/min",
     },
     # the same knob as TRUSTED_PROXY_COUNT above, so the throttle's idea of the client address
     # cannot drift from the GeoIP lookup's. Left unset, DRF's get_ident() trusts the whole

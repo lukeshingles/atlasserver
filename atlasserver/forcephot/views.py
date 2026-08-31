@@ -1,5 +1,6 @@
 """Django views for the forcephot app."""
 
+import contextlib
 import datetime
 import functools
 import hashlib
@@ -13,15 +14,18 @@ import typing as t
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from typing import override
+from urllib.parse import urlsplit
 
 import pandas as pd
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import PasswordResetView
 from django.contrib.gis.geoip2 import GeoIP2
 from django.contrib.gis.geoip2 import GeoIP2Exception
 from django.core.cache import caches
@@ -56,6 +60,7 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
+from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -84,9 +89,11 @@ from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
 from atlasserver.forcephot.verification import send_verification_email
+from atlasserver.forcephot.verification import site_name as verification_site_name
 from atlasserver.forcephot.verification import token_generator as verification_token_generator
 from atlasserver.forcephot.verification import user_from_uidb64
 
@@ -112,6 +119,32 @@ EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
 # signing up together is ordinary; what it has to stop is a loop. See register.
 REGISTRATION_WINDOW_SECONDS: t.Final = 600
 REGISTRATION_WINDOW_LIMIT: t.Final = 3
+
+# Submissions of any kind allowed from one client address per window, valid or not.
+#
+# RegistrationForm.clean_email answers "is this address registered here?", and that answer is only
+# reachable on the invalid branch. A limiter that ran after is_valid() therefore metered the mail
+# and left the answer free, which is an enumeration oracle over the whole user table -- the leak
+# EmailChangeForm.clean_new_email and resend_verification both close.
+#
+# Looser than the budget above, and separate from it, because the two bound different things. That
+# one bounds outgoing mail. This one bounds probes, and a mistyped password must not use up a
+# colleague's registration.
+REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
+
+# How many PDF plot renders the whole site may have in flight at once, across every task.
+#
+# The per-task lock in taskpdfplot only stops a herd on one task, and nothing bounded the total. A
+# render holds its request thread for up to PDF_PLOT_TIMEOUT_SECONDS while a spawned interpreter
+# starts and imports matplotlib, so requests for a few distinct tasks that have no .pdf yet could
+# occupy every worker at once and stop the site answering anything at all, the login page
+# included. The view needs no credentials and is not a DRF view, so no throttle reaches it either.
+# Production serves the site with four single-threaded workers (ATLASSERVER_NPROCESSES in
+# dotenv_example.txt), so this leaves most of them free whatever a crawler or a flood does.
+#
+# Named slots rather than a counter, for the reason given above: a read-modify-write on the
+# file-based cache is not atomic, while add() does at least fail for a name that is already taken.
+PDF_PLOT_RENDER_SLOTS: t.Final = 2
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +201,13 @@ def origin_only_referrer(view):
     return wrapper
 
 
-def get_tasklist_etag(request, user_id: int) -> str:
+def get_tasklist_etag(request, user_id: int, *, shows_owner_fields: bool = True) -> str:
     """Return an etag that changes whenever anything the given user's task pages show changes.
+
+    `shows_owner_fields` says which of the two bodies this tag describes. The serializer keeps
+    callback_url to the owner and to staff, so one URL has two representations; without this term
+    the tag would be the same for both, and a caller presenting the other one's tag would be
+    answered 304 with a body that was never meant for them.
 
     Scoped to one user's tasks rather than the whole table. A global aggregate was invalidated by
     every other user's activity, so a busy server would almost never produce a 304, and it cost a
@@ -197,6 +235,7 @@ def get_tasklist_etag(request, user_id: int) -> str:
         request.accepted_renderer.format,
         user_id,
         request.get_full_path(),
+        shows_owner_fields,
         usertasks["id__count"],
         usertasks["timestamp__max"],
         usertasks["starttimestamp__max"],
@@ -355,16 +394,9 @@ class ForcePhotPermission(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        if not request.user or not request.user.is_authenticated:
-            return False
-
-        # staff and instance owner have all permissions.
-        #
-        # pyrefly: ignore [missing-attribute]
-        # is_staff is on the concrete User, and django-stubs types request.user as
-        # AbstractBaseUser because AUTH_USER_MODEL is swappable in principle. It is not swapped
-        # here -- verification.py carries the same note where the checkers disagree about it.
-        return request.user.is_staff or obj.user_id == request.user.id
+        # staff and instance owner have all permissions; the rule itself lives on the model,
+        # because RequestImages and the serializer's callback_url filter apply the same one
+        return obj.is_owned_by(request.user)
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
@@ -563,7 +595,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
         # scoped to the task's owner, not to request.user: a staff member may be viewing someone
         # else's task, and their own tasks say nothing about whether this one has changed
-        etag = get_tasklist_etag(request, instance.user_id)
+        # the detail view is readable by anyone, so the body depends on who is asking; the list
+        # is scoped to the requester, so its body is always the owner's
+        etag = get_tasklist_etag(request, instance.user_id, shows_owner_fields=instance.is_owned_by(request.user))
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
@@ -596,7 +630,9 @@ class RequestImages(APIView):
         try:
             parent_task = Task.objects.get(id=pk, request_type="FP", is_archived=False)
 
-            if parent_task.user.id != request.user.id and not request.user.is_staff:
+            # the same rule the permission class applies, from the same place: this view names
+            # ForcePhotPermission but never calls check_object_permissions for the parent
+            if not parent_task.is_owned_by(request.user):
                 raise PermissionDenied
 
         except ObjectDoesNotExist:
@@ -1281,40 +1317,137 @@ def stats(request):
     return render(request, "stats.html", dictparams)
 
 
+def count_in_window(cachekey: str, window_seconds: float) -> int:
+    """Count one event against a fixed window, and return how many the window now holds.
+
+    The window start is stored with the count so that it stays fixed. incr() cannot be used: it
+    rewrites the value with the cache's *default* timeout rather than the remaining one, which
+    both shortened the window and restarted it on every attempt -- so a client that kept trying
+    kept renewing its own block indefinitely.
+
+    time.time(), not monotonic(): this value goes to a file-based cache that outlives the process
+    and the host, and monotonic() is measured from an epoch that does not survive a reboot -- a
+    stored value from the previous boot reads as being in the future here.
+
+    An elapsed time outside the window is therefore treated as no window at all, which covers an
+    expiry, a clock stepped by NTP, and any stale epoch. Without that the arithmetic below could
+    compute a timeout of the machine's former uptime and lock a shared address out for weeks.
+    """
+    throttlecache = caches["throttle"]
+    now = time.time()
+    window = throttlecache.get(cachekey)
+    elapsed = now - window[1] if window is not None else None
+
+    if elapsed is None or not (0 <= elapsed < window_seconds):
+        count, started = 1, now
+    else:
+        count, started = window[0] + 1, window[1]
+
+    throttlecache.set(cachekey, (count, started), timeout=window_seconds - (now - started))
+
+    return count
+
+
+class SiteOriginPasswordResetView(PasswordResetView):
+    """Django's password reset, with the mailed link pinned to the configured origin.
+
+    django.contrib.sites is not installed, so Django builds the link from the Host header, and
+    ALLOWED_HOSTS legitimately holds wildcard entries. Anyone who can serve one subdomain of
+    qub.ac.uk or fallingstar-data.com could therefore have this send a victim a valid reset link
+    that points at their own server, which discloses the token when the victim opens it.
+
+    This is the rule verification.absolute_url already applies to the mail this project sends
+    itself. The reset mail is the one Django owns, so it is applied here instead.
+
+    An unset SITE_ORIGIN keeps Django's own behaviour, which is what development and the tests
+    want; settings.py makes the variable mandatory in production.
+    """
+
+    @override
+    def setup(self, request, *args, **kwargs) -> None:
+        """Pin the values the reset mail template reads, before the form is handled."""
+        super().setup(request, *args, **kwargs)
+
+        if settings.SITE_ORIGIN:
+            origin = urlsplit(settings.SITE_ORIGIN)
+            self.extra_email_context = {
+                "protocol": origin.scheme,
+                "domain": origin.netloc,
+                # the same source the links come from, so the two cannot name different hosts
+                "site_name": verification_site_name(request),
+            }
+
+
+class ObtainAuthTokenThrottled(ObtainAuthToken):
+    """DRF's token endpoint, with the rate limit that its base class removes.
+
+    ObtainAuthToken sets throttle_classes = (), which overrides DEFAULT_THROTTLE_CLASSES, so the
+    one endpoint on the site that takes a password was also the only unmetered one. A success
+    returns a token that does not expire, so an unbounded guessing loop is worth more here than
+    against a session cookie.
+
+    ForcedPhotRateThrottle allows any view that declares no throttle_scope, so naming the scope is
+    what turns the limit on.
+
+    No authenticators, because APIView.initial() authenticates before it throttles. With the site
+    defaults in place, a wrong password in an Authorization header made BasicAuthentication answer
+    401 before the throttle ran, so the counter never moved and one extra header turned the limit
+    off. Nothing here reads request.user: ObtainAuthToken takes the credentials from the body
+    through its own serializer, and its permission_classes are already empty. The throttle then
+    keys on the client address, which is what a login endpoint wants.
+    """
+
+    # a tuple, like the empty throttle_classes and permission_classes ObtainAuthToken itself
+    # declares; DRF only iterates these
+    authentication_classes = ()
+    throttle_classes = [ForcedPhotRateThrottle]
+    throttle_scope = "forcephotlogin"
+
+
 def register(request):
     if request.method == "POST":
+        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+
+        # Counted before the form is bound, so that a rejected submission spends it too; see
+        # REGISTRATION_ATTEMPT_LIMIT for why the answer to a rejected one has to be metered.
+        attempts = count_in_window(f"registration-attempt-{clientkey}", REGISTRATION_WINDOW_SECONDS)
+
+        if attempts > REGISTRATION_ATTEMPT_LIMIT:
+            # An unbound form, and the message passed beside it rather than through add_error:
+            # binding runs clean_email, and its answer is the one this limit exists to meter. The
+            # username and the address are put back as initial values instead, so that a caller
+            # behind an address they share with a whole institute does not lose what they typed.
+            blocked = RegistrationForm(
+                initial={"username": request.POST.get("username", ""), "email": request.POST.get("email", "")}
+            )
+            response = render(
+                request,
+                "registration/register.html",
+                {
+                    "form": blocked,
+                    "name": "Register",
+                    "limitmessage": (
+                        "Too many registration attempts from this address. Please wait a few "
+                        "minutes before trying again."
+                    ),
+                },
+                # 429 like every other limit on the site, rather than a 200 that reads as an
+                # ordinary page render in the access log and to anything watching it
+                status=429,
+            )
+            # the window is fixed, so this is the longest the caller can be asked to wait
+            response["Retry-After"] = str(int(REGISTRATION_WINDOW_SECONDS))
+
+            return response
+
         form = RegistrationForm(request.POST)
         if form.is_valid():
             # Bounded per client address: every valid submission sends mail synchronously, so a
             # loop of distinct addresses is an open relay as far as the SMTP quota is concerned,
             # and plus-addressing aims them all at one inbox without tripping the unique index.
-            # The window start is stored with the count so that it stays fixed. incr() cannot be
-            # used: it rewrites the value with the cache's *default* timeout rather than the
-            # remaining one, which both shortened the window and restarted it on every attempt --
-            # so a client that kept trying kept renewing its own block indefinitely.
-            clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
-            throttlecache = caches["throttle"]
-            # time.time(), not monotonic(): this value is written to a file-based cache that
-            # outlives the process and the host, and monotonic() is measured from an epoch that
-            # does not survive a reboot -- a stored value from the previous boot reads as being in
-            # the future here.
-            #
-            # An elapsed time outside the window is therefore treated as no window at all, which
-            # covers an expiry, a clock stepped by NTP, and any stale epoch. Without that the
-            # arithmetic below could compute a timeout of the machine's former uptime and lock a
-            # shared address out for weeks.
-            now = time.time()
-            window = throttlecache.get(clientkey)
-            elapsed = now - window[1] if window is not None else None
-
-            if elapsed is None or not (0 <= elapsed < REGISTRATION_WINDOW_SECONDS):
-                registrations, started = 1, now
-            else:
-                registrations, started = window[0] + 1, window[1]
-
-            throttlecache.set(
-                clientkey, (registrations, started), timeout=REGISTRATION_WINDOW_SECONDS - (now - started)
-            )
+            # Tighter than the attempt budget above, and separate from it, because this one bounds
+            # the mail rather than the probes.
+            registrations = count_in_window(f"registration-{clientkey}", REGISTRATION_WINDOW_SECONDS)
 
             if registrations > REGISTRATION_WINDOW_LIMIT:
                 form.add_error(
@@ -1700,7 +1833,12 @@ _plotscript_cache: dict[Path, tuple[float, int, str]] = {}
 # own magnitude and its error: the plot shows those rather than converting the flux itself, so that
 # it agrees with the file the visitor downloads. "mag5sig" is the 5 sigma depth of the image, which
 # is what a point too faint to measure is drawn at. "chi/N" is read by the quality cut below.
-PLOTCOLUMNS = frozenset({"#MJD", "uJy", "duJy", "m", "dm", "mag5sig", "chi/N"})
+#
+# "F" is the filter band, and it is named here because df.query() below resolves it by name: a file
+# without it got past this guard and then raised pandas' UndefinedVariableError, which subclasses
+# NameError rather than ValueError, so it escaped the handler this guard was written to work with
+# and answered 500 (and mailed the admins) instead of drawing an empty plot.
+PLOTCOLUMNS = frozenset({"#MJD", "uJy", "duJy", "m", "dm", "mag5sig", "chi/N", "F"})
 
 
 # the arguments are named for the result file columns they carry, which is why they are not all
@@ -1749,7 +1887,7 @@ def resultplotdatajs(request, taskid):
         return HttpResponseNotFound("Page not found")
 
     try:
-        task = Task.objects.get(id=taskid)
+        task = Task.live().get(id=taskid)
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Page not found")
     if not task.finishtimestamp:
@@ -1897,6 +2035,25 @@ def resultplotdatajs(request, taskid):
     return HttpResponse(strjs, content_type="text/javascript", headers=headers)
 
 
+@contextlib.contextmanager
+def pdfplot_render_slot() -> Iterator[bool]:
+    """Hold one of the site's PDF render slots for the body, or yield False if none is free."""
+    cache = caches["default"]
+
+    for slot in range(PDF_PLOT_RENDER_SLOTS):
+        # the timeout outlives the render, so a worker killed mid-render cannot hold a slot for
+        # good; the same reasoning as the per-task lock below
+        slotkey = f"pdfplot-slot-{slot}"
+        if cache.add(slotkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
+            try:
+                yield True
+            finally:
+                cache.delete(slotkey)
+            return
+
+    yield False
+
+
 def _pdfplot_unavailable() -> HttpResponse:
     """Tell the client the plot is not ready yet, rather than that it does not exist.
 
@@ -1915,7 +2072,7 @@ def taskpdfplot(request, taskid):
         return HttpResponseNotFound("Page not found")
 
     try:
-        item = Task.objects.get(id=taskid)
+        item = Task.live().get(id=taskid)
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Page not found")
     if resultfile := item.localresultfile():
@@ -1933,30 +2090,41 @@ def taskpdfplot(request, taskid):
             if not caches["default"].add(lockkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
                 return _pdfplot_unavailable()
 
-            # A private path published by rename, so a killed child leaves its wreckage there
-            # rather than at the final name, and two concurrent renders cannot damage each other.
-            # The uniqueness goes in the stem so .pdf stays the suffix: plot_atlas_fp calls
-            # savefig() with no explicit format, and matplotlib infers it from the extension.
-            renderpath = pdfpath.with_name(f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}")
-
             try:
-                completed = make_pdf_plot(
-                    taskid=taskid,
-                    localresultfile=resultfilepath,
-                    taskcomment=item.comment,
-                    separate_process=True,
-                    outputpath=renderpath,
-                )
+                with pdfplot_render_slot() as hasslot:
+                    # the lock above is keyed on the task, so it says nothing about requests for
+                    # other tasks. See PDF_PLOT_RENDER_SLOTS for why the total is bounded as well.
+                    if not hasslot:
+                        return _pdfplot_unavailable()
 
-                if completed and renderpath.is_file():
-                    renderpath.replace(pdfpath)
+                    # A private path published by rename, so a killed child leaves its wreckage
+                    # there rather than at the final name, and two concurrent renders cannot damage
+                    # each other. The uniqueness goes in the stem so .pdf stays the suffix:
+                    # plot_atlas_fp calls savefig() with no explicit format, and matplotlib infers
+                    # it from the extension.
+                    renderpath = pdfpath.with_name(
+                        f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}"
+                    )
+
+                    try:
+                        completed = make_pdf_plot(
+                            taskid=taskid,
+                            localresultfile=resultfilepath,
+                            taskcomment=item.comment,
+                            separate_process=True,
+                            outputpath=renderpath,
+                        )
+
+                        if completed and renderpath.is_file():
+                            renderpath.replace(pdfpath)
+                    finally:
+                        renderpath.unlink(missing_ok=True)
+
+                    if not completed:
+                        logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
+                        return _pdfplot_unavailable()
             finally:
-                renderpath.unlink(missing_ok=True)
                 caches["default"].delete(lockkey)
-
-            if not completed:
-                logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
-                return _pdfplot_unavailable()
 
         if pdfpath.is_file():
             return FileResponse(pdfpath.open("rb"))
@@ -1969,13 +2137,19 @@ def taskpdfplot(request, taskid):
 # resultplotdatajs above) therefore take a task id and no credentials; note the serializer also
 # links results at their STATIC_URL path, which Apache serves without consulting Django at all.
 #
+# Public is not the same as archived, so they all read Task.live(). Deleting a finished task
+# archives it and reclaims what it can, but delete_result_files keeps the .txt and .jpg while a
+# live image request still needs them -- so without the filter these views went on serving a
+# deleted task's data, and taskpdfplot and resultplotdatajs rebuilt the .pdf and the cached plot
+# that the delete had just removed. ForcePhotTaskViewSet.retrieve already answers 404 for one.
+#
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit
 def _taskresultfile_response(
     taskid: int, getfile: Callable[[Task], str | Path | None]
 ) -> FileResponse | HttpResponseNotFound:
     """Serve one of a task's result files, or 404 when the task or the file does not exist."""
-    task = Task.objects.filter(id=taskid).first() if taskid else None
+    task = Task.live().filter(id=taskid).first() if taskid else None
     resultfile = getfile(task) if task is not None else None
     if resultfile:
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)

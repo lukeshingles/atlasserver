@@ -137,7 +137,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             return None
 
         try:
-            return validate_callback_url(value)
+            # allow_memo: one submission validates this same URL for every row of a radeclist,
+            # and then again for the whole list. See webhooks.CALLBACK_VALIDATION_MEMO_SECONDS.
+            return validate_callback_url(value, allow_memo=True)
         except CallbackUrlError as ex:
             raise serializers.ValidationError({"callback_url": str(ex)}) from ex
 
@@ -224,6 +226,52 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return default
 
     @override
+    def to_representation(self, instance: Task) -> dict[str, t.Any]:
+        """Serialise a task, keeping the submitter's callback URL to the submitter.
+
+        Reading a task is public on purpose -- the reasoning is on
+        ForcePhotPermission.has_object_permission -- and that covers the measurements a public
+        survey produced. It does not cover callback_url. The callback carries no signature and no
+        shared secret (see webhooks.send_task_callback), so the URL is the whole credential for
+        whatever it points at, and such URLs routinely hold a secret in their path or query. Task
+        ids are sequential, so without this anyone could walk them and collect every API user's.
+
+        Emptied rather than dropped, so that the shape of the response does not depend on who is
+        asking: a client that reads the field still finds it, and finds nothing in it.
+        """
+        data = super().to_representation(instance)
+
+        if data.get("callback_url") and not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
+            data["callback_url"] = None
+
+        return data
+
+    @override
+    def update(self, instance: Task, validated_data: dict[str, t.Any]) -> Task:
+        """Apply a change to a task, writing only the columns it touched.
+
+        ModelSerializer.update() ends in a bare instance.save(), which writes every concrete column
+        from the copy that was loaded at the start of the request. The task runner writes
+        starttimestamp, finishtimestamp, error_msg and attempt_count to the same row with queryset
+        updates (taskrunner.main.mark_started and mark_finished), and forcephot.queue renumbers
+        queuepos_relative the same way -- so a PATCH that overlapped one of those reverted it.
+
+        A finished task that loses its finishtimestamp re-enters Task.queued(), so the runner
+        dispatches it again and mails the user a second set of results.
+
+        task_modified_datetime is named as well because it is auto_now: Django only refreshes such
+        a field when update_fields lists it, and the task list's entity tag is built from it, so
+        leaving it out would hide the change from every polling browser. Task.delete() names it for
+        the same reason.
+        """
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save(update_fields=[*validated_data, "task_modified_datetime"])
+
+        return instance
+
+    @override
     def validate(self, attrs):
         mpc_name = self.submitted(attrs, "mpc_name")
         request_type = self.submitted(attrs, "request_type")
@@ -231,6 +279,39 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         # RA 0 and Dec 0 are valid coordinates, so test for "not given" rather than falsiness
         ra_missing = self.submitted(attrs, "ra") in (None, "")
         dec_missing = self.submitted(attrs, "dec") in (None, "")
+
+        # Above the target branching below, not inside one arm of it: an IMGZIP task carries
+        # whichever target its parent had, so the rules have to hold for an mpc_name request as
+        # much as for an ra/dec one. Nested in the ra/dec arm, they let a request that named an
+        # mpc_name create a parentless IMGZIP row -- which the runner cannot name a result file
+        # for, so it dies before it can record a finish time and is dispatched again forever.
+        if request_type == "IMGZIP":
+            # An image request is not created here, and the message says so.
+            #
+            # parent_task_id is neither a model field name nor a relation name, so ModelSerializer
+            # builds it as a ReadOnlyField and to_internal_value drops it. The old message asked
+            # for that field, which made this a 400 the caller could never satisfy. RequestImages
+            # is the path that carries what an image request needs: the parent's ownership rule,
+            # the per-user cap, the client location fields and a queue position.
+            if self.instance is None:
+                msg = (
+                    "IMGZIP tasks cannot be created here. Ask for the images of a finished"
+                    " forced photometry task by POSTing to /queue/<id>/requestimages/."
+                )
+                raise serializers.ValidationError(msg)
+
+            # An existing one must keep its parent: the runner names the parent's data file as the
+            # list of observations to fetch images for.
+            parent_task_id = self.submitted(attrs, "parent_task_id")
+            if not parent_task_id:
+                msg = "An IMGZIP task must keep its parent_task_id set to an FP task."
+                raise serializers.ValidationError(msg)
+
+            try:
+                Task.objects.all().get(id=parent_task_id, request_type="FP")
+            except (ObjectDoesNotExist, IndexError):
+                msg = "An IMGZIP task must keep its parent_task_id set to an FP task id."
+                raise serializers.ValidationError(msg) from None
 
         if mpc_name:  # it's an MPC object name
             if not ra_missing or not dec_missing:
@@ -242,18 +323,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
         else:
-            if request_type == "IMGZIP":
-                parent_task_id = self.submitted(attrs, "parent_task_id")
-                if not parent_task_id:
-                    msg = "IMGZIP requests must have a parent_task_id set to an FP task."
-                    raise serializers.ValidationError(msg)
-
-                try:
-                    Task.objects.all().get(id=parent_task_id, request_type="FP")
-                except (ObjectDoesNotExist, IndexError):
-                    msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
-                    raise serializers.ValidationError(msg) from None
-
             # The target rules, which apply to an IMGZIP task as much as to any other: an image
             # request carries the parent's own coordinates (see Task.new_imagerequest) and the
             # runner dispatches on them, and task_target_is_mpcname_or_radec requires a target of
