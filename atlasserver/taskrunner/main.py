@@ -795,66 +795,47 @@ def remove_old_tasks(
 
             taskids = [task.id for task in tasks]
 
-            for taskindex, task in enumerate(tasks):
-                task.delete_result_files()
-                # inside the batch as well as after it: 500 tasks times several filesystem operations
-                # each can alone outlast the staleness window on a slow results mount. The
-                # heartbeat rate-limits itself, so calling it often costs almost nothing.
-                if heartbeat is not None and taskindex % 50 == 49:
-                    heartbeat()
-
             if harddeleterecord:
-                # Image requests go with their parents, because parent_task cascades -- and the
-                # collector issues bulk SQL deletes, which never reach Task.delete() or
-                # delete_result_files(). A child's .zip was therefore left on the results volume
-                # with no row that could ever name it again, so no later sweep could find it.
+                # Everything this batch removes: the rows it selected, and the image requests that
+                # parent_task cascades to. The collector issues bulk SQL for that cascade, which
+                # never reaches Task.delete() or delete_result_files(), so a child's files would be
+                # left on the results volume with no row that could ever name them again.
+                #
+                # Read once, before anything is unlinked or deleted, and every decision below is
+                # made against it rather than against a database that this loop is changing. The
+                # set is closed under "image request of": a sweep that names no request_type can
+                # select a parent and its child alike, so which of the two brought the other in
+                # must not change what is reclaimed.
                 childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
+                doomed = childids | set(taskids)
 
-                # Only the children this batch did not select. A sweep that names no request_type
-                # can match a parent and its image request together, and the loop above has
-                # already reclaimed the files of any child that matched in its own right.
-                cascaded = list(Task.objects.filter(id__in=childids - set(taskids)).select_related("parent_task"))
-
-                # heartbeats inside these loops as well as between them, for the reason given on
-                # the loop above: each iteration is several filesystem operations, and a batch of
-                # them can alone outlast the staleness window on a slow results mount
-                for childindex, child in enumerate(cascaded):
-                    child.delete_result_files()
-                    child.forget_derived_cache()
-                    if heartbeat is not None and childindex % 50 == 49:
-                        heartbeat()
-
-                # Every child, not only the cascaded ones. A selected child's row left standing
-                # here still answers the read below as a live image request, so its parent would
-                # keep the .txt for a reader that is about to go in the same delete -- and the file
-                # would be left with no row that could ever name it again.
-                Task.objects.filter(id__in=childids).delete()
-
-                if heartbeat is not None:
-                    heartbeat()
-
-                # A parent keeps its .txt while a live image request still needs it as input, so
-                # the pass above left it behind. Every such request has now gone. Read again
-                # rather than reusing the instances: they memoised the image request they had, and
-                # the batch prefetched it, so they would still report one. The prefetch is
-                # repeated here, and now answers "none", which is the point.
-                reread = (
-                    Task.objects.filter(id__in=taskids)
+                going = (
+                    Task.objects.filter(id__in=doomed)
                     .select_related("parent_task")
                     .prefetch_related(Task.prefetch_imagerequests())
                 )
-                for taskindex, task in enumerate(reread):
-                    task.delete_result_files()
-                    if heartbeat is not None and taskindex % 50 == 49:
+                for index, task in enumerate(going):
+                    # alsogoing, so that a parent's data file is not kept for an image request
+                    # that is being removed in the same statement
+                    task.delete_result_files(alsogoing=doomed)
+                    task.forget_derived_cache()
+                    # inside the batch as well as after it: 500 tasks times several filesystem
+                    # operations each can alone outlast the staleness window on a slow results
+                    # mount. The heartbeat rate-limits itself, so calling it often costs almost
+                    # nothing.
+                    if heartbeat is not None and index % 50 == 49:
                         heartbeat()
 
-                # the rows are about to go, so there is no point marking them archived first
-                Task.objects.filter(id__in=taskids).delete()
+                # one statement for the parents and their image requests alike
+                Task.objects.filter(id__in=doomed).delete()
             else:
-                Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
+                for index, task in enumerate(tasks):
+                    task.delete_result_files()
+                    task.forget_derived_cache()
+                    if heartbeat is not None and index % 50 == 49:
+                        heartbeat()
 
-            for task in tasks:
-                task.forget_derived_cache()
+                Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
 
             if heartbeat is not None:
                 heartbeat()

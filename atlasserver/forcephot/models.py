@@ -459,26 +459,55 @@ class Task(models.Model):
             region=self.region,
         )
 
-    def delete_result_files(self) -> None:
-        """Delete the result files belonging to this task.
+    def live_imagerequest_ids(self) -> list[int]:
+        """Return the ids of the image requests that still read this task's data file.
+
+        Answered from the prefetch when the caller made one, so a page or a maintenance batch
+        costs one query for all of its tasks rather than one query each. All of them, not the
+        first: a parent can carry more than one live image request (see _imagerequest_task), and a
+        caller deciding whether its data file is still read has to weigh every one.
+        """
+        prefetched = getattr(self, "live_imagerequests", None)
+        if prefetched is not None:
+            return [imagerequest.id for imagerequest in prefetched]
+
+        return list(Task.objects.filter(parent_task_id=self.id, is_archived=False).values_list("id", flat=True))
+
+    def _unlink_results(self, extensions: t.Iterable[str]) -> None:
+        """Remove these result files of this task, whether or not they are on disk."""
+        for ext in extensions:
+            Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
+
+    def delete_result_files(self, *, alsogoing: t.AbstractSet[int] = frozenset()) -> None:
+        """Delete the result files that nothing will still need once this task is gone.
+
+        Exactly one file is shared between tasks: a forced photometry task's .txt, which an image
+        request reads as the list of observations to fetch images for. Everything else belongs to
+        one task alone, and goes with it.
+
+        `alsogoing` names the other tasks that are being removed in the same operation, so that
+        the .txt is not kept for a reader which is disappearing with it. A caller removing a
+        single task leaves it empty and gets the rule as it stands for that task on its own; the
+        maintenance sweep removes a parent and its image requests together and has to say so.
 
         Split out of delete() so that the maintenance sweep can reclaim the files of many tasks and
         then update or remove their rows in one statement, instead of one write per task.
         """
         if self.request_type == "IMGZIP":
+            # named for the parent, but this task's own output
             if zipfile := self.localresultimagezipfile:
                 Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
 
-            # the parent's .txt is kept while a live image request needs it, so once this was
-            # the last one it has to be collected here or nothing reclaims it until the
-            # maintenance sweep runs months later. The .jpg goes with the parent now, and is named
-            # here as well for the rows that were archived while it was still held back.
+            # The parent's own files, once this was the last image request that could read them.
+            # Reached only while the parent outlives this row: when it is going too, its own call
+            # collects them, and does so whatever its archived state. Without this, an archived
+            # parent's .txt would wait for the sweep months later.
             parent = self.parent_task
-            if parent is not None and parent.is_archived:
-                siblings = Task.objects.filter(parent_task_id=parent.id, is_archived=False).exclude(id=self.id)
-                if not siblings.exists():
-                    for ext in (".txt", ".jpg"):
-                        Path(settings.STATIC_ROOT, parent.localresultfileprefix() + ext).unlink(missing_ok=True)
+            if parent is not None and parent.is_archived and parent.id not in alsogoing:
+                readers = set(parent.live_imagerequest_ids()) - alsogoing - {self.id}
+                if not readers:
+                    # the .jpg as well, for a parent archived while that was still held back
+                    parent._unlink_results([".txt", ".jpg"])  # noqa: SLF001  # a Task, from a Task
 
         else:
             # The .jpg goes whatever else is kept. It was held back for an image request to
@@ -486,16 +515,15 @@ class Task(models.Model):
             # row is archived nothing renders that preview any more. Results are served from
             # STATIC_URL by the web server, without asking Django, so a file kept past its last
             # reader is one that any previously published link can still be redeemed for.
-            delete_extlist = [".pdf", ".fits", ".jpg"]
-            if self.imagerequest_task_id is None:
-                # The .txt is the one file a live image request still needs: it lists the
-                # observations to fetch images for, and the runner copies it to the science
-                # machine. It is reachable by its static path for as long as it is held, which
-                # ends when the last image request finishes and the branch above collects it.
-                delete_extlist += [".txt"]
+            extensions = [".pdf", ".fits", ".jpg"]
 
-            for ext in delete_extlist:
-                Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
+            # The .txt is the one file another task reads: it lists the observations to fetch
+            # images for, and the runner copies it to the science machine. It is reachable by its
+            # static path for as long as it is held.
+            if not set(self.live_imagerequest_ids()) - alsogoing:
+                extensions.append(".txt")
+
+            self._unlink_results(extensions)
 
     def forget_derived_cache(self) -> None:
         """Drop the cached plot data generated from this task's result file."""

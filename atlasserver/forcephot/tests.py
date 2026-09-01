@@ -4005,6 +4005,58 @@ class RemoveOldTasksTests(TestCase):
             left = sorted(path.name for path in prefix.parent.iterdir())
             assert not left, f"files left behind with no row that can ever name them: {left}"
 
+    def test_a_parent_with_two_image_requests_leaves_nothing_behind(self) -> None:
+        """Each image request used to ask whether a sibling still needed the parent's data file.
+
+        With two of them going in the same sweep, each saw the other and left the file alone, and
+        the parent kept it for both. The reclamation now weighs one fixed set of doomed rows
+        instead, so which of the three brought the others in cannot change the answer.
+        """
+        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+        for _ in range(2):
+            child = parent.new_imagerequest(user=self.user, from_api=True)
+            child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+            child.save()
+
+        assert len(parent.live_imagerequest_ids()) == 2
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            for suffix in (".txt", ".jpg", ".zip"):
+                prefix.with_suffix(suffix).write_text("results")
+
+            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=lambda _msg: None)
+
+            assert not Task.objects.exists(), "the rows survived the sweep"
+            left = sorted(path.name for path in prefix.parent.iterdir())
+            assert not left, f"files left behind with no row that can ever name them: {left}"
+
+    def test_one_image_request_of_two_does_not_reclaim_the_shared_input(self) -> None:
+        # the .txt is the image request's input, so it goes only once the last of them has, which
+        # is why the rule weighs every live request rather than the first one it finds
+        parent = self.make_old_task(days=200, request_type="FP")
+        children = []
+        for _ in range(2):
+            child = parent.new_imagerequest(user=self.user, from_api=False)
+            child.finishtimestamp = timezone.now()
+            child.save()
+            children.append(child)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("results")
+
+            parent.delete()  # archived, and its .txt kept for the two requests that read it
+            assert prefix.with_suffix(".txt").is_file()
+
+            children[0].delete()
+            assert prefix.with_suffix(".txt").is_file(), "the file went while a request still read it"
+
+            children[1].delete()
+            assert not prefix.with_suffix(".txt").exists(), "the last request left the file behind"
+
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
