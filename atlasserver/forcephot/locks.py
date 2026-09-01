@@ -1,18 +1,22 @@
 """Locks that the web workers share through the filesystem.
 
-A lock is a file that one process creates with O_EXCL. Every local filesystem makes that atomic,
-so exactly one of the processes that try at once gets the lock. The file cache offers add(), but
-add() checks for the key and then writes it, so two workers can both take the last render slot,
-and the cache culls entries when it is full, held ones included.
+A lock is an advisory lock (flock) on a file named for it, taken without waiting. The kernel
+grants it to one open file at a time, across processes and across the threads of one process, and
+releases it when the holder closes the file or dies. A holder that is killed mid-render therefore
+leaves nothing behind that a later request would have to judge abandoned and take over, and no
+take-over exists to race.
 
-A holder that is killed leaves its file behind. Every lock therefore has a lifetime, after which
-it counts as abandoned and the next taker takes it over. The take-over is a rename, which is
-atomic as well, so two takers cannot both take one abandoned lock.
+The file cache offers add(), but add() checks for the key and then writes it, so two workers can
+both take the last render slot, and the cache culls entries when it is full, held ones included.
+
+The lock files are never removed. A lock is a property of the open file, not of the file's
+existence: a contender that opened the file before it was unlinked would hold a lock on a file
+that nobody else can see.
 """
 
 import contextlib
+import fcntl
 import os
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -27,57 +31,21 @@ def _lockpath(name: str) -> Path:
     return Path(settings.LOCKS_DIR, f"{name}.lock")
 
 
-def _create(path: Path) -> bool:
-    """Create the lock file, and return False if it exists already."""
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        return False
-
-    os.close(fd)
-    return True
-
-
-def _take_over_if_abandoned(path: Path, stale_after: float) -> bool:
-    """Remove the file of a lock whose holder is gone, and return whether it was removed.
-
-    Moved aside by a rename, so that two takers of one abandoned lock cannot both remove it: the
-    second rename finds no file.
-    """
-    try:
-        age = time.time() - path.stat().st_mtime
-    except FileNotFoundError:
-        # released just now, so the caller can try to create it again
-        return True
-
-    if age < stale_after:
-        return False
-
-    abandoned = path.with_name(f"{path.name}.{os.getpid()}.abandoned")
-    try:
-        path.rename(abandoned)
-    except FileNotFoundError:
-        return False
-
-    abandoned.unlink(missing_ok=True)
-    return True
-
-
 @contextlib.contextmanager
-def try_lock(name: str, *, stale_after: float) -> Iterator[bool]:
-    """Hold the named lock for the body, or yield False at once if another process holds it.
-
-    `stale_after` is the number of seconds after which a lock counts as abandoned. It must exceed
-    the longest time a holder can legitimately hold the lock.
-    """
+def try_lock(name: str) -> Iterator[bool]:
+    """Hold the named lock for the body, or yield False at once if another holder has it."""
     path = _lockpath(name)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not _create(path) and not (_take_over_if_abandoned(path, stale_after) and _create(path)):
-        yield False
-        return
-
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+
         yield True
     finally:
-        path.unlink(missing_ok=True)
+        # closing the file releases the lock
+        os.close(fd)

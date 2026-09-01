@@ -2095,6 +2095,28 @@ class RequestImagesTests(TestCase):
         parentreads = [q["sql"] for q in queries if "forcephot_task" in q["sql"] and f"= {parent.id}" in q["sql"]]
         assert any("FOR UPDATE" in sql for sql in parentreads), parentreads
 
+    def test_a_queued_request_without_its_own_input_gets_a_copy_before_the_parent_goes(self) -> None:
+        # an image request from before requests had their own copy reads the parent's file when
+        # it is dispatched; deleting the parent used to remove that file and fail the request
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.save()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputs,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputs)),
+        ):
+            datafile = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".txt")
+            datafile.parent.mkdir(parents=True, exist_ok=True)
+            datafile.write_text("observations")
+            assert not child.inputfile().exists()
+
+            parent.delete()
+
+            assert not datafile.exists(), "the parent's data file was kept"
+            assert child.inputfile().read_text() == "observations", "the queued request lost its input"
+
     def test_a_delete_takes_the_same_lock_before_it_reclaims_files(self) -> None:
         # a delete of the parent locks its row first, so it waits for a copy of its data file that
         # an image request is making, rather than reclaiming the file under it
@@ -2107,6 +2129,30 @@ class RequestImagesTests(TestCase):
             parent.delete()
 
         assert any("FOR UPDATE" in q["sql"] for q in queries), [q["sql"] for q in queries]
+
+    def test_the_queue_recalculation_waits_for_the_commit(self) -> None:
+        # requested inside the transaction, the runner could read the request, recalculate without
+        # the new row, and count the request as handled; the row would then keep its provisional
+        # position until the backstop
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+
+            with (
+                mock.patch.object(views, "request_queue_recalc") as recalc,
+                self.captureOnCommitCallbacks() as callbacks,
+            ):
+                response = self.client.post(reverse("requestimages", args=[parent.id]))
+                assert response.status_code == 302, response.status_code
+                assert not recalc.called, "the recalculation was requested before the commit"
+
+            assert len(callbacks) == 1, callbacks
+            callbacks[0]()
+            assert recalc.called, "no recalculation was registered for the commit"
 
     def test_a_request_whose_data_file_has_gone_queues_nothing(self) -> None:
         # nothing could ever be fetched for it, so the row is rolled back rather than queued for a
@@ -4609,6 +4655,30 @@ class RemoveOldTasksTests(TestCase):
             children[1].delete()
             assert not legacy.exists(), "the last request served from the legacy zip left it behind"
 
+    def test_a_sweep_that_archives_every_request_served_from_a_legacy_zip_reclaims_it(self) -> None:
+        # both siblings are still live while the batch reclaims files, so each would otherwise see
+        # the other as still served and keep the zip; the batch is named, and the batch is left out
+        parent = self.make_old_task(days=200, request_type="FP")
+        parent.finishtimestamp = timezone.now()  # recent, so the sweep selects the requests alone
+        parent.save()
+        old = timezone.now() - datetime.timedelta(days=200)
+        for _ in range(2):
+            child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
+            child.finishtimestamp = old
+            child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("images")
+
+            taskrunner_main.remove_old_tasks(
+                days_ago=31, harddeleterecord=False, from_api=parent.from_api, logfunc=lambda _msg: None
+            )
+
+            assert Task.objects.filter(parent_task=parent, is_archived=True).count() == 2
+            assert not legacy.exists(), "the legacy zip outlived every request served from it"
+
     def test_a_request_with_its_own_zip_leaves_a_sibling_legacy_zip_alone(self) -> None:
         parent = self.make_old_task(days=200, request_type="FP")
         own, legacy_child = [parent.new_imagerequest(user=self.user, from_api=False) for _ in range(2)]
@@ -4923,7 +4993,8 @@ class PdfPlotViewTests(TestCase):
         with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
 
-        assert not Path(settings.LOCKS_DIR, f"pdfplot-lock-{self.task.id}.lock").exists()
+        with locks.try_lock(f"pdfplot-lock-{self.task.id}") as held:
+            assert held, "the per-task lock was left behind"
 
 
 class RegistrationVerificationTests(TestCase):
@@ -5844,23 +5915,24 @@ class PdfPlotRenderSlotTests(TestCase):
         self.task = Task.objects.create(
             user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
         )
-        self.release_every_slot()
+        # the slots this test holds, released by tearDown
+        self.heldslots = contextlib.ExitStack()
 
     def tearDown(self) -> None:
-        self.release_every_slot()
-
-    @staticmethod
-    def slotfile(slot: int) -> Path:
-        return Path(settings.LOCKS_DIR, f"pdfplot-slot-{slot}.lock")
-
-    def release_every_slot(self) -> None:
-        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
-            self.slotfile(slot).unlink(missing_ok=True)
+        self.heldslots.close()
 
     def take_every_slot(self) -> None:
-        Path(settings.LOCKS_DIR).mkdir(parents=True, exist_ok=True)
         for slot in range(views.PDF_PLOT_RENDER_SLOTS):
-            self.slotfile(slot).touch()
+            assert self.heldslots.enter_context(locks.try_lock(f"pdfplot-slot-{slot}"))
+
+    @staticmethod
+    def free_slots() -> list[int]:
+        free = []
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            with locks.try_lock(f"pdfplot-slot-{slot}") as held:
+                if held:
+                    free.append(slot)
+        return free
 
     def write_result_file(self, tmpdir: str) -> None:
         prefix = Path(tmpdir, self.task.localresultfileprefix())
@@ -5890,8 +5962,7 @@ class PdfPlotRenderSlotTests(TestCase):
     def test_a_slot_is_released_once_the_render_is_done(self) -> None:
         self.request_plot()
 
-        held = [slot for slot in range(views.PDF_PLOT_RENDER_SLOTS) if self.slotfile(slot).exists()]
-        assert not held, f"slots still held after the render: {held}"
+        assert self.free_slots() == list(range(views.PDF_PLOT_RENDER_SLOTS)), "a slot is still held after the render"
 
     def test_the_per_task_lock_is_released_even_when_no_slot_is_free(self) -> None:
         # the lock is claimed before the slot, so an early return must still give it back or the
@@ -5900,70 +5971,67 @@ class PdfPlotRenderSlotTests(TestCase):
 
         self.request_plot()
 
-        assert not Path(settings.LOCKS_DIR, f"pdfplot-lock-{self.task.id}.lock").exists(), (
-            "the per-task lock was left behind"
-        )
-
-    def test_a_slot_left_by_a_dead_worker_is_taken_over(self) -> None:
-        # a worker killed mid-render leaves its slot file; once it is older than the render could
-        # ever be, the next request takes it rather than refusing every render for good
-        self.take_every_slot()
-        long_ago = time.time() - views.PDF_PLOT_LOCK_STALE_SECONDS - 1
-        os.utime(self.slotfile(0), (long_ago, long_ago))
-
-        _response, render = self.request_plot()
-
-        assert render.called, "a slot left by a dead worker was never taken over"
+        with locks.try_lock(f"pdfplot-lock-{self.task.id}") as held:
+            assert held, "the per-task lock was left behind"
 
 
 class LockFileTests(TestCase):
-    """One lock file per name: exactly one taker gets it, and a dead holder's lock is taken over."""
+    """One lock per name: exactly one holder at a time, and a dead holder's lock is free at once."""
 
-    def test_only_one_taker_holds_the_lock(self) -> None:
-        with (
-            locks.try_lock("test-lock", stale_after=60) as first,
-            locks.try_lock("test-lock", stale_after=60) as second,
-        ):
+    def test_only_one_holder_at_a_time(self) -> None:
+        with locks.try_lock("test-lock") as first, locks.try_lock("test-lock") as second:
             assert first, "the first taker did not get the lock"
             assert not second, "two takers held one lock at once"
 
     def test_the_lock_is_released_after_the_body(self) -> None:
-        with locks.try_lock("test-lock", stale_after=60):
+        with locks.try_lock("test-lock"):
             pass
 
-        with locks.try_lock("test-lock", stale_after=60) as held:
+        with locks.try_lock("test-lock") as held:
             assert held, "a released lock refused the next taker"
 
     def test_the_lock_is_released_when_the_body_raises(self) -> None:
         def fail_while_holding() -> None:
-            with locks.try_lock("test-lock", stale_after=60):
+            with locks.try_lock("test-lock"):
                 msg = "body failed"
                 raise RuntimeError(msg)
 
         with contextlib.suppress(RuntimeError):
             fail_while_holding()
 
-        with locks.try_lock("test-lock", stale_after=60) as held:
+        with locks.try_lock("test-lock") as held:
             assert held, "a lock whose body raised was left held"
 
-    def test_a_fresh_lock_of_another_holder_is_respected(self) -> None:
-        # the file of a holder that is still within its lifetime is somebody else's
-        with locks.try_lock("test-lock", stale_after=60), locks.try_lock("test-lock", stale_after=60) as held:
-            assert not held
+    def test_a_lock_held_by_another_process_is_respected_and_freed_by_its_death(self) -> None:
+        # the kernel holds the lock for the process, so a holder that is killed mid-body leaves
+        # nothing that a later taker would have to judge abandoned
+        script = (
+            "import fcntl, os, sys, time\n"
+            "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o644)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "print('held', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        path = Path(settings.LOCKS_DIR, "test-lock.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen([sys.executable, "-c", script, str(path)], stdout=subprocess.PIPE, text=True)
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "held"
 
-    def test_an_abandoned_lock_is_taken_over(self) -> None:
-        with locks.try_lock("test-lock", stale_after=60):
-            path = Path(settings.LOCKS_DIR, "test-lock.lock")
-            long_ago = time.time() - 120
-            os.utime(path, (long_ago, long_ago))
+            with locks.try_lock("test-lock") as held:
+                assert not held, "a lock another process holds was taken"
+        finally:
+            holder.kill()
+            holder.wait()
 
-            with locks.try_lock("test-lock", stale_after=60) as held:
-                assert held, "a lock older than its lifetime was not taken over"
+        with locks.try_lock("test-lock") as held:
+            assert held, "the lock of a dead process was not free"
 
     def test_a_name_that_is_not_a_plain_file_name_is_refused(self) -> None:
         for name in ("", "../escape", ".hidden", "a/b"):
             try:
-                with locks.try_lock(name, stale_after=60):
+                with locks.try_lock(name):
                     pass
             except ValueError:
                 continue

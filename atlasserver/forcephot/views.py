@@ -78,7 +78,6 @@ from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
-from atlasserver.forcephot.misc import PDF_PLOT_TIMEOUT_SECONDS
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
@@ -149,13 +148,10 @@ REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
 # the site with four single-threaded workers (ATLASSERVER_NPROCESSES in dotenv_example.txt), so
 # this leaves most of them free whatever a crawler or a flood does.
 #
-# Named slots rather than a counter: each slot is one lock file (see forcephot.locks), which is
-# atomic across the workers, where a counter would need a read-modify-write.
+# Named slots rather than a counter: each slot is one lock (see forcephot.locks), which is atomic
+# across the workers and released by the kernel when its holder dies, where a counter would need
+# a read-modify-write and a repair after a crash.
 PDF_PLOT_RENDER_SLOTS: t.Final = 2
-
-# A render lock that is older than this was left by a worker that died mid-render, and the next
-# request takes it over. Longer than the render itself can last.
-PDF_PLOT_LOCK_STALE_SECONDS: t.Final = PDF_PLOT_TIMEOUT_SECONDS + 30
 
 logger = logging.getLogger(__name__)
 
@@ -681,7 +677,9 @@ class RequestImages(APIView):
                     msg = "The forced photometry data file for this task is no longer available."
                     return JsonResponse({"non_field_errors": msg}, status=404)
 
-                request_queue_recalc()
+                # after the commit, not inside the transaction: the runner could otherwise read
+                # the request, recalculate without the new row, and count the request as handled
+                transaction.on_commit(request_queue_recalc)
                 redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
 
         return redirect(redirurl, request=request)
@@ -2087,7 +2085,7 @@ def resultplotdatajs(request, taskid):
 def pdfplot_render_slot() -> Iterator[bool]:
     """Hold one of the site's PDF render slots for the body, or yield False if none is free."""
     for slot in range(PDF_PLOT_RENDER_SLOTS):
-        with try_lock(f"pdfplot-slot-{slot}", stale_after=PDF_PLOT_LOCK_STALE_SECONDS) as held:
+        with try_lock(f"pdfplot-slot-{slot}") as held:
             if held:
                 yield True
                 return
@@ -2115,7 +2113,7 @@ def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpRes
     would otherwise fork matplotlib once per concurrent request. One render per task at a time,
     and a bounded number across the site; the other requests are told to come back.
     """
-    with try_lock(f"pdfplot-lock-{taskid}", stale_after=PDF_PLOT_LOCK_STALE_SECONDS) as heldtask:
+    with try_lock(f"pdfplot-lock-{taskid}") as heldtask:
         if not heldtask:
             return _pdfplot_unavailable()
 

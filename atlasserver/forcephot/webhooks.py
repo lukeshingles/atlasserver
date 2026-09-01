@@ -89,7 +89,10 @@ def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
     # The slot is the thread's, not the caller's: an abandoned thread keeps it until the resolver
     # answers or gives up, which is what bounds the number of them. A caller who cannot get a slot
     # within the timeout is answered as a caller whose name cannot be resolved in time is.
-    if not _resolver_slots.acquire(timeout=CALLBACK_RESOLVE_TIMEOUT_SECONDS):
+    # bound to the object the slot was taken from, so that a thread abandoned by its caller gives
+    # the slot back to that semaphore and not to whatever the name refers to by then
+    slots = _resolver_slots
+    if not slots.acquire(timeout=CALLBACK_RESOLVE_TIMEOUT_SECONDS):
         msg = f"callback_url hostname could not be resolved within {CALLBACK_RESOLVE_TIMEOUT_SECONDS:.0f} seconds"
         raise CallbackUrlError(msg)
 
@@ -99,14 +102,14 @@ def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
         except Exception as ex:  # noqa: BLE001  # re-raised by the caller below, never swallowed
             failure.append(ex)
         finally:
-            _resolver_slots.release()
+            slots.release()
 
     thread = threading.Thread(target=resolve, name="callback-url-resolve", daemon=True)
     try:
         thread.start()
     except RuntimeError:
         # no thread could be started; the slot would otherwise be lost with it
-        _resolver_slots.release()
+        slots.release()
         raise
     thread.join(CALLBACK_RESOLVE_TIMEOUT_SECONDS)
 

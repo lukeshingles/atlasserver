@@ -814,7 +814,8 @@ def remove_old_tasks(
                 batch = tasks
 
             for index, task in enumerate(batch):
-                task.delete_result_files()
+                # the batch is named, because every row in it is still live until the write below
+                task.delete_result_files(going=going)
                 # inside the batch as well as after it: 500 tasks times several filesystem
                 # operations each can alone outlast the staleness window on a slow results mount.
                 # The heartbeat rate-limits itself, so calling it often costs almost nothing.

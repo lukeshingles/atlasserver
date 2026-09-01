@@ -484,13 +484,12 @@ describe('TaskPage', () => {
 
     test('a task list response overtaken by a later one is discarded', async () => {
         /*
-         * Two task-list requests can be in flight for the same url: tasklist_api_request_active is
-         * cleared when the response *headers* arrive, not when the body is parsed, and a
-         * user-triggered fetch skips that flag entirely. The apply site compares urls, which
-         * cannot tell two requests for the same url apart, so the older answer landing second put
-         * the earlier rows back -- and wrote its body into both caches, where a later 304 restores
-         * it again. The queue-position poll, the away poll and runnerstatus.js all already carry
-         * the request counter this needed.
+         * Two task-list requests can be in flight for the same url: a user-triggered fetch (a
+         * submission, a filter) skips the in-flight flag that keeps the poll to one at a time. The
+         * apply site compares urls, which cannot tell two requests for the same url apart, so the
+         * older answer landing second put the earlier rows back -- and wrote its body into the
+         * cache, where a later 304 restored it again. The queue-position poll, the away poll and
+         * runnerstatus.js all already carry the request counter this needed.
          */
         mock.timers.enable({ apis: ['setInterval'] });
 
@@ -499,18 +498,21 @@ describe('TaskPage', () => {
         const page = (comment) => ({
             results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
         });
-        // the second body is held: its headers still arrive at once, which is exactly what frees
-        // the in-flight flag and lets the third request start while this one is still on its way
+        // the second body is held; a submission then starts the third request while it is still
+        // on its way
         const bodies = [() => Promise.resolve(page('commentfirst')), () => overtaken, () => Promise.resolve(page('commentnewest'))];
         let listcall = 0;
 
-        global.fetch = (url) => {
+        global.fetch = (url, init) => {
             const href = url.toString();
             if (href.includes('taskrunnerstatus')) {
                 return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
             }
             if (href.includes('queuepositions')) {
                 return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
+            }
+            if (init && init.method === 'POST') {
+                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
             }
             const body = bodies[Math.min(listcall++, bodies.length - 1)];
             return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: body });
@@ -525,7 +527,9 @@ describe('TaskPage', () => {
             mock.timers.tick(6000);   // starts the request whose body is held
             await flush(60);
 
-            mock.timers.tick(6000);   // starts a newer one, which answers straight away
+            // a submission starts a newer one, which answers straight away
+            rendered.container.querySelector('#newrequest').dispatchEvent(
+                new window.Event('submit', { bubbles: true, cancelable: true }));
             await flush(60);
             assert.match(rendered.container.textContent, /commentnewest/, 'the newer answer was not applied');
 
@@ -704,6 +708,65 @@ describe('TaskPage', () => {
             assert.equal(badge.textContent.trim(), label);
         });
     }
+
+    test('a request stays active until its body has arrived', async () => {
+        /*
+         * The headers of a poll can arrive long before its body. A flag cleared at the headers
+         * let the next tick start a newer request while the body was still arriving, and the newer
+         * request then discarded that body; with every body slower than the poll interval, every
+         * body was discarded and the list never updated.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+
+        const page = (comment) => ({
+            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+        });
+        let listcall = 0;
+        let releaseBody = null;
+
+        global.fetch = (url) => {
+            const href = url.toString();
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
+            }
+            const call = listcall++;
+            if (call === 0) {
+                return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(page('commentfirst')) });
+            }
+            // headers at once; the body only when the test releases it
+            return Promise.resolve({
+                ok: true, status: 200, headers: { get: () => null },
+                json: () => new Promise((resolve) => { releaseBody = () => resolve(page('comment' + call)); }),
+            });
+        };
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            mock.timers.tick(6000);   // the poll: headers arrive, body pending
+            await flush(60);
+            assert.equal(listcall, 2);
+
+            mock.timers.tick(6000);   // the next tick must wait for that body
+            await flush(60);
+            assert.equal(listcall, 2, 'a request whose body was still arriving was overtaken by the next tick');
+
+            releaseBody();
+            await flush(60);
+            assert.match(rendered.container.textContent, /comment1/, 'the body was not applied');
+
+            mock.timers.tick(6000);   // and once the body is applied, polling goes on
+            await flush(60);
+            assert.equal(listcall, 3);
+        } finally {
+            mock.timers.reset();
+        }
+    });
 
     test('a discarded response does not leave its ETag behind', async () => {
         /*

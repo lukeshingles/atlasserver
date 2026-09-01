@@ -1,6 +1,7 @@
 import datetime
 import shutil
 import typing as t
+from collections.abc import Collection
 from pathlib import Path
 from typing import override
 
@@ -554,12 +555,17 @@ class Task(models.Model):
         for ext in extensions:
             Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
 
-    def delete_result_files(self) -> None:
+    def delete_result_files(self, *, going: Collection[int] = ()) -> None:
         """Delete the result files of this task. Every file belongs to one task.
 
         An image request works from its own copy of the parent's data file (see inputfile) and
         writes a zip named for itself, so nothing here is read by another row. A zip named for the
-        parent is a legacy name from before that rule; it goes with the parent.
+        parent is a legacy name from before that rule; it goes with the last live request served
+        from it.
+
+        `going` names the rows that go together with this one, when a maintenance batch reclaims
+        many at once. Those rows are still live while the batch runs, so a rule that asks which
+        live rows remain has to leave them out.
 
         Split out of delete() so that the maintenance sweep can reclaim the files of many tasks and
         then update or remove their rows in one statement, instead of one write per task.
@@ -575,7 +581,9 @@ class Task(models.Model):
             # itself is not loaded, so a maintenance batch stays at its fixed query count.
             legacyzip = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
             if self.parent_task_id is not None and Path(settings.STATIC_ROOT, legacyzip).exists():
-                siblings = Task.live().filter(parent_task_id=self.parent_task_id).exclude(id=self.id)
+                siblings = (
+                    Task.live().filter(parent_task_id=self.parent_task_id).exclude(id=self.id).exclude(id__in=going)
+                )
                 still_served = any(
                     not Path(settings.STATIC_ROOT, f"{sibling.localresultfileprefix()}.zip").exists()
                     for sibling in siblings
@@ -583,6 +591,19 @@ class Task(models.Model):
                 if not still_served:
                     Path(settings.STATIC_ROOT, legacyzip).unlink(missing_ok=True)
         else:
+            # An image request from before requests had their own copy of the data file reads the
+            # parent's file when the runner dispatches it. One that is still to run gets its copy
+            # now, before the file goes, so that the dispatch does not fail for want of a file the
+            # parent had. Rows that go with this one need nothing. The requests come from the
+            # prefetch in a maintenance batch and from one query otherwise.
+            if self.request_type == "FP" and (source := self.localresultfile()):
+                for child in self.live_imagerequests():
+                    if child.id in going or child.finished() or child.inputfile().exists():
+                        continue
+                    target = child.inputfile()
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(Path(settings.STATIC_ROOT, source), target)
+
             # The .jpg and the .txt go with the row too. localresultpreviewimagefile refuses an
             # archived parent, so nothing renders the preview once this row is archived, and each
             # image request holds its own copy of the data file. The web server serves results

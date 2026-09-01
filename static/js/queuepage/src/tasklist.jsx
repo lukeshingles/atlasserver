@@ -945,11 +945,10 @@ export function TaskPage() {
      * The same again for the task list itself, which had no such counter at all.
      *
      * Two of these can be in flight at once: a user-triggered fetch skips the
-     * tasklist_api_request_active guard, and that flag is cleared when the response headers arrive
-     * rather than when the body is parsed. The url check at the apply site cannot tell them apart,
+     * tasklist_api_request_active guard. The url check at the apply site cannot tell them apart,
      * because both are requests for the same url. So the older answer landing second put back the
-     * rows from before -- and, worse, wrote its body into both caches, after which a 304 restores
-     * that stale copy for as long as the tag holds, rather than for one poll.
+     * rows from before -- and, worse, wrote its body into the cache, after which a 304 restored
+     * that stale copy for as long as the tag held, rather than for one poll.
      */
     const tasklistRequestRef = React.useRef(0);
 
@@ -1331,14 +1330,6 @@ export function TaskPage() {
                 redirect: "manual"
             })
             .then((response) => {
-                // The flag belongs to the newest request. An overtaken one leaving it cleared let
-                // the next tick start yet another request while the newer one was still running,
-                // which overtook that one in turn -- and with latency above the poll interval the
-                // list could stay frozen while requests piled up.
-                if (isCurrent()) {
-                    tasklist_api_request_active = false;
-                }
-
                 // Checked here as well as below, because everything from this point writes state:
                 // an overtaken failure would otherwise leave "Server error" on screen after a
                 // newer request had succeeded, and an overtaken success would clear the error a
@@ -1392,9 +1383,6 @@ export function TaskPage() {
                 }
                 return null;
             }).catch(error => {
-                if (isCurrent()) {
-                    tasklist_api_request_active = false;
-                }
                 console.log('Get task list HTTP request failed', error);
                 if (!isCurrent()) {
                     // a newer request is in flight, and its answer is the one worth reporting
@@ -1404,6 +1392,15 @@ export function TaskPage() {
                 // deliberately left where it was: it is what tells the user how stale the page is.
                 setState({ tasklist_api_error: 'Connection error' });
             }).then(data => {
+                // The request is active until its body is here, whatever the outcome above: a
+                // clear at the headers let the next tick start a newer request while this body was
+                // still arriving, and the newer request then discarded it -- with a body slower
+                // than the poll interval, every body, so the list never updated. The flag belongs
+                // to the newest request, so an overtaken one leaves it alone.
+                if (isCurrent()) {
+                    tasklist_api_request_active = false;
+                }
+
                 if (tasklist_refresh_queued && !tasklist_api_request_active) {
                     // something asked for a refresh while this request was in flight; this
                     // response predates whatever prompted that, so fetch again right away.
