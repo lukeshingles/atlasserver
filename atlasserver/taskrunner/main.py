@@ -808,31 +808,36 @@ def remove_old_tasks(
                 # collector issues bulk SQL deletes, which never reach Task.delete() or
                 # delete_result_files(). A child's .zip was therefore left on the results volume
                 # with no row that could ever name it again, so no later sweep could find it.
-                children = list(
-                    Task.objects.filter(parent_task_id__in=taskids)
-                    .exclude(id__in=taskids)
-                    .select_related("parent_task")
-                )
+                childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
+
+                # Only the children this batch did not select. A sweep that names no request_type
+                # can match a parent and its image request together, and the loop above has
+                # already reclaimed the files of any child that matched in its own right.
+                cascaded = list(Task.objects.filter(id__in=childids - set(taskids)).select_related("parent_task"))
 
                 # heartbeats inside these loops as well as between them, for the reason given on
                 # the loop above: each iteration is several filesystem operations, and a batch of
                 # them can alone outlast the staleness window on a slow results mount
-                for childindex, child in enumerate(children):
+                for childindex, child in enumerate(cascaded):
                     child.delete_result_files()
                     child.forget_derived_cache()
                     if heartbeat is not None and childindex % 50 == 49:
                         heartbeat()
 
-                Task.objects.filter(id__in=[child.id for child in children]).delete()
+                # Every child, not only the cascaded ones. A selected child's row left standing
+                # here still answers the read below as a live image request, so its parent would
+                # keep the .txt for a reader that is about to go in the same delete -- and the file
+                # would be left with no row that could ever name it again.
+                Task.objects.filter(id__in=childids).delete()
 
                 if heartbeat is not None:
                     heartbeat()
 
-                # A parent keeps its .txt and .jpg while a live image request still needs them as
-                # its input, so the pass above left those two behind. Every such request has just
-                # gone. Read again rather than reusing the instances: they memoised the image
-                # request they had, and the batch prefetched it, so they would still report one.
-                # The prefetch is repeated here, and now answers "none", which is the point.
+                # A parent keeps its .txt while a live image request still needs it as input, so
+                # the pass above left it behind. Every such request has now gone. Read again
+                # rather than reusing the instances: they memoised the image request they had, and
+                # the batch prefetched it, so they would still report one. The prefetch is
+                # repeated here, and now answers "none", which is the point.
                 reread = (
                     Task.objects.filter(id__in=taskids)
                     .select_related("parent_task")

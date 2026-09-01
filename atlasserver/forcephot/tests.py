@@ -3979,6 +3979,32 @@ class RemoveOldTasksTests(TestCase):
         # must not add anything like ten more queries
         assert large - small <= 2, f"{small} queries for one task, {large} for six"
 
+    def test_a_parent_and_its_child_in_one_batch_leave_nothing_behind(self) -> None:
+        """Both rows match the sweep, so the child is selected rather than cascaded.
+
+        The reclamation pass excluded the selected children, so the child's row was still standing
+        when the parents were read again. The parent therefore reported a live image request and
+        kept its .txt for it a second time, and both rows then went in the same delete -- leaving
+        the file with no row that any later sweep could use to find it.
+        """
+        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+        child = parent.new_imagerequest(user=self.user, from_api=True)
+        child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+        child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            for suffix in (".txt", ".jpg", ".zip"):
+                prefix.with_suffix(suffix).write_text("results")
+
+            # the widest sweep names no request_type, so it matches the parent and the child alike
+            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=lambda _msg: None)
+
+            assert not Task.objects.exists(), "the rows survived the sweep"
+            left = sorted(path.name for path in prefix.parent.iterdir())
+            assert not left, f"files left behind with no row that can ever name them: {left}"
+
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
