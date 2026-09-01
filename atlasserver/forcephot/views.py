@@ -4,12 +4,10 @@ import contextlib
 import datetime
 import functools
 import hashlib
-import ipaddress
 import logging
 import math
 import os
 import statistics
-import time
 import typing as t
 import uuid
 from collections import defaultdict
@@ -25,6 +23,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import LoginView
 from django.contrib.auth.views import PasswordResetView
 from django.contrib.gis.geoip2 import GeoIP2
 from django.contrib.gis.geoip2 import GeoIP2Exception
@@ -73,6 +72,7 @@ from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.forms import ResendVerificationForm
+from atlasserver.forcephot.forms import ThrottledAuthenticationForm
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
@@ -83,13 +83,14 @@ from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
-from atlasserver.forcephot.netaddr import client_address
+from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
+from atlasserver.forcephot.throttles import count_in_window
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
@@ -299,20 +300,6 @@ def geoip_reader_forget() -> None:
     The seam tests reset the module state through, rather than reaching into the private dict.
     """
     _geoip_reader_cache.clear()
-
-
-def client_ip(request) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """Return the address the request came from, or None if it cannot be established.
-
-    The policy (and the reasoning behind it) lives in netaddr.client_address; this only supplies
-    the request pieces. NUM_PROXIES in REST_FRAMEWORK is set from the same TRUSTED_PROXY_COUNT so
-    that the throttle's idea of the client cannot drift from this one.
-    """
-    return client_address(
-        remote_addr=request.META.get("REMOTE_ADDR"),
-        forwarded_for=request.META.get("HTTP_X_FORWARDED_FOR"),
-        trusted_proxy_count=settings.TRUSTED_PROXY_COUNT,
-    )
 
 
 def client_location_fields(request) -> dict[str, str | None]:
@@ -1307,37 +1294,6 @@ def stats(request):
     return render(request, "stats.html", dictparams)
 
 
-def count_in_window(cachekey: str, window_seconds: float) -> int:
-    """Count one event against a fixed window, and return how many the window now holds.
-
-    The window start is stored with the count so that it stays fixed. incr() cannot be used: it
-    rewrites the value with the cache's *default* timeout rather than the remaining one, which
-    both shortened the window and restarted it on every attempt -- so a client that kept trying
-    kept renewing its own block indefinitely.
-
-    time.time(), not monotonic(): this value goes to a file-based cache that outlives the process
-    and the host, and monotonic() is measured from an epoch that does not survive a reboot -- a
-    stored value from the previous boot reads as being in the future here.
-
-    An elapsed time outside the window is therefore treated as no window at all, which covers an
-    expiry, a clock stepped by NTP, and any stale epoch. Without that the arithmetic below could
-    compute a timeout of the machine's former uptime and lock a shared address out for weeks.
-    """
-    throttlecache = caches["throttle"]
-    now = time.time()
-    window = throttlecache.get(cachekey)
-    elapsed = now - window[1] if window is not None else None
-
-    if elapsed is None or not (0 <= elapsed < window_seconds):
-        count, started = 1, now
-    else:
-        count, started = window[0] + 1, window[1]
-
-    throttlecache.set(cachekey, (count, started), timeout=window_seconds - (now - started))
-
-    return count
-
-
 class SiteOriginPasswordResetView(PasswordResetView):
     """Django's password reset, with the mailed link pinned to the configured origin.
 
@@ -1369,6 +1325,28 @@ class SiteOriginPasswordResetView(PasswordResetView):
             }
 
 
+class ThrottledLoginView(LoginView):
+    """Django's login page, with the failed-login budget from throttles applied.
+
+    The form refuses the password check for an address over the budget and records each failure.
+    This view turns that refusal into a 429 with a Retry-After, like every other limit on the
+    site, so it is visible to the access log and to anything watching it.
+    """
+
+    authentication_form = ThrottledAuthenticationForm
+
+    @override
+    def form_invalid(self, form):
+        from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
+
+        refused = any(error.code == "throttled" for error in form.non_field_errors().as_data())
+        response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
+        if refused:
+            response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+
+        return response
+
+
 class ObtainAuthTokenThrottled(ObtainAuthToken):
     """DRF's token endpoint, with the rate limit that its base class removes.
 
@@ -1390,8 +1368,8 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
     Dropping SessionAuthentication also drops the CSRF check it enforces. That is safe here: the
     view acts only on the credentials in its body, and its JSON reply is unreadable across origins.
 
-    This closes the ordering for this endpoint only. Every other DRF view still authenticates
-    first, so a wrong password in a Basic header to any of them answers 401 without a count.
+    A Basic header on any other view is metered by ThrottledBasicAuthentication (see throttles),
+    which counts failed password checks per address and refuses the check itself once over budget.
     """
 
     # a tuple, like the empty throttle_classes and permission_classes ObtainAuthToken itself

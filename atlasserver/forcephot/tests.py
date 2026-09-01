@@ -47,6 +47,7 @@ from rest_framework.serializers import ValidationError
 from atlasserver import atlastaskrunner
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot import throttles
 from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
 from atlasserver.forcephot import webhooks
@@ -5723,6 +5724,91 @@ class PdfPlotRenderSlotTests(TestCase):
         self.request_plot()
 
         assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None, "the per-task lock was left behind"
+
+
+class FailedLoginBudgetTests(TestCase):
+    """Failed password checks are counted per address on every path that takes a password.
+
+    DRF authenticates before it throttles, so a wrong password in a Basic header to any API view
+    was answered 401 before a throttle could count it; Django's login page and the admin's are not
+    DRF views, so no throttle reached them at all. One budget now covers the three, and it refuses
+    the check itself once over: an address over budget must not learn whether a password was right.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="guessed", email="g@example.com", password="pw12345678")
+        caches["throttle"].clear()
+
+    def tearDown(self) -> None:
+        caches["throttle"].clear()
+
+    @staticmethod
+    def basic(password: str) -> str:
+        return "Basic " + base64.b64encode(f"guessed:{password}".encode()).decode()
+
+    def test_a_basic_header_on_any_api_view_is_metered(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            statuses = [
+                self.client.get(
+                    reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("wrong")
+                ).status_code
+                for _ in range(5)
+            ]
+            # over budget, the check itself is refused: the right password gets the same answer
+            correct = self.client.get(
+                reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("pw12345678")
+            )
+
+        assert statuses[:3] == [401, 401, 401], statuses
+        assert statuses[3:] == [429, 429], statuses
+        assert correct.status_code == 429, correct.status_code
+
+    def test_the_login_page_refuses_the_check_once_over_budget(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert (
+                    self.client.post(reverse("login"), {"username": "guessed", "password": "wrong"}).status_code == 200
+                )
+
+            blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        assert "Too many failed login attempts" in blocked.content.decode()
+        assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
+
+    def test_a_successful_login_does_not_spend_the_budget(self) -> None:
+        # failures are counted, not attempts: a shared institute address must not be locked out
+        # by its own successful logins
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 1):
+            for _ in range(3):
+                response = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+                assert response.status_code == 302, response.status_code
+                self.client.logout()
+
+    def test_the_admin_login_shares_the_budget(self) -> None:
+        User.objects.create_superuser(username="root", email="root@example.com", password="pw12345678")
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("admin:login"), {"username": "root", "password": "wrong"})
+
+            blocked = self.client.post(reverse("admin:login"), {"username": "root", "password": "pw12345678"})
+
+        assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
+        assert "Too many failed login attempts" in blocked.content.decode()
+
+    def test_the_token_endpoint_counts_towards_the_same_budget(self) -> None:
+        # one address, one budget, whichever door it tries
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("login"), {"username": "guessed", "password": "wrong"})
+
+            viaheader = self.client.get(
+                reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("pw12345678")
+            )
+
+        assert viaheader.status_code == 429, viaheader.status_code
 
 
 class ThirdPartyScriptTests(TestCase):

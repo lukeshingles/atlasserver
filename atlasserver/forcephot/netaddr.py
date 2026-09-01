@@ -8,6 +8,7 @@ obvious home, but it imports plot_atlas_fp, and so matplotlib and astropy, at mo
 """
 
 import ipaddress
+import typing as t
 
 
 def address_is_public(address: str | ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -36,6 +37,22 @@ def _unbracket(hop: str) -> str:
         return hop[1 : hop.index("]")]
 
     return hop
+
+
+def client_ip(request: t.Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the address a request came from, or None if it cannot be established.
+
+    The policy is client_address below; this supplies the request pieces. NUM_PROXIES in
+    REST_FRAMEWORK is set from the same TRUSTED_PROXY_COUNT so that the throttle's idea of the
+    client cannot drift from this one.
+    """
+    from django.conf import settings
+
+    return client_address(
+        remote_addr=request.META.get("REMOTE_ADDR"),
+        forwarded_for=request.META.get("HTTP_X_FORWARDED_FOR"),
+        trusted_proxy_count=settings.TRUSTED_PROXY_COUNT,
+    )
 
 
 def client_address(

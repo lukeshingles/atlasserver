@@ -1,8 +1,17 @@
+import typing as t
+from typing import override
+
 from django import forms
+from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 from django.utils.translation import gettext_lazy as _
+
+from atlasserver.forcephot.throttles import login_failures_exceeded
+from atlasserver.forcephot.throttles import LOGIN_LIMIT_MESSAGE
+from atlasserver.forcephot.throttles import note_login_failure
 
 
 def email_is_taken(email: str, exclude_user=None) -> bool:
@@ -16,6 +25,40 @@ def email_is_taken(email: str, exclude_user=None) -> bool:
         others = others.exclude(pk=exclude_user.pk)
 
     return others.exists()
+
+
+class LoginFailureLimitMixin(AuthenticationForm):
+    """Refuse the password check itself once an address has failed too many in the window.
+
+    Refused before the check, not after: an over-budget address must not learn whether the
+    password was right. The error is a non-field error with code "throttled", which the login view
+    reads to answer 429 rather than 200.
+
+    An AuthenticationForm subclass rather than a bare mixin, so that super().clean() resolves for
+    the type checkers with the same signature. In the method resolution order of the two forms
+    below, that call still reaches the admin's clean() and then AuthenticationForm's, which is
+    where the password is checked.
+    """
+
+    @override
+    def clean(self) -> dict[str, t.Any]:
+        if self.request is not None and login_failures_exceeded(self.request):
+            raise forms.ValidationError(LOGIN_LIMIT_MESSAGE, code="throttled")
+
+        try:
+            return super().clean()
+        except forms.ValidationError:
+            if self.request is not None:
+                note_login_failure(self.request)
+            raise
+
+
+class ThrottledAuthenticationForm(LoginFailureLimitMixin, AuthenticationForm):
+    """The login page's form."""
+
+
+class ThrottledAdminAuthenticationForm(LoginFailureLimitMixin, AdminAuthenticationForm):
+    """The admin login's form; the admin reads site.login_form at request time."""
 
 
 class EmailChangeForm(forms.Form):

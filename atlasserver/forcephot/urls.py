@@ -28,12 +28,15 @@ from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework import routers
 
 from atlasserver.forcephot import views
+from atlasserver.forcephot.forms import ThrottledAdminAuthenticationForm
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
 router.register(r"queue", views.ForcePhotTaskViewSet)
 
 admin.site.site_url = f"{settings.PATHPREFIX}/"
+# read at request time by AdminSite.login, so the admin's password check shares the budget
+admin.site.login_form = ThrottledAdminAuthenticationForm
 admin.site.site_header = "ATLAS Forced Photometry Admin"
 admin.site.site_title = "ATLAS Forced Photometry"
 
@@ -47,6 +50,8 @@ urlpatterns = [
     # Before django.contrib.auth.urls, which atlasserver.urls includes after this module: the
     # stock view builds the mailed link from the Host header. See SiteOriginPasswordResetView.
     path("password_reset/", views.SiteOriginPasswordResetView.as_view(), name="password_reset"),
+    # likewise before django.contrib.auth.urls: the stock view has no limit on password guesses
+    path("login/", views.ThrottledLoginView.as_view(), name="login"),
     path("emailchange/", views.change_email, name="email_change"),
     path("apitoken/", views.api_token, name="apitoken"),
     path("verify/<uidb64>/<token>/", views.verify_email, name="verify_email"),

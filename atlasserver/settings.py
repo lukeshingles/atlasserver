@@ -347,7 +347,9 @@ REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
     # or allow read-only access for unauthenticated users.
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.BasicAuthentication",
+        # DRF's, with the failed-login budget: authentication runs before the throttles, so a
+        # wrong password in a Basic header was answered 401 before any throttle could count it
+        "atlasserver.forcephot.throttles.ThrottledBasicAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.TokenAuthentication",
     ],
