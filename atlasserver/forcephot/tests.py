@@ -6111,6 +6111,18 @@ class FailedLoginBudgetTests(TestCase):
         assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
         assert "Too many failed login attempts" in blocked.content.decode()
 
+    def test_a_malformed_token_request_is_not_a_failed_guess(self) -> None:
+        # a body with no password is refused before any password is checked; counting it would let
+        # empty posts from one address spend the budget of every user behind it
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                malformed = self.client.post(reverse("api-token-auth"), {"username": "guessed"})
+                assert malformed.status_code == 400, malformed.status_code
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 302, viapage.status_code
+
     def test_the_doors_share_one_budget(self) -> None:
         # one address, one budget, whichever door it tries: failures at the login page block a
         # Basic header and the token endpoint, and failures at the token endpoint block the page

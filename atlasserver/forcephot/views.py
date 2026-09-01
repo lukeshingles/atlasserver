@@ -1437,9 +1437,14 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
 
         try:
             return super().post(request, *args, **kwargs)
-        except serializers.ValidationError:
-            # the serializer refuses wrong credentials with a validation error
-            note_login_failure(request)
+        except serializers.ValidationError as ex:
+            # The serializer refuses wrong credentials with a validation error carrying the code
+            # "authorization". A body with no username or no password fails with a different
+            # code, before any password is checked; that is not a guess, and counting it would let
+            # empty posts spend the budget of every user behind one address.
+            codes = ex.get_codes()
+            if isinstance(codes, dict) and "authorization" in codes.get("non_field_errors", []):
+                note_login_failure(request)
             raise
 
 
