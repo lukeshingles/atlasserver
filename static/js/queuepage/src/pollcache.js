@@ -55,13 +55,13 @@ export class PollCache {
     }
 
     /**
-     * Record what a response said and classify it.
+     * Classify a response: NOT_MODIFIED for a 304, otherwise null (the caller reads the body).
      *
-     * Returns NOT_MODIFIED for a 304, otherwise null (the caller reads the body itself). The ETag
-     * is stored for both, because a 304 still carries the current one.
+     * This stores nothing. The caller stores the tag with storeEtag beside the body it describes,
+     * once it has decided to apply that body: a tag held without its body makes the next poll ask
+     * for a 304 that the cache cannot restore.
      */
-    noteResponse(url, status, etag) {
-        this.storeEtag(url, etag);
+    noteResponse(status) {
         return status === 304 ? NOT_MODIFIED : null;
     }
 }

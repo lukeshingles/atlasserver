@@ -55,8 +55,16 @@ if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
 # the aliases are taken from the real settings rather than listed again: a second list is one that
 # can be forgotten, and an alias missing from it fails as "cache not configured" only once some
 # test happens to touch it.
+# OPTIONS and TIMEOUT are carried over as well: MAX_ENTRIES on the "default" alias is what keeps a
+# held render slot from being culled, and a test cache with the 300-entry default would run the
+# slot protocol under a different contract from production.
 CACHES = {
-    name: {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": name} for name in _PRODUCTION_CACHES
+    name: {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": name,
+        **{key: value for key, value in config.items() if key in ("OPTIONS", "TIMEOUT")},
+    }
+    for name, config in _PRODUCTION_CACHES.items()
 }
 
 # MAILERS is deliberately not overridden here: Django's test runner already swaps every mailer's

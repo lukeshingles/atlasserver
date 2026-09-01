@@ -134,13 +134,13 @@ REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
 
 # How many PDF plot renders the whole site may have in flight at once, across every task.
 #
-# The per-task lock in taskpdfplot only stops a herd on one task, and nothing bounded the total. A
-# render holds its request thread for up to PDF_PLOT_TIMEOUT_SECONDS while a spawned interpreter
-# starts and imports matplotlib, so requests for a few distinct tasks that have no .pdf yet could
-# occupy every worker at once and stop the site answering anything at all, the login page
-# included. The view needs no credentials and is not a DRF view, so no throttle reaches it either.
-# Production serves the site with four single-threaded workers (ATLASSERVER_NPROCESSES in
-# dotenv_example.txt), so this leaves most of them free whatever a crawler or a flood does.
+# The per-task lock in taskpdfplot bounds the renders of one task. This bounds the total. A render
+# holds its request thread for up to PDF_PLOT_TIMEOUT_SECONDS while a spawned interpreter starts
+# and imports matplotlib. Without a total, requests for a few tasks that have no .pdf yet could
+# occupy every worker at once, and the site would answer nothing, the login page included. The
+# view needs no credentials and is not a DRF view, so no throttle reaches it. Production serves
+# the site with four single-threaded workers (ATLASSERVER_NPROCESSES in dotenv_example.txt), so
+# this leaves most of them free whatever a crawler or a flood does.
 #
 # Named slots rather than a counter, for the reason given above: a read-modify-write on the
 # file-based cache is not atomic, while add() does at least fail for a name that is already taken.
@@ -425,11 +425,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
 
-        usertaskcount = Task.objects.filter(
-            starttimestamp__isnull=True,
-            user_id=self.request.user.pk,
-            is_archived=False,
-        ).count()
+        usertaskcount = Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
 
         # a radeclist can hold up to 100 targets, so the limit must account for the size of this
         # request rather than only the tasks that are already queued
@@ -456,11 +452,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
     def perform_create(self, serializer: BaseSerializer[Task]) -> None:
         """Create new task(s)."""
         usertaskcount_before = (
-            Task.objects.filter(
-                starttimestamp__isnull=True,
-                user_id=self.request.user.pk,
-                is_archived=False,
-            ).count()
+            Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
             if self.request.user and self.request.user.pk is not None
             else 0
         )
@@ -624,32 +616,24 @@ class RequestImages(APIView):
         This creates a task, so it must not be reachable by GET: a safe method is not CSRF
         protected, and any page (or link prefetcher) could otherwise queue work for a logged-in user.
         """
-        if not request.user.is_authenticated:
-            raise PermissionDenied
-
+        # no is_authenticated test here: ForcePhotPermission.has_permission refuses an anonymous
+        # POST before this runs, and the object check below applies the ownership rule
         try:
-            parent_task = Task.objects.get(id=pk, request_type="FP", is_archived=False)
-
-            # the same rule the permission class applies, from the same place: this view names
-            # ForcePhotPermission but never calls check_object_permissions for the parent
-            if not parent_task.is_owned_by(request.user):
-                raise PermissionDenied
-
+            parent_task = Task.live().get(id=pk, request_type="FP")
         except ObjectDoesNotExist:
             return HttpResponseNotFound("Page not found")
 
+        self.check_object_permissions(request, parent_task)
+
         redirurl = reverse("task-list")
 
-        if self.request.user and self.request.user.is_authenticated:
-            userimziptaskcount = Task.objects.filter(
-                user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
-            ).count()
-            if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
-                msg = (
-                    f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
-                    " Delete some before making new requests."
-                )
-                return JsonResponse({"non_field_errors": msg}, status=429)
+        userimziptaskcount = Task.live().filter(user_id=request.user.pk, request_type="IMGZIP").count()
+        if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
+            msg = (
+                f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
+                " Delete some before making new requests."
+            )
+            return JsonResponse({"non_field_errors": msg}, status=429)
 
         if not parent_task.error_msg and parent_task.finishtimestamp:
             # which fields the child inherits is the model's decision; see Task.new_imagerequest
@@ -1149,9 +1133,12 @@ def queuepositions(request):
     fully serialised tasks and the filesystem stats that go with them.
     """
     queueoffset = Task.min_queuepos_relative()
-    positions = Task.objects.filter(
-        user_id=request.user.pk, finishtimestamp__isnull=True, is_archived=False, queuepos_relative__isnull=False
-    ).values_list("id", "queuepos_relative", "request_type")
+    # the same set the offset was measured against, so the subtraction below cannot drift
+    positions = (
+        Task.queued()
+        .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
+        .values_list("id", "queuepos_relative", "request_type")
+    )
 
     return JsonResponse(
         {
@@ -1369,12 +1356,13 @@ class SiteOriginPasswordResetView(PasswordResetView):
         super().setup(request, *args, **kwargs)
 
         if settings.SITE_ORIGIN:
-            origin = urlsplit(settings.SITE_ORIGIN)
+            # one answer for both, from the helper the other mail uses, so the link and the name
+            # in the text cannot differ
+            host = verification_site_name(request)
             self.extra_email_context = {
-                "protocol": origin.scheme,
-                "domain": origin.netloc,
-                # the same source the links come from, so the two cannot name different hosts
-                "site_name": verification_site_name(request),
+                "protocol": urlsplit(settings.SITE_ORIGIN).scheme,
+                "domain": host,
+                "site_name": host,
             }
 
 
@@ -1395,6 +1383,12 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
     off. Nothing here reads request.user: ObtainAuthToken takes the credentials from the body
     through its own serializer, and its permission_classes are already empty. The throttle then
     keys on the client address, which is what a login endpoint wants.
+
+    Dropping SessionAuthentication also drops the CSRF check it enforces. That is safe here: the
+    view acts only on the credentials in its body, and its JSON reply is unreadable across origins.
+
+    This closes the ordering for this endpoint only. Every other DRF view still authenticates
+    first, so a wrong password in a Basic header to any of them answers 401 without a count.
     """
 
     # a tuple, like the empty throttle_classes and permission_classes ObtainAuthToken itself
@@ -2137,18 +2131,14 @@ def taskpdfplot(request, taskid):
 # resultplotdatajs above) therefore take a task id and no credentials; note the serializer also
 # links results at their STATIC_URL path, which Apache serves without consulting Django at all.
 #
-# Public is not the same as archived, so they all read Task.live(). Deleting a finished task
-# archives it and reclaims what it can, but delete_result_files keeps the .txt while a live image
-# request still needs it as input -- so without the filter these views went on serving a deleted
-# task's data, and taskpdfplot and resultplotdatajs rebuilt the .pdf and the cached plot that the
-# delete had just removed. ForcePhotTaskViewSet.retrieve already answers 404 for one.
+# Public is not the same as archived, so they all read Task.live(), like retrieve. Without that
+# filter, these views serve a deleted task's data file, and taskpdfplot and resultplotdatajs
+# rebuild the .pdf and the cached plot that the delete reclaimed.
 #
-# The filter binds these views only. That .txt keeps its STATIC_URL path while it is held, and the
-# line above says who answers that path, so a caller who kept a link published before the delete
-# can still read it until the last image request finishes and the file is collected. Closing that
-# window means serving every result through Django, or keeping the child's input out of
-# STATIC_ROOT. The .jpg is no longer among them: nothing renders an archived task's preview, so
-# delete_result_files now collects it with the row.
+# The filter binds these views only. A deleted task's .txt stays on disk while a live image request
+# reads it (see Task.delete_result_files), and the web server serves its static path without
+# Django. A link published before the delete therefore resolves until the last image request goes.
+# To close that window, serve every result through Django, or keep the input out of STATIC_ROOT.
 #
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit

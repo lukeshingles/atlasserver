@@ -32,6 +32,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     # memoised queue offset. 0 is a normal value, so it cannot double as "not computed yet".
     _min_queuepos_cache: t.Any = UNSET
 
+    # The result links below name the file's static path, which the web server answers without
+    # Django. A check that a Django view makes (see views._taskresultfile_response) does not reach
+    # a link that was already handed out.
     def get_result_url(self, obj) -> str | None:
         localresultfile = obj.localresultfile()
         if localresultfile and not obj.error_msg and (request := self.context.get("request")):
@@ -280,11 +283,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         ra_missing = self.submitted(attrs, "ra") in (None, "")
         dec_missing = self.submitted(attrs, "dec") in (None, "")
 
-        # Above the target branching below, not inside one arm of it: an IMGZIP task carries
-        # whichever target its parent had, so the rules have to hold for an mpc_name request as
-        # much as for an ra/dec one. Nested in the ra/dec arm, they let a request that named an
-        # mpc_name create a parentless IMGZIP row -- which the runner cannot name a result file
-        # for, so it dies before it can record a finish time and is dispatched again forever.
+        # Before the branch on the target below, not inside one arm of it. An IMGZIP task carries
+        # the target of its parent, so these rules hold for an mpc_name request as much as for an
+        # ra/dec one. A row with no parent cannot be named a result file, so the runner fails on
+        # it before it records a finish time, and dispatches it again on every pass.
         if request_type == "IMGZIP":
             # An image request is not created here, and the message says so.
             #

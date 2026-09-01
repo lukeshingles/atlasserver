@@ -774,10 +774,7 @@ def remove_old_tasks(
 
         # The sweeps reach back up to 183 days, so the widest of them can match a lot of rows.
         # Take one bounded batch at a time rather than reading every matching id into memory, and
-        # do the database write once per batch rather than once per task: the old loop issued a
-        # full-row save() for every archived task and an UPDATE-then-DELETE for every hard-deleted
-        # one. select_related and the prefetch cover the lookups that delete_result_files() makes,
-        # so those cost one query per batch instead of one per task.
+        # do the database write once per batch rather than once per task.
         #
         # No offset is needed: processing a task removes it from this queryset, because it is
         # either deleted or marked archived (and the non-archived case filters on is_archived
@@ -785,15 +782,18 @@ def remove_old_tasks(
         # could not spin here forever.
         maxpasses = taskcount // MAINTENANCE_BATCH_SIZE + 2
         for _ in range(maxpasses):
+            # One read of the batch, with the relations delete_result_files asks about: the task's
+            # own image requests, and its parent's for an image request whose parent stays. Both
+            # answer from a prefetch, so a batch costs a fixed number of queries.
             tasks = list(
-                matchingtasks.select_related("parent_task").prefetch_related(Task.prefetch_imagerequests())[
-                    :MAINTENANCE_BATCH_SIZE
-                ]
+                matchingtasks.select_related("parent_task").prefetch_related(
+                    Task.prefetch_imagerequests(), Task.prefetch_parent_imagerequests()
+                )[:MAINTENANCE_BATCH_SIZE]
             )
             if not tasks:
                 break
 
-            taskids = [task.id for task in tasks]
+            taskids = {task.id for task in tasks}
 
             if harddeleterecord:
                 # Everything this batch removes: the rows it selected, and the image requests that
@@ -802,40 +802,40 @@ def remove_old_tasks(
                 # left on the results volume with no row that could ever name them again.
                 #
                 # Read once, before anything is unlinked or deleted, and every decision below is
-                # made against it rather than against a database that this loop is changing. The
-                # set is closed under "image request of": a sweep that names no request_type can
-                # select a parent and its child alike, so which of the two brought the other in
-                # must not change what is reclaimed.
+                # made against it. The set is closed under "image request of": a sweep that names
+                # no request_type can select a parent and its child alike, so which of the two
+                # brought the other in must not change what is reclaimed.
                 childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
-                doomed = childids | set(taskids)
-
-                going = (
-                    Task.objects.filter(id__in=doomed)
-                    .select_related("parent_task")
-                    .prefetch_related(Task.prefetch_imagerequests())
-                )
-                for index, task in enumerate(going):
-                    # alsogoing, so that a parent's data file is not kept for an image request
-                    # that is being removed in the same statement
-                    task.delete_result_files(alsogoing=doomed)
-                    task.forget_derived_cache()
-                    # inside the batch as well as after it: 500 tasks times several filesystem
-                    # operations each can alone outlast the staleness window on a slow results
-                    # mount. The heartbeat rate-limits itself, so calling it often costs almost
-                    # nothing.
-                    if heartbeat is not None and index % 50 == 49:
-                        heartbeat()
-
-                # one statement for the parents and their image requests alike
-                Task.objects.filter(id__in=doomed).delete()
+                going = childids | taskids
+                # the children the batch did not select; their parents are all in the batch, so
+                # they ask nothing of them (see delete_result_files)
+                cascaded = list(Task.objects.filter(id__in=childids - taskids).select_related("parent_task"))
+                batch = tasks + cascaded
             else:
-                for index, task in enumerate(tasks):
-                    task.delete_result_files()
-                    task.forget_derived_cache()
-                    if heartbeat is not None and index % 50 == 49:
-                        heartbeat()
+                going = taskids
+                batch = tasks
 
+            for index, task in enumerate(batch):
+                # alsogoing: every row in the batch stops being a reader, whether it is deleted
+                # or archived, so a shared file is not kept for one of them
+                task.delete_result_files(alsogoing=going)
+                # inside the batch as well as after it: 500 tasks times several filesystem
+                # operations each can alone outlast the staleness window on a slow results mount.
+                # The heartbeat rate-limits itself, so calling it often costs almost nothing.
+                if heartbeat is not None and index % 50 == 49:
+                    heartbeat()
+
+            if harddeleterecord:
+                # one statement for the parents and their image requests alike; the rows are about
+                # to go, so there is no point marking them archived first
+                Task.objects.filter(id__in=going).delete()
+            else:
                 Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
+
+            # After the write, not before it. A reader that arrives between the two finds no cache
+            # entry, reads a data file that is still there, and keeps the plot for thirty days.
+            for task in batch:
+                task.forget_derived_cache()
 
             if heartbeat is not None:
                 heartbeat()

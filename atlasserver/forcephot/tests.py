@@ -1492,6 +1492,19 @@ RESULTFILE_HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apf
 RESULTFILE_DATAROW = "59000.0 19.0 0.1 100 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
 
 
+def write_plotscript_stubs(staticroot: str) -> None:
+    """Put a plotting script where resultplotdatajs will look for it under STATIC_ROOT.
+
+    The view appends the script to any response that carries data. Both names are written because
+    which one it asks for depends on DEBUG, and Django's test runner turns DEBUG off whatever the
+    settings module says.
+    """
+    for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
+        plotscript = Path(staticroot, name)
+        plotscript.parent.mkdir(parents=True, exist_ok=True)
+        plotscript.write_text("/* stub */\n")
+
+
 class ClientLocationTests(TestCase):
     """X-Forwarded-For is written by whoever sends the request unless a proxy in front maintains it.
 
@@ -1879,13 +1892,7 @@ class ResultPlotDataColumnTests(TestCase):
             prefix.parent.mkdir(parents=True, exist_ok=True)
             prefix.with_suffix(".txt").write_text(header + "\n" + rows)
 
-            # the view appends the plotting script to any response that carries data, and reads
-            # it from STATIC_ROOT. Both names are written because which one it asks for depends on
-            # DEBUG, and Django's test runner turns that off whatever the settings module says.
-            for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
-                plotscript = Path(tmpdir, name)
-                plotscript.parent.mkdir(parents=True, exist_ok=True)
-                plotscript.write_text("/* stub */\n")
+            write_plotscript_stubs(tmpdir)
 
             return self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
 
@@ -1909,12 +1916,11 @@ class ResultPlotDataColumnTests(TestCase):
 class ArchivedTaskResultTests(TestCase):
     """Deleting a finished task must put its results out of reach, not only out of the list.
 
-    delete() archives the row and reclaims what it can, but delete_result_files keeps the .txt and
-    the .jpg while a live image request still needs them as its input. The result file and plot
-    views read the row by id, and without Task.live() they went on serving a deleted task's
-    photometry to anyone -- while taskpdfplot and resultplotdatajs rebuilt the .pdf and the cached
-    plot data that the same delete had just removed. ForcePhotTaskViewSet.retrieve already
-    answered 404 for the very same task.
+    delete() archives the row and reclaims what it can, but delete_result_files keeps the .txt
+    while a live image request still reads it. The result file and plot views read the row by id,
+    so without Task.live() they serve a deleted task's photometry to anyone, and taskpdfplot and
+    resultplotdatajs rebuild the .pdf and the cached plot data that the delete reclaimed.
+    ForcePhotTaskViewSet.retrieve answers 404 for the same task.
     """
 
     def setUp(self) -> None:
@@ -1922,7 +1928,7 @@ class ArchivedTaskResultTests(TestCase):
         self.task = Task.objects.create(
             user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
         )
-        # the live child is what makes delete_result_files keep the .txt and the .jpg
+        # the live image request is what makes delete_result_files keep the .txt
         self.child = self.task.new_imagerequest(user=self.owner, from_api=False)
         self.child.save()
         caches["taskderived"].clear()
@@ -1948,10 +1954,7 @@ class ArchivedTaskResultTests(TestCase):
         for suffix in (".jpg", ".pdf"):
             prefix.with_suffix(suffix).write_text("results")
 
-        for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
-            plotscript = Path(tmpdir, name)
-            plotscript.parent.mkdir(parents=True, exist_ok=True)
-            plotscript.write_text("/* stub */\n")
+        write_plotscript_stubs(tmpdir)
 
     def test_a_live_task_is_still_served(self) -> None:
         # the filter must not lock the data that is public on purpose
@@ -1995,6 +1998,13 @@ class ArchivedTaskResultTests(TestCase):
             prefix = Path(tmpdir, self.task.localresultfileprefix())
             assert not prefix.with_suffix(".jpg").exists(), "the preview outlived its last reader"
             assert prefix.with_suffix(".txt").is_file(), "the image request lost its input file"
+            assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
+
+            # and with the file put back -- a row archived before the .jpg went with it, or a
+            # copy that reappears -- the refusal has to come from the model, not from the disk
+            prefix.with_suffix(".jpg").write_text("results")
+            self.child.refresh_from_db()
+            assert self.child.localresultpreviewimagefile is None, "the model resolved an archived parent's preview"
             assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
 
     def test_the_plot_cache_is_not_repopulated_after_a_delete(self) -> None:
@@ -2673,12 +2683,12 @@ class BrokenLinkEmailTests(TestCase):
 
 
 class CallbackUrlResolutionTests(TestCase):
-    """Resolving the caller's hostname is blocking work on a request thread, so it has to be bounded.
+    """The resolution of the caller's hostname blocks a request thread, so it has to be bounded.
 
-    socket.getaddrinfo takes no timeout of its own, and one submission used to run it once per row
-    and then once more per row: a radeclist copies callback_url into every row, splitradeclist
-    validates each row, and views.create validates the whole list again. That is 200 blocking
-    lookups for a 100-line request, on a site served by four single-threaded workers.
+    socket.getaddrinfo takes no timeout of its own, and one submission validates the same URL once
+    per row and then once more per row: a radeclist copies callback_url into every row,
+    splitradeclist validates each row, and views.create validates the whole list again. Without a
+    memo that is 200 lookups for a 100-line request, on a site with four single-threaded workers.
     """
 
     def setUp(self) -> None:
@@ -4057,6 +4067,102 @@ class RemoveOldTasksTests(TestCase):
             children[1].delete()
             assert not prefix.with_suffix(".txt").exists(), "the last request left the file behind"
 
+    def test_two_archived_image_requests_release_the_shared_input_when_swept(self) -> None:
+        """The soft sweep archives rows, so every row in its batch stops being a reader too.
+
+        Two image requests of one archived parent, swept together by the 14-day IMGZIP sweep: each
+        saw the other as a live reader and kept the parent's .txt, both rows were then archived, and
+        nothing would call delete_result_files for either again. The file stayed on the volume, at
+        a static path the web server serves, until the 183-day hard sweep.
+        """
+        parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
+        for _ in range(2):
+            child = parent.new_imagerequest(user=self.user, from_api=False)
+            child.finishtimestamp = timezone.now() - datetime.timedelta(days=20)
+            child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            for suffix in (".txt", ".zip"):
+                prefix.with_suffix(suffix).write_text("results")
+
+            taskrunner_main.remove_old_tasks(days_ago=14, request_type="IMGZIP", logfunc=lambda _msg: None)
+
+            assert Task.objects.filter(request_type="IMGZIP", is_archived=False).count() == 0
+            left = sorted(path.name for path in prefix.parent.iterdir())
+            assert not left, f"files kept for readers the same sweep archived: {left}"
+
+    def test_the_plot_cache_is_dropped_only_once_the_row_is_written(self) -> None:
+        # a reader that arrives between the two finds no cache entry, reads a data file that is
+        # still there, and keeps the plot for thirty days; so the drop has to follow the write
+        archived = self.make_old_task(days=200, request_type="FP")
+        removed = self.make_old_task(days=200, request_type="FP", from_api=True, is_archived=True)
+        rowstate: dict[int, str] = {}
+        original = Task.forget_derived_cache
+
+        def spy(task: Task) -> None:
+            row = Task.objects.filter(id=task.id).values_list("is_archived", flat=True).first()
+            rowstate[task.id] = "gone" if row is None else ("archived" if row else "LIVE")
+            original(task)
+
+        with mock.patch.object(Task, "forget_derived_cache", spy):
+            taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
+            taskrunner_main.remove_old_tasks(
+                days_ago=7, harddeleterecord=True, is_archived=True, from_api=True, logfunc=lambda _msg: None
+            )
+
+        assert rowstate == {archived.id: "archived", removed.id: "gone"}, rowstate
+
+    def test_a_batch_of_image_requests_does_not_query_once_per_parent(self) -> None:
+        """The parents stay, so each child asks its parent which siblings remain.
+
+        A parent reached through select_related carries nothing from prefetch_imagerequests, so
+        without a prefetch through the parent that question was one query per row.
+        """
+
+        def sweep_queries(pairs: int) -> int:
+            for _ in range(pairs):
+                # a web-submitted parent that the API sweep does not select, with an API child it does
+                parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
+                child = parent.new_imagerequest(user=self.user, from_api=True)
+                child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+                child.save()
+
+            with CaptureQueriesContext(connection) as queries:
+                taskrunner_main.remove_old_tasks(
+                    days_ago=31, harddeleterecord=True, from_api=True, logfunc=lambda _msg: None
+                )
+
+            return len(queries)
+
+        small = sweep_queries(1)
+        large = sweep_queries(6)
+
+        assert large - small <= 2, f"{small} queries for one image request, {large} for six"
+
+    def test_one_image_request_of_two_does_not_reclaim_the_shared_zip(self) -> None:
+        # every image request of one parent writes the same job{parent}.zip, so the zip goes only
+        # once the last of them has -- like the parent's data file, and unlike everything else
+        parent = self.make_old_task(days=200, request_type="FP")
+        children = []
+        for _ in range(2):
+            child = parent.new_imagerequest(user=self.user, from_api=False)
+            child.finishtimestamp = timezone.now()
+            child.save()
+            children.append(child)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            zipfile = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
+            zipfile.parent.mkdir(parents=True, exist_ok=True)
+            zipfile.write_text("images")
+
+            children[0].delete()
+            assert zipfile.is_file(), "the zip went while a sibling still served it"
+
+            children[1].delete()
+            assert not zipfile.exists(), "the last image request left the zip behind"
+
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
@@ -4549,11 +4655,14 @@ class RegistrationVerificationTests(TestCase):
         """
         User.objects.create_user(username="already", email="taken@example.com", password=None)
 
-        for attempt in range(views.REGISTRATION_ATTEMPT_LIMIT):
-            response = self.register(email="taken@example.com")
-            assert "already exists" in response.content.decode(), attempt
+        # the view reads the limit at call time, so three attempts prove the boundary that twenty
+        # would, at a seventh of the cost
+        with mock.patch.object(views, "REGISTRATION_ATTEMPT_LIMIT", 3):
+            for attempt in range(3):
+                response = self.register(email="taken@example.com")
+                assert "already exists" in response.content.decode(), attempt
 
-        blocked = self.register(email="taken@example.com")
+            blocked = self.register(email="taken@example.com")
         page = blocked.content.decode()
 
         assert "Too many registration attempts" in page, page
@@ -4563,10 +4672,11 @@ class RegistrationVerificationTests(TestCase):
         # a 200 reads as an ordinary page render in the access log, and a blank form makes a
         # caller behind a shared institute address retype everything
         User.objects.create_user(username="already2", email="taken2@example.com", password=None)
-        for _ in range(views.REGISTRATION_ATTEMPT_LIMIT):
-            self.register(email="taken2@example.com")
+        with mock.patch.object(views, "REGISTRATION_ATTEMPT_LIMIT", 3):
+            for _ in range(3):
+                self.register(email="taken2@example.com")
 
-        blocked = self.register(email="taken2@example.com")
+            blocked = self.register(email="taken2@example.com")
         page = blocked.content.decode()
 
         assert blocked.status_code == 429, blocked.status_code

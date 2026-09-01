@@ -256,11 +256,9 @@ class Task(models.Model):
     def localresultpreviewimagefile(self) -> str | None:
         """Return the relative path to the preview image if it exists, otherwise None.
 
-        An image request shares its parent's preview, so this resolves to another row's file. That
-        row is checked as well: the views filter on the id they were asked for, so without this an
-        archived parent's image was still served through a live child's id, which is the reach
-        Task.live() is there to close. delete_result_files keeps the .jpg only because the child
-        needs the parent's data file beside it, not because the image is still meant to be public.
+        An image request shares its parent's preview, so this can resolve to another row's file.
+        This refuses an archived parent, because the views filter only on the id they were asked
+        for: a live image request's id would otherwise reach the parent's image.
         """
         if self.finishtimestamp and not (self.parent_task is not None and self.parent_task.is_archived):
             imagefile = f"{self.localresultfileprefix(use_parent=True)}.jpg"
@@ -286,27 +284,34 @@ class Task(models.Model):
         imagstackfile = Path(f"{self.localresultfileprefix()}.fits")
         return imagstackfile if Path(settings.STATIC_ROOT, imagstackfile).exists() else None
 
-    def _imagerequest_task(self) -> "Task | None":
-        """Return the image request task associated with this forced photometry task, or None.
+    def _live_imagerequests(self) -> "list[Task]":
+        """Return the image requests of this task that are not archived, oldest first.
 
-        A parent can end up with more than one live image request (e.g. a double-clicked
-        button), so order the query to make sure that every caller agrees on which one it is.
+        Answered from the prefetch when the caller made one (see prefetch_imagerequests), so a page
+        or a maintenance batch costs one query for all of its tasks rather than one each. Memoised
+        otherwise: one serialisation asks three times, and delete_result_files asks again.
 
-        Serialising one task asks for this three times (imagerequest_task_id, imagerequest_finished,
-        and the imagerequest URL), so the result is memoised. When the caller prefetched the
-        relation (see PREFETCH_IMAGEREQUESTS), the whole page costs one query instead of one per
-        task.
+        Ordered by id, so that every caller agrees on which request is the first one. A parent can
+        carry more than one live image request, for example from a double-clicked button.
         """
         prefetched = getattr(self, "live_imagerequests", None)
         if prefetched is not None:
-            return prefetched[0] if prefetched else None
+            return list(prefetched)
 
         if self._imagerequest_cache is UNSET:
-            self._imagerequest_cache = (
-                Task.objects.filter(parent_task_id=self.id, is_archived=False).order_by("id").first()
-            )
+            self._imagerequest_cache = list(Task.live().filter(parent_task_id=self.id).order_by("id"))
 
         return self._imagerequest_cache
+
+    def _imagerequest_task(self) -> "Task | None":
+        """Return the image request that this task reports, or None if it has none."""
+        live = self._live_imagerequests()
+
+        return live[0] if live else None
+
+    def live_imagerequest_ids(self) -> list[int]:
+        """Return the ids of the image requests that still read this task's data file."""
+        return [imagerequest.id for imagerequest in self._live_imagerequests()]
 
     @property
     def imagerequest_task_id(self) -> int | None:
@@ -325,9 +330,13 @@ class Task(models.Model):
         """Return the tasks that have not been archived: everything a reader may still be shown.
 
         delete() archives a finished task instead of removing it, so archived means the owner
-        deleted it. One definition, because the API, the result file views and the plot views all
-        have to agree: a reader that misses this rule serves data the owner asked to have removed,
-        and rebuilds the derived files and cache entries that archiving reclaimed.
+        deleted it. One definition, because every reader has to agree. A reader that misses this
+        rule serves data the owner asked to have removed, and a writer that misses it keeps a file
+        for an image request that no reader can reach.
+
+        Two readers apply the same predicate on a queryset of their own, because DRF hands them
+        one: ForcePhotTaskViewSet.list filters its queryset, and retrieve tests the instance that
+        get_object() returns.
         """
         return Task.objects.filter(is_archived=False)
 
@@ -413,10 +422,24 @@ class Task(models.Model):
 
     @staticmethod
     def prefetch_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
-        """Return the prefetch that lets _imagerequest_task() answer without a query per task."""
+        """Return the prefetch that lets _live_imagerequests() answer without a query per task."""
         return models.Prefetch(
             "imagerequest",
-            queryset=Task.objects.filter(is_archived=False).order_by("id"),
+            queryset=Task.live().order_by("id"),
+            to_attr="live_imagerequests",
+        )
+
+    @staticmethod
+    def prefetch_parent_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
+        """Return the prefetch that gives each task's parent its own live image requests.
+
+        For a batch of image requests: delete_result_files asks the parent which siblings stay,
+        and a parent reached through select_related carries nothing from prefetch_imagerequests.
+        Without this it is one query per row.
+        """
+        return models.Prefetch(
+            "parent_task__imagerequest",
+            queryset=Task.live().order_by("id"),
             to_attr="live_imagerequests",
         )
 
@@ -459,20 +482,6 @@ class Task(models.Model):
             region=self.region,
         )
 
-    def live_imagerequest_ids(self) -> list[int]:
-        """Return the ids of the image requests that still read this task's data file.
-
-        Answered from the prefetch when the caller made one, so a page or a maintenance batch
-        costs one query for all of its tasks rather than one query each. All of them, not the
-        first: a parent can carry more than one live image request (see _imagerequest_task), and a
-        caller deciding whether its data file is still read has to weigh every one.
-        """
-        prefetched = getattr(self, "live_imagerequests", None)
-        if prefetched is not None:
-            return [imagerequest.id for imagerequest in prefetched]
-
-        return list(Task.objects.filter(parent_task_id=self.id, is_archived=False).values_list("id", flat=True))
-
     def _unlink_results(self, extensions: t.Iterable[str]) -> None:
         """Remove these result files of this task, whether or not they are on disk."""
         for ext in extensions:
@@ -481,45 +490,47 @@ class Task(models.Model):
     def delete_result_files(self, *, alsogoing: t.AbstractSet[int] = frozenset()) -> None:
         """Delete the result files that nothing will still need once this task is gone.
 
-        Exactly one file is shared between tasks: a forced photometry task's .txt, which an image
-        request reads as the list of observations to fetch images for. Everything else belongs to
-        one task alone, and goes with it.
+        Two files are shared, and both belong to one forced photometry task and its image
+        requests. The .txt is the parent's data file. Each image request reads it as the list of
+        observations to fetch. The .zip is named for the parent, and every image request of that
+        parent writes the same one. Each stays while another task still reads it. Everything else
+        belongs to one task alone, and goes with it.
 
-        `alsogoing` names the other tasks that are being removed in the same operation, so that
-        the .txt is not kept for a reader which is disappearing with it. A caller removing a
-        single task leaves it empty and gets the rule as it stands for that task on its own; the
-        maintenance sweep removes a parent and its image requests together and has to say so.
+        `alsogoing` names the other tasks that this operation removes, so that a shared file is
+        not kept for a reader which disappears with it. A caller that removes one task leaves it
+        empty. The maintenance sweep removes a parent and its image requests together, and has to
+        say so.
 
         Split out of delete() so that the maintenance sweep can reclaim the files of many tasks and
         then update or remove their rows in one statement, instead of one write per task.
         """
         if self.request_type == "IMGZIP":
-            # named for the parent, but this task's own output
-            if zipfile := self.localresultimagezipfile:
+            parent = self.parent_task
+            # The other image requests of the parent that this operation leaves in place. A parent
+            # that goes too takes every one of them with it, so it is not asked: the answer is
+            # known, and the parent of a cascaded row carries no prefetch to answer from.
+            if parent is None or parent.id in alsogoing:
+                siblings: set[int] = set()
+            else:
+                siblings = set(parent.live_imagerequest_ids()) - alsogoing - {self.id}
+
+            if not siblings and (zipfile := self.localresultimagezipfile):
                 Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
 
-            # The parent's own files, once this was the last image request that could read them.
-            # Reached only while the parent outlives this row: when it is going too, its own call
-            # collects them, and does so whatever its archived state. Without this, an archived
-            # parent's .txt would wait for the sweep months later.
-            parent = self.parent_task
-            if parent is not None and parent.is_archived and parent.id not in alsogoing:
-                readers = set(parent.live_imagerequest_ids()) - alsogoing - {self.id}
-                if not readers:
-                    # the .jpg as well, for a parent archived while that was still held back
-                    parent._unlink_results([".txt", ".jpg"])  # noqa: SLF001  # a Task, from a Task
+            # The parent's data file, once no image request that stays can read it. Only while
+            # the parent outlives this row: when it goes too, its own call collects the file.
+            if not siblings and parent is not None and parent.is_archived and parent.id not in alsogoing:
+                parent._unlink_results([".txt"])  # noqa: SLF001  # a Task, from a Task
 
         else:
-            # The .jpg goes whatever else is kept. It was held back for an image request to
-            # display, but localresultpreviewimagefile refuses an archived parent, so once this
-            # row is archived nothing renders that preview any more. Results are served from
-            # STATIC_URL by the web server, without asking Django, so a file kept past its last
-            # reader is one that any previously published link can still be redeemed for.
+            # The .jpg goes with the row. localresultpreviewimagefile refuses an archived parent,
+            # so nothing renders the preview once this row is archived. The web server serves
+            # results from STATIC_URL without Django, so a file kept past its last reader stays
+            # readable by every link that was published before.
             extensions = [".pdf", ".fits", ".jpg"]
 
-            # The .txt is the one file another task reads: it lists the observations to fetch
-            # images for, and the runner copies it to the science machine. It is reachable by its
-            # static path for as long as it is held.
+            # the data file, once no image request that stays can read it. The web server serves
+            # it from its static path for as long as it is held.
             if not set(self.live_imagerequest_ids()) - alsogoing:
                 extensions.append(".txt")
 

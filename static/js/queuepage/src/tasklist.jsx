@@ -1320,13 +1320,9 @@ export function TaskPage() {
                     return null;
                 }
 
+                // held until the body is applied below, and stored beside it; see PollCache.noteResponse
                 responseetag = response.headers.get('ETag');
-                // Deliberately not handed to noteResponse: the tag is recorded with the body
-                // below, so that a response this call goes on to discard leaves neither. A tag
-                // held without its body makes the next poll send an If-None-Match for a page the
-                // cache cannot restore, and the 304 then re-applies the older body for as long as
-                // the server's tag stands. A 304 carries no tag of its own, so nothing is lost.
-                if (tasklist_pollcache.noteResponse(get_url, response.status, null) === NOT_MODIFIED) {
+                if (tasklist_pollcache.noteResponse(response.status) === NOT_MODIFIED) {
                     debug_log('Task list unchanged (304)', get_url);
                     setState({ tasklist_api_error: '' });
                     return NOT_MODIFIED;
