@@ -134,6 +134,9 @@ filecacheroot = Path("/files/atlasforced/django_cache")
 if not filecacheroot.is_dir():
     filecacheroot = Path("/tmp/atlasforced/django_cache")
 
+# the lock files that the web workers share; see forcephot.locks
+LOCKS_DIR = filecacheroot / "locks"
+
 
 CACHES = {
     # File-based rather than locmem, because the entries here coordinate the mod_wsgi processes
@@ -141,10 +144,8 @@ CACHES = {
     #
     # MAX_ENTRIES is raised well above the default of 300 because every write culls a third of the
     # directory at random once that many files are present, and this directory holds control state
-    # rather than a cache of results -- the queue-recalc counter, the PDF render slots and the
-    # per-task render locks. Losing one of those to a cull is not a slower answer but a wrong one:
-    # a render slot deleted while it is held lets a further render start and lets its holder then
-    # release a slot that belongs to somebody else.
+    # rather than a cache of results, for example the queue-recalc counter. Losing that to a cull
+    # is not a slower answer but a wrong one. Locks do not live here at all: see forcephot.locks.
     "default": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "default",

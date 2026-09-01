@@ -9,6 +9,8 @@ sets ATLASSERVER_TEST_DB=mysql so that the suite still runs against the engine u
 """
 
 import os
+import tempfile
+from pathlib import Path
 
 # Set before the star import, because settings.py applies its production hardening under a plain
 # `if not DEBUG:` at import time — assigning DEBUG afterwards would be too late. A plain
@@ -55,9 +57,8 @@ if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
 # the aliases are taken from the real settings rather than listed again: a second list is one that
 # can be forgotten, and an alias missing from it fails as "cache not configured" only once some
 # test happens to touch it.
-# OPTIONS and TIMEOUT are carried over as well: MAX_ENTRIES on the "default" alias is what keeps a
-# held render slot from being culled, and a test cache with the 300-entry default would run the
-# slot protocol under a different contract from production.
+# OPTIONS and TIMEOUT are carried over as well, so that the test caches run under the same contract
+# as production.
 CACHES = {
     name: {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -66,6 +67,9 @@ CACHES = {
     }
     for name, config in _PRODUCTION_CACHES.items()
 }
+
+# a directory of this run alone, so that a lock left by an earlier run cannot refuse a render here
+LOCKS_DIR = Path(tempfile.mkdtemp(prefix="atlasserver-test-locks-"))
 
 # MAILERS is deliberately not overridden here: Django's test runner already swaps every mailer's
 # backend for locmem, so result emails land in django.core.mail.outbox rather than being sent.

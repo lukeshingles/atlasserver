@@ -45,6 +45,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
 from atlasserver import atlastaskrunner
+from atlasserver.forcephot import locks
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import throttles
@@ -4885,7 +4886,6 @@ class PdfPlotViewTests(TestCase):
 
         with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=capture):
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
-            caches["default"].delete(f"pdfplot-lock-{self.task.id}")
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
 
         assert len(seen) == 2, seen
@@ -4919,11 +4919,11 @@ class PdfPlotViewTests(TestCase):
         assert concurrent == [503], concurrent
 
     def test_the_lock_is_released_when_a_render_finishes(self) -> None:
-        # a lock left behind would make the task's plot unavailable until the cache entry expired
+        # a lock left behind would make the task's plot unavailable until it counted as abandoned
         with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
 
-        assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None
+        assert not Path(settings.LOCKS_DIR, f"pdfplot-lock-{self.task.id}.lock").exists()
 
 
 class RegistrationVerificationTests(TestCase):
@@ -5844,10 +5844,23 @@ class PdfPlotRenderSlotTests(TestCase):
         self.task = Task.objects.create(
             user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
         )
-        caches["default"].clear()
+        self.release_every_slot()
 
     def tearDown(self) -> None:
-        caches["default"].clear()
+        self.release_every_slot()
+
+    @staticmethod
+    def slotfile(slot: int) -> Path:
+        return Path(settings.LOCKS_DIR, f"pdfplot-slot-{slot}.lock")
+
+    def release_every_slot(self) -> None:
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            self.slotfile(slot).unlink(missing_ok=True)
+
+    def take_every_slot(self) -> None:
+        Path(settings.LOCKS_DIR).mkdir(parents=True, exist_ok=True)
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            self.slotfile(slot).touch()
 
     def write_result_file(self, tmpdir: str) -> None:
         prefix = Path(tmpdir, self.task.localresultfileprefix())
@@ -5866,8 +5879,7 @@ class PdfPlotRenderSlotTests(TestCase):
         assert render.called, "no render was attempted with every slot free"
 
     def test_no_render_starts_when_every_slot_is_taken(self) -> None:
-        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
-            caches["default"].add(f"pdfplot-slot-{slot}", True, timeout=60)
+        self.take_every_slot()
 
         response, render = self.request_plot()
 
@@ -5878,18 +5890,85 @@ class PdfPlotRenderSlotTests(TestCase):
     def test_a_slot_is_released_once_the_render_is_done(self) -> None:
         self.request_plot()
 
-        held = [slot for slot in range(views.PDF_PLOT_RENDER_SLOTS) if caches["default"].get(f"pdfplot-slot-{slot}")]
+        held = [slot for slot in range(views.PDF_PLOT_RENDER_SLOTS) if self.slotfile(slot).exists()]
         assert not held, f"slots still held after the render: {held}"
 
     def test_the_per_task_lock_is_released_even_when_no_slot_is_free(self) -> None:
         # the lock is claimed before the slot, so an early return must still give it back or the
-        # task cannot be rendered again until the lock times out
-        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
-            caches["default"].add(f"pdfplot-slot-{slot}", True, timeout=60)
+        # task cannot be rendered again until the lock counts as abandoned
+        self.take_every_slot()
 
         self.request_plot()
 
-        assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None, "the per-task lock was left behind"
+        assert not Path(settings.LOCKS_DIR, f"pdfplot-lock-{self.task.id}.lock").exists(), (
+            "the per-task lock was left behind"
+        )
+
+    def test_a_slot_left_by_a_dead_worker_is_taken_over(self) -> None:
+        # a worker killed mid-render leaves its slot file; once it is older than the render could
+        # ever be, the next request takes it rather than refusing every render for good
+        self.take_every_slot()
+        long_ago = time.time() - views.PDF_PLOT_LOCK_STALE_SECONDS - 1
+        os.utime(self.slotfile(0), (long_ago, long_ago))
+
+        _response, render = self.request_plot()
+
+        assert render.called, "a slot left by a dead worker was never taken over"
+
+
+class LockFileTests(TestCase):
+    """One lock file per name: exactly one taker gets it, and a dead holder's lock is taken over."""
+
+    def test_only_one_taker_holds_the_lock(self) -> None:
+        with (
+            locks.try_lock("test-lock", stale_after=60) as first,
+            locks.try_lock("test-lock", stale_after=60) as second,
+        ):
+            assert first, "the first taker did not get the lock"
+            assert not second, "two takers held one lock at once"
+
+    def test_the_lock_is_released_after_the_body(self) -> None:
+        with locks.try_lock("test-lock", stale_after=60):
+            pass
+
+        with locks.try_lock("test-lock", stale_after=60) as held:
+            assert held, "a released lock refused the next taker"
+
+    def test_the_lock_is_released_when_the_body_raises(self) -> None:
+        def fail_while_holding() -> None:
+            with locks.try_lock("test-lock", stale_after=60):
+                msg = "body failed"
+                raise RuntimeError(msg)
+
+        with contextlib.suppress(RuntimeError):
+            fail_while_holding()
+
+        with locks.try_lock("test-lock", stale_after=60) as held:
+            assert held, "a lock whose body raised was left held"
+
+    def test_a_fresh_lock_of_another_holder_is_respected(self) -> None:
+        # the file of a holder that is still within its lifetime is somebody else's
+        with locks.try_lock("test-lock", stale_after=60), locks.try_lock("test-lock", stale_after=60) as held:
+            assert not held
+
+    def test_an_abandoned_lock_is_taken_over(self) -> None:
+        with locks.try_lock("test-lock", stale_after=60):
+            path = Path(settings.LOCKS_DIR, "test-lock.lock")
+            long_ago = time.time() - 120
+            os.utime(path, (long_ago, long_ago))
+
+            with locks.try_lock("test-lock", stale_after=60) as held:
+                assert held, "a lock older than its lifetime was not taken over"
+
+    def test_a_name_that_is_not_a_plain_file_name_is_refused(self) -> None:
+        for name in ("", "../escape", ".hidden", "a/b"):
+            try:
+                with locks.try_lock(name, stale_after=60):
+                    pass
+            except ValueError:
+                continue
+            msg = f"lock name {name!r} was accepted"
+            raise AssertionError(msg)
 
 
 class FailedLoginBudgetTests(TestCase):

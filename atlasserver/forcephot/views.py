@@ -74,6 +74,7 @@ from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.forms import ResendVerificationForm
 from atlasserver.forcephot.forms import ThrottledAuthenticationForm
+from atlasserver.forcephot.locks import try_lock
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
@@ -149,9 +150,13 @@ REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
 # the site with four single-threaded workers (ATLASSERVER_NPROCESSES in dotenv_example.txt), so
 # this leaves most of them free whatever a crawler or a flood does.
 #
-# Named slots rather than a counter, for the reason given above: a read-modify-write on the
-# file-based cache is not atomic, while add() does at least fail for a name that is already taken.
+# Named slots rather than a counter: each slot is one lock file (see forcephot.locks), which is
+# atomic across the workers, where a counter would need a read-modify-write.
 PDF_PLOT_RENDER_SLOTS: t.Final = 2
+
+# A render lock that is older than this was left by a worker that died mid-render, and the next
+# request takes it over. Longer than the render itself can last.
+PDF_PLOT_LOCK_STALE_SECONDS: t.Final = PDF_PLOT_TIMEOUT_SECONDS + 30
 
 logger = logging.getLogger(__name__)
 
@@ -2049,18 +2054,11 @@ def resultplotdatajs(request, taskid):
 @contextlib.contextmanager
 def pdfplot_render_slot() -> Iterator[bool]:
     """Hold one of the site's PDF render slots for the body, or yield False if none is free."""
-    cache = caches["default"]
-
     for slot in range(PDF_PLOT_RENDER_SLOTS):
-        # the timeout outlives the render, so a worker killed mid-render cannot hold a slot for
-        # good; the same reasoning as the per-task lock below
-        slotkey = f"pdfplot-slot-{slot}"
-        if cache.add(slotkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
-            try:
+        with try_lock(f"pdfplot-slot-{slot}", stale_after=PDF_PLOT_LOCK_STALE_SECONDS) as held:
+            if held:
                 yield True
-            finally:
-                cache.delete(slotkey)
-            return
+                return
 
     yield False
 
@@ -2094,14 +2092,12 @@ def taskpdfplot(request, taskid):
         # refresh plots after a change to plot_atlas_fp
         if not pdfpath.is_file():
             # Herd control: the queue page links a PDF for every finished task, so a crawler or a
-            # reload would otherwise fork matplotlib once per concurrent request. Not a mutex (see
-            # the note by the limiter constants); losing the race costs one extra render, not the
-            # tenth. The timeout outlives the render so a killed worker cannot wedge the task.
-            lockkey = f"pdfplot-lock-{taskid}"
-            if not caches["default"].add(lockkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
-                return _pdfplot_unavailable()
+            # reload would otherwise fork matplotlib once per concurrent request. One render per
+            # task at a time; the others are told to come back.
+            with try_lock(f"pdfplot-lock-{taskid}", stale_after=PDF_PLOT_LOCK_STALE_SECONDS) as heldtask:
+                if not heldtask:
+                    return _pdfplot_unavailable()
 
-            try:
                 with pdfplot_render_slot() as hasslot:
                     # the lock above is keyed on the task, so it says nothing about requests for
                     # other tasks. See PDF_PLOT_RENDER_SLOTS for why the total is bounded as well.
@@ -2134,8 +2130,6 @@ def taskpdfplot(request, taskid):
                     if not completed:
                         logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
                         return _pdfplot_unavailable()
-            finally:
-                caches["default"].delete(lockkey)
 
         if pdfpath.is_file():
             return FileResponse(pdfpath.open("rb"))
