@@ -140,7 +140,6 @@ def datetime_to_mjd(dt: datetime.datetime) -> float:
 def make_pdf_plot_worker(
     localresultfile: Path,
     taskid: int,
-    taskcomment: str = "",
     logprefix: str = "",
     logfunc: t.Callable[[t.Any], t.Any] | None = None,
     outputpath: Path | None = None,
@@ -222,21 +221,14 @@ def run_process_with_timeout(proc: BaseProcess, timeout: float) -> bool:
     return not timed_out
 
 
-def make_pdf_plot(*args, separate_process: bool = False, timeout: float = PDF_PLOT_TIMEOUT_SECONDS, **kwargs) -> bool:
-    """Render a task's PDF plot. Return False if it had to be killed for exceeding `timeout`.
+def make_pdf_plot(*args, timeout: float = PDF_PLOT_TIMEOUT_SECONDS, **kwargs) -> bool:
+    """Render a task's PDF plot in a child process. Return False if it was killed for exceeding `timeout`.
 
     matplotlib has to run in its own process or it crashes the caller, and that process is also the
     only place a time limit can be imposed: plot_atlas_fp is third-party code run against a
     user-supplied result file, and an unbounded join() here holds a mod_wsgi worker thread for as
     long as it takes, so enough slow plots exhaust the pool.
-
-    `timeout` is ignored without `separate_process`, because there is nothing to interrupt: the
-    task runner calls it that way from a process that is already per-task and already capped.
     """
-    if not separate_process:
-        make_pdf_plot_worker(*args, **kwargs)
-        return True
-
     # every argument is pickled to reach the spawned child, which is why no caller passes a logfunc
     # on this path: a bound method or a closure would not survive the trip.
     proc = PLOT_PROCESS_CONTEXT.Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)

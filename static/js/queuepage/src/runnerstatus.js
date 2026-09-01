@@ -145,7 +145,7 @@ export function runnerMessage(status, { showQueue = true } = {}) {
  * used that value before this module became the owner of the poll. No other page sets the value,
  * and thus no other page stops the poll for it.
  */
-function pollingPaused() {
+export function pollingPaused() {
     // Use typeof for both names. The store also runs under `node --test`, which has no document.
     // A direct reference to a name that does not exist gives a ReferenceError.
     if (typeof document === 'undefined') {

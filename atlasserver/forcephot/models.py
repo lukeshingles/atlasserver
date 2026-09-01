@@ -61,6 +61,15 @@ def _space_normalised(field: str) -> Trim:
 BLANK_MPC_NAME = models.Q(Exact(_space_normalised("mpc_name"), models.Value("")))
 
 
+def jobfilename(taskid: int, suffix: str = "") -> str:
+    """Return the name every file of a task carries: job, the zero-padded id, and the suffix.
+
+    The one definition of the name, for the model, the task runner and the remote script alike.
+    The runner also globs by it when it reclaims the files of a deleted task.
+    """
+    return f"job{taskid:05d}{suffix}"
+
+
 class Task(models.Model):
     class RequestType(models.TextChoices):
         FP = "FP", "Forced Photometry Data"
@@ -264,7 +273,7 @@ class Task(models.Model):
         """Return the relative path prefix for the job (no file extension)."""
         # the id column, so that a child answers without loading its parent row
         int_id = int(self.parent_task_id) if use_parent and self.parent_task_id else int(self.id)
-        return f"results/job{int_id:05d}"
+        return f"results/{jobfilename(int_id)}"
 
     def localresultfile(self) -> str | None:
         """Return the relative path to the FP data file if the job is finished, and the file exists.
@@ -298,11 +307,6 @@ class Task(models.Model):
         return None
 
     @property
-    def localresultpdfplotfile(self) -> str | None:
-        """Return the full local path to the PDF plot file if the job is finished."""
-        return f"{self.localresultfileprefix()}.pdf" if self.finishtimestamp else None
-
-    @property
     def localresultimagezipfile(self) -> Path | None:
         """Return the relative path to this image request's zip if it exists, otherwise None.
 
@@ -324,7 +328,7 @@ class Task(models.Model):
         lets the parent's own file go with the parent: the runner reads this one, so nothing that
         outlives a deleted task is left at a public path for it.
         """
-        return Path(settings.TASK_INPUTS_DIR, f"job{self.id:05d}.txt")
+        return Path(settings.TASK_INPUTS_DIR, jobfilename(self.id, ".txt"))
 
     def copy_parent_datafile(self) -> bool:
         """Copy the parent's data file to this image request's input path. Return whether it existed.
@@ -433,12 +437,21 @@ class Task(models.Model):
 
         return 0 if minqueuepos is None else int(minqueuepos)
 
-    @property
-    def queuepos(self) -> int | None:
+    def queuepos_from(self, minqueuepos: int) -> int | None:
+        """Return the position in the queue, counted from the given front of the global queue.
+
+        None for a task that is not queued. The one definition of the position: the serializer
+        passes the front it has aggregated once for the whole page, and queuepos below aggregates
+        it for one task.
+        """
         if self.finishtimestamp or self.queuepos_relative is None:
             return None
 
-        return self.queuepos_relative - Task.min_queuepos_relative()
+        return self.queuepos_relative - minqueuepos
+
+    @property
+    def queuepos(self) -> int | None:
+        return self.queuepos_from(Task.min_queuepos_relative())
 
     def is_owned_by(self, user: t.Any) -> bool:
         """Return whether this user may act on the task: its owner, or any staff member.

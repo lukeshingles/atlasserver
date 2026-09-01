@@ -2,7 +2,7 @@
 
 import React from "react"
 import ReactDOM from 'react-dom';
-import { subscribe } from "runnerstatus";
+import { pollingPaused, subscribe } from "runnerstatus";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
@@ -58,8 +58,16 @@ function pageTitle(taskid, finishedwhileaway) {
     return finishedwhileaway > 0 ? '(' + finishedwhileaway + ') ' + title : title;
 }
 
-function pollingPaused() {
-    return document[hidden] || !user_is_active;
+/**
+ * Start a request in a family that only honours its newest member, and return the test for it.
+ *
+ * Each family keeps a counter in a ref; the counter moves on when a newer request starts. The test
+ * says whether this request is still the newest, and a response of one that is not is dropped:
+ * every write it would make is a rewind, and the newer request answers the same question.
+ */
+function startRequest(counterRef) {
+    const requestnumber = ++counterRef.current;
+    return () => requestnumber == counterRef.current;
 }
 
 /**
@@ -768,7 +776,6 @@ let tasklist_api_request_active = false;
 // set when a refresh was requested while a request was already in flight; the settled request
 // re-fetches so the refresh is delayed rather than lost
 let tasklist_refresh_queued = false;
-const tasklist_fetchcache = {};
 // remembers the ETag of each polled page so that an unchanged page can be answered with a 304
 const tasklist_pollcache = new PollCache();
 // counts history navigations, so that a response can tell whether one happened while it was in
@@ -1018,7 +1025,7 @@ export function TaskPage() {
             emptyticksRef.current = 0;
         }
 
-        const requestnumber = ++queueposRequestRef.current;
+        const isCurrent = startRequest(queueposRequestRef);
 
         fetch(queuepositions_url,
             {
@@ -1032,7 +1039,7 @@ export function TaskPage() {
                 // out of date and every write below it would be a rewind. Dropped rather than
                 // merged: the newer request is asking the same question of the same endpoint, so
                 // there is nothing here it will not also say, and nothing is lost by waiting for it.
-                if (requestnumber != queueposRequestRef.current) {
+                if (!isCurrent()) {
                     debug_log('discarding a queue positions response overtaken by a later request');
                     return;
                 }
@@ -1150,11 +1157,9 @@ export function TaskPage() {
                 // user-triggered fetch (a filter, the pager, a delete) re-applies the body held
                 // here and visibly rewinds the positions that were just corrected. setState
                 // updates stateRef before it returns, so the new results are readable here.
-                const cached = tasklist_fetchcache[geturl];
+                const cached = tasklist_pollcache.getBody(geturl);
                 if (cached != null && cached.results != null && geturl == window.location.href) {
-                    const patched = { ...cached, results: stateRef.current.results };
-                    tasklist_fetchcache[geturl] = patched;
-                    tasklist_pollcache.storeBody(geturl, patched);
+                    tasklist_pollcache.storeBody(geturl, { ...cached, results: stateRef.current.results });
                 }
             })
             .catch(error => {
@@ -1193,7 +1198,7 @@ export function TaskPage() {
             return;
         }
 
-        const requestnumber = ++awayRequestRef.current;
+        const isCurrent = startRequest(awayRequestRef);
 
         fetch(queuepositions_url,
             {
@@ -1205,7 +1210,7 @@ export function TaskPage() {
             .then(data => {
                 // overtaken by a later away poll, so this is the older of two answers about the same
                 // queue; see awayRequestRef
-                if (requestnumber != awayRequestRef.current) {
+                if (!isCurrent()) {
                     debug_log('discarding an away count response overtaken by a later request');
                     return;
                 }
@@ -1269,12 +1274,11 @@ export function TaskPage() {
         // start by applying a cached version if we have it
         // then send out an HTTP request and update when available
         if (usertriggered) {
-            const tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
-            if (tasklist_fetchcachematch) {
-                debug_log('using tasklist_fetchcache before GET response', window.location.href);
-                setState(tasklist_fetchcache[window.location.href]);
+            if (tasklist_pollcache.hasBody(window.location.href)) {
+                debug_log('using the cached body before the GET response', window.location.href);
+                setState(tasklist_pollcache.getBody(window.location.href));
             } else {
-                debug_log('no tasklist_fetchcache for', window.location.href);
+                debug_log('no cached body for', window.location.href);
             }
         }
 
@@ -1289,7 +1293,7 @@ export function TaskPage() {
 
         tasklist_api_request_active = true;
         const get_url = window.location.href;
-        const requestnumber = ++tasklistRequestRef.current;
+        const isCurrent = startRequest(tasklistRequestRef);
         // held until the body is applied below; see the note at the storeEtag call
         let responseetag = null;
         debug_log('Fetching task list from', get_url);
@@ -1312,7 +1316,7 @@ export function TaskPage() {
                 // the next tick start yet another request while the newer one was still running,
                 // which overtook that one in turn -- and with latency above the poll interval the
                 // list could stay frozen while requests piled up.
-                if (requestnumber == tasklistRequestRef.current) {
+                if (isCurrent()) {
                     tasklist_api_request_active = false;
                 }
 
@@ -1321,7 +1325,7 @@ export function TaskPage() {
                 // newer request had succeeded, and an overtaken success would clear the error a
                 // newer failed one had just set. The check below covers the rest of the window,
                 // where a newer request starts while this body is still being parsed.
-                if (requestnumber != tasklistRequestRef.current) {
+                if (!isCurrent()) {
                     debug_log('discarding a task list response overtaken by a later request');
                     return null;
                 }
@@ -1369,11 +1373,11 @@ export function TaskPage() {
                 }
                 return null;
             }).catch(error => {
-                if (requestnumber == tasklistRequestRef.current) {
+                if (isCurrent()) {
                     tasklist_api_request_active = false;
                 }
                 console.log('Get task list HTTP request failed', error);
-                if (requestnumber != tasklistRequestRef.current) {
+                if (!isCurrent()) {
                     // a newer request is in flight, and its answer is the one worth reporting
                     return;
                 }
@@ -1394,7 +1398,7 @@ export function TaskPage() {
                 // A newer request for the task list has started since this one, so this answer is
                 // already out of date; see tasklistRequestRef. Placed above every write below it,
                 // the two caches included: a stale body stored there outlives the response itself.
-                if (requestnumber != tasklistRequestRef.current) {
+                if (!isCurrent()) {
                     debug_log('discarding a task list response overtaken by a later request');
                     return;
                 }
@@ -1444,7 +1448,6 @@ export function TaskPage() {
                     // this request was in flight those differ, and storing the old page's body
                     // under the new page's key would both show the wrong tasks on a later revisit
                     // and let an If-None-Match be sent for a page we do not actually hold
-                    tasklist_fetchcache[get_url] = statechanges;
                     // an If-None-Match is only worth sending once a rendered copy exists to fall
                     // back on, since a 304 carries no body. The tag goes in beside it, never
                     // before it: the two describe one page and have to move together.
@@ -1452,7 +1455,7 @@ export function TaskPage() {
                     tasklist_pollcache.storeEtag(get_url, responseetag);
                     if (get_url == window.location.href) {
                         debug_log('Applying results from', get_url);
-                        // the flag goes on a copy: statechanges was just stored in both caches,
+                        // the flag goes on a copy: statechanges was just stored in the cache,
                         // and setting it on the shared object polluted every later re-application
                         // of the cached body — the eager pre-request restore and the 304 fallback
                         // would scroll an untouched page to the top on a routine poll.

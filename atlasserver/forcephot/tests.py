@@ -4791,7 +4791,7 @@ class ProcessTimeoutTests(TestCase):
         with mock.patch.object(
             misc, "run_process_with_timeout", side_effect=lambda proc, _timeout: captured.append(proc)
         ):
-            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1, separate_process=True)
+            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1)
 
         assert len(captured) == 1, captured
         # the class, not the constant: this is what was actually handed to the runner

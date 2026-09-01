@@ -130,10 +130,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return self._min_queuepos_cache
 
     def get_queuepos(self, obj) -> int | None:
-        if obj.finishtimestamp or obj.queuepos_relative is None:
-            return None
-
-        return obj.queuepos_relative - self.min_queuepos_relative
+        return obj.queuepos_from(self.min_queuepos_relative)
 
     @staticmethod
     def _rounded_seconds(value: float | None) -> float | None:

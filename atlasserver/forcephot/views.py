@@ -2108,6 +2108,44 @@ def _pdfplot_unavailable() -> HttpResponse:
     )
 
 
+def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpResponse | None:
+    """Render the task's PDF plot at pdfpath, and return None; or return the answer that says why not.
+
+    Herd control: the queue page links a PDF for every finished task, so a crawler or a reload
+    would otherwise fork matplotlib once per concurrent request. One render per task at a time,
+    and a bounded number across the site; the other requests are told to come back.
+    """
+    with try_lock(f"pdfplot-lock-{taskid}", stale_after=PDF_PLOT_LOCK_STALE_SECONDS) as heldtask:
+        if not heldtask:
+            return _pdfplot_unavailable()
+
+        with pdfplot_render_slot() as hasslot:
+            # the lock above is keyed on the task, so it says nothing about requests for other
+            # tasks. See PDF_PLOT_RENDER_SLOTS for why the total is bounded as well.
+            if not hasslot:
+                return _pdfplot_unavailable()
+
+            # A private path published by rename, so a killed child leaves its wreckage there
+            # rather than at the final name, and two concurrent renders cannot damage each other.
+            # The uniqueness goes in the stem so .pdf stays the suffix: plot_atlas_fp calls
+            # savefig() with no explicit format, and matplotlib infers it from the extension.
+            renderpath = pdfpath.with_name(f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}")
+
+            try:
+                completed = make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, outputpath=renderpath)
+
+                if completed and renderpath.is_file():
+                    renderpath.replace(pdfpath)
+            finally:
+                renderpath.unlink(missing_ok=True)
+
+            if not completed:
+                logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
+                return _pdfplot_unavailable()
+
+    return None
+
+
 def taskpdfplot(request, taskid):
     if not taskid:
         return HttpResponseNotFound("Page not found")
@@ -2122,46 +2160,8 @@ def taskpdfplot(request, taskid):
 
         # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
         # refresh plots after a change to plot_atlas_fp
-        if not pdfpath.is_file():
-            # Herd control: the queue page links a PDF for every finished task, so a crawler or a
-            # reload would otherwise fork matplotlib once per concurrent request. One render per
-            # task at a time; the others are told to come back.
-            with try_lock(f"pdfplot-lock-{taskid}", stale_after=PDF_PLOT_LOCK_STALE_SECONDS) as heldtask:
-                if not heldtask:
-                    return _pdfplot_unavailable()
-
-                with pdfplot_render_slot() as hasslot:
-                    # the lock above is keyed on the task, so it says nothing about requests for
-                    # other tasks. See PDF_PLOT_RENDER_SLOTS for why the total is bounded as well.
-                    if not hasslot:
-                        return _pdfplot_unavailable()
-
-                    # A private path published by rename, so a killed child leaves its wreckage
-                    # there rather than at the final name, and two concurrent renders cannot damage
-                    # each other. The uniqueness goes in the stem so .pdf stays the suffix:
-                    # plot_atlas_fp calls savefig() with no explicit format, and matplotlib infers
-                    # it from the extension.
-                    renderpath = pdfpath.with_name(
-                        f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}"
-                    )
-
-                    try:
-                        completed = make_pdf_plot(
-                            taskid=taskid,
-                            localresultfile=resultfilepath,
-                            taskcomment=item.comment,
-                            separate_process=True,
-                            outputpath=renderpath,
-                        )
-
-                        if completed and renderpath.is_file():
-                            renderpath.replace(pdfpath)
-                    finally:
-                        renderpath.unlink(missing_ok=True)
-
-                    if not completed:
-                        logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
-                        return _pdfplot_unavailable()
+        if not pdfpath.is_file() and (refusal := _render_pdfplot(taskid, resultfilepath, pdfpath)) is not None:
+            return refusal
 
         if pdfpath.is_file():
             return FileResponse(pdfpath.open("rb"))

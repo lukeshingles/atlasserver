@@ -214,8 +214,8 @@ def calculate_queue_positions() -> None:
 
         queuedtaskcount = len(queuedtasks)
 
-        unassigned_taskids = [t.id for t in queuedtasks]
-        unassigned_task_userids = [t.user_id for t in queuedtasks]
+        # (task id, user id) pairs: one list, so that the two cannot drift apart
+        unassigned = [(t.id, t.user_id) for t in queuedtasks]
 
         # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
         queuepos: int = 0
@@ -224,26 +224,24 @@ def calculate_queue_positions() -> None:
         # round trip per task while holding a lock on every queued row, so a deep queue made every
         # submission slow and serialised concurrent submitters behind it
         queuepos_updates: dict[int, int] = {}
-        while unassigned_taskids:
+        while unassigned:
             useridsassigned_currentpass = set()
 
             if passnum == 0 and runningtaskid is not None:
                 # currently running task will be assigned position 0
-                try:
-                    index = unassigned_taskids.index(runningtaskid)
-                    unassigned_taskids.pop(index)
-                    unassigned_task_userids.pop(index)
+                if any(taskid == runningtaskid for taskid, _userid in unassigned):
+                    unassigned = [(taskid, userid) for taskid, userid in unassigned if taskid != runningtaskid]
                     useridsassigned_currentpass.add(runningtask_userid)
                     queuepos_updates[runningtaskid] = 0
                     queuepos = 1
-                except ValueError:  # the task disappeared between the two queries?
+                else:
+                    # the task disappeared between the two queries?
                     runningtaskid = None
 
             # collect the tasks not assigned in this pass rather than popping from
-            # the lists during iteration (which would skip elements)
-            remaining_taskids: list[int] = []
-            remaining_task_userids: list[int] = []
-            for taskid, task_userid in zip(unassigned_taskids, unassigned_task_userids, strict=True):
+            # the list during iteration (which would skip elements)
+            remaining: list[tuple[int, int]] = []
+            for taskid, task_userid in unassigned:
                 if task_userid not in useridsassigned_currentpass and (
                     passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
                 ):
@@ -251,11 +249,9 @@ def calculate_queue_positions() -> None:
                     useridsassigned_currentpass.add(task_userid)
                     queuepos += 1
                 else:
-                    remaining_taskids.append(taskid)
-                    remaining_task_userids.append(task_userid)
+                    remaining.append((taskid, task_userid))
 
-            unassigned_taskids = remaining_taskids
-            unassigned_task_userids = remaining_task_userids
+            unassigned = remaining
 
             # bail out rather than spin forever if a pass somehow assigns nothing. Not an assert:
             # those are stripped under python -O, which is exactly when a hung request would be

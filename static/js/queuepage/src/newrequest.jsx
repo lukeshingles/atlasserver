@@ -5,8 +5,11 @@ import { csrfHeader } from "csrftoken";
 
 let submission_in_progress = false;
 
+// how far back the earliest date of a new request defaults to. The reset button names it too.
+const DEFAULT_MJD_MIN_DAYS = 30;
+
 function getDefaultMjdMin() {
-    return (mjdFromDate(new Date()) - 30.).toFixed(5);
+    return (mjdFromDate(new Date()) - DEFAULT_MJD_MIN_DAYS).toFixed(5);
 }
 
 function errortext(value) {
@@ -284,7 +287,7 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
                 <label htmlFor="id_mjd_min">MJD min:</label><input type="number" name="mjd_min" step="any" id="id_mjd_min" value={values.mjd_min} onChange={setField('mjd_min')} />
                 {/* the emoji is the whole of this control, so without a label there is nothing
                     for a screen reader (or a hover) to say about it */}
-                <button type="button" className="btn resetbutton" title="Reset to 30 days before today" aria-label="Reset MJD min to 30 days before today" onClick={() => { forgetValue('mjd_min'); setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() })); }}>↩️</button>
+                <button type="button" className="btn resetbutton" title={'Reset to ' + DEFAULT_MJD_MIN_DAYS + ' days before today'} aria-label={'Reset MJD min to ' + DEFAULT_MJD_MIN_DAYS + ' days before today'} onClick={() => { forgetValue('mjd_min'); setValues((previous) => ({ ...previous, mjd_min: getDefaultMjdMin() })); }}>↩️</button>
                 <p className="inputisodate" id='id_mjd_min_isoformat'>{mjd_min_isoformat}</p>
             </li>
             <li key="mjd_max">

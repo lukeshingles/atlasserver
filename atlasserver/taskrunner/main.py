@@ -37,6 +37,7 @@ import sys
 from django.contrib.auth import get_user_model
 
 from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot.models import jobfilename
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import send_task_callback
@@ -67,7 +68,7 @@ def mjdnow() -> float:
 
 def localresultfileprefix(taskid: int) -> str:
     """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / f"job{taskid:05d}"))
+    return str(Path(settings.RESULTS_DIR / jobfilename(taskid)))
 
 
 def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
@@ -165,8 +166,8 @@ def remove_task_resultfiles(
     # for a stack) and, for an image request, its private copy of the parent's data file. The
     # database row is already gone by the time this runs, so anything left behind is orphaned.
     # Glob patterns must be relative to the globbed directory.
-    taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
-    taskfiles += list(Path(settings.TASK_INPUTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
+    taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=jobfilename(taskid, ".*")))
+    taskfiles += list(Path(settings.TASK_INPUTS_DIR).glob(pattern=jobfilename(taskid, ".*")))
 
     for taskfile in taskfiles:
         if Path(taskfile).exists():
@@ -184,13 +185,13 @@ def remote_result_filename(task) -> str | None:
     A task can produce several files, but this is the one that has to exist.
     """
     if task.request_type == "FP":
-        return f"job{task.id:05d}.txt"
+        return jobfilename(task.id, ".txt")
     if task.request_type == "IMGZIP":
         # the remote script names the zip after the data file it is given, which is uploaded under
         # this task's own name below
-        return f"job{task.id:05d}.zip"
+        return jobfilename(task.id, ".zip")
     if task.request_type == "SSOSTACK":
-        return f"job{task.id:05d}.fits"
+        return jobfilename(task.id, ".fits")
 
     return None
 
@@ -286,8 +287,8 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         # this task's name either way, so the zip the remote script writes is named for it too.
         localdatafile = task.inputfile()
         if not localdatafile.exists():
-            localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
-        remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
+            localdatafile = Path(settings.RESULTS_DIR, jobfilename(task.parent_task_id, ".txt"))
+        remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
 
         if not localdatafile.exists():
             # the parent forced photometry data file lists the images to fetch. Without it the task
@@ -304,7 +305,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         atlascommand += " red" if task.use_reduced else " diff"
 
     elif task.request_type == "SSOSTACK":
-        remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
+        remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
         atlascommand += build_ssostack_command(
             task,
             remoteresultfile=remoteresultfile,
@@ -451,10 +452,6 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             # here, because the task would then never be marked finished and would be retried forever
             logfunc("ERROR: could not parse the result file")
             return localresultfile, "Could not parse the result file"
-
-        # if not task.from_api:
-        #     make_pdf_plot(taskid=task.id, taskcomment=task.comment, localresultfile=localresultfile,
-        #                   logprefix=logprefix, logfunc=log, separate_process=True)
 
     return localresultfile, None
 
