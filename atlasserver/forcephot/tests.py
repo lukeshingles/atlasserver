@@ -6817,3 +6817,106 @@ class SiteNoticeTests(TestCase):
 
         assert "data-showqueue" not in self.page(reverse("index"))
         assert "data-showqueue" in self.page(reverse("task-list"))
+
+
+class RequestCostTests(TestCase):
+    """Work that a request did more than once, or for rows that could not use it."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="cost", email="cost@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_the_queue_offset_is_aggregated_once_per_list_request(self) -> None:
+        # the entity-tag and the serializer both need the front of the global queue; the view
+        # makes the aggregate once and hands it to the serializer
+        for ra in range(3):
+            Task.objects.create(user=self.user, ra=float(ra), dec=2.0, request_type="FP", queuepos_relative=ra)
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 200, response.status_code
+        offsetqueries = [q["sql"] for q in queries if "MIN(" in q["sql"].upper() and "queuepos_relative" in q["sql"]]
+        assert len(offsetqueries) == 1, f"{len(offsetqueries)} queue-offset aggregates for one request"
+
+    def test_the_queue_offset_is_aggregated_once_per_detail_request(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", queuepos_relative=0)
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 200, response.status_code
+        offsetqueries = [q["sql"] for q in queries if "MIN(" in q["sql"].upper() and "queuepos_relative" in q["sql"]]
+        assert len(offsetqueries) == 1, f"{len(offsetqueries)} queue-offset aggregates for one request"
+
+    def test_a_submission_counts_the_queued_tasks_once(self) -> None:
+        # create() counts them for its limit and perform_create needed the same count for
+        # userqueuedtasks_on_submit; the count is made once and handed over
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"ra": 1.0, "dec": 2.0}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper() and "starttimestamp" in q["sql"]]
+        assert len(counts) == 1, f"the user's queued tasks were counted {len(counts)} times"
+        assert Task.objects.get(user=self.user).userqueuedtasks_on_submit == 0
+
+    def test_image_links_are_looked_up_for_the_rows_that_can_have_them(self) -> None:
+        # a light-curve task never has a zip or a stacked image, so its row is not stat-ed for
+        # them -- and a zip that happens to carry its name is not offered on it either
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.finishtimestamp = timezone.now()
+        child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            for task in (parent, child):
+                zippath = Path(tmpdir, task.localresultfileprefix()).with_suffix(".zip")
+                zippath.parent.mkdir(parents=True, exist_ok=True)
+                zippath.write_text("images")
+
+            response = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json")
+
+        rows = {row["id"]: row for row in response.json()["results"]}
+        assert rows[parent.id]["result_imagezip_url"] is None, "a zip was offered on a light-curve task"
+        assert rows[parent.id]["result_imagestack_url"] is None
+        assert rows[child.id]["result_imagezip_url"], "the image request's own zip was not offered"
+
+    def test_the_weekly_statistics_read_the_finished_tasks_once(self) -> None:
+        # three figures are made from the same rows; the rows are read once, not once per figure
+        def statistics_queries(taskcount: int) -> int:
+            now = timezone.now()
+            for index in range(taskcount):
+                Task.objects.create(
+                    user=self.user,
+                    ra=float(index),
+                    dec=2.0,
+                    request_type="FP",
+                    starttimestamp=now,
+                    finishtimestamp=now,
+                    userqueuedtasks_on_submit=index % 2,
+                )
+            caches["usagestats"].clear()
+            with CaptureQueriesContext(connection) as queries:
+                response = self.client.get(reverse("statsshortterm"))
+            assert response.status_code == 200, response.status_code
+
+            # the reads of the finished rows themselves: not the counts, not the aggregates
+            reads = [
+                q["sql"]
+                for q in queries
+                if "finishtimestamp" in q["sql"]
+                and "IS NOT NULL" in q["sql"]
+                and not any(word in q["sql"].upper() for word in ("COUNT(", "MIN(", "MAX(", "AVG(", "SUM("))
+            ]
+            assert len(reads) == 1, f"the finished tasks were read {len(reads)} times: {reads}"
+            return len(queries)
+
+        small = statistics_queries(1)
+        large = statistics_queries(20)
+
+        assert large == small, f"{small} queries for one finished task, {large} for twenty-one"

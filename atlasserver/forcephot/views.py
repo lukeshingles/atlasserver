@@ -18,7 +18,6 @@ from typing import Any
 from typing import override
 from urllib.parse import urlsplit
 
-import pandas as pd
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
@@ -213,7 +212,9 @@ def origin_only_referrer(view):
     return wrapper
 
 
-def get_tasklist_etag(request, user_id: int, *, shows_owner_fields: bool = True) -> str:
+def get_tasklist_etag(
+    request, user_id: int, *, shows_owner_fields: bool = True, min_queuepos_relative: int | None = None
+) -> str:
     """Return an etag that changes whenever anything the given user's task pages show changes.
 
     `shows_owner_fields` says which of the two bodies this tag describes. The serializer keeps
@@ -253,8 +254,9 @@ def get_tasklist_etag(request, user_id: int, *, shows_owner_fields: bool = True)
         usertasks["starttimestamp__max"],
         usertasks["finishtimestamp__max"],
         usertasks["task_modified_datetime__max"],
-        # the queue position rendered for a task is relative to the front of the global queue
-        Task.min_queuepos_relative(),
+        # the queue position rendered for a task is relative to the front of the global queue.
+        # The caller passes the offset when it has made it already for the serializer.
+        Task.min_queuepos_relative() if min_queuepos_relative is None else min_queuepos_relative,
     )
 
 
@@ -446,18 +448,25 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
                 raise serializers.ValidationError({"non_field_errors": msg})
             serializer.is_valid(raise_exception=True)
 
-        self.perform_create(serializer)
+        self.perform_create(serializer, usertaskcount=usertaskcount)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @override
-    def perform_create(self, serializer: BaseSerializer[Task]) -> None:
-        """Create new task(s)."""
-        usertaskcount_before = (
-            Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
-            if self.request.user and self.request.user.pk is not None
-            else 0
-        )
+    def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int | None = None) -> None:
+        """Create new task(s).
+
+        `usertaskcount` is the number of the user's queued tasks before this submission. create()
+        has counted them already for its limit, so it passes the count rather than have it made
+        again.
+        """
+        usertaskcount_before = usertaskcount
+        if usertaskcount_before is None:
+            usertaskcount_before = (
+                Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
+                if self.request.user and self.request.user.pk is not None
+                else 0
+            )
 
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
@@ -543,14 +552,16 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if userpk is None:
             raise PermissionDenied
 
-        etag = get_tasklist_etag(request, userpk)
+        # one aggregate for the entity-tag and the serializer both
+        queueoffset = Task.min_queuepos_relative()
+        etag = get_tasklist_etag(request, userpk, min_queuepos_relative=queueoffset)
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
         page = self.paginate_queryset(listqueryset)
 
         if page is not None:
-            serializer = self.get_serializer(page, many=True)
+            serializer = self.get_serializer(page, many=True, context=self.serializer_context(queueoffset))
             paginator = self.paginator
             if not isinstance(paginator, TaskPagination):
                 msg = f"expected TaskPagination, got {type(paginator).__name__}"
@@ -580,11 +591,22 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         # else's task, and their own tasks say nothing about whether this one has changed
         # the detail view is readable by anyone, so the body depends on who is asking; the list
         # is scoped to the requester, so its body is always the owner's
-        etag = get_tasklist_etag(request, instance.user_id, shows_owner_fields=instance.is_owned_by(request.user))
+        queueoffset = Task.min_queuepos_relative()
+        etag = get_tasklist_etag(
+            request,
+            instance.user_id,
+            shows_owner_fields=instance.is_owned_by(request.user),
+            min_queuepos_relative=queueoffset,
+        )
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
-        return Response(self.get_serializer(instance).data, headers={"ETag": etag})
+        serializer = self.get_serializer(instance, context=self.serializer_context(queueoffset))
+        return Response(serializer.data, headers={"ETag": etag})
+
+    def serializer_context(self, queueoffset: int) -> dict[str, t.Any]:
+        """Return the usual serializer context with the queue offset the view has made already."""
+        return {**self.get_serializer_context(), "min_queuepos_relative": queueoffset}
 
 
 class RequestImages(APIView):
@@ -1112,15 +1134,18 @@ def statsshortterm(request):
         mean = mean_seconds(values)
         return "-" if mean is None else f"{mean:.1f}s"
 
-    if sevendaytasks_finished.count() > 0:
-        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
+    # one read of the four columns the figures below use, rather than a full read per figure
+    finished = list(
+        sevendaytasks_finished.only("timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit")
+    )
 
-        sevendaytasks_finished_firstusertasks = sevendaytasks_finished.filter(userqueuedtasks_on_submit=0)
+    if finished:
+        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in finished])
         dictparams["sevendayavgwaittimeuserfirst"] = mean_seconds_str(
-            [tsk.waittime() for tsk in sevendaytasks_finished_firstusertasks]
+            [tsk.waittime() for tsk in finished if tsk.userqueuedtasks_on_submit == 0]
         )
 
-        sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
+        sevenday_runtimes = [tsk.runtime() for tsk in finished]
         dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
         num_job_processors = runnerstatus.NUMSLOTS
         # one definition of which values count, shared with the string above
@@ -1226,7 +1251,7 @@ def taskrunnerstatus(request):
     # The medians and the count below can change while `written` does not. But the task runner
     # writes the file every STATUS_WRITE_SECONDS, and thus this version holds for that interval
     # at most. The poll asks each minute.
-    etag = f'"{status["written"]}"'
+    etag = entity_tag(status["written"])
 
     # A browser that holds the current version asks with If-None-Match, and the answer is 304 with
     # no body. This comes before the medians and the count, because a 304 makes both unnecessary.
@@ -1937,6 +1962,10 @@ def resultplotdatajs(request, taskid):
 
         dfforcedphot = None
         if resultfilepath is not None:
+            # imported here and not at the top: this is the one view that reads a result file with
+            # pandas, and the import costs every worker half a second at start-up otherwise
+            import pandas as pd
+
             try:
                 dfforcedphot = pd.read_csv(
                     resultfilepath,
@@ -1990,9 +2019,12 @@ def resultplotdatajs(request, taskid):
             divid = f"plotforcedflux-task-{taskid}"
 
             for color, filterband in [(11, "c"), (12, "o"), (8, "w")]:
-                # @filterband is resolved by pandas from this scope, so the names must agree
-                dffilter = dfforcedphot.query("F == @filterband", inplace=False)
+                dffilter = dfforcedphot[dfforcedphot["F"] == filterband]
 
+                # itertuples rather than iterrows: iterrows builds a Series per row, and a result
+                # file holds thousands of them. The cast to float is one operation on the frame,
+                # and it keeps the integer flux columns printing as "100.0", the way the row
+                # iteration upcast them.
                 jsout.extend(
                     (
                         '\njslabels.push({"color": '
@@ -2002,12 +2034,12 @@ def resultplotdatajs(request, taskid):
                         + '"});\n',
                         "jslcdata.push(["
                         + ", ".join(
-                            [
-                                plotpoint(mjd, uJy, duJy, m, dm, mag5sig)
-                                for _, (mjd, uJy, duJy, m, dm, mag5sig) in dffilter[
-                                    ["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]
-                                ].iterrows()
+                            plotpoint(mjd, uJy, duJy, m, dm, mag5sig)
+                            for mjd, uJy, duJy, m, dm, mag5sig in dffilter[
+                                ["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]
                             ]
+                            .astype(float)
+                            .itertuples(index=False, name=None)
                         )
                         + "]);\n",
                     )

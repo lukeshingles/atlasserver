@@ -92,28 +92,40 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     # the finishtimestamp checks below are not redundant with the file existence checks: an
     # unfinished task cannot have produced a result yet, so testing the timestamp first skips a
     # filesystem stat for every queued task in the page
+    # Each of the two checked for the one request type that produces the file: the lookups stat the
+    # results directory, and a page of a hundred light-curve tasks stated it three hundred times for
+    # files that no light-curve task has. The queue page reads the links on those rows only.
     def get_result_imagezip_url(self, obj) -> str | None:
-        if obj.finishtimestamp and obj.localresultimagezipfile and (request := self.context.get("request")):
-            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+        if obj.request_type != "IMGZIP" or not obj.finishtimestamp:
+            return None
+
+        if (imagezipfile := obj.localresultimagezipfile) and (request := self.context.get("request")):
+            return request.build_absolute_uri(staticfiles_storage.url(imagezipfile))
 
         return None
 
     def get_result_imagestack_url(self, obj) -> str | None:
-        if obj.finishtimestamp and obj.localresultimagestackfile and (request := self.context.get("request")):
-            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagestackfile))
+        if obj.request_type != "SSOSTACK" or not obj.finishtimestamp:
+            return None
+
+        if (imagestackfile := obj.localresultimagestackfile) and (request := self.context.get("request")):
+            return request.build_absolute_uri(staticfiles_storage.url(imagestackfile))
 
         return None
 
     @property
     def min_queuepos_relative(self) -> int:
-        """Return the queue offset, computed once per serializer rather than once per task.
+        """Return the queue offset, computed once per request rather than once per task.
 
         Task.min_queuepos_relative() is a global aggregate that does not depend on the task being
-        serialised. Under many=True this serializer instance is reused for every task in the page,
-        so memoising here turns N aggregate queries into one.
+        serialised. The viewset has made it already for the entity-tag, and hands it over in the
+        context as "min_queuepos_relative"; a serializer built without it makes the aggregate once.
+        Under many=True this serializer instance is reused for every task in the page, so the memo
+        turns N aggregate queries into one.
         """
         if self._min_queuepos_cache is UNSET:
-            self._min_queuepos_cache = Task.min_queuepos_relative()
+            given = self.context.get("min_queuepos_relative")
+            self._min_queuepos_cache = Task.min_queuepos_relative() if given is None else given
 
         return self._min_queuepos_cache
 
