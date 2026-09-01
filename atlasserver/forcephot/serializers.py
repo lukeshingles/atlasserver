@@ -331,7 +331,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         # The stack request is a trial feature, offered on the queue page to the accounts the
         # settings name. The page's flag is only a hint to the browser, so the rule is applied
         # here, where a request from any token holder arrives.
-        if request_type == "SSOSTACK" and self.instance is None and not stack_requests_allowed(self.context):
+        # On a creation, and on an update that turns another kind of task into one: an ordinary
+        # account could otherwise submit a forced photometry task and PATCH its request_type.
+        becomes_stack = request_type == "SSOSTACK" and (
+            self.instance is None or self.instance.request_type != "SSOSTACK"
+        )
+        if becomes_stack and not stack_requests_allowed(self.context):
             msg = "Image stack requests are not enabled for this account."
             raise serializers.ValidationError(msg)
 

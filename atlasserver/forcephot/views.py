@@ -60,6 +60,7 @@ from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
+from rest_framework.exceptions import Throttled
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -92,6 +93,9 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import count_in_window
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
+from atlasserver.forcephot.throttles import login_failures_exceeded
+from atlasserver.forcephot.throttles import LOGIN_LIMIT_MESSAGE
+from atlasserver.forcephot.throttles import note_login_failure
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
 from atlasserver.forcephot.verification import send_verification_email
@@ -598,43 +602,55 @@ class RequestImages(APIView):
         """
         # no is_authenticated test here: ForcePhotPermission.has_permission refuses an anonymous
         # POST before this runs, and the object check below applies the ownership rule
-        try:
-            parent_task = Task.live().get(id=pk, request_type="FP")
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
-
-        self.check_object_permissions(request, parent_task)
-
-        # One live image request per task. A second one is the same request again -- the child
-        # inherits every field from the parent -- and it competes with the first for the result
-        # file the runner writes for that parent. The queue page offers the button only while
-        # there is none; this is the same rule for a caller that does not go through the page.
-        if parent_task.live_imagerequest_ids():
-            return JsonResponse({"non_field_errors": "An image request for this task is already queued."}, status=409)
-
         redirurl = reverse("task-list")
 
-        userimziptaskcount = Task.live().filter(user_id=request.user.pk, request_type="IMGZIP").count()
-        if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
-            msg = (
-                f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
-                " Delete some before making new requests."
-            )
-            return JsonResponse({"non_field_errors": msg}, status=429)
+        # One transaction, with the parent row locked for its extent. Two overlapping requests
+        # for one parent cannot then both find no live image request, and Task.delete takes the
+        # same lock, so a delete of the parent waits until the copy of its data file below is
+        # done rather than reclaiming the file under it.
+        with transaction.atomic():
+            try:
+                parent_task = Task.live().select_for_update().get(id=pk, request_type="FP")
+            except ObjectDoesNotExist:
+                return HttpResponseNotFound("Page not found")
 
-        if not parent_task.error_msg and parent_task.finishtimestamp:
-            # which fields the child inherits is the model's decision; see Task.new_imagerequest
-            newtask = parent_task.new_imagerequest(user=request.user, from_api=request_is_from_api(request))
-            for field, value in client_location_fields(self.request).items():
-                setattr(newtask, field, value)
-            newtask.queuepos_relative = next_queuepos_relative()
-            newtask.save()
-            # the request's own copy of the data file, made now that it has an id. The parent's
-            # file can then go with the parent, whenever that is deleted.
-            newtask.copy_parent_datafile()
-            request_queue_recalc()
+            self.check_object_permissions(request, parent_task)
 
-            redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
+            # One live image request per task. A second one is the same request again -- the child
+            # inherits every field from the parent -- and it competes with the first for the result
+            # file the runner writes for that parent. The queue page offers the button only while
+            # there is none; this is the same rule for a caller that does not go through the page.
+            if parent_task.live_imagerequest_ids():
+                return JsonResponse(
+                    {"non_field_errors": "An image request for this task is already queued."}, status=409
+                )
+
+            userimziptaskcount = Task.live().filter(user_id=request.user.pk, request_type="IMGZIP").count()
+            if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
+                msg = (
+                    f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
+                    " Delete some before making new requests."
+                )
+                return JsonResponse({"non_field_errors": msg}, status=429)
+
+            if not parent_task.error_msg and parent_task.finishtimestamp:
+                # which fields the child inherits is the model's decision; see Task.new_imagerequest
+                newtask = parent_task.new_imagerequest(user=request.user, from_api=request_is_from_api(request))
+                for field, value in client_location_fields(self.request).items():
+                    setattr(newtask, field, value)
+                newtask.queuepos_relative = next_queuepos_relative()
+                newtask.save()
+
+                # the request's own copy of the data file, made now that it has an id. Without the
+                # file nothing could ever be fetched, so the row is rolled back rather than queued
+                # for a run that is certain to fail.
+                if not newtask.copy_parent_datafile():
+                    transaction.set_rollback(True)
+                    msg = "The forced photometry data file for this task is no longer available."
+                    return JsonResponse({"non_field_errors": msg}, status=404)
+
+                request_queue_recalc()
+                redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
 
         return redirect(redirurl, request=request)
 
@@ -1377,6 +1393,21 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
     authentication_classes = ()
     throttle_classes = [ForcedPhotRateThrottle]
     throttle_scope = "forcephotlogin"
+
+    @override
+    def post(self, request, *args, **kwargs):
+        # The same failed-login budget as every other door (see throttles): the rate above bounds
+        # how often this endpoint may be asked, and this stops an address that has exhausted its
+        # guesses elsewhere from spending more here, or from getting a token for a lucky one.
+        if login_failures_exceeded(request):
+            raise Throttled(detail=LOGIN_LIMIT_MESSAGE)
+
+        try:
+            return super().post(request, *args, **kwargs)
+        except serializers.ValidationError:
+            # the serializer refuses wrong credentials with a validation error
+            note_login_failure(request)
+            raise
 
 
 def register(request):

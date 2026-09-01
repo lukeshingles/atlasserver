@@ -602,6 +602,71 @@ describe('TaskPage', () => {
         }
     });
 
+    test('an overtaken response does not free the next tick to start another request', async () => {
+        /*
+         * The in-flight flag belongs to the newest request. An overtaken poll used to clear it as
+         * its headers arrived, so the next tick started yet another request while the newer one
+         * was still running -- which overtook that one in turn, and with latency above the poll
+         * interval every body was discarded and the list stayed frozen while requests piled up.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+
+        const releases = [];
+        const page = (comment) => ({
+            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+        });
+        let listcall = 0;
+
+        global.fetch = (url, init) => {
+            const href = url.toString();
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
+            }
+            if (init && init.method === 'POST') {
+                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
+            }
+            const call = listcall++;
+            if (call === 0) {
+                return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(page('commentfirst')) });
+            }
+            // every later task-list request is held until the test releases it
+            return new Promise((resolve) => {
+                releases.push(() => resolve({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(page('comment' + call)) }));
+            });
+        };
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            mock.timers.tick(6000);   // the poll (call 1), held
+            await flush(60);
+
+            // a submission overtakes it (call 2), also held
+            rendered.container.querySelector('#newrequest').dispatchEvent(
+                new window.Event('submit', { bubbles: true, cancelable: true }));
+            await flush(60);
+            assert.equal(listcall, 3);
+
+            releases[0]();   // the overtaken poll's headers arrive while the newer request runs
+            await flush(60);
+
+            mock.timers.tick(6000);   // the next tick must not start a third request
+            await flush(60);
+            assert.equal(listcall, 3, 'an overtaken response freed the next tick to start another request');
+
+            releases[1]();
+            await flush(60);
+            assert.match(rendered.container.textContent, /comment2/, 'the newer request did not apply');
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
     test('a discarded response does not leave its ETag behind', async () => {
         /*
          * The tag and the body describe one page, so they have to move together. The tag was

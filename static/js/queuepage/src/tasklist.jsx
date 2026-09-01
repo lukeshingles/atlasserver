@@ -1308,7 +1308,13 @@ export function TaskPage() {
                 redirect: "manual"
             })
             .then((response) => {
-                tasklist_api_request_active = false;
+                // The flag belongs to the newest request. An overtaken one leaving it cleared let
+                // the next tick start yet another request while the newer one was still running,
+                // which overtook that one in turn -- and with latency above the poll interval the
+                // list could stay frozen while requests piled up.
+                if (requestnumber == tasklistRequestRef.current) {
+                    tasklist_api_request_active = false;
+                }
 
                 // Checked here as well as below, because everything from this point writes state:
                 // an overtaken failure would otherwise leave "Server error" on screen after a
@@ -1363,7 +1369,9 @@ export function TaskPage() {
                 }
                 return null;
             }).catch(error => {
-                tasklist_api_request_active = false;
+                if (requestnumber == tasklistRequestRef.current) {
+                    tasklist_api_request_active = false;
+                }
                 console.log('Get task list HTTP request failed', error);
                 if (requestnumber != tasklistRequestRef.current) {
                     // a newer request is in flight, and its answer is the one worth reporting

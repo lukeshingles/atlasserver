@@ -2072,6 +2072,54 @@ class RequestImagesTests(TestCase):
             assert child.inputfile().read_text() == "observations"
             assert not str(child.inputfile()).startswith(tmpdir), "the copy is at a public path"
 
+    def test_the_parent_row_is_locked_while_the_request_is_created(self) -> None:
+        # two overlapping requests for one parent must not both find no live image request, and a
+        # delete of the parent must not reclaim the data file under the copy being made of it.
+        # SQLite has no row locks and Django emits nothing for it there; MySQL, which CI and
+        # production use, does.
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+
+            with CaptureQueriesContext(connection) as queries:
+                self.client.post(reverse("requestimages", args=[parent.id]))
+
+        parentreads = [q["sql"] for q in queries if "forcephot_task" in q["sql"] and f"= {parent.id}" in q["sql"]]
+        assert any("FOR UPDATE" in sql for sql in parentreads), parentreads
+
+    def test_a_delete_takes_the_same_lock_before_it_reclaims_files(self) -> None:
+        # a delete of the parent locks its row first, so it waits for a copy of its data file that
+        # an image request is making, rather than reclaiming the file under it
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+
+        with CaptureQueriesContext(connection) as queries:
+            parent.delete()
+
+        assert any("FOR UPDATE" in q["sql"] for q in queries), [q["sql"] for q in queries]
+
+    def test_a_request_whose_data_file_has_gone_queues_nothing(self) -> None:
+        # nothing could ever be fetched for it, so the row is rolled back rather than queued for a
+        # run that is certain to fail; the message is the one the runner would have given
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            response = self.client.post(reverse("requestimages", args=[parent.id]))
+
+        assert response.status_code == 404, response.status_code
+        assert "no longer available" in json.dumps(response.json())
+        assert not Task.objects.filter(request_type="IMGZIP").exists(), "a request with no input was queued"
+
     def test_a_second_image_request_for_the_same_task_is_refused(self) -> None:
         # the child inherits every field from the parent, so a second one is the same request
         # again -- and it competes with the first for the result file named for that parent
@@ -2325,6 +2373,35 @@ class StackRequestGateTests(TestCase):
             response = self.submit_stack()
 
         assert response.status_code == 201, response.content
+
+    def test_a_patch_cannot_turn_another_task_into_a_stack_request(self) -> None:
+        # the gate covered creation only, so an ordinary account could submit a forced photometry
+        # task for an MPC object and PATCH its request_type
+        task = Task.objects.create(user=self.user, mpc_name="Makemake", request_type="FP")
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"request_type": "SSOSTACK"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        task.refresh_from_db()
+        assert task.request_type == "FP"
+
+    def test_a_named_account_can_still_edit_its_stack_request(self) -> None:
+        # the gate is for a task that becomes a stack request, not for one that already is
+        task = Task.objects.create(user=self.user, mpc_name="Makemake", request_type="SSOSTACK")
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"comment": "edited"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
 
     def test_the_page_offers_the_option_by_the_same_rule(self) -> None:
         page = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html").content.decode()
@@ -4459,6 +4536,45 @@ class RemoveOldTasksTests(TestCase):
 
             assert not legacy.exists()
 
+    def test_a_legacy_zip_goes_with_the_last_request_served_from_it(self) -> None:
+        # a zip named for the parent, from before requests had their own: it used to stay at its
+        # static path until the parent went, however many of its requests had been deleted
+        parent = self.make_old_task(days=200, request_type="FP")
+        children = []
+        for _ in range(2):
+            child = parent.new_imagerequest(user=self.user, from_api=False)
+            child.finishtimestamp = timezone.now()
+            child.save()
+            children.append(child)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("images")
+
+            children[0].delete()
+            assert legacy.is_file(), "the zip went while another request was still served from it"
+
+            children[1].delete()
+            assert not legacy.exists(), "the last request served from the legacy zip left it behind"
+
+    def test_a_request_with_its_own_zip_leaves_a_sibling_legacy_zip_alone(self) -> None:
+        parent = self.make_old_task(days=200, request_type="FP")
+        own, legacy_child = [parent.new_imagerequest(user=self.user, from_api=False) for _ in range(2)]
+        for child in (own, legacy_child):
+            child.finishtimestamp = timezone.now()
+            child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("images")
+            Path(tmpdir, own.localresultfileprefix()).with_suffix(".zip").write_text("own images")
+
+            own.delete()
+
+            assert legacy.is_file(), "a request with its own zip reclaimed the one its sibling is served from"
+
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
@@ -5798,8 +5914,9 @@ class FailedLoginBudgetTests(TestCase):
         assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
         assert "Too many failed login attempts" in blocked.content.decode()
 
-    def test_the_token_endpoint_counts_towards_the_same_budget(self) -> None:
-        # one address, one budget, whichever door it tries
+    def test_the_doors_share_one_budget(self) -> None:
+        # one address, one budget, whichever door it tries: failures at the login page block a
+        # Basic header and the token endpoint, and failures at the token endpoint block the page
         with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
             for _ in range(3):
                 self.client.post(reverse("login"), {"username": "guessed", "password": "wrong"})
@@ -5807,8 +5924,20 @@ class FailedLoginBudgetTests(TestCase):
             viaheader = self.client.get(
                 reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("pw12345678")
             )
+            viatoken = self.client.post(reverse("api-token-auth"), {"username": "guessed", "password": "pw12345678"})
 
         assert viaheader.status_code == 429, viaheader.status_code
+        assert viatoken.status_code == 429, viatoken.content
+
+        caches["throttle"].clear()
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("api-token-auth"), {"username": "guessed", "password": "wrong"})
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 429, viapage.status_code
+        assert "_auth_user_id" not in self.client.session
 
 
 class ThirdPartyScriptTests(TestCase):

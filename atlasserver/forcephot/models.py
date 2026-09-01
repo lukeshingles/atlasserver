@@ -10,6 +10,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import caches
 from django.db import models
+from django.db import transaction
 from django.db.models import Min
 from django.db.models.functions import Replace
 from django.db.models.functions import Trim
@@ -138,6 +139,7 @@ class Task(models.Model):
 
     id: int
     user_id: int
+    parent_task_id: int | None
 
     # per-instance memoisation slots, declared as class attributes so that no __init__ override is
     # needed. Model instances do not outlive a request, so a stale entry is not a concern.
@@ -260,7 +262,8 @@ class Task(models.Model):
 
     def localresultfileprefix(self, use_parent: bool = False) -> str:
         """Return the relative path prefix for the job (no file extension)."""
-        int_id = int(self.parent_task.id) if use_parent and self.parent_task else int(self.id)
+        # the id column, so that a child answers without loading its parent row
+        int_id = int(self.parent_task_id) if use_parent and self.parent_task_id else int(self.id)
         return f"results/job{int_id:05d}"
 
     def localresultfile(self) -> str | None:
@@ -334,7 +337,12 @@ class Task(models.Model):
 
         target = self.inputfile()
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(Path(settings.STATIC_ROOT, source), target)
+        try:
+            shutil.copyfile(Path(settings.STATIC_ROOT, source), target)
+        except FileNotFoundError:
+            # gone between the existence check in localresultfile() and here; the caller holds
+            # the parent's row lock, so only the maintenance sweep can do that
+            return False
 
         return True
 
@@ -344,7 +352,7 @@ class Task(models.Model):
         imagstackfile = Path(f"{self.localresultfileprefix()}.fits")
         return imagstackfile if Path(settings.STATIC_ROOT, imagstackfile).exists() else None
 
-    def _live_imagerequests(self) -> "list[Task]":
+    def live_imagerequests(self) -> "list[Task]":
         """Return the image requests of this task that are not archived, oldest first.
 
         Answered from the prefetch when the caller made one (see prefetch_imagerequests), so a page
@@ -354,7 +362,7 @@ class Task(models.Model):
         Ordered by id, so that every caller agrees on which request is the first one. A parent can
         carry more than one live image request, for example from a double-clicked button.
         """
-        prefetched = getattr(self, "live_imagerequests", None)
+        prefetched = getattr(self, "prefetched_imagerequests", None)
         if prefetched is not None:
             return list(prefetched)
 
@@ -365,13 +373,13 @@ class Task(models.Model):
 
     def _imagerequest_task(self) -> "Task | None":
         """Return the image request that this task reports, or None if it has none."""
-        live = self._live_imagerequests()
+        live = self.live_imagerequests()
 
         return live[0] if live else None
 
     def live_imagerequest_ids(self) -> list[int]:
         """Return the ids of the image requests that still read this task's data file."""
-        return [imagerequest.id for imagerequest in self._live_imagerequests()]
+        return [imagerequest.id for imagerequest in self.live_imagerequests()]
 
     @property
     def imagerequest_task_id(self) -> int | None:
@@ -482,11 +490,11 @@ class Task(models.Model):
 
     @staticmethod
     def prefetch_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
-        """Return the prefetch that lets _live_imagerequests() answer without a query per task."""
+        """Return the prefetch that lets live_imagerequests() answer without a query per task."""
         return models.Prefetch(
             "imagerequest",
             queryset=Task.live().order_by("id"),
-            to_attr="live_imagerequests",
+            to_attr="prefetched_imagerequests",
         )
 
     def new_imagerequest(self, user: User, *, from_api: bool) -> "Task":
@@ -546,6 +554,21 @@ class Task(models.Model):
         if self.request_type == "IMGZIP":
             self._unlink_results([".zip"])
             self.inputfile().unlink(missing_ok=True)
+
+            # A zip written under the parent's name, from before an image request had its own.
+            # Reclaimed here once no other live image request of the parent is still served from
+            # it -- a row without a zip of its own is. Otherwise it would stay at its static path
+            # until the parent went. One query, and only while such a file exists; the parent row
+            # itself is not loaded, so a maintenance batch stays at its fixed query count.
+            legacyzip = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
+            if self.parent_task_id is not None and Path(settings.STATIC_ROOT, legacyzip).exists():
+                siblings = Task.live().filter(parent_task_id=self.parent_task_id).exclude(id=self.id)
+                still_served = any(
+                    not Path(settings.STATIC_ROOT, f"{sibling.localresultfileprefix()}.zip").exists()
+                    for sibling in siblings
+                )
+                if not still_served:
+                    Path(settings.STATIC_ROOT, legacyzip).unlink(missing_ok=True)
         else:
             # The .jpg and the .txt go with the row too. localresultpreviewimagefile refuses an
             # archived parent, so nothing renders the preview once this row is archived, and each
@@ -563,17 +586,25 @@ class Task(models.Model):
     def delete(  # type: ignore[override]  # ty: ignore[invalid-method-override]
         self, using: str | None = None, keep_parents: bool = False
     ) -> None:
-        # cleanup associated files when removing a task object from the database
-        self.delete_result_files()
+        with transaction.atomic(using=using):
+            # This row locked first, before any file goes. RequestImages holds the same lock on
+            # a parent while it copies the parent's data file for a new image request, so that
+            # copy is complete, or not started, by the time the file is reclaimed here.
+            if self.pk is not None:
+                list(Task.objects.select_for_update().filter(pk=self.pk).values_list("id", flat=True))
 
-        # keep finished jobs in the database but mark them as archived and hide them from the website
-        if self.finished():
-            self.is_archived = True
-            # only the one column changed, so there is no reason to rewrite every other one
-            self.save(update_fields=["is_archived", "task_modified_datetime"])
-            self.forget_derived_cache()
-        else:
-            super().delete(using=using, keep_parents=keep_parents)
+            # cleanup associated files when removing a task object from the database
+            self.delete_result_files()
+
+            # keep finished jobs in the database but mark them as archived and hide them from the
+            # website
+            if self.finished():
+                self.is_archived = True
+                # only the one column changed, so there is no reason to rewrite every other one
+                self.save(update_fields=["is_archived", "task_modified_datetime"])
+                self.forget_derived_cache()
+            else:
+                super().delete(using=using, keep_parents=keep_parents)
 
 
 class PendingEmailVerification(models.Model):
