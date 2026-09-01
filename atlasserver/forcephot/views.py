@@ -1443,7 +1443,8 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
             # code, before any password is checked; that is not a guess, and counting it would let
             # empty posts spend the budget of every user behind one address.
             codes = ex.get_codes()
-            if isinstance(codes, dict) and "authorization" in codes.get("non_field_errors", []):
+            fieldcodes = codes.get("non_field_errors") if isinstance(codes, dict) else None
+            if isinstance(fieldcodes, list) and "authorization" in fieldcodes:
                 note_login_failure(request)
             raise
 
