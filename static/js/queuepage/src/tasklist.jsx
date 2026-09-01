@@ -1309,6 +1309,17 @@ export function TaskPage() {
             })
             .then((response) => {
                 tasklist_api_request_active = false;
+
+                // Checked here as well as below, because everything from this point writes state:
+                // an overtaken failure would otherwise leave "Server error" on screen after a
+                // newer request had succeeded, and an overtaken success would clear the error a
+                // newer failed one had just set. The check below covers the rest of the window,
+                // where a newer request starts while this body is still being parsed.
+                if (requestnumber != tasklistRequestRef.current) {
+                    debug_log('discarding a task list response overtaken by a later request');
+                    return null;
+                }
+
                 responseetag = response.headers.get('ETag');
                 // Deliberately not handed to noteResponse: the tag is recorded with the body
                 // below, so that a response this call goes on to discard leaves neither. A tag
@@ -1358,6 +1369,10 @@ export function TaskPage() {
             }).catch(error => {
                 tasklist_api_request_active = false;
                 console.log('Get task list HTTP request failed', error);
+                if (requestnumber != tasklistRequestRef.current) {
+                    // a newer request is in flight, and its answer is the one worth reporting
+                    return;
+                }
                 // in state, so that this actually reaches the screen. The "last updated" time is
                 // deliberately left where it was: it is what tells the user how stale the page is.
                 setState({ tasklist_api_error: 'Connection error' });

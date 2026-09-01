@@ -539,6 +539,69 @@ describe('TaskPage', () => {
         }
     });
 
+    test('an overtaken failure does not report an error over a newer success', async () => {
+        /*
+         * The generation check used to sit only in the second promise callback, after the response
+         * handler had already written the error state. A submission skips the in-flight flag, so
+         * it can overtake a slow poll -- and when that poll then answered 500, "Server error"
+         * appeared on a page whose newer request had succeeded, with nothing there to clear it.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+
+        let releaseSlowPoll;
+        const slowpoll = new Promise((resolve) => { releaseSlowPoll = resolve; });
+        const rows = (comment) => ({
+            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+        });
+        let listcall = 0;
+
+        global.fetch = (url, init) => {
+            const href = url.toString();
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
+            }
+            if (init && init.method === 'POST') {
+                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
+            }
+            const call = listcall++;
+            if (call === 1) {
+                return slowpoll;   // the poll whose answer arrives last, and fails
+            }
+            return Promise.resolve({
+                ok: true, status: 200, headers: { get: () => null },
+                json: () => Promise.resolve(rows(call === 0 ? 'commentfirst' : 'commentnewest')),
+            });
+        };
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            assert.match(rendered.container.textContent, /commentfirst/);
+
+            mock.timers.tick(6000);   // the poll goes out and does not come back yet
+            await flush(60);
+
+            // a submission, which skips the in-flight guard and so overtakes that poll
+            rendered.container.querySelector('#newrequest').dispatchEvent(
+                new window.Event('submit', { bubbles: true, cancelable: true }));
+            await flush(120);
+            assert.match(rendered.container.textContent, /commentnewest/, 'the newer request did not apply');
+
+            releaseSlowPoll({ ok: false, status: 500, headers: { get: () => null }, json: () => Promise.resolve(null) });
+            await flush(60);
+
+            assert.doesNotMatch(rendered.container.textContent, /Server error/,
+                'an overtaken failure reported an error over a newer success');
+            assert.match(rendered.container.textContent, /commentnewest/);
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
     test('a discarded response does not leave its ETag behind', async () => {
         /*
          * The tag and the body describe one page, so they have to move together. The tag was

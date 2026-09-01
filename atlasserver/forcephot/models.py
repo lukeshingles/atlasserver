@@ -469,9 +469,10 @@ class Task(models.Model):
             if zipfile := self.localresultimagezipfile:
                 Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
 
-            # the parent's .txt and .jpg are kept while a live image request needs them, so once
-            # this was the last one they have to be collected here or nothing reclaims them until
-            # the maintenance sweep runs months later
+            # the parent's .txt is kept while a live image request needs it, so once this was
+            # the last one it has to be collected here or nothing reclaims it until the
+            # maintenance sweep runs months later. The .jpg goes with the parent now, and is named
+            # here as well for the rows that were archived while it was still held back.
             parent = self.parent_task
             if parent is not None and parent.is_archived:
                 siblings = Task.objects.filter(parent_task_id=parent.id, is_archived=False).exclude(id=self.id)
@@ -480,11 +481,18 @@ class Task(models.Model):
                         Path(settings.STATIC_ROOT, parent.localresultfileprefix() + ext).unlink(missing_ok=True)
 
         else:
-            delete_extlist = [".pdf", ".fits"]
+            # The .jpg goes whatever else is kept. It was held back for an image request to
+            # display, but localresultpreviewimagefile refuses an archived parent, so once this
+            # row is archived nothing renders that preview any more. Results are served from
+            # STATIC_URL by the web server, without asking Django, so a file kept past its last
+            # reader is one that any previously published link can still be redeemed for.
+            delete_extlist = [".pdf", ".fits", ".jpg"]
             if self.imagerequest_task_id is None:
-                # image request tasks share this preview image, and need the .txt data file
-                # as the input that lists the observations to fetch images for
-                delete_extlist += [".jpg", ".txt"]
+                # The .txt is the one file a live image request still needs: it lists the
+                # observations to fetch images for, and the runner copies it to the science
+                # machine. It is reachable by its static path for as long as it is held, which
+                # ends when the last image request finishes and the branch above collects it.
+                delete_extlist += [".txt"]
 
             for ext in delete_extlist:
                 Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)

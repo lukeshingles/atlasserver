@@ -2138,10 +2138,17 @@ def taskpdfplot(request, taskid):
 # links results at their STATIC_URL path, which Apache serves without consulting Django at all.
 #
 # Public is not the same as archived, so they all read Task.live(). Deleting a finished task
-# archives it and reclaims what it can, but delete_result_files keeps the .txt and .jpg while a
-# live image request still needs them -- so without the filter these views went on serving a
-# deleted task's data, and taskpdfplot and resultplotdatajs rebuilt the .pdf and the cached plot
-# that the delete had just removed. ForcePhotTaskViewSet.retrieve already answers 404 for one.
+# archives it and reclaims what it can, but delete_result_files keeps the .txt while a live image
+# request still needs it as input -- so without the filter these views went on serving a deleted
+# task's data, and taskpdfplot and resultplotdatajs rebuilt the .pdf and the cached plot that the
+# delete had just removed. ForcePhotTaskViewSet.retrieve already answers 404 for one.
+#
+# The filter binds these views only. That .txt keeps its STATIC_URL path while it is held, and the
+# line above says who answers that path, so a caller who kept a link published before the delete
+# can still read it until the last image request finishes and the file is collected. Closing that
+# window means serving every result through Django, or keeping the child's input out of
+# STATIC_ROOT. The .jpg is no longer among them: nothing renders an archived task's preview, so
+# delete_result_files now collects it with the row.
 #
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit

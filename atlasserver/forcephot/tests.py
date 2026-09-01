@@ -1988,7 +1988,13 @@ class ArchivedTaskResultTests(TestCase):
 
             self.task.delete()
 
-            assert Path(tmpdir, self.task.localresultfileprefix()).with_suffix(".jpg").is_file()
+            # collected with the row, not merely hidden: results are served from STATIC_URL by the
+            # web server without asking Django, so a file left on disk stays readable by any link
+            # published before the delete. The .txt cannot go the same way -- the image request
+            # reads it -- which is why only the preview is asserted gone here.
+            prefix = Path(tmpdir, self.task.localresultfileprefix())
+            assert not prefix.with_suffix(".jpg").exists(), "the preview outlived its last reader"
+            assert prefix.with_suffix(".txt").is_file(), "the image request lost its input file"
             assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
 
     def test_the_plot_cache_is_not_repopulated_after_a_delete(self) -> None:
