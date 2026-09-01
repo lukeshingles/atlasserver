@@ -155,9 +155,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             return None
 
         try:
-            # allow_memo: one submission validates this same URL for every row of a radeclist,
-            # and then again for the whole list. See webhooks.CALLBACK_VALIDATION_MEMO_SECONDS.
-            return validate_callback_url(value, allow_memo=True)
+            # one submission validates this same URL for every row of a radeclist, and then again
+            # for the whole list; views.create opens the scope that answers the repeats
+            return validate_callback_url(value)
         except CallbackUrlError as ex:
             raise serializers.ValidationError({"callback_url": str(ex)}) from ex
 

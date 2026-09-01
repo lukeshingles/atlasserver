@@ -102,6 +102,7 @@ from atlasserver.forcephot.verification import send_verification_email
 from atlasserver.forcephot.verification import site_name as verification_site_name
 from atlasserver.forcephot.verification import token_generator as verification_token_generator
 from atlasserver.forcephot.verification import user_from_uidb64
+from atlasserver.forcephot.webhooks import callback_urls_validated_once
 
 # not atlasserver.taskrunner.main: importing that module runs django.setup() and pulls pandas and
 # multiprocessing into every web worker, permanently, to read two constants
@@ -419,23 +420,27 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
         usertaskcount = Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
 
-        # a radeclist can hold up to 100 targets, so the limit must account for the size of this
-        # request rather than only the tasks that are already queued
-        if "radeclist" in request.data:
-            datalist = splitradeclist(request.data)
-            newtaskcount = len(datalist)
-            serializer = self.get_serializer(data=datalist, many=True)
-        else:
-            newtaskcount = 1
-            serializer = self.get_serializer(data=request.data)
+        # Each callback URL is resolved once for the whole submission: splitradeclist validates
+        # every row, and the serializer validates the list again. See webhooks._validated_urls.
+        with callback_urls_validated_once():
+            # a radeclist can hold up to 100 targets, so the limit must account for the size of
+            # this request rather than only the tasks that are already queued
+            if "radeclist" in request.data:
+                datalist = splitradeclist(request.data)
+                newtaskcount = len(datalist)
+                serializer = self.get_serializer(data=datalist, many=True)
+            else:
+                newtaskcount = 1
+                serializer = self.get_serializer(data=request.data)
 
-        if usertaskcount + newtaskcount > MAX_USER_TASKS:
-            msg = (
-                f"ERROR: You have too many queued tasks ({usertaskcount} queued"
-                f" + {newtaskcount} requested > {MAX_USER_TASKS})."
-            )
-            raise serializers.ValidationError({"non_field_errors": msg})
-        serializer.is_valid(raise_exception=True)
+            if usertaskcount + newtaskcount > MAX_USER_TASKS:
+                msg = (
+                    f"ERROR: You have too many queued tasks ({usertaskcount} queued"
+                    f" + {newtaskcount} requested > {MAX_USER_TASKS})."
+                )
+                raise serializers.ValidationError({"non_field_errors": msg})
+            serializer.is_valid(raise_exception=True)
+
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)

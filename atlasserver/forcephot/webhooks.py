@@ -10,15 +10,16 @@ oracle. validate_callback_url() is applied when the task is submitted and again 
 the request is sent.
 """
 
+import contextlib
 import email.message
 import json
 import socket
 import threading
-import time
 import typing as t
 import urllib.error
 import urllib.request
-from collections import OrderedDict
+from collections.abc import Iterator
+from contextvars import ContextVar
 from typing import override
 from urllib.parse import urlparse
 
@@ -42,60 +43,37 @@ MAX_CALLBACK_URL_LENGTH = 500
 # name whose server stalls could take a worker out of service for minutes.
 CALLBACK_RESOLVE_TIMEOUT_SECONDS = 5.0
 
-# How long a successful validation may be reused, and by how many URLs.
+# The most resolver threads that may run at once. A resolver that does not answer leaves its
+# thread behind (see resolve_within_timeout), and a caller who names such a host on every
+# submission would otherwise grow one thread per attempt until the resolver gave up on each.
+CALLBACK_RESOLVER_THREADS = 8
+_resolver_slots = threading.BoundedSemaphore(CALLBACK_RESOLVER_THREADS)
+
+# The URLs that the current request has already validated, or None outside a submission.
 #
 # One submission validates the same URL over and over: a radeclist copies callback_url into every
 # row, splitradeclist validates each row, and views.create validates the whole list again -- 200
-# resolutions for one 100-line request. Only the submission path opts in, with allow_memo. The
-# check made before the request is sent must be current, because that is the one that has to
-# notice a name which has moved since (see send_task_callback).
-#
-# Bounded as well as short, because the keys are URLs a caller chose.
-CALLBACK_VALIDATION_MEMO_SECONDS = 30.0
-CALLBACK_VALIDATION_MEMO_MAXSIZE = 128
-
-# url -> the monotonic time at which its answer stops being reusable. Oldest first, so the entry
-# to drop when the map is full is the one at the front. Guarded by a lock rather than relying on
-# the GIL: this project supports the free-threaded build.
-_validation_memo: OrderedDict[str, float] = OrderedDict()
-_validation_memo_lock = threading.Lock()
+# resolutions for one 100-line request. The submission view opens a scope with
+# callback_urls_validated_once(), and the second and later checks of one URL within that scope
+# are answered from the first. Nothing outlives the request, and nothing is shared between
+# requests or threads: a context variable is per task and per thread. The send path runs outside
+# any scope, so the check it makes before a request is always current, which is what lets it
+# notice a name that has moved (see send_task_callback).
+_validated_urls: ContextVar[set[str] | None] = ContextVar("validated_callback_urls", default=None)
 
 
 class CallbackUrlError(ValueError):
     """Raised when a callback URL is missing, malformed or points somewhere it must not."""
 
 
-def _memo_holds(url: str) -> bool:
-    """Return whether this URL passed validation recently enough to skip the checks."""
-    with _validation_memo_lock:
-        expiry = _validation_memo.get(url)
-        if expiry is None:
-            return False
-
-        if expiry <= time.monotonic():
-            del _validation_memo[url]
-            return False
-
-        # deliberately no move_to_end: every entry is given the same lifetime, so insertion order
-        # is expiry order, and re-ordering on a read would make the map evict a younger entry than
-        # the one at the front while keeping an almost expired one.
-        return True
-
-
-def _memo_store(url: str) -> None:
-    """Remember that this URL passed, and drop the oldest entries once the map is full."""
-    with _validation_memo_lock:
-        _validation_memo[url] = time.monotonic() + CALLBACK_VALIDATION_MEMO_SECONDS
-        _validation_memo.move_to_end(url)
-
-        while len(_validation_memo) > CALLBACK_VALIDATION_MEMO_MAXSIZE:
-            _validation_memo.popitem(last=False)
-
-
-def forget_validated_urls() -> None:
-    """Drop every remembered validation, so that nothing inherits an answer it did not ask for."""
-    with _validation_memo_lock:
-        _validation_memo.clear()
+@contextlib.contextmanager
+def callback_urls_validated_once() -> Iterator[None]:
+    """Open the scope within which each callback URL is validated once. For the submission view."""
+    token = _validated_urls.set(set())
+    try:
+        yield
+    finally:
+        _validated_urls.reset(token)
 
 
 def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
@@ -108,14 +86,28 @@ def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
     answer: list[t.Any] = []
     failure: list[BaseException] = []
 
+    # The slot is the thread's, not the caller's: an abandoned thread keeps it until the resolver
+    # answers or gives up, which is what bounds the number of them. A caller who cannot get a slot
+    # within the timeout is answered as a caller whose name cannot be resolved in time is.
+    if not _resolver_slots.acquire(timeout=CALLBACK_RESOLVE_TIMEOUT_SECONDS):
+        msg = f"callback_url hostname could not be resolved within {CALLBACK_RESOLVE_TIMEOUT_SECONDS:.0f} seconds"
+        raise CallbackUrlError(msg)
+
     def resolve() -> None:
         try:
             answer.extend(socket.getaddrinfo(hostname, port))
         except Exception as ex:  # noqa: BLE001  # re-raised by the caller below, never swallowed
             failure.append(ex)
+        finally:
+            _resolver_slots.release()
 
     thread = threading.Thread(target=resolve, name="callback-url-resolve", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except RuntimeError:
+        # no thread could be started; the slot would otherwise be lost with it
+        _resolver_slots.release()
+        raise
     thread.join(CALLBACK_RESOLVE_TIMEOUT_SECONDS)
 
     if thread.is_alive():
@@ -136,7 +128,7 @@ def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
     return answer
 
 
-def validate_callback_url(url: str, *, allow_memo: bool = False) -> str:
+def validate_callback_url(url: str) -> str:
     """Return the URL if it is a safe public https endpoint, otherwise raise CallbackUrlError.
 
     Resolution happens here and again just before the request is sent. That does not close the
@@ -144,15 +136,15 @@ def validate_callback_url(url: str, *, allow_memo: bool = False) -> str:
     the request itself is also sent without following redirects and without credentials, and its
     body is never surfaced to the user.
 
-    `allow_memo` lets a recent answer for the same URL stand, and is for the submission path only:
-    it validates one URL many times per request. The send path must not pass it, because noticing
-    a name that has moved is what that second check is for.
+    Within the scope that callback_urls_validated_once() opens, the second and later checks of one
+    URL are answered from the first. See _validated_urls.
     """
     if not url:
         msg = "callback_url must not be empty"
         raise CallbackUrlError(msg)
 
-    if allow_memo and _memo_holds(url):
+    validated = _validated_urls.get()
+    if validated is not None and url in validated:
         return url
 
     if len(url) > MAX_CALLBACK_URL_LENGTH:
@@ -187,7 +179,7 @@ def validate_callback_url(url: str, *, allow_memo: bool = False) -> str:
     addrinfo = resolve_within_timeout(parsed.hostname, port)
 
     # skipped in development, where a developer's callback target is usually on their own machine.
-    # Written as a guarded block rather than an early return, so that both paths reach the memo.
+    # Written as a guarded block rather than an early return, so that both paths reach the scope.
     if not settings.DEBUG:
         for family, _type, _proto, _canonname, sockaddr in addrinfo:
             if family not in (socket.AF_INET, socket.AF_INET6):
@@ -201,8 +193,8 @@ def validate_callback_url(url: str, *, allow_memo: bool = False) -> str:
                 msg = "callback_url must resolve to a public address"
                 raise CallbackUrlError(msg)
 
-    if allow_memo:
-        _memo_store(url)
+    if validated is not None:
+        validated.add(url)
 
     return url
 

@@ -3058,16 +3058,13 @@ class CallbackUrlResolutionTests(TestCase):
 
     socket.getaddrinfo takes no timeout of its own, and one submission validates the same URL once
     per row and then once more per row: a radeclist copies callback_url into every row,
-    splitradeclist validates each row, and views.create validates the whole list again. Without a
-    memo that is 200 lookups for a 100-line request, on a site with four single-threaded workers.
+    splitradeclist validates each row, and views.create validates the whole list again. Answered
+    once per request, that is one lookup for a 100-line request rather than 200, on a site with
+    four single-threaded workers.
     """
 
     def setUp(self) -> None:
-        webhooks.forget_validated_urls()
         self.user = User.objects.create_user(username="cbcost", email="cbc@example.com", password=None)
-
-    def tearDown(self) -> None:
-        webhooks.forget_validated_urls()
 
     def test_a_multi_target_submission_resolves_the_name_once(self) -> None:
         self.client.force_login(self.user)
@@ -3121,19 +3118,72 @@ class CallbackUrlResolutionTests(TestCase):
             except OSError:
                 pass
 
-    def test_the_send_path_never_reuses_a_remembered_answer(self) -> None:
+    def test_an_answer_lives_only_within_its_request(self) -> None:
         # the check made before the request is sent is the one that has to notice a name that has
-        # moved since the task was submitted, so it must not be served from the memo
+        # moved since the task was submitted, so it must never be served from a submission's answer,
+        # and one submission must not inherit the answer of another
         url = "https://example.com/hook"
         public = [(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]
 
-        with mock.patch("socket.getaddrinfo", return_value=public):
-            validate_callback_url(url, allow_memo=True)
-
         with mock.patch("socket.getaddrinfo", return_value=public) as resolve:
-            validate_callback_url(url)
+            with webhooks.callback_urls_validated_once():
+                validate_callback_url(url)
+                validate_callback_url(url)
+            assert resolve.call_count == 1, "a repeat within one submission was resolved again"
 
-        assert resolve.call_count == 1, "the send path took a remembered answer"
+            validate_callback_url(url)
+            assert resolve.call_count == 2, "the send path took a submission's answer"
+            validate_callback_url(url)
+            assert resolve.call_count == 3, "the send path remembered its own answer"
+
+            with webhooks.callback_urls_validated_once():
+                validate_callback_url(url)
+            assert resolve.call_count == 4, "a second submission inherited the first one's answer"
+
+    def test_a_refused_url_is_not_remembered_as_validated(self) -> None:
+        # only a URL that passed every check is answered from; a private address that was refused
+        # once must be refused again by the next row
+        private = [(socket.AF_INET, None, None, "", ("10.0.0.5", 443))]
+
+        with (
+            override_settings(DEBUG=False),
+            mock.patch("socket.getaddrinfo", return_value=private),
+            webhooks.callback_urls_validated_once(),
+        ):
+            for _ in range(2):
+                try:
+                    validate_callback_url("https://internal.example.com/hook")
+                except CallbackUrlError:
+                    continue
+                msg = "a refused URL was answered from its earlier refusal"
+                raise AssertionError(msg)
+
+    def test_abandoned_resolver_threads_are_bounded(self) -> None:
+        # a resolver that never answers leaves its thread behind; a caller who names such a host on
+        # every submission must not be able to grow one thread per attempt
+        release = threading.Event()
+
+        def stuck(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            release.wait(5)
+            return []
+
+        with (
+            mock.patch("socket.getaddrinfo", side_effect=stuck) as resolve,
+            mock.patch.object(webhooks, "CALLBACK_RESOLVE_TIMEOUT_SECONDS", 0.1),
+            mock.patch.object(webhooks, "_resolver_slots", threading.BoundedSemaphore(1)),
+        ):
+            try:
+                for _ in range(3):
+                    try:
+                        validate_callback_url("https://slow.example.com/hook")
+                    except CallbackUrlError:
+                        continue
+                    msg = "a stuck resolver was allowed through"
+                    raise AssertionError(msg)
+            finally:
+                release.set()
+
+        assert resolve.call_count == 1, f"{resolve.call_count} resolver threads for one stuck host"
 
 
 @override_settings(DEBUG=False)
