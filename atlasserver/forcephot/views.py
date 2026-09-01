@@ -89,6 +89,7 @@ from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
@@ -465,40 +466,37 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         extra_fields.update(client_location_fields(self.request))
         extra_fields["from_api"] = request_is_from_api(self.request)
 
-        serializer.save(**extra_fields)
+        # One transaction for the inserts and the positions. Each insert is otherwise committed on
+        # its own with queuepos_relative NULL, and the runner polls twice a second with
+        # order_by("queuepos_relative"), where NULL sorts first: a task submitted a moment ago was
+        # dispatched ahead of everything already waiting, which is the window
+        # next_queuepos_relative() exists to close.
+        with transaction.atomic():
+            serializer.save(**extra_fields)
 
-        # take the ids from the saved objects rather than serializer.data: accessing .data here
-        # would cache the response body before the updates below have been applied
-        # save() above populated this, so it is not None; many=True makes it a list. Narrowed
-        # rather than assumed, because everything below indexes into it.
-        created = serializer.instance
-        newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
+            # take the ids from the saved objects rather than serializer.data: accessing .data here
+            # would cache the response body before the updates below have been applied
+            # save() above populated this, so it is not None; many=True makes it a list. Narrowed
+            # rather than assumed, because everything below indexes into it.
+            created = serializer.instance
+            newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
 
-        # Provisional positions at the back of the queue. The real ordering is round-robin across
-        # users and is assigned by the task runner; this only stops a task submitted between two
-        # renumberings from showing no position at all, and costs one aggregate for the whole batch.
-        nextqueuepos = next_queuepos_relative()
+            # Provisional positions at the back of the queue. The real ordering is round-robin
+            # across users and is assigned by the task runner; this only stops a task submitted
+            # between two renumberings from showing no position at all, and costs one aggregate
+            # for the whole batch.
+            nextqueuepos = next_queuepos_relative()
 
-        # one statement rather than an UPDATE per task: a radeclist can hold 100 targets, and that
-        # was 100 round trips inside the request that the user is waiting on
-        Task.objects.bulk_update(
-            [
-                Task(
-                    id=task.id,
-                    userqueuedtasks_on_submit=usertaskcount_before + i,
-                    queuepos_relative=nextqueuepos + i,
-                )
-                for i, task in enumerate(newtasks)
-            ],
-            ["userqueuedtasks_on_submit", "queuepos_relative"],
-        )
+            # set on the instances as well as written, so that the response serialises the values
+            # without a reload per task: a radeclist can hold 100 targets
+            for i, task in enumerate(newtasks):
+                task.userqueuedtasks_on_submit = usertaskcount_before + i
+                task.queuepos_relative = nextqueuepos + i
+
+            # one statement rather than an UPDATE per task
+            Task.objects.bulk_update(newtasks, ["userqueuedtasks_on_submit", "queuepos_relative"])
 
         request_queue_recalc()
-
-        # the updates above went straight to the database, so reload the in-memory objects that
-        # will be serialised into the response
-        for task in newtasks:
-            task.refresh_from_db()
 
     @override
     def perform_update(self, serializer: BaseSerializer[Task]) -> None:
@@ -529,15 +527,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             raise PermissionDenied
 
         if request.accepted_renderer.format == "html":
+            # only what the template reads: it builds its URLs and its user id itself. A COUNT
+            # for a "usertaskcount" it never rendered was paid on every load of the queue page.
             return Response(
                 template_name=self.template_name,
-                data={
-                    "name": "Task Queue",
-                    "singletaskdetail": False,
-                    "paginator": self.paginator,
-                    "usertaskcount": listqueryset.count(),
-                    "debug": settings.DEBUG,
-                },
+                data={"name": "Task Queue", "allow_stack_rock": stack_requests_allowed({"request": request})},
             )
 
         # answer a conditional request before paginating: an unchanged page then costs one
@@ -577,12 +571,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if request.accepted_renderer.format == "html":
             return Response(
                 template_name=self.template_name,
-                data={
-                    # self.get_object() again here would repeat the lookup query
-                    "name": f"Task {instance.id}",
-                    "singletaskdetail": True,
-                    "debug": settings.DEBUG,
-                },
+                # self.get_object() again here would repeat the lookup query
+                data={"name": f"Task {instance.id}", "allow_stack_rock": stack_requests_allowed({"request": request})},
             )
 
         # scoped to the task's owner, not to request.user: a staff member may be viewing someone
@@ -598,6 +588,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
 class RequestImages(APIView):
     permission_classes = [ForcePhotPermission]
+    # the same budget as the viewset's create: this creates a task too, and ran a GeoIP lookup, an
+    # aggregate and an insert per call with no limit at all
+    throttle_scope = "forcephottasks"
 
     # this view takes no request body and redirects on success, so the schema generator cannot
     # infer a serializer for it
@@ -624,6 +617,13 @@ class RequestImages(APIView):
             return HttpResponseNotFound("Page not found")
 
         self.check_object_permissions(request, parent_task)
+
+        # One live image request per task. A second one is the same request again -- the child
+        # inherits every field from the parent -- and it competes with the first for the result
+        # file the runner writes for that parent. The queue page offers the button only while
+        # there is none; this is the same rule for a caller that does not go through the page.
+        if parent_task.live_imagerequest_ids():
+            return JsonResponse({"non_field_errors": "An image request for this task is already queued."}, status=409)
 
         redirurl = reverse("task-list")
 

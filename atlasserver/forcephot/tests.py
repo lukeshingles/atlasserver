@@ -44,6 +44,7 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
+from atlasserver import atlastaskrunner
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import verification
@@ -2055,6 +2056,37 @@ class RequestImagesTests(TestCase):
         assert "parent_task_id" not in body, "the error still asks for a field this serializer drops"
         assert not Task.objects.filter(request_type="IMGZIP").exists()
 
+    def test_a_second_image_request_for_the_same_task_is_refused(self) -> None:
+        # the child inherits every field from the parent, so a second one is the same request
+        # again -- and it competes with the first for the result file named for that parent
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n")
+
+            first = self.client.post(reverse("requestimages", args=[parent.id]))
+            second = self.client.post(reverse("requestimages", args=[parent.id]))
+
+        assert first.status_code == 302, first.status_code
+        assert second.status_code == 409, second.status_code
+        assert Task.objects.filter(request_type="IMGZIP").count() == 1
+
+    def test_image_requests_are_throttled_like_other_submissions(self) -> None:
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+        caches["throttle"].clear()
+
+        try:
+            with mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephottasks": "2/min"}):
+                statuses = [self.client.post(reverse("requestimages", args=[parent.id])).status_code for _ in range(3)]
+        finally:
+            caches["throttle"].clear()
+
+        assert 429 in statuses, statuses
+
     def test_an_mpc_name_cannot_smuggle_an_imgzip_task_past_the_refusal(self) -> None:
         """The refusal used to sit inside the branch that handles ra/dec targets only.
 
@@ -2226,6 +2258,176 @@ class RequestImagesTests(TestCase):
         assert not Task.objects.filter(parent_task_id=task.id).exists()
 
 
+class ProperMotionValidationTests(TestCase):
+    def test_a_non_finite_proper_motion_is_a_400(self) -> None:
+        # ra, dec and the MJD bounds each refuse NaN; the proper motions did not, and a NaN reached
+        # the database (a 500 under MySQL) and the remote command line as pmra=nan
+        user = User.objects.create_user(username="pm", email="pm@example.com", password=None)
+        self.client.force_login(user)
+
+        for field in ("propermotion_ra", "propermotion_dec"):
+            with self.subTest(field=field):
+                response = self.client.post(
+                    reverse("task-list"),
+                    data=json.dumps({"ra": 1.0, "dec": 2.0, "radec_epoch_year": 2020.0, field: "NaN"}),
+                    content_type="application/json",
+                    HTTP_ACCEPT="application/json",
+                )
+
+                assert response.status_code == 400, response.content
+                assert field in response.json(), response.content
+
+
+class StackRequestGateTests(TestCase):
+    """The image stack request is offered to the accounts settings.TEST_USERS names, and to staff.
+
+    The queue page's flag was a URL parameter the visitor could type, and the server checked nothing:
+    any token holder could run the stacking script on the science machine.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="stacker", email="st@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def submit_stack(self) -> t.Any:
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "SSOSTACK", "mpc_name": "Makemake"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_an_ordinary_account_cannot_submit_one(self) -> None:
+        response = self.submit_stack()
+
+        assert response.status_code == 400, response.content
+        assert "not enabled" in json.dumps(response.json())
+        assert not Task.objects.filter(request_type="SSOSTACK").exists()
+
+    def test_a_named_account_can(self) -> None:
+        with override_settings(TEST_USERS=[self.user.pk]):
+            response = self.submit_stack()
+
+        assert response.status_code == 201, response.content
+
+    def test_the_page_offers_the_option_by_the_same_rule(self) -> None:
+        page = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html").content.decode()
+        assert "const allow_stack_rock = false;" in page
+
+        with override_settings(TEST_USERS=[self.user.pk]):
+            page = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html").content.decode()
+        assert "const allow_stack_rock = true;" in page
+
+
+class AdminBulkDeleteTests(TestCase):
+    """The admin's bulk action calls queryset.delete(), which never reaches Task.delete()."""
+
+    def setUp(self) -> None:
+        self.staff = User.objects.create_superuser(username="root", email="root@example.com", password="pw12345678")
+        self.owner = User.objects.create_user(username="victim", email="v@example.com", password=None)
+        self.client.force_login(self.staff)
+
+    def test_delete_selected_archives_a_finished_task_and_reclaims_its_files(self) -> None:
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, task.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".pdf").write_text("plot")
+
+            response = self.client.post(
+                reverse("admin:forcephot_task_changelist"),
+                {"action": "delete_selected", "_selected_action": [task.id], "post": "yes"},
+            )
+
+            assert response.status_code == 302, response.status_code
+            task.refresh_from_db()
+            assert task.is_archived, "a finished task was hard-deleted where every other path archives it"
+            assert not prefix.with_suffix(".pdf").exists(), "the result file outlived the row"
+
+    def test_tasks_cannot_be_added_in_the_admin(self) -> None:
+        # a row added there has no queue position, and NULL sorts ahead of every task waiting
+        response = self.client.get(reverse("admin:forcephot_task_add"))
+
+        assert response.status_code == 403, response.status_code
+
+
+class UnverifiedAccountSweepTests(TestCase):
+    """An address registered and never confirmed was held for good.
+
+    The verification link expired, but the row did not, so the real owner could neither register
+    the address, log in, nor reset a password -- reset skips inactive accounts.
+    """
+
+    def make(self, username: str, *, days: int, active: bool = False, marker: bool = True) -> User:
+        user = User.objects.create_user(username=username, email=f"{username}@example.com", password=None)
+        user.is_active = active
+        user.save()
+        if marker:
+            PendingEmailVerification.objects.create(user=user, created=timezone.now() - datetime.timedelta(days=days))
+        return user
+
+    def test_only_the_stale_unconfirmed_accounts_go(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        stale = self.make("stale", days=8)
+        recent = self.make("recent", days=1)
+        # confirmed since, so the marker is gone (verify_email deletes it); an old inactive
+        # account without one was switched off by an administrator and is not the sweep's to take
+        disabled = self.make("disabled", days=30, marker=False)
+        confirmed = self.make("confirmed", days=30, active=True)
+
+        removed = taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        assert removed == 1
+        assert not User.objects.filter(pk=stale.pk).exists(), "the stale registration was kept"
+        for user in (recent, disabled, confirmed):
+            assert User.objects.filter(pk=user.pk).exists(), f"{user.username} was removed"
+
+    def test_the_address_can_then_be_registered_again(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make("squatter", days=8)
+        taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        response = self.client.post(
+            reverse("register"),
+            {
+                "username": "owner",
+                "email": "squatter@example.com",
+                "password1": "a-long-pw-123",
+                "password2": "a-long-pw-123",
+            },
+        )
+
+        assert "already exists" not in response.content.decode()
+        assert User.objects.filter(username="owner").exists()
+
+
+class TaskRunnerPidFileTests(TestCase):
+    def test_a_truncated_pid_file_does_not_stop_a_start(self) -> None:
+        # int("") raised out of start(), and a restart had already stopped the runner by then
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "taskrunner.pid")
+            pidfile.write_text("")
+
+            with (
+                mock.patch.object(atlastaskrunner, "TASKRUNNER_PIDFILE", pidfile),
+                mock.patch.object(atlastaskrunner, "taskrunner_session_exists", return_value=False),
+                mock.patch.object(atlastaskrunner, "run_command") as run,
+            ):
+                atlastaskrunner.start()
+
+            assert run.called, "the runner was not started"
+            assert not pidfile.exists(), "the unreadable pid file was left to block the next start"
+
+    def test_a_readable_pid_is_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "taskrunner.pid")
+            pidfile.write_text("4242\n")
+            assert atlastaskrunner.read_pidfile(pidfile) == 4242
+
+
 class TaskCreateLimitTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="submitter", email="s2@example.com", password=None)
@@ -2250,6 +2452,52 @@ class TaskCreateLimitTests(TestCase):
 
         assert response.status_code == 400, response.status_code
         assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS - 1
+
+
+class TaskCreateAtomicityTests(TestCase):
+    """The inserts and the queue positions are one transaction.
+
+    Each insert was committed on its own with queuepos_relative NULL, and the runner dispatches in
+    order_by("queuepos_relative"), where NULL sorts first -- so a task submitted a moment ago ran
+    ahead of everything already waiting, for the length of the window until bulk_update.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="atomic", email="at@example.com", password=None)
+
+    def test_a_failure_to_number_the_tasks_leaves_no_task_behind(self) -> None:
+        self.client.force_login(self.user)
+
+        with mock.patch.object(Task.objects, "bulk_update", side_effect=RuntimeError("numbering failed")):
+            try:
+                self.client.post(
+                    reverse("task-list"),
+                    data=json.dumps({"radeclist": "10.0 20.0\n11.0 21.0\n"}),
+                    content_type="application/json",
+                    HTTP_ACCEPT="application/json",
+                )
+            except RuntimeError:
+                pass
+            else:
+                msg = "the failure did not reach the caller"
+                raise AssertionError(msg)
+
+        assert not Task.objects.filter(user=self.user).exists(), "an unnumbered task was committed"
+
+    def test_the_response_carries_the_positions_without_a_reload_per_task(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"radeclist": "10.0 20.0\n11.0 21.0\n"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        positions = [task["queuepos"] for task in response.json()]
+        assert positions == sorted(positions), positions
+        assert None not in positions, positions
 
 
 class TaskCreateResponseTests(TestCase):
@@ -2497,6 +2745,36 @@ class TaskRunnerEmailTests(TestCase):
         assert django_mail.outbox[0].to == ["m@example.com"]
         for task in (first, finishing):
             assert f"Task {task.id}:" in body
+
+    def test_an_mpc_task_names_its_object_rather_than_empty_coordinates(self) -> None:
+        # the mail read the coordinate columns and nothing else, so every MPC task announced
+        # itself as "RA None Dec None"
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        finishing = Task.objects.create(
+            user=self.user, mpc_name="Makemake", timestamp=self.stamp, send_email=True, finishtimestamp=timezone.now()
+        )
+
+        taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
+
+        body = str(django_mail.outbox[0].body)
+        assert "MPC[Makemake]" in body, body
+        assert "None" not in body, body
+
+    @override_settings(SITE_ORIGIN="https://staging.example")
+    def test_the_link_in_the_mail_names_the_configured_origin(self) -> None:
+        # the link was a hard-coded production host, so a staging deployment mailed its users a
+        # link to somebody else's task on the production server
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        finishing = self.make_batch_task(finished=True)
+
+        taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
+
+        body = str(django_mail.outbox[0].body)
+        assert finishing.public_url() in body, body
+        assert finishing.public_url().startswith("https://staging.example/"), finishing.public_url()
+        assert "fallingstar-data.com" not in body, body
 
     def test_send_failure_does_not_propagate(self) -> None:
         # an exception here used to kill the worker before finishtimestamp was written,
@@ -5559,6 +5837,30 @@ class QueueRecalcHandoffTests(TestCase):
 
         assert self.renumbering_requested() is True
         assert self.renumbering_requested() is False, "the same request was seen twice"
+
+    def test_the_counter_does_not_start_expiring_after_the_first_request(self) -> None:
+        """incr() rewrote the key with the cache's default timeout.
+
+        So the "never expire" that the first request set was lost on the second, and the runner
+        read 0 after five quiet minutes. Against the file-based backend production uses: the
+        in-memory one keeps its own incr() that leaves the expiry alone, and cannot show this.
+        """
+        import pickle
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filecache = {"BACKEND": "django.core.cache.backends.filebased.FileBasedCache", "LOCATION": tmpdir}
+            with override_settings(CACHES={**settings.CACHES, "default": filecache}):
+                taskqueue.request_recalc()
+                taskqueue.request_recalc()
+
+                assert taskqueue.recalc_generation() == 2
+                # one key, so one file; the backend writes the expiry first, and None for a key
+                # that never expires
+                (cachefile,) = Path(tmpdir).glob("*.djcache")
+                with cachefile.open("rb") as f:
+                    expiry = pickle.load(f)  # noqa: S301  # this process wrote it a moment ago
+
+        assert expiry is None, f"the counter expires at {expiry}"
 
     def test_a_request_during_a_renumbering_is_not_swallowed(self) -> None:
         """The lost update a clear-on-consume flag had.

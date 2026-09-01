@@ -242,7 +242,7 @@ def send_task_callback(task: "Task", logfunc: t.Callable[[t.Any], None]) -> bool
 
     payload = {
         "task_id": task.id,
-        "task_url": f"https://fallingstar-data.com/forcedphot/queue/{task.id}/",
+        "task_url": task.public_url(),
         "request_type": task.request_type,
         "finishtimestamp": task.finishtimestamp.isoformat() if task.finishtimestamp else None,
         "error_msg": task.error_msg,

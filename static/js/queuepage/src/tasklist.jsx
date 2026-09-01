@@ -1679,7 +1679,9 @@ export function TaskPage() {
     }
 
     if (!singletaskmode) {
-        const allow_stack_rock = new URL(state.dataurl).searchParams.get('allow_stack_rock') == 'true';
+        // a global from the page, set by the server from the same rule the serializer applies. It
+        // was read from the URL, which offered the option to anyone who typed the parameter -- and
+        // the server accepted the request, because nothing there checked.
 
         pagehtml.push(<NewRequest key="newrequest" fetchData={fetchData} allow_stack_rock={allow_stack_rock} />);
     }

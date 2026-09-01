@@ -34,7 +34,10 @@ django.setup()
 
 import sys
 
+from django.contrib.auth import get_user_model
+
 from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import send_task_callback
 
@@ -536,11 +539,10 @@ def send_email_if_needed(task, logfunc) -> None:
             batchtasks_unfinished += 1
         else:
             localresultfile = localresultfileprefix(batchtask.id) + ".txt"
-            taskurl = f"https://fallingstar-data.com/forcedphot/queue/{batchtask.id}/"
             strtask = (
-                f"Task {batchtask.id}: RA {batchtask.ra} Dec {batchtask.dec} "
+                f"Task {batchtask.id}: {batchtask.describe_target()} "
                 f"{'img_reduced' if batchtask.use_reduced else 'img_difference'} "
-                f"\n{taskurl}\n"
+                f"\n{batchtask.public_url()}\n"
             )
 
             if batchtask.comment:
@@ -845,6 +847,33 @@ def remove_old_tasks(
         logfunc("  Done.")
 
 
+# How long a registration may wait for its address to be confirmed before the account goes.
+# The verification link stops working after settings.PASSWORD_RESET_TIMEOUT, but the row did not,
+# so an address registered and never confirmed was held for good: the real owner could neither
+# register it, log in, nor reset a password, because reset skips inactive accounts.
+UNVERIFIED_ACCOUNT_DAYS: t.Final = 7
+
+
+def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=log_general) -> int:
+    """Delete the accounts that registered more than `days_ago` ago and never confirmed their address.
+
+    Only the rows that carry the pending-verification marker and are inactive. An account that an
+    administrator switched off has no marker (see PendingEmailVerification), and one that was
+    confirmed lost its marker when it was.
+    """
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
+    stale = PendingEmailVerification.objects.filter(created__lt=cutoff, user__is_active=False)
+    userids = list(stale.values_list("user_id", flat=True))
+    if not userids:
+        return 0
+
+    # the marker goes with the account, by cascade
+    get_user_model().objects.filter(id__in=userids, is_active=False).delete()
+    logfunc(f"Removed {len(userids)} accounts that did not confirm their address within {days_ago} days")
+
+    return len(userids)
+
+
 def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     """Remove old tasks and associated files according to their type and age.
 
@@ -875,6 +904,8 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
         if heartbeat is not None:
             heartbeat()
         remove_old_tasks(**sweep, logfunc=logfunc, heartbeat=heartbeat)
+
+    remove_unverified_accounts(logfunc=logfunc)
 
 
 def main() -> None:

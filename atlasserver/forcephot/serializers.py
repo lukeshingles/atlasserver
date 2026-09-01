@@ -1,7 +1,9 @@
 import math
 import typing as t
+from collections.abc import Mapping
 from typing import override
 
+from django.conf import settings
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
@@ -13,6 +15,19 @@ from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.models import UNSET
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import validate_callback_url
+
+
+def stack_requests_allowed(context: Mapping[str, t.Any]) -> bool:
+    """Return whether the caller in this serializer context may submit an image stack request.
+
+    The queue page reads the same rule to decide whether to offer the option, so the two cannot
+    drift: an account that sees the box can submit, and one that does not see it cannot.
+    """
+    user = getattr(context.get("request"), "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+
+    return bool(getattr(user, "is_staff", False) or user.pk in settings.TEST_USERS)
 
 
 def is_finite_float(val):
@@ -191,6 +206,32 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return value
 
+    # the same finite check as ra and dec: a NaN here reached the database, where mysqlclient
+    # refuses it with a 500, and the runner's command line, as `pmra=nan`
+    @staticmethod
+    def validate_propermotion_ra(value):
+        if value is None or value == "":
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {"propermotion_ra": "propermotion_ra must be a finite floating-point number."}
+            )
+
+        return value
+
+    @staticmethod
+    def validate_propermotion_dec(value):
+        if value is None or value == "":
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {"propermotion_dec": "propermotion_dec must be a finite floating-point number."}
+            )
+
+        return value
+
     @staticmethod
     def validate_mjd_min(value):
         if value is None or value == "":
@@ -287,6 +328,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         # the target of its parent, so these rules hold for an mpc_name request as much as for an
         # ra/dec one. A row with no parent cannot be named a result file, so the runner fails on
         # it before it records a finish time, and dispatches it again on every pass.
+        # The stack request is a trial feature, offered on the queue page to the accounts the
+        # settings name. The page's flag is only a hint to the browser, so the rule is applied
+        # here, where a request from any token holder arrives.
+        if request_type == "SSOSTACK" and self.instance is None and not stack_requests_allowed(self.context):
+            msg = "Image stack requests are not enabled for this account."
+            raise serializers.ValidationError(msg)
+
         if request_type == "IMGZIP":
             # An image request is not created here, and the message says so.
             #

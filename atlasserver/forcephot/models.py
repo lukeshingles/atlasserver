@@ -13,6 +13,8 @@ from django.db.models import Min
 from django.db.models.functions import Replace
 from django.db.models.functions import Trim
 from django.db.models.lookups import Exact
+from django.urls import get_script_prefix
+from django.urls import reverse
 from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
@@ -183,12 +185,7 @@ class Task(models.Model):
     def __str__(self) -> str:
         """Return a string representation of the task (as seen in the admin panel list of tasks)."""
         user = self.user
-        if self.mpc_name:
-            targetstr = f" MPC[{self.mpc_name}]"
-        elif self.ra is not None and self.dec is not None:
-            targetstr = f" RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
-        else:  # a task with no target at all can be created in the admin panel
-            targetstr = " RA Dec: (none)"
+        targetstr = " " + self.describe_target()
 
         if self.finishtimestamp:
             status = "finished"
@@ -230,6 +227,35 @@ class Task(models.Model):
             self.mpc_name = self.mpc_name.strip(MPC_NAME_WHITESPACE)
 
         super().save(*args, **kwargs)
+
+    def describe_target(self) -> str:
+        """Return the target of this task as one short string, for logs and mail.
+
+        One definition: the result email used to print "RA None Dec None" for every MPC task,
+        because it read the coordinate columns and nothing else.
+        """
+        if self.mpc_name:
+            return f"MPC[{self.mpc_name}]"
+        if self.ra is not None and self.dec is not None:
+            return f"RA Dec: {self.ra:09.4f} {self.dec:09.4f}"
+
+        # a task with no target at all could be created in the admin panel
+        return "RA Dec: (none)"
+
+    def public_url(self) -> str:
+        """Return the absolute URL of this task's page, for a message sent from outside a request.
+
+        The task runner sends the result email and the completion callback, and it has no request
+        to build a URL from. SITE_ORIGIN is the same authority the verification mail uses. The
+        script prefix comes from settings when no request has set one, which is the runner's case;
+        inside a request, reverse() already carries it.
+        """
+        path = reverse("task-detail", args=[self.id])
+        if get_script_prefix() == "/":
+            path = settings.PATHPREFIX + path
+
+        # development has no origin configured; a wrong host in a development mail is harmless
+        return (settings.SITE_ORIGIN or "http://localhost:8000") + path
 
     def localresultfileprefix(self, use_parent: bool = False) -> str:
         """Return the relative path prefix for the job (no file extension)."""

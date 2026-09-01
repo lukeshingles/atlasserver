@@ -117,6 +117,7 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     global.api_url_base = 'http://testserver/queue/';
     global.queuepositions_url = 'http://testserver/queuepositions.json';
     global.user_id = 1;
+    global.allow_stack_rock = false;
     global.user_is_active = true;
     global.hidden = 'hidden';
     global.newtaskids = [];

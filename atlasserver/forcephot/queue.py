@@ -81,13 +81,12 @@ def request_recalc() -> None:
     process that changes which task is running, so it is the natural owner of the ordering.
     """
     cache = caches["default"]
-    try:
-        cache.incr(RECALC_GENERATION_CACHEKEY)
-    except ValueError:
-        # incr requires the key to exist, and it does not on the first request after a deploy or a
-        # cleared cache. Two callers can race to here and both add 1 rather than reaching 2, which
-        # does not matter: the runner is watching for a change, not counting submissions.
-        cache.add(RECALC_GENERATION_CACHEKEY, 1, timeout=None)
+    # Not incr(): it rewrites the key with the cache's default timeout, so the counter set here to
+    # never expire started expiring after the first increment. The runner then read 0 after five
+    # quiet minutes, and a request that re-created the key at 1 could equal the value it had last
+    # recorded and be dropped. Two callers can race here and both write the same value, which
+    # does not matter: the runner watches for a change, it does not count submissions.
+    cache.set(RECALC_GENERATION_CACHEKEY, int(cache.get(RECALC_GENERATION_CACHEKEY) or 0) + 1, timeout=None)
 
 
 def recalc_generation() -> int:
