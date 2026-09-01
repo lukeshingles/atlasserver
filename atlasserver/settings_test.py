@@ -30,7 +30,7 @@ from atlasserver.settings import CACHES as _PRODUCTION_CACHES
 
 DEBUG = True
 
-# Belt and braces for the same settings: the env var above can still lose to BASE_DIR/.env
+# A second guard for the same settings: the env var above can still lose to BASE_DIR/.env
 # (load_dotenv overrides the environment), and these four break the suite outright when they leak
 # in — SECURE_SSL_REDIRECT answers every test-client request with a 301, and the plain-http test
 # client never sends secure-only cookies back.

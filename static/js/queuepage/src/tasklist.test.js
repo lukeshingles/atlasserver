@@ -667,6 +667,44 @@ describe('TaskPage', () => {
         }
     });
 
+    for (const [running_taskids, label] of [[[], 'Attempted'], [[7], 'Running'], [undefined, 'Running']]) {
+        test(`a started task the runner ${running_taskids == null ? 'cannot list' : running_taskids.length ? 'lists' : 'does not list'} shows as ${label}`, async () => {
+            /*
+             * A task with a start time is running only while the runner lists it. One it started and
+             * gave back -- the remote machine was unreachable, say -- waits for another attempt, and
+             * the row says so rather than "running" for hours. A runner too old to report the list
+             * leaves the row as it was.
+             */
+            const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
+            const status = { stale: false, queued_task_count: 1 };
+            if (running_taskids != null) {
+                status.running_taskids = running_taskids;
+            }
+
+            global.fetch = (url) => {
+                const href = url.toString();
+                if (href.includes('taskrunnerstatus')) {
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(status) });
+                }
+                if (href.includes('queuepositions')) {
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: { 7: 0 } }) });
+                }
+                return Promise.resolve({
+                    ok: true, status: 200, headers: { get: () => null },
+                    json: () => Promise.resolve({ results: [started], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0 }),
+                });
+            };
+
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+
+            const badge = rendered.container.querySelector('.taskbadge-queued, .taskbadge-running');
+            assert.ok(badge, 'no status badge on the row');
+            assert.equal(badge.textContent.trim(), label);
+        });
+    }
+
     test('a discarded response does not leave its ETag behind', async () => {
         /*
          * The tag and the body describe one page, so they have to move together. The tag was

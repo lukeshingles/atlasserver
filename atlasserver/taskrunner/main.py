@@ -344,7 +344,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             now = time.perf_counter()
             # the cancellation check is a database query, and the 1s communicate() timeout used to
             # run one per second per slot. Across 16 slots that was ~16 queries/sec forever, and a
-            # single job at the 4 hour limit issued over ten thousand of them. Cancelling a job
+            # single task at the 4 hour limit issued over ten thousand of them. Cancelling a task
             # that has already been running for minutes is not more urgent than this.
             if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
                 lastcancelcheck = now
@@ -377,7 +377,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         for line in stderr.split("\n"):
             logfunc(f"{REMOTE_SERVER} STDERR: {line}")
 
-    if not task_exists(taskid=task.id):  # check if job was cancelled
+    if not task_exists(taskid=task.id):  # check if the task was cancelled
         return None, None
 
     # copy files from sc01 to local machine, deleting the remote files after successful copy
@@ -915,8 +915,8 @@ def main() -> None:
     mp.set_start_method("spawn")
     numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
-    procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
-    procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
+    procs_userids: dict[int, int] = {}  # user_id of the task each slot runs
+    procs_taskids: dict[int, int] = {}  # id of the task each slot runs
 
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
@@ -970,13 +970,13 @@ def main() -> None:
             recalc_requested = seen_generation != last_recalc_generation
 
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
-            # caught, because this loop is what dispatches every job: unguarded, a lock timeout or
+            # caught, because this loop is what dispatches every task: unguarded, a lock timeout or
             # a bad queue state would take the exception out of main() and stop the runner, and the
             # supervisor would restart it straight back into the same state. Queue positions going
             # stale is a display problem; not dispatching anything is not.
             try:
                 taskqueue.calculate_queue_positions()
-            except Exception as ex:  # noqa: BLE001 (this loop dispatches every job; stale
+            except Exception as ex:  # noqa: BLE001 (this loop dispatches every task; stale
                 # queue positions are a display problem, not dispatching is not)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
             else:
@@ -1018,7 +1018,7 @@ def main() -> None:
 
         if task is None:
             # nothing runnable. That is either an empty queue or a queue holding only tasks from
-            # users who already have a job running, and only the former should slow the polling
+            # users who already have a task running, and only the former should slow the polling
             if not printedwaiting and not queuedtasks.exists():
                 logfunc("Waiting for tasks...")
                 printedwaiting = True

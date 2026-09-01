@@ -84,6 +84,9 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+# CI runs `coverage report`, which fails below this. The suite covers 71 percent; the gate is a
+# little under that, so a change that removes tests is caught and a small refactor is not.
+fail_under = 70
 exclude_also = [
     "if t.TYPE_CHECKING:",
     "if TYPE_CHECKING:",

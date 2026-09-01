@@ -88,13 +88,13 @@ function tracksQueuePosition(task) {
 /**
  * Put a number on the navbar's Queue badge, or take the badge away at zero.
  *
- * The badge is rendered by the server, which is right for every other page -- each navigation
- * re-renders it -- but this page never navigates: submitting, cancelling and finishing all happen
- * without a page load, so the badge it was drawn with goes stale the moment anything changes.
+ * The server renders the badge, which is right for every other page: each navigation re-renders
+ * it. This page never navigates. Submitting, cancelling and finishing all happen without a page
+ * load, so the badge it was drawn with goes stale the moment anything changes.
  *
- * A direct DOM call because the navbar is not React's, the same reason the row animations are; and
- * from the queuepositions response because that is the user's whole queued set rather than the page
- * of rows on screen, so it is the count the badge wants.
+ * A direct DOM call, because the navbar is not React's; the row animations are direct for the same
+ * reason. The count comes from the queuepositions response, because that is the user's whole queued
+ * set rather than the page of rows on screen. That set is the count the badge wants.
  */
 function updateQueueBadge(count) {
     const badge = document.querySelector('.queuecount');
@@ -381,6 +381,7 @@ function taskPropsEqual(prev, next) {
         prev.hidePlot === next.hidePlot
         // a string or null, so this stays the cheap check the rest of this function avoids
         && prev.waitestimate === next.waitestimate
+        && prev.attempted === next.attempted
         && (prev.taskdata === next.taskdata
             || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
     );
@@ -522,6 +523,12 @@ export const Task = React.memo(function Task(props) {
         buttontext = 'Delete';
         statuslabel = task.error_msg != null ? 'Error' : 'Finished';
         statusbadge = task.error_msg != null ? 'taskbadge-error' : 'taskbadge-finished';
+    } else if (task.starttimestamp != null && props.attempted) {
+        // started once and given back: the runner will try it again, and until then nothing runs
+        statusclass = "queued started";
+        buttontext = 'Cancel';
+        statuslabel = 'Attempted';
+        statusbadge = 'taskbadge-queued';
     } else if (task.starttimestamp != null) {
         statusclass = "queued started";
         buttontext = 'Cancel';
@@ -717,6 +724,18 @@ export const Task = React.memo(function Task(props) {
                 taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
             }
         }
+    } else if (task.starttimestamp != null && props.attempted) {
+        // The runner started this task and released it without a result, so the attempt will be
+        // made again; the bar is still because nothing is running for it now.
+        taskbox.push(
+            <div key="status" className="taskstatus running">
+                Attempted (started {timeelapsed} seconds ago); the task runner will try again
+                <div className="progress taskprogress" role="progressbar"
+                    aria-label={'Task ' + task.id + ' waits for another attempt'}>
+                    <div className="progress-bar progress-bar-striped"></div>
+                </div>
+            </div>
+        );
     } else if (task.starttimestamp != null) {
         // An indeterminate bar, striped and moving: the server reports that a task has started and
         // how long ago, and nothing about how far through it is, so there is no fraction to draw.
@@ -1755,11 +1774,20 @@ export function TaskPage() {
             runnerstatus,
         })));
 
+        // A task with a start time that the runner does not list as running was started once and
+        // given back, for example when the remote machine was unreachable. Known only from a fresh
+        // status of a runner that reports the list; otherwise the row keeps saying "running".
+        const attempted = (task) => (
+            task.starttimestamp != null && task.finishtimestamp == null
+            && runnerstatus != null && !runnerstatus.stale
+            && Array.isArray(runnerstatus.running_taskids) && !runnerstatus.running_taskids.includes(task.id)
+        );
+
         tasklist = [
             <ul key="ultasklist" className="tasks">
                 {state.results.map((task) => (
                     <Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView}
-                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} />))}
+                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} attempted={attempted(task)} />))}
             </ul>,
             <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
         ];

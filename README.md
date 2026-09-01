@@ -45,7 +45,7 @@ atlaswebserver start
 atlastaskrunner start
 ```
 
-For atlastaskrunner to process jobs, there much be an SSH host alias named named 'atlas' that points to atlas-base-sc01.ifa.hawaii.edu with your username. The server-side scripts must also be installed in your sc01 home folder:
+For atlastaskrunner to process tasks, there must be an SSH host alias named 'atlas' that points to atlas-base-sc01.ifa.hawaii.edu with your username. The server-side scripts must also be installed in your sc01 home folder:
 ```sh
 scp atlasserver/taskrunner/atlas_*.py atlas:~/
 ```

@@ -5491,7 +5491,7 @@ class RegistrationVerificationTests(TestCase):
         assert len(calls) == 2, calls  # and it was the second check that refused it
 
     def test_a_disabled_account_cannot_be_reactivated_by_an_old_link(self) -> None:
-        # belt and braces for the check above: the activation view applies the same rule, so a link
+        # the same rule a second time, for the check above: the activation view applies it, so a link
         # obtained by any other route is refused too
         self.register()
         link = self.verification_link()

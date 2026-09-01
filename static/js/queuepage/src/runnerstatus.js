@@ -48,14 +48,16 @@ export function describeAge(seconds) {
 }
 
 /*
- * Fields of the status that change on their own. No reader uses their values.
+ * Fields of the status that change on their own. No reader uses their values. The list of running
+ * task ids is not among them: the queue page reads it, to tell a task that runs from one that was
+ * started and given back, and two lists with the same ids compare equal below.
  *
  * This is a list of the fields to ignore, and not a list of the fields that are of use. A field
  * that the endpoint gains later is thus compared by default. Such a field can then cost an
  * unnecessary render, which is a small cost. In a list of the fields to compare, a new field would
  * be invisible to every reader, and nothing would fail to show the mistake.
  */
-const RUNNERSTATUS_VOLATILE_FIELDS = ['written', 'pid', 'running_taskids', 'status_age_seconds'];
+const RUNNERSTATUS_VOLATILE_FIELDS = ['written', 'pid', 'status_age_seconds'];
 
 /**
  * Whether two status responses tell every reader the same thing.

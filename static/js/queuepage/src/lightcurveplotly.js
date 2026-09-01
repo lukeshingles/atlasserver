@@ -52,12 +52,18 @@
 
     // Always refer to the external data via the global variable and lcdivname.
 
+    var limits = jslimitsglobal[locallcdivname];
+
+    // Five percent of the plotted span on each side. The upper axis counts days since discovery
+    // and overlays the lower one, so the two ranges must cover the same span of time: the upper
+    // one used to run to today where the lower one ran to the last point, and its labels then
+    // stood against the wrong points.
     var pad = 20.0; // i.e. 5 percent
-    var xpadding = (jslimitsglobal[locallcdivname]["today"] - jslimitsglobal[locallcdivname]["xmin"]) / pad;
-    var xmin = jslimitsglobal[locallcdivname]["xmin"] - xpadding;
-    var xmax = jslimitsglobal[locallcdivname]["xmax"] + xpadding;
-    var x2min = jslimitsglobal[locallcdivname]["xmin"] - jslimitsglobal[locallcdivname]["discoveryDate"] - xpadding;
-    var x2max = jslimitsglobal[locallcdivname]["today"] - jslimitsglobal[locallcdivname]["discoveryDate"] + xpadding;
+    var xpadding = (limits["xmax"] - limits["xmin"]) / pad;
+    var xmin = limits["xmin"] - xpadding;
+    var xmax = limits["xmax"] + xpadding;
+    var x2min = xmin - limits["discoveryDate"];
+    var x2max = xmax - limits["discoveryDate"];
     var ymin = jslimitsglobal[locallcdivname]["ymin"];
     var ymax = jslimitsglobal[locallcdivname]["ymax"];
 
@@ -132,9 +138,9 @@
         // are a readable plot on a light background.
         var theme = (window.atlasTheme && window.atlasTheme.plotlyColors()) || { axis: {}, hoverlabel: {} };
 
-        // So... Flot wanted [[x, y, error], [x, y, error], ...]
-        // Plotly wants [x, x, ...], [y, y, ...], [error, error, ...]. Should be easy to convert,
-        // but it's a bit of a pain!
+        // The data arrives as points, [[x, y, error], [x, y, error], ...], which is the shape the
+        // earlier plotting library took. Plotly takes one array per axis: [x, x, ...], [y, y, ...],
+        // [error, error, ...]. The loops below convert between the two.
 
         // All the lightcurve data
         var data = [];
