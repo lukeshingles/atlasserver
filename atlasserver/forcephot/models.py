@@ -1,4 +1,5 @@
 import datetime
+import shutil
 import typing as t
 from pathlib import Path
 from typing import override
@@ -300,9 +301,42 @@ class Task(models.Model):
 
     @property
     def localresultimagezipfile(self) -> Path | None:
-        """Return the full local path to the image zip file if it exists, otherwise None."""
-        imagezipfile = Path(f"{self.localresultfileprefix(use_parent=True)}.zip")
-        return imagezipfile if Path(settings.STATIC_ROOT, imagezipfile).exists() else None
+        """Return the relative path to this image request's zip if it exists, otherwise None.
+
+        Named for this task. An image request written before that was named for its parent, so
+        that name is tried second, for the rows that finished under the old rule and have not yet
+        been swept.
+        """
+        for prefix in (self.localresultfileprefix(), self.localresultfileprefix(use_parent=True)):
+            imagezipfile = Path(f"{prefix}.zip")
+            if Path(settings.STATIC_ROOT, imagezipfile).exists():
+                return imagezipfile
+
+        return None
+
+    def inputfile(self) -> Path:
+        """Return the private path of this image request's input: a copy of the parent's data file.
+
+        Outside STATIC_ROOT, which the web server serves without asking Django. The copy is what
+        lets the parent's own file go with the parent: the runner reads this one, so nothing that
+        outlives a deleted task is left at a public path for it.
+        """
+        return Path(settings.TASK_INPUTS_DIR, f"job{self.id:05d}.txt")
+
+    def copy_parent_datafile(self) -> bool:
+        """Copy the parent's data file to this image request's input path. Return whether it existed.
+
+        Called once the row has an id. A parent with no data file cannot have images fetched for
+        it; the runner reports that when it dispatches the request, so nothing is raised here.
+        """
+        if self.parent_task is None or not (source := self.parent_task.localresultfile()):
+            return False
+
+        target = self.inputfile()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path(settings.STATIC_ROOT, source), target)
+
+        return True
 
     @property
     def localresultimagestackfile(self) -> Path | None:
@@ -455,20 +489,6 @@ class Task(models.Model):
             to_attr="live_imagerequests",
         )
 
-    @staticmethod
-    def prefetch_parent_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
-        """Return the prefetch that gives each task's parent its own live image requests.
-
-        For a batch of image requests: delete_result_files asks the parent which siblings stay,
-        and a parent reached through select_related carries nothing from prefetch_imagerequests.
-        Without this it is one query per row.
-        """
-        return models.Prefetch(
-            "parent_task__imagerequest",
-            queryset=Task.live().order_by("id"),
-            to_attr="live_imagerequests",
-        )
-
     def new_imagerequest(self, user: User, *, from_api: bool) -> "Task":
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
 
@@ -513,54 +533,26 @@ class Task(models.Model):
         for ext in extensions:
             Path(settings.STATIC_ROOT, self.localresultfileprefix() + ext).unlink(missing_ok=True)
 
-    def delete_result_files(self, *, alsogoing: t.AbstractSet[int] = frozenset()) -> None:
-        """Delete the result files that nothing will still need once this task is gone.
+    def delete_result_files(self) -> None:
+        """Delete the result files of this task. Every file belongs to one task.
 
-        Two files are shared, and both belong to one forced photometry task and its image
-        requests. The .txt is the parent's data file. Each image request reads it as the list of
-        observations to fetch. The .zip is named for the parent, and every image request of that
-        parent writes the same one. Each stays while another task still reads it. Everything else
-        belongs to one task alone, and goes with it.
-
-        `alsogoing` names the other tasks that this operation removes, so that a shared file is
-        not kept for a reader which disappears with it. A caller that removes one task leaves it
-        empty. The maintenance sweep removes a parent and its image requests together, and has to
-        say so.
+        An image request works from its own copy of the parent's data file (see inputfile) and
+        writes a zip named for itself, so nothing here is read by another row. A zip named for the
+        parent is a legacy name from before that rule; it goes with the parent.
 
         Split out of delete() so that the maintenance sweep can reclaim the files of many tasks and
         then update or remove their rows in one statement, instead of one write per task.
         """
         if self.request_type == "IMGZIP":
-            parent = self.parent_task
-            # The other image requests of the parent that this operation leaves in place. A parent
-            # that goes too takes every one of them with it, so it is not asked: the answer is
-            # known, and the parent of a cascaded row carries no prefetch to answer from.
-            if parent is None or parent.id in alsogoing:
-                siblings: set[int] = set()
-            else:
-                siblings = set(parent.live_imagerequest_ids()) - alsogoing - {self.id}
-
-            if not siblings and (zipfile := self.localresultimagezipfile):
-                Path(settings.STATIC_ROOT, zipfile).unlink(missing_ok=True)
-
-            # The parent's data file, once no image request that stays can read it. Only while
-            # the parent outlives this row: when it goes too, its own call collects the file.
-            if not siblings and parent is not None and parent.is_archived and parent.id not in alsogoing:
-                parent._unlink_results([".txt"])  # noqa: SLF001  # a Task, from a Task
-
+            self._unlink_results([".zip"])
+            self.inputfile().unlink(missing_ok=True)
         else:
-            # The .jpg goes with the row. localresultpreviewimagefile refuses an archived parent,
-            # so nothing renders the preview once this row is archived. The web server serves
-            # results from STATIC_URL without Django, so a file kept past its last reader stays
-            # readable by every link that was published before.
-            extensions = [".pdf", ".fits", ".jpg"]
-
-            # the data file, once no image request that stays can read it. The web server serves
-            # it from its static path for as long as it is held.
-            if not set(self.live_imagerequest_ids()) - alsogoing:
-                extensions.append(".txt")
-
-            self._unlink_results(extensions)
+            # The .jpg and the .txt go with the row too. localresultpreviewimagefile refuses an
+            # archived parent, so nothing renders the preview once this row is archived, and each
+            # image request holds its own copy of the data file. The web server serves results
+            # from STATIC_URL without Django, so a file kept past its row would stay readable by
+            # every link that was published before.
+            self._unlink_results([".pdf", ".fits", ".jpg", ".txt", ".zip"])
 
     def forget_derived_cache(self) -> None:
         """Drop the cached plot data generated from this task's result file."""

@@ -160,25 +160,22 @@ def remove_task_resultfiles(
     logfunc: t.Callable[[t.Any], None] = log_general,
 ) -> None:
     """Delete any associated result files from a deleted task."""
-    if request_type == "FP":
-        # an FP task also produces a .jpg preview (and possibly a .pdf plot). The database row is
-        # already gone by the time this runs, so anything left behind is orphaned forever.
-        # glob patterns must be relative to the globbed directory
-        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
-    elif request_type == "IMGZIP" and parent_task_id is not None:
-        taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(parent_task_id) + ".zip")]
-    else:  # SSOSTACK
-        # glob patterns must be relative to the globbed directory
-        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
+    # Every file is named for its own task, whatever the type: the results (a .txt, .jpg and
+    # perhaps a .pdf for forced photometry; a .zip for an image request; a .fits, .jpg and .txt
+    # for a stack) and, for an image request, its private copy of the parent's data file. The
+    # database row is already gone by the time this runs, so anything left behind is orphaned.
+    # Glob patterns must be relative to the globbed directory.
+    taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
+    taskfiles += list(Path(settings.TASK_INPUTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
 
     for taskfile in taskfiles:
         if Path(taskfile).exists():
             try:
                 Path(taskfile).unlink(missing_ok=True)
             except OSError:
-                logfunc(f"Error deleting file: {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
+                logfunc(f"Error deleting file: {taskfile.name}")
             else:
-                logfunc(f"Deleted {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
+                logfunc(f"Deleted {taskfile.name}")
 
 
 def remote_result_filename(task) -> str | None:
@@ -189,7 +186,9 @@ def remote_result_filename(task) -> str | None:
     if task.request_type == "FP":
         return f"job{task.id:05d}.txt"
     if task.request_type == "IMGZIP":
-        return f"job{task.parent_task_id:05d}.zip"
+        # the remote script names the zip after the data file it is given, which is uploaded under
+        # this task's own name below
+        return f"job{task.id:05d}.zip"
     if task.request_type == "SSOSTACK":
         return f"job{task.id:05d}.fits"
 
@@ -282,8 +281,13 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         atlascommand += build_fp_command(task, remoteresultfile=remoteresultfile)
 
     elif task.request_type == "IMGZIP":
-        localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
-        remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
+        # This task's own copy of the parent's data file, made when the request was created. A
+        # request created before that copy existed reads the parent's file itself. Uploaded under
+        # this task's name either way, so the zip the remote script writes is named for it too.
+        localdatafile = task.inputfile()
+        if not localdatafile.exists():
+            localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
+        remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
 
         if not localdatafile.exists():
             # the parent forced photometry data file lists the images to fetch. Without it the task
@@ -404,13 +408,16 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         copycommands = [
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
         ]
-        # the data file should already be copied, but just in case, copy it again (deleting the remote file)
+        # the data file is collected from the remote host too, so it does not accumulate there.
+        # Into the private input directory, never the results directory: the web server serves
+        # that one, and this file is a copy of a data file the parent may since have deleted.
+        settings.TASK_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
         copycommands.append(
             [
                 "rsync",
                 "--remove-source-files",
                 f"{REMOTE_SERVER}:{remotedatafile}",
-                str(settings.RESULTS_DIR),
+                str(task.inputfile()),
             ]
         )
 
@@ -784,14 +791,9 @@ def remove_old_tasks(
         # could not spin here forever.
         maxpasses = taskcount // MAINTENANCE_BATCH_SIZE + 2
         for _ in range(maxpasses):
-            # One read of the batch, with the relations delete_result_files asks about: the task's
-            # own image requests, and its parent's for an image request whose parent stays. Both
-            # answer from a prefetch, so a batch costs a fixed number of queries.
-            tasks = list(
-                matchingtasks.select_related("parent_task").prefetch_related(
-                    Task.prefetch_imagerequests(), Task.prefetch_parent_imagerequests()
-                )[:MAINTENANCE_BATCH_SIZE]
-            )
+            # One read of the batch. delete_result_files asks nothing of the database, so a batch
+            # costs a fixed number of queries whatever its size.
+            tasks = list(matchingtasks.select_related("parent_task")[:MAINTENANCE_BATCH_SIZE])
             if not tasks:
                 break
 
@@ -803,24 +805,19 @@ def remove_old_tasks(
                 # never reaches Task.delete() or delete_result_files(), so a child's files would be
                 # left on the results volume with no row that could ever name them again.
                 #
-                # Read once, before anything is unlinked or deleted, and every decision below is
-                # made against it. The set is closed under "image request of": a sweep that names
-                # no request_type can select a parent and its child alike, so which of the two
-                # brought the other in must not change what is reclaimed.
+                # Read once, before anything is deleted. A sweep that names no request_type can
+                # select a parent and its child alike, so the children the batch did not select
+                # are the ones that still need their files reclaimed.
                 childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
                 going = childids | taskids
-                # the children the batch did not select; their parents are all in the batch, so
-                # they ask nothing of them (see delete_result_files)
-                cascaded = list(Task.objects.filter(id__in=childids - taskids).select_related("parent_task"))
+                cascaded = list(Task.objects.filter(id__in=childids - taskids))
                 batch = tasks + cascaded
             else:
                 going = taskids
                 batch = tasks
 
             for index, task in enumerate(batch):
-                # alsogoing: every row in the batch stops being a reader, whether it is deleted
-                # or archived, so a shared file is not kept for one of them
-                task.delete_result_files(alsogoing=going)
+                task.delete_result_files()
                 # inside the batch as well as after it: 500 tasks times several filesystem
                 # operations each can alone outlast the staleness window on a slow results mount.
                 # The heartbeat rate-limits itself, so calling it often costs almost nothing.

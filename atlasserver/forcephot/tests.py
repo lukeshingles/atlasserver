@@ -988,43 +988,36 @@ class TaskDeleteFileTests(TestCase):
         resultfile.touch()
         return task
 
-    def test_datafile_kept_while_an_image_request_needs_it(self) -> None:
+    def test_the_datafile_goes_with_the_parent_even_while_an_image_request_is_queued(self) -> None:
+        # the request works from its own copy (see Task.copy_parent_datafile), so nothing reads
+        # the parent's file once the parent is gone -- and the web server serves the parent's
+        # path without asking Django, so a file kept there stays readable by any old link
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
             parent = self.make_finished_task(Path(tmpdir))
             Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
 
             parent.delete()
 
-            # the queued image request rsyncs this file to the compute host as its input
-            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
 
-    def test_datafile_removed_once_the_image_request_is_deleted(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+    def test_an_image_request_keeps_its_copy_until_it_is_deleted(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+        ):
             parent = self.make_finished_task(Path(tmpdir))
-            Path(tmpdir, f"{parent.localresultfileprefix()}.jpg").touch()
             imagerequest = Task.objects.create(
                 user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent
             )
+            assert imagerequest.copy_parent_datafile()
+            inputcopy = imagerequest.inputfile()
 
             parent.delete()
-            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert inputcopy.is_file(), "the request lost its input when the parent went"
 
             imagerequest.delete()
-
-            # nothing else revisits the parent, so its files must be collected here
-            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
-            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.jpg").exists()
-
-    def test_datafile_kept_while_another_image_request_remains(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            parent = self.make_finished_task(Path(tmpdir))
-            first = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
-            Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
-
-            parent.delete()
-            first.delete()
-
-            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert not inputcopy.exists(), "the copy outlived the request"
 
     def test_datafile_deleted_when_no_image_request_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
@@ -1917,10 +1910,10 @@ class ResultPlotDataColumnTests(TestCase):
 class ArchivedTaskResultTests(TestCase):
     """Deleting a finished task must put its results out of reach, not only out of the list.
 
-    delete() archives the row and reclaims what it can, but delete_result_files keeps the .txt
-    while a live image request still reads it. The result file and plot views read the row by id,
-    so without Task.live() they serve a deleted task's photometry to anyone, and taskpdfplot and
-    resultplotdatajs rebuild the .pdf and the cached plot data that the delete reclaimed.
+    delete() archives the row and reclaims its files. The result file and plot views read the row
+    by id, so without Task.live() they answered for a deleted task -- and while the data file was
+    kept for a live image request, they served it to anyone, and taskpdfplot and resultplotdatajs
+    rebuilt the .pdf and the cached plot data that the delete reclaimed.
     ForcePhotTaskViewSet.retrieve answers 404 for the same task.
     """
 
@@ -1929,7 +1922,7 @@ class ArchivedTaskResultTests(TestCase):
         self.task = Task.objects.create(
             user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
         )
-        # the live image request is what makes delete_result_files keep the .txt
+        # a live image request: the case in which the parent's data file used to be kept
         self.child = self.task.new_imagerequest(user=self.owner, from_api=False)
         self.child.save()
         caches["taskderived"].clear()
@@ -1971,8 +1964,8 @@ class ArchivedTaskResultTests(TestCase):
             self.write_result_files(tmpdir)
             self.task.delete()
 
-            # the input file really does outlive the delete, so these views are the only guard
-            assert Path(tmpdir, self.task.localresultfileprefix()).with_suffix(".txt").is_file()
+            # the data file goes with the row: an image request works from its own copy
+            assert not Path(tmpdir, self.task.localresultfileprefix()).with_suffix(".txt").exists()
             assert Task.objects.get(id=self.task.id).is_archived
 
             for url in self.urls():
@@ -1994,11 +1987,10 @@ class ArchivedTaskResultTests(TestCase):
 
             # collected with the row, not merely hidden: results are served from STATIC_URL by the
             # web server without asking Django, so a file left on disk stays readable by any link
-            # published before the delete. The .txt cannot go the same way -- the image request
-            # reads it -- which is why only the preview is asserted gone here.
+            # published before the delete
             prefix = Path(tmpdir, self.task.localresultfileprefix())
-            assert not prefix.with_suffix(".jpg").exists(), "the preview outlived its last reader"
-            assert prefix.with_suffix(".txt").is_file(), "the image request lost its input file"
+            assert not prefix.with_suffix(".jpg").exists(), "the preview outlived its row"
+            assert not prefix.with_suffix(".txt").exists(), "the data file outlived its row"
             assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
 
             # and with the file put back -- a row archived before the .jpg went with it, or a
@@ -2055,6 +2047,29 @@ class RequestImagesTests(TestCase):
         assert "requestimages" in body, body
         assert "parent_task_id" not in body, "the error still asks for a field this serializer drops"
         assert not Task.objects.filter(request_type="IMGZIP").exists()
+
+    def test_an_image_request_takes_its_own_copy_of_the_data_file(self) -> None:
+        # outside STATIC_ROOT, named for the request: the parent's file can then go whenever the
+        # parent is deleted, and nothing a deleted task owned stays at a public path for it
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+        ):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+
+            response = self.client.post(reverse("requestimages", args=[parent.id]))
+
+            assert response.status_code == 302, response.status_code
+            child = Task.objects.get(request_type="IMGZIP")
+            assert child.inputfile() == Path(inputsdir, f"job{child.id:05d}.txt")
+            assert child.inputfile().read_text() == "observations"
+            assert not str(child.inputfile()).startswith(tmpdir), "the copy is at a public path"
 
     def test_a_second_image_request_for_the_same_task_is_refused(self) -> None:
         # the child inherits every field from the parent, so a second one is the same request
@@ -4163,8 +4178,9 @@ class AtlasCommandTests(TestCase):
         ssostack = self.make_task(ra=None, dec=None, mpc_name="Makemake", request_type="SSOSTACK")
 
         assert taskrunner_main.remote_result_filename(fptask) == f"job{fptask.id:05d}.txt"
-        # the zip belongs to the parent, because that is the task whose images these are
-        assert taskrunner_main.remote_result_filename(imgzip) == f"job{fptask.id:05d}.zip"
+        # named for the image request itself: the remote script names the zip after the data
+        # file it is given, which the runner uploads under the request's own name
+        assert taskrunner_main.remote_result_filename(imgzip) == f"job{imgzip.id:05d}.zip"
         assert taskrunner_main.remote_result_filename(ssostack) == f"job{ssostack.id:05d}.fits"
 
     def test_unknown_request_type_has_no_result_file(self) -> None:
@@ -4320,56 +4336,36 @@ class RemoveOldTasksTests(TestCase):
             left = sorted(path.name for path in prefix.parent.iterdir())
             assert not left, f"files left behind with no row that can ever name them: {left}"
 
-    def test_one_image_request_of_two_does_not_reclaim_the_shared_input(self) -> None:
-        # the .txt is the image request's input, so it goes only once the last of them has, which
-        # is why the rule weighs every live request rather than the first one it finds
-        parent = self.make_old_task(days=200, request_type="FP")
-        children = []
-        for _ in range(2):
-            child = parent.new_imagerequest(user=self.user, from_api=False)
-            child.finishtimestamp = timezone.now()
-            child.save()
-            children.append(child)
+    def test_a_deleted_parent_takes_its_data_file_while_the_image_request_keeps_its_copy(self) -> None:
+        """The image request reads its own copy, so the parent's file need not outlive the parent.
 
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            prefix = Path(tmpdir, parent.localresultfileprefix())
-            prefix.parent.mkdir(parents=True, exist_ok=True)
-            prefix.with_suffix(".txt").write_text("results")
-
-            parent.delete()  # archived, and its .txt kept for the two requests that read it
-            assert prefix.with_suffix(".txt").is_file()
-
-            children[0].delete()
-            assert prefix.with_suffix(".txt").is_file(), "the file went while a request still read it"
-
-            children[1].delete()
-            assert not prefix.with_suffix(".txt").exists(), "the last request left the file behind"
-
-    def test_two_archived_image_requests_release_the_shared_input_when_swept(self) -> None:
-        """The soft sweep archives rows, so every row in its batch stops being a reader too.
-
-        Two image requests of one archived parent, swept together by the 14-day IMGZIP sweep: each
-        saw the other as a live reader and kept the parent's .txt, both rows were then archived, and
-        nothing would call delete_result_files for either again. The file stayed on the volume, at
-        a static path the web server serves, until the 183-day hard sweep.
+        The parent's .txt used to be kept while a live image request existed, at a static path the
+        web server serves without Django, so a deleted task's data stayed readable by any link that
+        was published before. It now goes with the row, and the request runs from the copy made
+        when it was created.
         """
-        parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
-        for _ in range(2):
-            child = parent.new_imagerequest(user=self.user, from_api=False)
-            child.finishtimestamp = timezone.now() - datetime.timedelta(days=20)
-            child.save()
+        parent = self.make_old_task(days=200, request_type="FP")
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.save()
 
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+        ):
             prefix = Path(tmpdir, parent.localresultfileprefix())
             prefix.parent.mkdir(parents=True, exist_ok=True)
-            for suffix in (".txt", ".zip"):
-                prefix.with_suffix(suffix).write_text("results")
+            prefix.with_suffix(".txt").write_text("observations")
+            assert child.copy_parent_datafile()
 
-            taskrunner_main.remove_old_tasks(days_ago=14, request_type="IMGZIP", logfunc=lambda _msg: None)
+            parent.delete()
 
-            assert Task.objects.filter(request_type="IMGZIP", is_archived=False).count() == 0
-            left = sorted(path.name for path in prefix.parent.iterdir())
-            assert not left, f"files kept for readers the same sweep archived: {left}"
+            assert not prefix.with_suffix(".txt").exists(), "the parent's data file outlived the parent"
+            assert child.inputfile().read_text() == "observations", "the image request lost its input"
+
+            inputcopy = child.inputfile()
+            child.delete()
+            assert not inputcopy.exists(), "the input copy outlived the image request"
 
     def test_the_plot_cache_is_dropped_only_once_the_row_is_written(self) -> None:
         # a reader that arrives between the two finds no cache entry, reads a data file that is
@@ -4419,9 +4415,9 @@ class RemoveOldTasksTests(TestCase):
 
         assert large - small <= 2, f"{small} queries for one image request, {large} for six"
 
-    def test_one_image_request_of_two_does_not_reclaim_the_shared_zip(self) -> None:
-        # every image request of one parent writes the same job{parent}.zip, so the zip goes only
-        # once the last of them has -- like the parent's data file, and unlike everything else
+    def test_each_image_request_owns_its_own_zip(self) -> None:
+        # every image request of one parent used to write, and delete, the same job{parent}.zip,
+        # so the delete of one removed a live sibling's output
         parent = self.make_old_task(days=200, request_type="FP")
         children = []
         for _ in range(2):
@@ -4431,15 +4427,36 @@ class RemoveOldTasksTests(TestCase):
             children.append(child)
 
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            zipfile = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
-            zipfile.parent.mkdir(parents=True, exist_ok=True)
-            zipfile.write_text("images")
+            zips = [Path(tmpdir, child.localresultfileprefix()).with_suffix(".zip") for child in children]
+            zips[0].parent.mkdir(parents=True, exist_ok=True)
+            for zipfile in zips:
+                zipfile.write_text("images")
+
+            assert children[1].localresultimagezipfile == Path(children[1].localresultfileprefix() + ".zip")
 
             children[0].delete()
-            assert zipfile.is_file(), "the zip went while a sibling still served it"
 
-            children[1].delete()
-            assert not zipfile.exists(), "the last image request left the zip behind"
+            assert not zips[0].exists(), "the deleted request left its zip behind"
+            assert zips[1].is_file(), "the delete of one request removed the other's output"
+
+    def test_a_zip_named_for_the_parent_is_still_found_and_goes_with_the_parent(self) -> None:
+        # the name an image request wrote under before it had its own; such a row is served from
+        # it until the sweep, and the file is collected with the parent it is named for
+        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+        child = parent.new_imagerequest(user=self.user, from_api=True)
+        child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+        child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("images")
+
+            assert child.localresultimagezipfile == Path(parent.localresultfileprefix() + ".zip")
+
+            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=lambda _msg: None)
+
+            assert not legacy.exists()
 
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
@@ -5933,7 +5950,98 @@ class QueueRecalcHandoffTests(TestCase):
         assert self.renumbering_requested() is False
 
 
+class ImageRequestDispatchTests(TestCase):
+    """What the runner sends for an image request, and what it expects back."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="dispatch", email="d@example.com", password=None)
+        self.parent = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now()
+        )
+        self.child = self.parent.new_imagerequest(user=self.user, from_api=False)
+        self.child.save()
+
+    def dispatch(self) -> list[list[str]]:
+        """Run the child up to the remote command and return every rsync it issued."""
+        rsyncs: list[list[str]] = []
+
+        def fake_rsync(command: list[str], logfunc: t.Any) -> int:
+            rsyncs.append(command)
+            return 0
+
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        with (
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=fake_rsync),
+            mock.patch("subprocess.Popen", return_value=proc),
+            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+        ):
+            taskrunner_main.runtask(self.child, logfunc=lambda _msg: None)
+
+        return rsyncs
+
+    def test_the_request_uploads_its_own_copy_under_its_own_name(self) -> None:
+        # the runner reads its settings module directly, so its directories are patched on that
+        # object, as RunRsyncTests and TaskRunnerResultFileTests do; the model reads django.conf
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+        ):
+            inputcopy = self.child.inputfile()
+            inputcopy.parent.mkdir(parents=True, exist_ok=True)
+            inputcopy.write_text("observations")
+
+            rsyncs = self.dispatch()
+
+        upload = rsyncs[0]
+        assert upload[1] == str(inputcopy), upload
+        assert upload[2].endswith(f"job{self.child.id:05d}.txt"), "uploaded under the parent's name"
+        assert taskrunner_main.remote_result_filename(self.child) == f"job{self.child.id:05d}.zip"
+
+    def test_a_request_made_before_the_copy_existed_reads_the_parent_file(self) -> None:
+        # rows created before the copy was made still run, from the parent's own file, and still
+        # upload under their own name so that the zip comes back named for them
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+        ):
+            parentfile = Path(tmpdir, self.parent.localresultfileprefix()).with_suffix(".txt")
+            parentfile.parent.mkdir(parents=True, exist_ok=True)
+            parentfile.write_text("observations")
+
+            rsyncs = self.dispatch()
+
+        upload = rsyncs[0]
+        assert upload[1] == str(parentfile), upload
+        assert upload[2].endswith(f"job{self.child.id:05d}.txt"), upload
+
+
 class TaskRunnerResultFileTests(TestCase):
+    def test_remove_imgzip_resultfiles(self) -> None:
+        # the zip is named for the request, and its private input copy goes with it
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as inputsdir:
+            resultsdir = Path(tmpdir)
+            (resultsdir / "job00042.zip").touch()
+            (resultsdir / "job00007.zip").touch()  # a zip named for the parent, from an older request
+            (Path(inputsdir) / "job00042.txt").touch()
+
+            with (
+                mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", resultsdir),
+                mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+            ):
+                taskrunner_main.remove_task_resultfiles(taskid=42, request_type="IMGZIP", logfunc=lambda _msg: None)
+
+            assert not (resultsdir / "job00042.zip").exists()
+            assert not (Path(inputsdir) / "job00042.txt").exists()
+            assert (resultsdir / "job00007.zip").exists(), "another task's file was removed"
+
     def test_remove_ssostack_resultfiles(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
 

@@ -268,6 +268,11 @@ STATIC_URL = f"{PATHPREFIX}/static/"
 STATIC_ROOT = Path(BASE_DIR, "static")
 RESULTS_DIR = Path(STATIC_ROOT, "results")
 
+# Where an image request keeps its copy of the parent's data file until it has run. Outside
+# STATIC_ROOT on purpose: the web server serves that tree without asking Django, and this copy is
+# what lets the parent's own file go with the parent when the parent is deleted.
+TASK_INPUTS_DIR = Path(BASE_DIR, "taskinputs")
+
 
 def _static_version() -> str:
     """Return a cache-busting suffix that changes whenever a served asset does.

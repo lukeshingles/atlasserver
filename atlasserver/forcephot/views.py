@@ -642,6 +642,9 @@ class RequestImages(APIView):
                 setattr(newtask, field, value)
             newtask.queuepos_relative = next_queuepos_relative()
             newtask.save()
+            # the request's own copy of the data file, made now that it has an id. The parent's
+            # file can then go with the parent, whenever that is deleted.
+            newtask.copy_parent_datafile()
             request_queue_recalc()
 
             redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
@@ -2133,12 +2136,9 @@ def taskpdfplot(request, taskid):
 #
 # Public is not the same as archived, so they all read Task.live(), like retrieve. Without that
 # filter, these views serve a deleted task's data file, and taskpdfplot and resultplotdatajs
-# rebuild the .pdf and the cached plot that the delete reclaimed.
-#
-# The filter binds these views only. A deleted task's .txt stays on disk while a live image request
-# reads it (see Task.delete_result_files), and the web server serves its static path without
-# Django. A link published before the delete therefore resolves until the last image request goes.
-# To close that window, serve every result through Django, or keep the input out of STATIC_ROOT.
+# rebuild the .pdf and the cached plot that the delete reclaimed. The files themselves go with the
+# row (see Task.delete_result_files), so a static link published before the delete stops resolving
+# at the same moment.
 #
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit
