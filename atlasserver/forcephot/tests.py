@@ -6127,6 +6127,29 @@ class FailedLoginBudgetTests(TestCase):
 
         assert viapage.status_code == 302, viapage.status_code
 
+    def test_a_good_password_for_an_inactive_account_is_not_a_failed_guess(self) -> None:
+        # the default backend refuses an inactive account, such as one not yet verified, before
+        # the form learns whether the password was right; only a wrong password spends the budget
+        User.objects.create_user(username="dormant", email="d@example.com", password="pw12345678", is_active=False)
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                refused = self.client.post(reverse("login"), {"username": "dormant", "password": "pw12345678"})
+                assert refused.status_code == 200, refused.status_code
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 302, viapage.status_code
+
+    def test_a_wrong_password_for_an_unknown_account_is_still_a_failed_guess(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("login"), {"username": "nobody", "password": "wrong"})
+
+            blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert blocked.status_code == 429, blocked.status_code
+
     def test_a_malformed_token_request_is_not_a_failed_guess(self) -> None:
         # a body with no password is refused before any password is checked; counting it would let
         # empty posts from one address spend the budget of every user behind it

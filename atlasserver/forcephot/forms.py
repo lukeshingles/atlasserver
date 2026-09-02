@@ -48,14 +48,34 @@ class LoginFailureLimitMixin(AuthenticationForm):
         try:
             return super().clean()
         except forms.ValidationError:
-            # Counted only when the password was wrong. AuthenticationForm sets user_cache once the
-            # password checks out, and raises after that for an inactive account, or in the admin
-            # for one without staff access, with the same error code as a wrong password. A
-            # colleague who tries the admin with a good password must not spend the address's
-            # budget of guesses.
-            if self.request is not None and getattr(self, "user_cache", None) is None:
+            if self.request is not None and self.password_was_wrong():
                 note_login_failure(self.request)
             raise
+
+    def password_was_wrong(self) -> bool:
+        """Return whether the refusal was for the password, rather than for the account.
+
+        Only a wrong password is a guess. The admin refuses an account without staff access after
+        the password has checked out, with the same error code as a wrong password; and the default
+        backend refuses an inactive account, such as one not yet verified, before the form learns
+        whether the password was right. So the password is checked here against the named account.
+        A colleague who tries the right password on an account that is refused must not spend the
+        address's budget of guesses.
+        """
+        if getattr(self, "user_cache", None) is not None:
+            return False
+
+        username = self.cleaned_data.get("username")
+        password = self.cleaned_data.get("password")
+        if not username or not password:
+            # no password was offered, so none was guessed
+            return False
+
+        user = User.objects.filter(username=username).first()
+        if user is None:
+            return True
+
+        return not user.check_password(password)
 
 
 class ThrottledAuthenticationForm(LoginFailureLimitMixin, AuthenticationForm):
