@@ -2508,6 +2508,18 @@ class UnverifiedAccountSweepTests(TestCase):
             PendingEmailVerification.objects.create(user=user, created=timezone.now() - datetime.timedelta(days=days))
         return user
 
+    def test_a_resent_link_dates_the_marker_afresh(self) -> None:
+        # the sweep reads the marker's date; a link resent after the cutoff was deleted with its
+        # account by the next hourly pass, so following the mail just sent always failed
+        user = self.make("latecomer", days=8)
+        user.email = "late@example.com"
+        user.save()
+
+        self.client.post(reverse("resend_verification"), {"email": "late@example.com"})
+        taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        assert User.objects.filter(username="latecomer").exists(), "the account went with a fresh link in the mail"
+
     def test_only_the_stale_unconfirmed_accounts_go(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
 
@@ -6128,18 +6140,27 @@ class FailedLoginBudgetTests(TestCase):
         assert viapage.status_code == 302, viapage.status_code
 
     def test_a_good_password_for_an_inactive_account_is_not_a_failed_guess(self) -> None:
-        # the default backend refuses an inactive account, such as one not yet verified, before
-        # the form learns whether the password was right; only a wrong password spends the budget
+        # every door refuses an inactive account, such as one not yet verified, in the same way as
+        # a wrong password; only a wrong password spends the budget, at any of them
         User.objects.create_user(username="dormant", email="d@example.com", password="pw12345678", is_active=False)
+        credentials = {"username": "dormant", "password": "pw12345678"}
+        header = "Basic " + base64.b64encode(b"dormant:pw12345678").decode()
+        doors = [
+            ("page", lambda: self.client.post(reverse("login"), credentials)),
+            ("token", lambda: self.client.post(reverse("api-token-auth"), credentials)),
+            ("header", lambda: self.client.get(reverse("task-list"), headers={"Authorization": header})),
+        ]
 
-        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
-            for _ in range(3):
-                refused = self.client.post(reverse("login"), {"username": "dormant", "password": "pw12345678"})
-                assert refused.status_code == 200, refused.status_code
+        for name, knock in doors:
+            caches["throttle"].clear()
+            with self.subTest(door=name), mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+                for _ in range(3):
+                    refused = knock()
+                    assert refused.status_code in (200, 400, 401), (name, refused.status_code)
 
-            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
-
-        assert viapage.status_code == 302, viapage.status_code
+                viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+                assert viapage.status_code == 302, (name, viapage.status_code)
+                self.client.logout()
 
     def test_a_wrong_password_for_an_unknown_account_is_still_a_failed_guess(self) -> None:
         with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):

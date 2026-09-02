@@ -1566,6 +1566,12 @@ def resend_verification(request):
                     send_verification_email(request, user)
                 except Exception:
                     logger.exception("Could not resend a verification email")
+                else:
+                    # the marker dates the latest link, not the registration: the sweep of
+                    # unverified accounts reads it, and a fresh link must outlive the sweep
+                    PendingEmailVerification.objects.filter(user=user).update(
+                        created=datetime.datetime.now(datetime.UTC)
+                    )
 
         # reported as sent either way, whether or not an account exists and whether or not the
         # rate limit allowed this one: neither is something a stranger should be able to probe for

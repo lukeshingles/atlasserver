@@ -95,6 +95,23 @@ def note_login_failure(request: t.Any) -> int:
     return count_in_window(login_failures_key(request), LOGIN_FAILURE_WINDOW_SECONDS)
 
 
+def password_was_wrong(username: object, password: object) -> bool:
+    """Return whether a refused login offered a wrong password, rather than a refused account.
+
+    Only a wrong password is a guess. The backends refuse an inactive account, such as one not yet
+    verified, and the admin one without staff access, in the same way as a wrong password; so the
+    password is checked here against the named account. No password offered is no guess.
+    """
+    # here rather than at the top: this module is imported while the apps are still loading
+    from django.contrib.auth import get_user_model
+
+    if not isinstance(username, str) or not isinstance(password, str) or not username or not password:
+        return False
+
+    user = get_user_model()._default_manager.filter(username=username).first()  # noqa: SLF001
+    return user is None or not user.check_password(password)
+
+
 class ThrottledBasicAuthentication(BasicAuthentication):
     """Basic authentication that refuses to check a password for an address over the budget.
 
@@ -110,7 +127,7 @@ class ThrottledBasicAuthentication(BasicAuthentication):
         try:
             return super().authenticate_credentials(userid, password, request)
         except exceptions.AuthenticationFailed:
-            if request is not None:
+            if request is not None and password_was_wrong(userid, password):
                 note_login_failure(request)
             raise
 

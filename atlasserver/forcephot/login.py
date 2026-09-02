@@ -11,7 +11,6 @@ from typing import override
 from django import forms
 from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
-from django.contrib.auth.models import User
 from django.contrib.auth.views import LoginView
 from django.http import HttpResponse
 from rest_framework import serializers
@@ -25,6 +24,7 @@ from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
 from atlasserver.forcephot.throttles import login_failures_exceeded
 from atlasserver.forcephot.throttles import LOGIN_LIMIT_MESSAGE
 from atlasserver.forcephot.throttles import note_login_failure
+from atlasserver.forcephot.throttles import password_was_wrong
 
 
 class LoginFailureLimitMixin(AuthenticationForm):
@@ -50,23 +50,12 @@ class LoginFailureLimitMixin(AuthenticationForm):
             raise
 
     def password_was_wrong(self) -> bool:
-        """Return whether the refusal was for the password, rather than for the account.
-
-        The admin refuses an account without staff access after the password has checked out, with
-        the same error code as a wrong password, and the default backend refuses an inactive
-        account before the form learns whether the password was right. So the password is checked
-        here against the named account: a good password for a refused account is not a guess.
-        """
+        """Return whether the refusal was for the password; see throttles.password_was_wrong."""
         if getattr(self, "user_cache", None) is not None:
+            # the password checked out, and the account was refused after that
             return False
 
-        username = self.cleaned_data.get("username")
-        password = self.cleaned_data.get("password")
-        if not username or not password:
-            return False
-
-        user = User.objects.filter(username=username).first()
-        return user is None or not user.check_password(password)
+        return password_was_wrong(self.cleaned_data.get("username"), self.cleaned_data.get("password"))
 
 
 class ThrottledAuthenticationForm(LoginFailureLimitMixin, AuthenticationForm):
@@ -115,10 +104,16 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
         try:
             return super().post(request, *args, **kwargs)
         except serializers.ValidationError as ex:
-            # only a rejected password counts, which the serializer marks with the code
-            # "authorization"; a body with no password fails earlier, with another code
+            # only a wrong password counts. The serializer marks a refused login with the code
+            # "authorization", for a wrong password and a refused account alike; a body with no
+            # password fails earlier, with another code.
             codes = ex.get_codes()
             fieldcodes = codes.get("non_field_errors") if isinstance(codes, dict) else None
-            if isinstance(fieldcodes, list) and "authorization" in fieldcodes:
+            body = request.data if isinstance(request.data, dict) else {}
+            if (
+                isinstance(fieldcodes, list)
+                and "authorization" in fieldcodes
+                and password_was_wrong(body.get("username"), body.get("password"))
+            ):
                 note_login_failure(request)
             raise
