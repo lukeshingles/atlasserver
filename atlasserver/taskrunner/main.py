@@ -866,11 +866,16 @@ def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=
     if not userids:
         return 0
 
-    # the marker goes with the account, by cascade
-    get_user_model().objects.filter(id__in=userids, is_active=False).delete()
-    logfunc(f"Removed {len(userids)} accounts that did not confirm their address within {days_ago} days")
+    # The cutoff is checked again by the delete itself: a link resent since the ids were read has
+    # dated the marker afresh, and that account stays. The marker goes with the account, by cascade.
+    usermodel = get_user_model()
+    _total, removed = usermodel.objects.filter(
+        id__in=userids, is_active=False, pending_verification__created__lt=cutoff
+    ).delete()
+    count = removed.get(usermodel._meta.label, 0)  # noqa: SLF001
+    logfunc(f"Removed {count} accounts that did not confirm their address within {days_ago} days")
 
-    return len(userids)
+    return count
 
 
 def do_maintenance(heartbeat: t.Callable[[], None] | None = None):

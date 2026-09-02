@@ -1780,8 +1780,8 @@ export function TaskPage() {
         // status of a runner that reports the list, and only from one written a full write
         // interval after the task started: a snapshot written just before the dispatch cannot
         // list the task, and the start time is truncated to the second. Otherwise the row keeps
-        // saying "running". The page holds the status it was last given, so a later snapshot can
-        // only make the label later, never wrong.
+        // saying "running". An unchanged poll carries its write time onto the kept status, so the
+        // label follows the first snapshot written late enough, at the next render.
         const attempted = (task) => (
             task.starttimestamp != null && task.finishtimestamp == null
             && runnerstatus != null && !runnerstatus.stale

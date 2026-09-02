@@ -322,6 +322,9 @@ describe('the store', () => {
         assert.equal(seen.length, 2, 'an unchanged poll must not be reported');
         // the object is kept as well as the notification, because the queue page renders from it
         assert.equal(store.current(), published);
+        // and it learns the newer write time in place: the queue page reads that beside the list
+        // of running task ids, at its next render
+        assert.equal(published.written, '2026-01-01T00:01:00Z', 'the kept status kept the old write time');
         unsubscribe();
     });
 

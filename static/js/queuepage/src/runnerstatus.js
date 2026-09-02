@@ -48,9 +48,11 @@ export function describeAge(seconds) {
 }
 
 /*
- * Fields of the status that change on their own. No reader uses their values. The list of running
- * task ids is not among them: the queue page reads it, to tell a task that runs from one that was
- * started and given back, and two lists with the same ids compare equal below.
+ * Fields of the status that change on their own. No reader renders from their values, but the
+ * queue page reads the write time beside the list of running task ids, to tell a task that runs
+ * from one that was started and given back; so an unchanged poll carries these fields onto the
+ * kept status (see publish), and the page reads them at its next render. The list of ids is not
+ * among them: a change to it is a change, and two lists with the same ids compare equal below.
  *
  * This is a list of the fields to ignore, and not a list of the fields that are of use. A field
  * that the endpoint gains later is thus compared by default. Such a field can then cost an
@@ -332,6 +334,15 @@ export function createStore({ url, poll = POLL_MS, reader = '', storage = browse
         // would render the full page again, with the estimate of each row, to draw one unchanged
         // sentence.
         if (runnerStatusEqual(status, next)) {
+            // the same thing, said again later: the kept object learns the newer write time in
+            // place, without a round of the readers
+            if (status != null) {
+                for (const field of RUNNERSTATUS_VOLATILE_FIELDS) {
+                    if (field in next) {
+                        status[field] = next[field];
+                    }
+                }
+            }
             return;
         }
 

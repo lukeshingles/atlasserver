@@ -669,6 +669,35 @@ describe('TaskPage', () => {
         });
     }
 
+    test('a started task becomes attempted once a snapshot written late enough omits it', async () => {
+        /*
+         * The snapshot from just after the start says nothing, and the next one may differ from
+         * it only in its write time. The store tells nobody about that one, but the kept status
+         * learns its write time, and the next render of the list reads it.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
+        const handle = stubScriptedList([() => answer({ ...listpage(), results: [started] })], {
+            runnerstatus: { queued_task_count: 1, running_taskids: [], written: '2026-09-01T00:00:05Z' },
+            positions: { 7: 0 },
+        });
+
+        try {
+            const rendered = await mountPage();
+            assert.equal(rendered.container.querySelector('.taskbadge').textContent.trim(), 'Running');
+
+            handle.runnerstatus = { ...handle.runnerstatus, written: '2026-09-01T00:01:00Z' };
+            mock.timers.tick(60000);   // the runner-status poll
+            await flush(120);
+            await tick();   // the next list poll renders the rows again
+
+            assert.equal(rendered.container.querySelector('.taskbadge').textContent.trim(), 'Attempted',
+                'a snapshot that differed only in its write time never reached the page');
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
     test('a request stays active until its body has arrived', async () => {
         /*
          * The headers of a poll can arrive long before its body. A flag cleared at the headers

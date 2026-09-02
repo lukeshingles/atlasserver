@@ -1558,20 +1558,20 @@ def resend_verification(request):
 
         if may_send:
             user = unverified_account_for(email)
-            if user is not None:
+            # The marker dates the latest link, not the registration, and it is dated before the
+            # send: the sweep of unverified accounts checks the date when it deletes, so an account
+            # still there after this write outlives the sweep, and one the sweep took first gets no
+            # link, because the write finds no row.
+            if user is not None and PendingEmailVerification.objects.filter(user=user).update(
+                created=datetime.datetime.now(datetime.UTC)
+            ):
                 # guarded like the send in register(), and for the same reason: an unreachable mail
                 # relay is a temporary condition, and letting it out of a plain Django view answers
-                # with a 500 rather than the page below. Nothing has been written to undo.
+                # with a 500 rather than the page below.
                 try:
                     send_verification_email(request, user)
                 except Exception:
                     logger.exception("Could not resend a verification email")
-                else:
-                    # the marker dates the latest link, not the registration: the sweep of
-                    # unverified accounts reads it, and a fresh link must outlive the sweep
-                    PendingEmailVerification.objects.filter(user=user).update(
-                        created=datetime.datetime.now(datetime.UTC)
-                    )
 
         # reported as sent either way, whether or not an account exists and whether or not the
         # rate limit allowed this one: neither is something a stranger should be able to probe for

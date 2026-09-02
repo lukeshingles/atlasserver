@@ -2520,6 +2520,45 @@ class UnverifiedAccountSweepTests(TestCase):
 
         assert User.objects.filter(username="latecomer").exists(), "the account went with a fresh link in the mail"
 
+    def test_a_marker_dated_afresh_after_the_ids_were_read_keeps_its_account(self) -> None:
+        # a resend can land between the read of the stale ids and the delete; the delete checks
+        # the cutoff again, so the account with the fresh link stays
+        user = self.make("latecomer", days=8)
+        original_list = list
+
+        def refresh_between(iterable: t.Iterable[int]) -> list[int]:
+            ids = original_list(iterable)
+            PendingEmailVerification.objects.filter(user=user).update(created=timezone.now())
+            return ids
+
+        # the sweep reads the ids with the builtin list; the module attribute shadows it
+        with mock.patch.object(taskrunner_main, "list", refresh_between, create=True):
+            removed = taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        assert removed == 0, removed
+        assert User.objects.filter(username="latecomer").exists(), "the account went with a fresh link in the mail"
+
+    def test_no_link_is_sent_for_an_account_the_sweep_took_first(self) -> None:
+        # the resend dates the marker before it sends, and sends only when that write found a row
+        user = self.make("gone", days=8)
+        user.email = "gone@example.com"
+        user.save()
+
+        lookup = views.unverified_account_for
+
+        def taken_by_the_sweep(email: str) -> User | None:
+            found = lookup(email)
+            User.objects.filter(pk=user.pk).delete()
+            return found
+
+        with (
+            mock.patch.object(views, "unverified_account_for", taken_by_the_sweep),
+            mock.patch.object(views, "send_verification_email") as send,
+        ):
+            self.client.post(reverse("resend_verification"), {"email": "gone@example.com"})
+
+        assert not send.called, "a link was sent for an account that no longer exists"
+
     def test_only_the_stale_unconfirmed_accounts_go(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
 
