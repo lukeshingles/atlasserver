@@ -4392,6 +4392,10 @@ class RunRsyncTests(TestCase):
         assert any("exited with code 12" in line for line in logged), logged
 
 
+def silent(_msg: object) -> None:
+    """Swallow a log line: for a sweep whose output is not what the test is about."""
+
+
 class RemoveOldTasksTests(TestCase):
     """The hourly maintenance sweep, which now writes once per batch rather than once per task."""
 
@@ -4406,6 +4410,28 @@ class RemoveOldTasksTests(TestCase):
             finishtimestamp=timezone.now() - datetime.timedelta(days=days),
             **kwargs,
         )
+
+    def make_imagerequest(self, parent: Task, *, days: int = 0) -> Task:
+        """Return a finished image request of the parent, finished the given number of days ago."""
+        child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
+        child.finishtimestamp = timezone.now() - datetime.timedelta(days=days)
+        child.save()
+        return child
+
+    @staticmethod
+    def write_results(
+        staticroot: str | Path, task: Task, suffixes: tuple[str, ...], *, use_parent: bool = False
+    ) -> Path:
+        """Write a result file per suffix under the task's name, and return the prefix path."""
+        prefix = Path(staticroot, task.localresultfileprefix(use_parent=use_parent))
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        for suffix in suffixes:
+            prefix.with_suffix(suffix).write_text("results")
+        return prefix
+
+    @staticmethod
+    def files_left(prefix: Path) -> list[str]:
+        return sorted(path.name for path in prefix.parent.iterdir())
 
     def test_old_tasks_are_archived_and_recent_ones_are_left_alone(self) -> None:
         old = self.make_old_task(days=200)
@@ -4428,88 +4454,104 @@ class RemoveOldTasksTests(TestCase):
 
         assert list(Task.objects.values_list("id", flat=True)) == [keep.id]
 
-    def test_a_hard_delete_batch_does_not_scale_its_queries_with_the_batch(self) -> None:
-        """The batch is read with select_related and a prefetch so the sweep costs a few queries.
+    def test_a_batch_does_not_scale_its_queries_with_its_size(self) -> None:
+        """A batch is read with select_related and one prefetch, so it costs a few queries.
 
-        The reclamation passes re-read the rows, and a plain queryset there gives back the per-row
-        relation lookups the batch exists to avoid: one image-request query per parent, and a
-        parent lookup per child.
+        Each path asks something of the rows' relations: a hard delete reclaims the files of the
+        children it cascades to, an archive gives a queued request its input copy, and a batch of
+        image requests whose parents stay asks which siblings remain. Without the prefetch each was
+        one query per row.
         """
 
-        def sweep_queries(taskcount: int) -> int:
-            for index in range(taskcount):
-                parent = self.make_old_task(days=200, request_type="FP", from_api=True)
-                child = parent.new_imagerequest(user=self.user, from_api=True)
-                child.finishtimestamp = timezone.now()
-                child.comment = f"child {index}"
-                child.save()
+        def hard_delete_pair() -> None:
+            parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+            self.make_imagerequest(parent)
 
-            with CaptureQueriesContext(connection) as queries:
-                taskrunner_main.remove_old_tasks(
-                    days_ago=31, harddeleterecord=True, from_api=True, logfunc=lambda _msg: None
-                )
+        def archive_pair() -> None:
+            parent = self.make_old_task(days=200, request_type="FP")
+            self.make_imagerequest(parent)
+            self.write_results(settings.STATIC_ROOT, parent, (".txt",))
 
-            return len(queries)
-
-        small = sweep_queries(1)
-        large = sweep_queries(6)
-
-        # a constant number of statements per batch, so five more parents (and five more children)
-        # must not add anything like ten more queries
-        assert large - small <= 2, f"{small} queries for one task, {large} for six"
-
-    def test_a_parent_and_its_child_in_one_batch_leave_nothing_behind(self) -> None:
-        """Both rows match the sweep, so the child is selected rather than cascaded.
-
-        The reclamation pass excluded the selected children, so the child's row was still standing
-        when the parents were read again. The parent therefore reported a live image request and
-        kept its .txt for it a second time, and both rows then went in the same delete -- leaving
-        the file with no row that any later sweep could use to find it.
-        """
-        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
-        child = parent.new_imagerequest(user=self.user, from_api=True)
-        child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
-        child.save()
-
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            prefix = Path(tmpdir, parent.localresultfileprefix())
-            prefix.parent.mkdir(parents=True, exist_ok=True)
-            for suffix in (".txt", ".jpg", ".zip"):
-                prefix.with_suffix(suffix).write_text("results")
-
-            # the widest sweep names no request_type, so it matches the parent and the child alike
-            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=lambda _msg: None)
-
-            assert not Task.objects.exists(), "the rows survived the sweep"
-            left = sorted(path.name for path in prefix.parent.iterdir())
-            assert not left, f"files left behind with no row that can ever name them: {left}"
-
-    def test_a_parent_with_two_image_requests_leaves_nothing_behind(self) -> None:
-        """Each image request used to ask whether a sibling still needed the parent's data file.
-
-        With two of them going in the same sweep, each saw the other and left the file alone, and
-        the parent kept it for both. The reclamation now weighs one fixed set of doomed rows
-        instead, so which of the three brought the others in cannot change the answer.
-        """
-        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
-        for _ in range(2):
+        def imagerequest_of_a_kept_parent() -> None:
+            # a web-submitted parent that the API sweep does not select, with an API child it does
+            parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
             child = parent.new_imagerequest(user=self.user, from_api=True)
             child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
             child.save()
 
-        assert len(parent.live_imagerequest_ids()) == 2
+        def api_hard_delete() -> None:
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=silent)
 
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            prefix = Path(tmpdir, parent.localresultfileprefix())
-            prefix.parent.mkdir(parents=True, exist_ok=True)
-            for suffix in (".txt", ".jpg", ".zip"):
-                prefix.with_suffix(suffix).write_text("results")
+        def fp_archive() -> None:
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=False, request_type="FP", logfunc=silent)
 
-            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=lambda _msg: None)
+        def sweep_queries(count: int, make: t.Callable[[], None], sweep: t.Callable[[], None]) -> int:
+            for _ in range(count):
+                make()
+            with CaptureQueriesContext(connection) as queries:
+                sweep()
+            return len(queries)
 
-            assert not Task.objects.exists(), "the rows survived the sweep"
-            left = sorted(path.name for path in prefix.parent.iterdir())
-            assert not left, f"files left behind with no row that can ever name them: {left}"
+        scenarios = [
+            ("hard delete", hard_delete_pair, api_hard_delete),
+            ("archive", archive_pair, fp_archive),
+            ("image requests of kept parents", imagerequest_of_a_kept_parent, api_hard_delete),
+        ]
+        for name, make, sweep in scenarios:
+            with (
+                self.subTest(scenario=name),
+                tempfile.TemporaryDirectory() as tmpdir,
+                override_settings(STATIC_ROOT=tmpdir),
+            ):
+                small = sweep_queries(1, make, sweep)
+                large = sweep_queries(6, make, sweep)
+
+                # a constant number of statements per batch, so five more rows must not add
+                # anything like five more queries
+                assert large - small <= 2, f"{name}: {small} queries for one, {large} for six"
+
+    def test_a_hard_delete_leaves_no_file_behind(self) -> None:
+        """Every file of a deleted row goes, whichever rows the batch brought in together.
+
+        parent_task cascades, and the collector never calls delete_result_files(), so a cascaded
+        child's zip was left with no row that could ever name it. A child selected beside its
+        parent, or two children of one parent, each once kept the parent's file for the other. The
+        reclamation weighs one fixed set of doomed rows, so what brought the others in cannot
+        change the answer.
+        """
+
+        def api_sweep() -> None:
+            # selects the parent, and only cascades to its child
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=silent)
+
+        def widest_sweep() -> None:
+            # names no request_type, so it selects the parent and the child alike
+            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=silent)
+
+        # (name, children, days since the children finished, sweep): a recent child is not
+        # selected by the sweep, so the parent's deletion cascades to it
+        shapes = [
+            ("cascaded child", 1, 0, api_sweep),
+            ("child selected beside its parent", 1, 200, widest_sweep),
+            ("two children", 2, 200, widest_sweep),
+        ]
+        for name, childcount, childdays, sweep in shapes:
+            with (
+                self.subTest(shape=name),
+                tempfile.TemporaryDirectory() as tmpdir,
+                override_settings(STATIC_ROOT=tmpdir),
+            ):
+                parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+                for _ in range(childcount):
+                    # each child has a zip of its own, and the parent a legacy one under its name
+                    self.write_results(tmpdir, self.make_imagerequest(parent, days=childdays), (".zip",))
+                prefix = self.write_results(tmpdir, parent, (".txt", ".jpg", ".zip"))
+
+                sweep()
+
+                assert not Task.objects.exists(), f"{name}: the rows survived the sweep"
+                left = self.files_left(prefix)
+                assert not left, f"{name}: files left behind with no row that can ever name them: {left}"
 
     def test_a_deleted_parent_takes_its_data_file_while_the_image_request_keeps_its_copy(self) -> None:
         """The image request reads its own copy, so the parent's file need not outlive the parent.
@@ -4592,68 +4634,62 @@ class RemoveOldTasksTests(TestCase):
 
     def test_each_image_request_owns_its_own_zip(self) -> None:
         # every image request of one parent used to write, and delete, the same job{parent}.zip,
-        # so the delete of one removed a live sibling's output
+        # so the delete of one removed a live sibling's output. A zip named for the parent, from
+        # before requests had their own, still serves a request without one, and a request that
+        # has its own leaves it to that sibling.
         parent = self.make_old_task(days=200, request_type="FP")
-        children = []
-        for _ in range(2):
-            child = parent.new_imagerequest(user=self.user, from_api=False)
-            child.finishtimestamp = timezone.now()
-            child.save()
-            children.append(child)
+        own, other, legacy_child = [self.make_imagerequest(parent) for _ in range(3)]
 
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            zips = [Path(tmpdir, child.localresultfileprefix()).with_suffix(".zip") for child in children]
-            zips[0].parent.mkdir(parents=True, exist_ok=True)
-            for zipfile in zips:
-                zipfile.write_text("images")
+            ownzip = self.write_results(tmpdir, own, (".zip",)).with_suffix(".zip")
+            otherzip = self.write_results(tmpdir, other, (".zip",)).with_suffix(".zip")
+            legacyzip = self.write_results(tmpdir, parent, (".zip",)).with_suffix(".zip")
+            assert other.localresultimagezipfile == Path(other.localresultfileprefix() + ".zip")
+            assert legacy_child.localresultimagezipfile == Path(parent.localresultfileprefix() + ".zip")
 
-            assert children[1].localresultimagezipfile == Path(children[1].localresultfileprefix() + ".zip")
+            own.delete()
 
-            children[0].delete()
-
-            assert not zips[0].exists(), "the deleted request left its zip behind"
-            assert zips[1].is_file(), "the delete of one request removed the other's output"
-
-    def test_a_zip_named_for_the_parent_is_still_found_and_goes_with_the_parent(self) -> None:
-        # the name an image request wrote under before it had its own; such a row is served from
-        # it until the sweep, and the file is collected with the parent it is named for
-        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
-        child = parent.new_imagerequest(user=self.user, from_api=True)
-        child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
-        child.save()
-
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
-            legacy.parent.mkdir(parents=True, exist_ok=True)
-            legacy.write_text("images")
-
-            assert child.localresultimagezipfile == Path(parent.localresultfileprefix() + ".zip")
-
-            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=lambda _msg: None)
-
-            assert not legacy.exists()
+            assert not ownzip.exists(), "the deleted request left its zip behind"
+            assert otherzip.is_file(), "the delete of one request removed the other's output"
+            assert legacyzip.is_file(), "a request with its own zip reclaimed the one its sibling is served from"
 
     def test_a_legacy_zip_goes_with_the_last_request_served_from_it(self) -> None:
-        # a zip named for the parent, from before requests had their own: it used to stay at its
-        # static path until the parent went, however many of its requests had been deleted
-        parent = self.make_old_task(days=200, request_type="FP")
-        children = []
-        for _ in range(2):
-            child = parent.new_imagerequest(user=self.user, from_api=False)
-            child.finishtimestamp = timezone.now()
-            child.save()
-            children.append(child)
+        """A zip named for the parent used to stay at its static path until the parent went.
 
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
-            legacy.parent.mkdir(parents=True, exist_ok=True)
-            legacy.write_text("images")
+        It goes when the last live request without a zip of its own goes: deleted one by one, or
+        archived together by one sweep, where both rows are still live while the batch reclaims
+        files and each would otherwise see the other as still served.
+        """
+        with (
+            self.subTest(how="deleted one by one"),
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+        ):
+            parent = self.make_old_task(days=200, request_type="FP")
+            first, second = [self.make_imagerequest(parent) for _ in range(2)]
+            legacy = self.write_results(tmpdir, parent, (".zip",)).with_suffix(".zip")
 
-            children[0].delete()
+            first.delete()
             assert legacy.is_file(), "the zip went while another request was still served from it"
 
-            children[1].delete()
+            second.delete()
             assert not legacy.exists(), "the last request served from the legacy zip left it behind"
+
+        with (
+            self.subTest(how="archived by one sweep"),
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+        ):
+            # the parent is recent, so the sweep selects the two requests alone
+            parent = self.make_old_task(days=0, request_type="FP")
+            for _ in range(2):
+                self.make_imagerequest(parent, days=200)
+            legacy = self.write_results(tmpdir, parent, (".zip",)).with_suffix(".zip")
+
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=False, logfunc=lambda _msg: None)
+
+            assert Task.objects.filter(parent_task=parent, is_archived=True).count() == 2
+            assert not legacy.exists(), "the legacy zip outlived every request served from it"
 
     def test_a_batch_locks_its_rows_before_it_reads_their_children(self) -> None:
         # RequestImages holds the same lock on a parent while it creates an image request, so a
@@ -4668,73 +4704,6 @@ class RemoveOldTasksTests(TestCase):
 
         assert any("FOR UPDATE" in q["sql"] for q in queries), [q["sql"][:80] for q in queries]
 
-    def test_an_archive_batch_does_not_scale_its_queries_with_the_batch(self) -> None:
-        # the archive path reclaims each parent's data file, and gives a queued request without its
-        # own copy one first; the requests come from one prefetch, not one query per parent
-        def sweep_queries(taskcount: int) -> int:
-            with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-                for _ in range(taskcount):
-                    parent = self.make_old_task(days=200, request_type="FP")
-                    child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
-                    child.finishtimestamp = timezone.now()
-                    child.save()
-                    datafile = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".txt")
-                    datafile.parent.mkdir(parents=True, exist_ok=True)
-                    datafile.write_text("observations")
-
-                with CaptureQueriesContext(connection) as queries:
-                    taskrunner_main.remove_old_tasks(
-                        days_ago=31, harddeleterecord=False, request_type="FP", logfunc=lambda _msg: None
-                    )
-
-            return len(queries)
-
-        small = sweep_queries(1)
-        large = sweep_queries(6)
-
-        assert large - small <= 2, f"{small} queries for one task, {large} for six"
-
-    def test_a_sweep_that_archives_every_request_served_from_a_legacy_zip_reclaims_it(self) -> None:
-        # both siblings are still live while the batch reclaims files, so each would otherwise see
-        # the other as still served and keep the zip; the batch is named, and the batch is left out
-        parent = self.make_old_task(days=200, request_type="FP")
-        parent.finishtimestamp = timezone.now()  # recent, so the sweep selects the requests alone
-        parent.save()
-        old = timezone.now() - datetime.timedelta(days=200)
-        for _ in range(2):
-            child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
-            child.finishtimestamp = old
-            child.save()
-
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
-            legacy.parent.mkdir(parents=True, exist_ok=True)
-            legacy.write_text("images")
-
-            taskrunner_main.remove_old_tasks(
-                days_ago=31, harddeleterecord=False, from_api=parent.from_api, logfunc=lambda _msg: None
-            )
-
-            assert Task.objects.filter(parent_task=parent, is_archived=True).count() == 2
-            assert not legacy.exists(), "the legacy zip outlived every request served from it"
-
-    def test_a_request_with_its_own_zip_leaves_a_sibling_legacy_zip_alone(self) -> None:
-        parent = self.make_old_task(days=200, request_type="FP")
-        own, legacy_child = [parent.new_imagerequest(user=self.user, from_api=False) for _ in range(2)]
-        for child in (own, legacy_child):
-            child.finishtimestamp = timezone.now()
-            child.save()
-
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            legacy = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".zip")
-            legacy.parent.mkdir(parents=True, exist_ok=True)
-            legacy.write_text("images")
-            Path(tmpdir, own.localresultfileprefix()).with_suffix(".zip").write_text("own images")
-
-            own.delete()
-
-            assert legacy.is_file(), "a request with its own zip reclaimed the one its sibling is served from"
-
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
@@ -4742,36 +4711,6 @@ class RemoveOldTasksTests(TestCase):
 
         queued.refresh_from_db()
         assert not queued.is_archived
-
-    def test_a_hard_delete_reclaims_the_files_of_its_cascaded_children(self) -> None:
-        """parent_task cascades, and the collector never calls delete_result_files().
-
-        The sweep reclaims the files of the rows it selected, then removes them with a queryset
-        delete. Django issues bulk SQL for the cascade, so an image request's .zip was left on the
-        results volume with no row that could ever name it again -- and the parent's .txt and .jpg,
-        which delete_result_files() keeps while a live image request needs them, went the same way.
-        """
-        # a parent that is NOT archived, which is what do_maintenance's own hard-delete sweeps
-        # select: an archived one lets the child's cleanup reclaim the parent's files by itself,
-        # so the pass that re-reads the parents would never be exercised
-        parent = self.make_old_task(days=200, request_type="FP", from_api=True)
-        child = parent.new_imagerequest(user=self.user, from_api=True)
-        child.finishtimestamp = timezone.now()
-        child.save()
-
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            prefix = Path(tmpdir, parent.localresultfileprefix())
-            prefix.parent.mkdir(parents=True, exist_ok=True)
-            for suffix in (".txt", ".jpg", ".zip"):
-                prefix.with_suffix(suffix).write_text("results")
-
-            taskrunner_main.remove_old_tasks(
-                days_ago=31, harddeleterecord=True, from_api=True, logfunc=lambda _msg: None
-            )
-
-            assert not Task.objects.filter(id__in=[parent.id, child.id]).exists(), "the rows survived the sweep"
-            left = sorted(path.name for path in prefix.parent.iterdir())
-            assert not left, f"files left behind with no row that can ever name them: {left}"
 
     def test_archiving_is_a_bounded_number_of_queries(self) -> None:
         # the old loop cost a query for the image request plus a full-row save() per task
@@ -5902,19 +5841,7 @@ class LoginThrottleTests(TestCase):
         # unmetered behaviour
         assert "forcephotlogin" in ForcedPhotRateThrottle.THROTTLE_RATES
 
-    def test_password_guessing_is_throttled(self) -> None:
-        # SimpleRateThrottle binds THROTTLE_RATES at class-definition time, so override_settings
-        # does not reach it; patch the attribute the throttle actually reads (see ReadThrottleTests)
-        with mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephotlogin": "3/min"}):
-            statuses = [
-                self.client.post(reverse("api-token-auth"), {"username": "tokenuser", "password": "wrong"}).status_code
-                for _ in range(5)
-            ]
-
-        assert statuses[:3] == [400, 400, 400], statuses
-        assert 429 in statuses, statuses
-
-    def test_an_authorization_header_does_not_turn_the_limit_off(self) -> None:
+    def test_password_guessing_is_throttled_with_or_without_an_authorization_header(self) -> None:
         """DRF authenticates before it throttles, and BasicAuthentication is enabled site-wide.
 
         A wrong password in an Authorization header therefore answered 401 from the authenticator,
@@ -5922,19 +5849,25 @@ class LoginThrottleTests(TestCase):
         limit off. The view declares no authenticators of its own now, because it reads the
         credentials from the body and never looks at request.user.
         """
-        header = base64.b64encode(b"tokenuser:wrong").decode()
+        basic = "Basic " + base64.b64encode(b"tokenuser:wrong").decode()
 
-        with mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephotlogin": "3/min"}):
-            statuses = [
-                self.client.post(
-                    reverse("api-token-auth"),
-                    {"username": "tokenuser", "password": "wrong"},
-                    HTTP_AUTHORIZATION=f"Basic {header}",
-                ).status_code
-                for _ in range(5)
-            ]
+        for name, headers in (("no header", {}), ("a Basic header", {"Authorization": basic})):
+            caches["throttle"].clear()
+            # SimpleRateThrottle binds THROTTLE_RATES at class-definition time, so override_settings
+            # does not reach it; patch the attribute the throttle actually reads
+            with (
+                self.subTest(name),
+                mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephotlogin": "3/min"}),
+            ):
+                statuses = [
+                    self.client.post(
+                        reverse("api-token-auth"), {"username": "tokenuser", "password": "wrong"}, headers=headers
+                    ).status_code
+                    for _ in range(5)
+                ]
 
-        assert 429 in statuses, statuses
+                assert statuses[:3] == [400, 400, 400], statuses
+                assert 429 in statuses, statuses
 
     def test_a_correct_password_still_returns_a_token(self) -> None:
         response = self.client.post(reverse("api-token-auth"), {"username": "tokenuser", "password": "pw12345678"})
@@ -6025,22 +5958,19 @@ class LockFileTests(TestCase):
             assert first, "the first taker did not get the lock"
             assert not second, "two takers held one lock at once"
 
-    def test_the_lock_is_released_after_the_body(self) -> None:
-        with locks.try_lock("test-lock"):
-            pass
-
-        with locks.try_lock("test-lock") as held:
-            assert held, "a released lock refused the next taker"
-
-    def test_the_lock_is_released_when_the_body_raises(self) -> None:
+    def test_the_lock_is_released_after_the_body_whether_it_returns_or_raises(self) -> None:
         def fail_while_holding() -> None:
             with locks.try_lock("test-lock"):
                 msg = "body failed"
                 raise RuntimeError(msg)
 
+        with locks.try_lock("test-lock"):
+            pass
+        with locks.try_lock("test-lock") as held:
+            assert held, "a released lock refused the next taker"
+
         with contextlib.suppress(RuntimeError):
             fail_while_holding()
-
         with locks.try_lock("test-lock") as held:
             assert held, "a lock whose body raised was left held"
 
@@ -6948,28 +6878,21 @@ class RequestCostTests(TestCase):
         self.user = User.objects.create_user(username="cost", email="cost@example.com", password=None)
         self.client.force_login(self.user)
 
-    def test_the_queue_offset_is_aggregated_once_per_list_request(self) -> None:
+    def test_the_queue_offset_is_aggregated_once_per_request(self) -> None:
         # the entity-tag and the serializer both need the front of the global queue; the view
         # makes the aggregate once and hands it to the serializer
         for ra in range(3):
             Task.objects.create(user=self.user, ra=float(ra), dec=2.0, request_type="FP", queuepos_relative=ra)
+        task = Task.objects.filter(user=self.user).first()
+        assert task is not None
 
-        with CaptureQueriesContext(connection) as queries:
-            response = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json")
+        for url in (reverse("task-list"), reverse("task-detail", args=[task.id])):
+            with self.subTest(url=url), CaptureQueriesContext(connection) as queries:
+                response = self.client.get(url, HTTP_ACCEPT="application/json")
 
-        assert response.status_code == 200, response.status_code
-        offsetqueries = [q["sql"] for q in queries if "MIN(" in q["sql"].upper() and "queuepos_relative" in q["sql"]]
-        assert len(offsetqueries) == 1, f"{len(offsetqueries)} queue-offset aggregates for one request"
-
-    def test_the_queue_offset_is_aggregated_once_per_detail_request(self) -> None:
-        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", queuepos_relative=0)
-
-        with CaptureQueriesContext(connection) as queries:
-            response = self.client.get(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
-
-        assert response.status_code == 200, response.status_code
-        offsetqueries = [q["sql"] for q in queries if "MIN(" in q["sql"].upper() and "queuepos_relative" in q["sql"]]
-        assert len(offsetqueries) == 1, f"{len(offsetqueries)} queue-offset aggregates for one request"
+                assert response.status_code == 200, response.status_code
+                offsets = [q["sql"] for q in queries if "MIN(" in q["sql"].upper() and "queuepos_relative" in q["sql"]]
+                assert len(offsets) == 1, f"{len(offsets)} queue-offset aggregates for one request"
 
     def test_a_submission_counts_the_queued_tasks_once(self) -> None:
         # create() counts them for its limit and perform_create needed the same count for

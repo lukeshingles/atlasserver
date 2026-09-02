@@ -482,58 +482,83 @@ describe('TaskPage', () => {
         return control;
     };
 
+    /*
+     * The task-list requests and their answers, scripted by the test.
+     *
+     * Each entry of `scripts` answers one task-list request, in order; the last one answers every
+     * request after it. An entry is a function of the call number and the fetch init, returning
+     * the response object, so a test can hold a body, answer 304 or fail. The other two endpoints
+     * answer at once from the handle, and a POST is a submission that made task 2. The handle
+     * counts the task-list calls.
+     */
+    const listpage = (comment) => ({
+        results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+    });
+    const answer = (body, { status = 200, etag = null } = {}) => ({
+        ok: status < 400, status, headers: { get: (name) => (name === 'ETag' ? etag : null) }, json: () => Promise.resolve(body),
+    });
+    // a response whose headers arrive at once and whose body waits for the returned release
+    const heldBody = (holder) => {
+        let release;
+        const body = new Promise((resolve) => { release = resolve; });
+        holder.release = (page) => release(page);
+        return { ...answer(null), json: () => body };
+    };
+    const stubScriptedList = (scripts, { runnerstatus = {}, positions = {} } = {}) => {
+        const handle = { listcalls: 0, runnerstatus: { stale: false, queued_task_count: 0, ...runnerstatus } };
+        global.fetch = (url, init = {}) => {
+            const href = url.toString();
+            if (init.method === 'POST') {
+                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
+            }
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve(answer(handle.runnerstatus));
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve(answer({ queuepositions: positions }));
+            }
+            const call = handle.listcalls++;
+            return Promise.resolve(scripts[Math.min(call, scripts.length - 1)](call, init));
+        };
+        return handle;
+    };
+    const mountPage = async () => {
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(120);
+        return rendered;
+    };
+    const submit = (rendered) => rendered.container.querySelector('#newrequest').dispatchEvent(
+        new window.Event('submit', { bubbles: true, cancelable: true }));
+    // one poll interval, and the wait for whatever it started
+    const tick = async () => { mock.timers.tick(6000); await flush(60); };
+
     test('a task list response overtaken by a later one is discarded', async () => {
         /*
          * Two task-list requests can be in flight for the same url: a user-triggered fetch (a
          * submission, a filter) skips the in-flight flag that keeps the poll to one at a time. The
          * apply site compares urls, which cannot tell two requests for the same url apart, so the
          * older answer landing second put the earlier rows back -- and wrote its body into the
-         * cache, where a later 304 restored it again. The queue-position poll, the away poll and
-         * runnerstatus.js all already carry the request counter this needed.
+         * cache, where a later 304 restored it again.
          */
         mock.timers.enable({ apis: ['setInterval'] });
-
-        let releaseOvertaken;
-        const overtaken = new Promise((resolve) => { releaseOvertaken = resolve; });
-        const page = (comment) => ({
-            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
-        });
-        // the second body is held; a submission then starts the third request while it is still
-        // on its way
-        const bodies = [() => Promise.resolve(page('commentfirst')), () => overtaken, () => Promise.resolve(page('commentnewest'))];
-        let listcall = 0;
-
-        global.fetch = (url, init) => {
-            const href = url.toString();
-            if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
-            }
-            if (href.includes('queuepositions')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
-            }
-            if (init && init.method === 'POST') {
-                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
-            }
-            const body = bodies[Math.min(listcall++, bodies.length - 1)];
-            return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: body });
-        };
+        const overtaken = {};
+        stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            () => heldBody(overtaken),   // the poll whose body is held while a submission overtakes it
+            () => answer(listpage('commentnewest')),
+        ]);
 
         try {
-            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
-            mounted.push(rendered.root);
-            await flush(120);
+            const rendered = await mountPage();
             assert.match(rendered.container.textContent, /commentfirst/);
+            await tick();
 
-            mock.timers.tick(6000);   // starts the request whose body is held
-            await flush(60);
-
-            // a submission starts a newer one, which answers straight away
-            rendered.container.querySelector('#newrequest').dispatchEvent(
-                new window.Event('submit', { bubbles: true, cancelable: true }));
+            submit(rendered);
             await flush(60);
             assert.match(rendered.container.textContent, /commentnewest/, 'the newer answer was not applied');
 
-            releaseOvertaken(page('commentovertaken'));
+            overtaken.release(listpage('commentovertaken'));
             await flush(60);
 
             assert.match(rendered.container.textContent, /commentnewest/, 'an overtaken answer overwrote a newer one');
@@ -546,56 +571,28 @@ describe('TaskPage', () => {
     test('an overtaken failure does not report an error over a newer success', async () => {
         /*
          * The generation check used to sit only in the second promise callback, after the response
-         * handler had already written the error state. A submission skips the in-flight flag, so
-         * it can overtake a slow poll -- and when that poll then answered 500, "Server error"
-         * appeared on a page whose newer request had succeeded, with nothing there to clear it.
+         * handler had already written the error state. A submission overtakes a slow poll, and
+         * when that poll then answered 500, "Server error" appeared on a page whose newer request
+         * had succeeded, with nothing there to clear it.
          */
         mock.timers.enable({ apis: ['setInterval'] });
-
-        let releaseSlowPoll;
-        const slowpoll = new Promise((resolve) => { releaseSlowPoll = resolve; });
-        const rows = (comment) => ({
-            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
-        });
-        let listcall = 0;
-
-        global.fetch = (url, init) => {
-            const href = url.toString();
-            if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
-            }
-            if (href.includes('queuepositions')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
-            }
-            if (init && init.method === 'POST') {
-                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
-            }
-            const call = listcall++;
-            if (call === 1) {
-                return slowpoll;   // the poll whose answer arrives last, and fails
-            }
-            return Promise.resolve({
-                ok: true, status: 200, headers: { get: () => null },
-                json: () => Promise.resolve(rows(call === 0 ? 'commentfirst' : 'commentnewest')),
-            });
-        };
+        let failSlowPoll;
+        const slowpoll = new Promise((resolve) => { failSlowPoll = resolve; });
+        stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            () => slowpoll,   // the poll whose answer arrives last, and fails
+            () => answer(listpage('commentnewest')),
+        ]);
 
         try {
-            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
-            mounted.push(rendered.root);
-            await flush(120);
-            assert.match(rendered.container.textContent, /commentfirst/);
+            const rendered = await mountPage();
+            await tick();
 
-            mock.timers.tick(6000);   // the poll goes out and does not come back yet
-            await flush(60);
-
-            // a submission, which skips the in-flight guard and so overtakes that poll
-            rendered.container.querySelector('#newrequest').dispatchEvent(
-                new window.Event('submit', { bubbles: true, cancelable: true }));
+            submit(rendered);
             await flush(120);
             assert.match(rendered.container.textContent, /commentnewest/, 'the newer request did not apply');
 
-            releaseSlowPoll({ ok: false, status: 500, headers: { get: () => null }, json: () => Promise.resolve(null) });
+            failSlowPoll(answer(null, { status: 500 }));
             await flush(60);
 
             assert.doesNotMatch(rendered.container.textContent, /Server error/,
@@ -609,61 +606,33 @@ describe('TaskPage', () => {
     test('an overtaken response does not free the next tick to start another request', async () => {
         /*
          * The in-flight flag belongs to the newest request. An overtaken poll used to clear it as
-         * its headers arrived, so the next tick started yet another request while the newer one
+         * its answer arrived, so the next tick started yet another request while the newer one
          * was still running -- which overtook that one in turn, and with latency above the poll
          * interval every body was discarded and the list stayed frozen while requests piled up.
          */
         mock.timers.enable({ apis: ['setInterval'] });
-
-        const releases = [];
-        const page = (comment) => ({
-            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
-        });
-        let listcall = 0;
-
-        global.fetch = (url, init) => {
-            const href = url.toString();
-            if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
-            }
-            if (href.includes('queuepositions')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
-            }
-            if (init && init.method === 'POST') {
-                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
-            }
-            const call = listcall++;
-            if (call === 0) {
-                return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(page('commentfirst')) });
-            }
-            // every later task-list request is held until the test releases it
-            return new Promise((resolve) => {
-                releases.push(() => resolve({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(page('comment' + call)) }));
-            });
-        };
+        const held = [];
+        const handle = stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            // every later task-list request is held whole until the test releases it
+            (call) => new Promise((resolve) => { held.push(() => resolve(answer(listpage('comment' + call)))); }),
+        ]);
 
         try {
-            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
-            mounted.push(rendered.root);
-            await flush(120);
+            const rendered = await mountPage();
+            await tick();   // the poll (call 1), held
 
-            mock.timers.tick(6000);   // the poll (call 1), held
+            submit(rendered);   // overtakes it (call 2), also held
+            await flush(60);
+            assert.equal(handle.listcalls, 3);
+
+            held[0]();   // the overtaken poll answers while the newer request runs
             await flush(60);
 
-            // a submission overtakes it (call 2), also held
-            rendered.container.querySelector('#newrequest').dispatchEvent(
-                new window.Event('submit', { bubbles: true, cancelable: true }));
-            await flush(60);
-            assert.equal(listcall, 3);
+            await tick();   // the next tick must not start a third request
+            assert.equal(handle.listcalls, 3, 'an overtaken response freed the next tick to start another request');
 
-            releases[0]();   // the overtaken poll's headers arrive while the newer request runs
-            await flush(60);
-
-            mock.timers.tick(6000);   // the next tick must not start a third request
-            await flush(60);
-            assert.equal(listcall, 3, 'an overtaken response freed the next tick to start another request');
-
-            releases[1]();
+            held[1]();
             await flush(60);
             assert.match(rendered.container.textContent, /comment2/, 'the newer request did not apply');
         } finally {
@@ -686,28 +655,13 @@ describe('TaskPage', () => {
              * have reached the list.
              */
             const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
-            const status = { stale: false, queued_task_count: 1, written };
+            const runnerstatus = { queued_task_count: 1, written };
             if (running_taskids != null) {
-                status.running_taskids = running_taskids;
+                runnerstatus.running_taskids = running_taskids;
             }
+            stubScriptedList([() => answer({ ...listpage(), results: [started] })], { runnerstatus, positions: { 7: 0 } });
 
-            global.fetch = (url) => {
-                const href = url.toString();
-                if (href.includes('taskrunnerstatus')) {
-                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(status) });
-                }
-                if (href.includes('queuepositions')) {
-                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: { 7: 0 } }) });
-                }
-                return Promise.resolve({
-                    ok: true, status: 200, headers: { get: () => null },
-                    json: () => Promise.resolve({ results: [started], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0 }),
-                });
-            };
-
-            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
-            mounted.push(rendered.root);
-            await flush(120);
+            const rendered = await mountPage();
 
             const badge = rendered.container.querySelector('.taskbadge-queued, .taskbadge-running');
             assert.ok(badge, 'no status badge on the row');
@@ -723,52 +677,26 @@ describe('TaskPage', () => {
          * body was discarded and the list never updated.
          */
         mock.timers.enable({ apis: ['setInterval'] });
-
-        const page = (comment) => ({
-            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
-        });
-        let listcall = 0;
-        let releaseBody = null;
-
-        global.fetch = (url) => {
-            const href = url.toString();
-            if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
-            }
-            if (href.includes('queuepositions')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
-            }
-            const call = listcall++;
-            if (call === 0) {
-                return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(page('commentfirst')) });
-            }
-            // headers at once; the body only when the test releases it
-            return Promise.resolve({
-                ok: true, status: 200, headers: { get: () => null },
-                json: () => new Promise((resolve) => { releaseBody = () => resolve(page('comment' + call)); }),
-            });
-        };
+        const pending = {};
+        const handle = stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            () => heldBody(pending),   // headers at once; the body only when the test releases it
+        ]);
 
         try {
-            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
-            mounted.push(rendered.root);
-            await flush(120);
+            const rendered = await mountPage();
+            await tick();   // the poll: headers arrive, body pending
+            assert.equal(handle.listcalls, 2);
 
-            mock.timers.tick(6000);   // the poll: headers arrive, body pending
-            await flush(60);
-            assert.equal(listcall, 2);
+            await tick();   // the next tick must wait for that body
+            assert.equal(handle.listcalls, 2, 'a request whose body was still arriving was overtaken by the next tick');
 
-            mock.timers.tick(6000);   // the next tick must wait for that body
-            await flush(60);
-            assert.equal(listcall, 2, 'a request whose body was still arriving was overtaken by the next tick');
-
-            releaseBody();
+            pending.release(listpage('comment1'));
             await flush(60);
             assert.match(rendered.container.textContent, /comment1/, 'the body was not applied');
 
-            mock.timers.tick(6000);   // and once the body is applied, polling goes on
-            await flush(60);
-            assert.equal(listcall, 3);
+            await tick();   // and once the body is applied, polling goes on
+            assert.equal(handle.listcalls, 3);
         } finally {
             mock.timers.reset();
         }
@@ -782,54 +710,33 @@ describe('TaskPage', () => {
          * server answered 304 because its representation really had not changed, and the 304
          * branch re-applied the older body -- for as long as that tag stood, not for one poll.
          *
-         * The stub below is the server: it answers 304 to a request that already carries its
-         * current tag, which is the whole point.
+         * The stub is the server: it answers 304 to a request that already carries its current
+         * tag, which is the whole point.
          */
         mock.timers.enable({ apis: ['setInterval'] });
-
-        let releaseHeld;
-        const held = new Promise((resolve) => { releaseHeld = resolve; });
-        const page = (comment) => ({
-            results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
-        });
-        // the second call is the one whose body is held while a third starts behind it
-        const calls = [
-            { etag: '"v1"', body: () => Promise.resolve(page('commentfirst')) },
-            { etag: '"v2"', body: () => held },
-            { etag: '"v2"', body: () => Promise.resolve(page('commentsecond')) },
-        ];
-        let listcall = 0;
-
-        global.fetch = (url, init) => {
-            const href = url.toString();
-            if (href.includes('taskrunnerstatus')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ stale: false, queued_task_count: 0 }) });
-            }
-            if (href.includes('queuepositions')) {
-                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ queuepositions: {} }) });
-            }
-            const call = calls[Math.min(listcall++, calls.length - 1)];
-            const asked = (init && init.headers && init.headers['If-None-Match']) || null;
-            const headers = { get: (name) => (name === 'ETag' ? call.etag : null) };
-            if (asked === call.etag) {
-                return Promise.resolve({ ok: true, status: 304, headers, json: () => Promise.resolve(null) });
-            }
-            return Promise.resolve({ ok: true, status: 200, headers, json: call.body });
-        };
+        const held = {};
+        const versioned = (etag, response) => (call, init) => (
+            (init.headers && init.headers['If-None-Match']) === etag ? answer(null, { status: 304, etag }) : response(etag)
+        );
+        stubScriptedList([
+            versioned('"v1"', (etag) => answer(listpage('commentfirst'), { etag })),
+            // the rows change server-side: the second call's body is held while a third starts behind it
+            versioned('"v2"', (etag) => ({ ...heldBody(held), headers: { get: (name) => (name === 'ETag' ? etag : null) } })),
+            versioned('"v2"', (etag) => answer(listpage('commentsecond'), { etag })),
+        ]);
 
         try {
-            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
-            mounted.push(rendered.root);
-            await flush(120);
+            const rendered = await mountPage();
             assert.match(rendered.container.textContent, /commentfirst/);
 
-            mock.timers.tick(6000);   // the rows change server-side; headers arrive, body is held
+            await tick();   // headers arrive, body is held
+
+            // a submission's fetch goes out while that body is still in flight; the poll itself
+            // waits for the body now, so only a user-triggered request can overtake it
+            submit(rendered);
             await flush(60);
 
-            mock.timers.tick(6000);   // the next poll goes out while that body is still in flight
-            await flush(60);
-
-            releaseHeld(page('commentsecond'));
+            held.release(listpage('commentsecond'));
             await flush(60);
 
             assert.match(rendered.container.textContent, /commentsecond/,
