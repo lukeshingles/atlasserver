@@ -48,7 +48,12 @@ class LoginFailureLimitMixin(AuthenticationForm):
         try:
             return super().clean()
         except forms.ValidationError:
-            if self.request is not None:
+            # Counted only when the password was wrong. AuthenticationForm sets user_cache once the
+            # password checks out, and raises after that for an inactive account, or in the admin
+            # for one without staff access, with the same error code as a wrong password. A
+            # colleague who tries the admin with a good password must not spend the address's
+            # budget of guesses.
+            if self.request is not None and getattr(self, "user_cache", None) is None:
                 note_login_failure(self.request)
             raise
 

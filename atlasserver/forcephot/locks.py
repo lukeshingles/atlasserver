@@ -32,6 +32,24 @@ def _lockpath(name: str) -> Path:
 
 
 @contextlib.contextmanager
+def hold_lock(name: str) -> Iterator[None]:
+    """Hold the named lock for the body, waiting for it if another holder has it.
+
+    For a short critical section, such as a read-modify-write of one cache entry, where a caller
+    that finds the lock taken has nothing better to do than wait a moment.
+    """
+    path = _lockpath(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
 def try_lock(name: str) -> Iterator[bool]:
     """Hold the named lock for the body, or yield False at once if another holder has it."""
     path = _lockpath(name)

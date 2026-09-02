@@ -16,6 +16,7 @@ from rest_framework.permissions import SAFE_METHODS
 from rest_framework.request import Request
 from rest_framework.throttling import SimpleRateThrottle
 
+from atlasserver.forcephot.locks import hold_lock
 from atlasserver.forcephot.netaddr import client_ip
 
 if t.TYPE_CHECKING:
@@ -28,6 +29,9 @@ if t.TYPE_CHECKING:
 # Scope used for safe methods, in place of whatever the view declares for writes. Separate so that
 # a burst of reads cannot use up a user's ability to submit, and so the two can be tuned apart.
 READ_SCOPE = "forcephotread"
+
+# how many locks the fixed-window counters share; see count_in_window
+WINDOW_LOCK_STRIPES = 64
 
 
 def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = True) -> int:
@@ -45,22 +49,29 @@ def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = T
     An elapsed time outside the window is therefore treated as no window at all, which covers an
     expiry, a clock stepped by NTP, and any stale epoch. Without that the arithmetic below could
     compute a timeout of the machine's former uptime and lock a shared address out for weeks.
+
+    The read and the write are one critical section, under a lock shared by the workers: without
+    it a wave of concurrent attempts each read the same count and wrote the same count plus one,
+    so the wave counted as one attempt. The lock is one of a fixed number of stripes, chosen by
+    the key, so the lock files stay few whatever the number of keys.
     """
     throttlecache = caches["throttle"]
-    now = time.time()
-    window = throttlecache.get(cachekey)
-    elapsed = now - window[1] if window is not None else None
 
-    if elapsed is None or not (0 <= elapsed < window_seconds):
-        count, started = 0, now
-    else:
-        count, started = window[0], window[1]
+    with hold_lock(f"window-{int(hashlib.sha256(cachekey.encode()).hexdigest(), 16) % WINDOW_LOCK_STRIPES}"):
+        now = time.time()
+        window = throttlecache.get(cachekey)
+        elapsed = now - window[1] if window is not None else None
 
-    if not increment:
-        return count
+        if elapsed is None or not (0 <= elapsed < window_seconds):
+            count, started = 0, now
+        else:
+            count, started = window[0], window[1]
 
-    count += 1
-    throttlecache.set(cachekey, (count, started), timeout=window_seconds - (now - started))
+        if not increment:
+            return count
+
+        count += 1
+        throttlecache.set(cachekey, (count, started), timeout=window_seconds - (now - started))
 
     return count
 

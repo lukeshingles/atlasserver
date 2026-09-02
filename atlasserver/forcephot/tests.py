@@ -6031,6 +6031,34 @@ class FailedLoginBudgetTests(TestCase):
     def basic(password: str) -> str:
         return "Basic " + base64.b64encode(f"guessed:{password}".encode()).decode()
 
+    def test_concurrent_failures_are_each_counted(self) -> None:
+        # a wave of guesses from one address used to read the same count and each write it plus
+        # one, so the wave counted as one; the read and the write are one critical section now
+        threads, each = 8, 5
+        barrier = threading.Barrier(threads)
+        original_get = caches["throttle"].get
+
+        def slow_get(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            # widens the window between the read and the write, so that a race is certain to show
+            value = original_get(*args, **kwargs)
+            time.sleep(0.002)
+            return value
+
+        def guess() -> None:
+            barrier.wait()
+            for _ in range(each):
+                throttles.count_in_window("test-window", 60)
+
+        with mock.patch.object(caches["throttle"], "get", slow_get):
+            workers = [threading.Thread(target=guess) for _ in range(threads)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+
+        counted = throttles.count_in_window("test-window", 60, increment=False)
+        assert counted == threads * each, f"{counted} of {threads * each} concurrent failures were counted"
+
     def test_a_basic_header_on_any_api_view_is_metered(self) -> None:
         with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
             statuses = [
@@ -6082,6 +6110,19 @@ class FailedLoginBudgetTests(TestCase):
 
         assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
         assert "Too many failed login attempts" in blocked.content.decode()
+
+    def test_a_good_password_refused_by_the_admin_is_not_a_failed_guess(self) -> None:
+        # the admin refuses an account without staff access with the same error code as a wrong
+        # password; only a wrong password spends the budget
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                refused = self.client.post(reverse("admin:login"), {"username": "guessed", "password": "pw12345678"})
+                assert refused.status_code == 200, refused.status_code
+                assert "_auth_user_id" not in self.client.session
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 302, viapage.status_code
 
     def test_a_malformed_token_request_is_not_a_failed_guess(self) -> None:
         # a body with no password is refused before any password is checked; counting it would let
