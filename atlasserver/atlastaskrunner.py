@@ -57,18 +57,33 @@ def taskrunner_session_exists() -> bool:
     return returncode == 0
 
 
+TASKRUNNER_PIDFILE = Path("/tmp/atlasforced/taskrunner.pid")
+
+
+def read_pidfile(pidfile: Path) -> int | None:
+    """Return the pid the file holds, or None for a file that does not hold one.
+
+    A file truncated by an unclean exit says nothing about what is running, and an exception here
+    made `start` and `restart` fail until the file was removed by hand.
+    """
+    try:
+        return int(pidfile.read_text().strip())
+    except ValueError:
+        print(f"Ignoring unreadable pid file {pidfile}")
+        return None
+
+
 def start() -> None:
     """Start the task runner in a tmux session."""
     if taskrunner_session_exists():
         print("atlastaskrunner tmux session already exists")
     else:
         print("Starting atlastaskrunner tmux session")
-        pidfile = Path("/tmp/atlasforced/taskrunner.pid")
-        if pidfile.is_file():
-            pid = int(pidfile.open().read().strip())
-            if not psutil.pid_exists(pid):
-                # process ended, so the pid file should be deleted
-                pidfile.unlink(missing_ok=True)
+        if TASKRUNNER_PIDFILE.is_file():
+            pid = read_pidfile(TASKRUNNER_PIDFILE)
+            if pid is None or not psutil.pid_exists(pid):
+                # process ended, or the file is not a pid: either way it must not stop a start
+                TASKRUNNER_PIDFILE.unlink(missing_ok=True)
 
         supervisorpath = ATLASSERVERPATH / "atlasserver" / "taskrunner" / "supervise_atlastaskrunner.sh"
         run_command(

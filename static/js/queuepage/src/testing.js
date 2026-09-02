@@ -81,7 +81,13 @@ export async function importComponent(entry) {
  * The components read several of those directly (api_url_base, newtaskids, the MJD helpers), which
  * is why they have to be provided rather than imported.
  */
+// node's own fetch, put back by teardownDom: a test that assigns global.fetch would otherwise hand
+// its stub to every test after it, and a test that forgot to assign one would then pass on a
+// stranger's answers.
+let fetchBeforeSetup;
+
 export function setupDom({ url = 'http://testserver/queue/' } = {}) {
+    fetchBeforeSetup = global.fetch;
     // jsdom rather than happy-dom: under happy-dom, React 19 never fired onChange for a text
     // input, however the event was dispatched (onInput and onClick both worked), so a test of
     // typing failed as though the component were broken. React and testing-library are developed
@@ -117,6 +123,7 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     global.api_url_base = 'http://testserver/queue/';
     global.queuepositions_url = 'http://testserver/queuepositions.json';
     global.user_id = 1;
+    global.allow_stack_rock = false;
     global.user_is_active = true;
     global.hidden = 'hidden';
     global.newtaskids = [];
@@ -146,6 +153,8 @@ export async function teardownDom(window) {
         'requestAnimationFrame', 'cancelAnimationFrame', 'navigator']) {
         delete global[name];
     }
+
+    global.fetch = fetchBeforeSetup;
 }
 
 /**

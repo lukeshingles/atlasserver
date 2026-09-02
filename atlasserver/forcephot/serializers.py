@@ -1,7 +1,9 @@
 import math
 import typing as t
+from collections.abc import Mapping
 from typing import override
 
+from django.conf import settings
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
@@ -13,6 +15,19 @@ from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.models import UNSET
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import validate_callback_url
+
+
+def stack_requests_allowed(context: Mapping[str, t.Any]) -> bool:
+    """Return whether the caller in this serializer context may submit an image stack request.
+
+    The queue page reads the same rule to decide whether to offer the option, so the two cannot
+    drift: an account that sees the box can submit, and one that does not see it cannot.
+    """
+    user = getattr(context.get("request"), "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+
+    return bool(getattr(user, "is_staff", False) or user.pk in settings.TEST_USERS)
 
 
 def is_finite_float(val):
@@ -32,6 +47,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     # memoised queue offset. 0 is a normal value, so it cannot double as "not computed yet".
     _min_queuepos_cache: t.Any = UNSET
 
+    # The result links below name the file's static path, which the web server answers without
+    # Django. A check that a Django view makes (see views._taskresultfile_response) does not reach
+    # a link that was already handed out.
     def get_result_url(self, obj) -> str | None:
         localresultfile = obj.localresultfile()
         if localresultfile and not obj.error_msg and (request := self.context.get("request")):
@@ -74,36 +92,45 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     # the finishtimestamp checks below are not redundant with the file existence checks: an
     # unfinished task cannot have produced a result yet, so testing the timestamp first skips a
     # filesystem stat for every queued task in the page
+    # Each of the two checked for the one request type that produces the file: the lookups stat the
+    # results directory, and a page of a hundred light-curve tasks stated it three hundred times for
+    # files that no light-curve task has. The queue page reads the links on those rows only.
     def get_result_imagezip_url(self, obj) -> str | None:
-        if obj.finishtimestamp and obj.localresultimagezipfile and (request := self.context.get("request")):
-            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagezipfile))
+        if obj.request_type != "IMGZIP" or not obj.finishtimestamp:
+            return None
+
+        if (imagezipfile := obj.localresultimagezipfile) and (request := self.context.get("request")):
+            return request.build_absolute_uri(staticfiles_storage.url(imagezipfile))
 
         return None
 
     def get_result_imagestack_url(self, obj) -> str | None:
-        if obj.finishtimestamp and obj.localresultimagestackfile and (request := self.context.get("request")):
-            return request.build_absolute_uri(staticfiles_storage.url(obj.localresultimagestackfile))
+        if obj.request_type != "SSOSTACK" or not obj.finishtimestamp:
+            return None
+
+        if (imagestackfile := obj.localresultimagestackfile) and (request := self.context.get("request")):
+            return request.build_absolute_uri(staticfiles_storage.url(imagestackfile))
 
         return None
 
     @property
     def min_queuepos_relative(self) -> int:
-        """Return the queue offset, computed once per serializer rather than once per task.
+        """Return the queue offset, computed once per request rather than once per task.
 
         Task.min_queuepos_relative() is a global aggregate that does not depend on the task being
-        serialised. Under many=True this serializer instance is reused for every task in the page,
-        so memoising here turns N aggregate queries into one.
+        serialised. The viewset has made it already for the entity-tag, and hands it over in the
+        context as "min_queuepos_relative"; a serializer built without it makes the aggregate once.
+        Under many=True this serializer instance is reused for every task in the page, so the memo
+        turns N aggregate queries into one.
         """
         if self._min_queuepos_cache is UNSET:
-            self._min_queuepos_cache = Task.min_queuepos_relative()
+            given = self.context.get("min_queuepos_relative")
+            self._min_queuepos_cache = Task.min_queuepos_relative() if given is None else given
 
         return self._min_queuepos_cache
 
     def get_queuepos(self, obj) -> int | None:
-        if obj.finishtimestamp or obj.queuepos_relative is None:
-            return None
-
-        return obj.queuepos_relative - self.min_queuepos_relative
+        return obj.queuepos_from(self.min_queuepos_relative)
 
     @staticmethod
     def _rounded_seconds(value: float | None) -> float | None:
@@ -137,6 +164,8 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             return None
 
         try:
+            # one submission validates this same URL for every row of a radeclist, and then again
+            # for the whole list; views.create opens the scope that answers the repeats
             return validate_callback_url(value)
         except CallbackUrlError as ex:
             raise serializers.ValidationError({"callback_url": str(ex)}) from ex
@@ -186,6 +215,32 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return value
 
+    # the same finite check as ra and dec: a NaN here reached the database, where mysqlclient
+    # refuses it with a 500, and the runner's command line, as `pmra=nan`
+    @staticmethod
+    def validate_propermotion_ra(value):
+        if value is None or value == "":
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {"propermotion_ra": "propermotion_ra must be a finite floating-point number."}
+            )
+
+        return value
+
+    @staticmethod
+    def validate_propermotion_dec(value):
+        if value is None or value == "":
+            return value
+
+        if not is_finite_float(value):
+            raise serializers.ValidationError(
+                {"propermotion_dec": "propermotion_dec must be a finite floating-point number."}
+            )
+
+        return value
+
     @staticmethod
     def validate_mjd_min(value):
         if value is None or value == "":
@@ -224,6 +279,37 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return default
 
     @override
+    def to_representation(self, instance: Task) -> dict[str, t.Any]:
+        """Serialise a task, keeping the submitter's callback URL to the submitter.
+
+        Reading a task is public on purpose, but the callback carries no signature, so its URL is
+        the whole credential for whatever it points at. Emptied rather than dropped, so that the
+        shape of the response does not depend on who is asking.
+        """
+        data = super().to_representation(instance)
+
+        if data.get("callback_url") and not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
+            data["callback_url"] = None
+
+        return data
+
+    @override
+    def update(self, instance: Task, validated_data: dict[str, t.Any]) -> Task:
+        """Apply a change to a task, writing only the columns it touched.
+
+        A bare save() writes every column from the copy loaded at the start of the request, and the
+        runner and the queue write the same row meanwhile: a PATCH that overlapped a finish
+        reverted it, and the task was dispatched again. task_modified_datetime is named because it
+        is auto_now, which Django refreshes only when update_fields lists it.
+        """
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save(update_fields=[*validated_data, "task_modified_datetime"])
+
+        return instance
+
+    @override
     def validate(self, attrs):
         mpc_name = self.submitted(attrs, "mpc_name")
         request_type = self.submitted(attrs, "request_type")
@@ -231,6 +317,42 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         # RA 0 and Dec 0 are valid coordinates, so test for "not given" rather than falsiness
         ra_missing = self.submitted(attrs, "ra") in (None, "")
         dec_missing = self.submitted(attrs, "dec") in (None, "")
+
+        # Before the branch on the target: an IMGZIP task carries its parent's target, so these
+        # rules hold for an mpc_name request as much as for an ra/dec one.
+        # The stack request is offered to the accounts the settings name; the page's flag is only a
+        # hint to the browser, so the rule is applied here. On a creation, and on an update that
+        # turns another kind of task into one, or a PATCH of request_type would pass the gate.
+        becomes_stack = request_type == "SSOSTACK" and (
+            self.instance is None or self.instance.request_type != "SSOSTACK"
+        )
+        if becomes_stack and not stack_requests_allowed(self.context):
+            msg = "Image stack requests are not enabled for this account."
+            raise serializers.ValidationError(msg)
+
+        if request_type == "IMGZIP":
+            # An image request is not created here, and the message says so: parent_task_id is a
+            # ReadOnlyField that to_internal_value drops, so the old message asked for a field the
+            # caller could never send. RequestImages carries what an image request needs.
+            if self.instance is None:
+                msg = (
+                    "IMGZIP tasks cannot be created here. Ask for the images of a finished"
+                    " forced photometry task by POSTing to /queue/<id>/requestimages/."
+                )
+                raise serializers.ValidationError(msg)
+
+            # An existing one must keep its parent: the runner names the parent's data file as the
+            # list of observations to fetch images for.
+            parent_task_id = self.submitted(attrs, "parent_task_id")
+            if not parent_task_id:
+                msg = "An IMGZIP task must keep its parent_task_id set to an FP task."
+                raise serializers.ValidationError(msg)
+
+            try:
+                Task.objects.all().get(id=parent_task_id, request_type="FP")
+            except (ObjectDoesNotExist, IndexError):
+                msg = "An IMGZIP task must keep its parent_task_id set to an FP task id."
+                raise serializers.ValidationError(msg) from None
 
         if mpc_name:  # it's an MPC object name
             if not ra_missing or not dec_missing:
@@ -242,18 +364,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             msg = "Image stacking only works on MPC objects."
             raise serializers.ValidationError(msg)
         else:
-            if request_type == "IMGZIP":
-                parent_task_id = self.submitted(attrs, "parent_task_id")
-                if not parent_task_id:
-                    msg = "IMGZIP requests must have a parent_task_id set to an FP task."
-                    raise serializers.ValidationError(msg)
-
-                try:
-                    Task.objects.all().get(id=parent_task_id, request_type="FP")
-                except (ObjectDoesNotExist, IndexError):
-                    msg = "IMGZIP requests must have a parent_task_id set to an FP task id."
-                    raise serializers.ValidationError(msg) from None
-
             # The target rules, which apply to an IMGZIP task as much as to any other: an image
             # request carries the parent's own coordinates (see Task.new_imagerequest) and the
             # runner dispatches on them, and task_target_is_mpcname_or_radec requires a target of

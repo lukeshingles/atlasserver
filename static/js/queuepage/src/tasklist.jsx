@@ -2,7 +2,7 @@
 
 import React from "react"
 import ReactDOM from 'react-dom';
-import { subscribe } from "runnerstatus";
+import { pollingPaused, subscribe } from "runnerstatus";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
@@ -58,8 +58,20 @@ function pageTitle(taskid, finishedwhileaway) {
     return finishedwhileaway > 0 ? '(' + finishedwhileaway + ') ' + title : title;
 }
 
-function pollingPaused() {
-    return document[hidden] || !user_is_active;
+// How much later than a task's start a runner snapshot must be written before its silence about
+// the task means the task was given back. The runner writes its status every fifteen seconds.
+const ATTEMPTED_AFTER_MS = 15000;
+
+/**
+ * Start a request in a family that only honours its newest member, and return the test for it.
+ *
+ * Each family keeps a counter in a ref; the counter moves on when a newer request starts. The test
+ * says whether this request is still the newest, and a response of one that is not is dropped:
+ * every write it would make is a rewind, and the newer request answers the same question.
+ */
+function startRequest(counterRef) {
+    const requestnumber = ++counterRef.current;
+    return () => requestnumber == counterRef.current;
 }
 
 /**
@@ -80,13 +92,13 @@ function tracksQueuePosition(task) {
 /**
  * Put a number on the navbar's Queue badge, or take the badge away at zero.
  *
- * The badge is rendered by the server, which is right for every other page -- each navigation
- * re-renders it -- but this page never navigates: submitting, cancelling and finishing all happen
- * without a page load, so the badge it was drawn with goes stale the moment anything changes.
+ * The server renders the badge, which is right for every other page: each navigation re-renders
+ * it. This page never navigates. Submitting, cancelling and finishing all happen without a page
+ * load, so the badge it was drawn with goes stale the moment anything changes.
  *
- * A direct DOM call because the navbar is not React's, the same reason the row animations are; and
- * from the queuepositions response because that is the user's whole queued set rather than the page
- * of rows on screen, so it is the count the badge wants.
+ * A direct DOM call, because the navbar is not React's; the row animations are direct for the same
+ * reason. The count comes from the queuepositions response, because that is the user's whole queued
+ * set rather than the page of rows on screen. That set is the count the badge wants.
  */
 function updateQueueBadge(count) {
     const badge = document.querySelector('.queuecount');
@@ -373,6 +385,7 @@ function taskPropsEqual(prev, next) {
         prev.hidePlot === next.hidePlot
         // a string or null, so this stays the cheap check the rest of this function avoids
         && prev.waitestimate === next.waitestimate
+        && prev.attempted === next.attempted
         && (prev.taskdata === next.taskdata
             || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
     );
@@ -514,6 +527,12 @@ export const Task = React.memo(function Task(props) {
         buttontext = 'Delete';
         statuslabel = task.error_msg != null ? 'Error' : 'Finished';
         statusbadge = task.error_msg != null ? 'taskbadge-error' : 'taskbadge-finished';
+    } else if (task.starttimestamp != null && props.attempted) {
+        // started once and given back: the runner will try it again, and until then nothing runs
+        statusclass = "queued started";
+        buttontext = 'Cancel';
+        statuslabel = 'Attempted';
+        statusbadge = 'taskbadge-queued';
     } else if (task.starttimestamp != null) {
         statusclass = "queued started";
         buttontext = 'Cancel';
@@ -709,6 +728,18 @@ export const Task = React.memo(function Task(props) {
                 taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
             }
         }
+    } else if (task.starttimestamp != null && props.attempted) {
+        // The runner started this task and released it without a result, so the attempt will be
+        // made again; the bar is still because nothing is running for it now.
+        taskbox.push(
+            <div key="status" className="taskstatus running">
+                Attempted (started {timeelapsed} seconds ago); the task runner will try again
+                <div className="progress taskprogress" role="progressbar"
+                    aria-label={'Task ' + task.id + ' waits for another attempt'}>
+                    <div className="progress-bar progress-bar-striped"></div>
+                </div>
+            </div>
+        );
     } else if (task.starttimestamp != null) {
         // An indeterminate bar, striped and moving: the server reports that a task has started and
         // how long ago, and nothing about how far through it is, so there is no fraction to draw.
@@ -768,7 +799,6 @@ let tasklist_api_request_active = false;
 // set when a refresh was requested while a request was already in flight; the settled request
 // re-fetches so the refresh is delayed rather than lost
 let tasklist_refresh_queued = false;
-const tasklist_fetchcache = {};
 // remembers the ETag of each polled page so that an unchanged page can be answered with a 304
 const tasklist_pollcache = new PollCache();
 // counts history navigations, so that a response can tell whether one happened while it was in
@@ -915,6 +945,17 @@ export function TaskPage() {
      */
     const awayRequestRef = React.useRef(0);
 
+    /*
+     * The same again for the task list itself, which had no such counter at all.
+     *
+     * Two of these can be in flight at once: a user-triggered fetch skips the
+     * tasklist_api_request_active guard. The url check at the apply site cannot tell them apart,
+     * because both are requests for the same url. So the older answer landing second put back the
+     * rows from before -- and, worse, wrote its body into the cache, after which a 304 restored
+     * that stale copy for as long as the tag held, rather than for one poll.
+     */
+    const tasklistRequestRef = React.useRef(0);
+
     /* Ticks skipped since the queue was last reported empty; see EMPTY_QUEUE_TICKS. */
     const emptyticksRef = React.useRef(0);
 
@@ -1006,7 +1047,7 @@ export function TaskPage() {
             emptyticksRef.current = 0;
         }
 
-        const requestnumber = ++queueposRequestRef.current;
+        const isCurrent = startRequest(queueposRequestRef);
 
         fetch(queuepositions_url,
             {
@@ -1020,7 +1061,7 @@ export function TaskPage() {
                 // out of date and every write below it would be a rewind. Dropped rather than
                 // merged: the newer request is asking the same question of the same endpoint, so
                 // there is nothing here it will not also say, and nothing is lost by waiting for it.
-                if (requestnumber != queueposRequestRef.current) {
+                if (!isCurrent()) {
                     debug_log('discarding a queue positions response overtaken by a later request');
                     return;
                 }
@@ -1138,11 +1179,9 @@ export function TaskPage() {
                 // user-triggered fetch (a filter, the pager, a delete) re-applies the body held
                 // here and visibly rewinds the positions that were just corrected. setState
                 // updates stateRef before it returns, so the new results are readable here.
-                const cached = tasklist_fetchcache[geturl];
+                const cached = tasklist_pollcache.getBody(geturl);
                 if (cached != null && cached.results != null && geturl == window.location.href) {
-                    const patched = { ...cached, results: stateRef.current.results };
-                    tasklist_fetchcache[geturl] = patched;
-                    tasklist_pollcache.storeBody(geturl, patched);
+                    tasklist_pollcache.storeBody(geturl, { ...cached, results: stateRef.current.results });
                 }
             })
             .catch(error => {
@@ -1181,7 +1220,7 @@ export function TaskPage() {
             return;
         }
 
-        const requestnumber = ++awayRequestRef.current;
+        const isCurrent = startRequest(awayRequestRef);
 
         fetch(queuepositions_url,
             {
@@ -1193,7 +1232,7 @@ export function TaskPage() {
             .then(data => {
                 // overtaken by a later away poll, so this is the older of two answers about the same
                 // queue; see awayRequestRef
-                if (requestnumber != awayRequestRef.current) {
+                if (!isCurrent()) {
                     debug_log('discarding an away count response overtaken by a later request');
                     return;
                 }
@@ -1257,12 +1296,11 @@ export function TaskPage() {
         // start by applying a cached version if we have it
         // then send out an HTTP request and update when available
         if (usertriggered) {
-            const tasklist_fetchcachematch = (window.location.href in tasklist_fetchcache);
-            if (tasklist_fetchcachematch) {
-                debug_log('using tasklist_fetchcache before GET response', window.location.href);
-                setState(tasklist_fetchcache[window.location.href]);
+            if (tasklist_pollcache.hasBody(window.location.href)) {
+                debug_log('using the cached body before the GET response', window.location.href);
+                setState(tasklist_pollcache.getBody(window.location.href));
             } else {
-                debug_log('no tasklist_fetchcache for', window.location.href);
+                debug_log('no cached body for', window.location.href);
             }
         }
 
@@ -1277,6 +1315,9 @@ export function TaskPage() {
 
         tasklist_api_request_active = true;
         const get_url = window.location.href;
+        const isCurrent = startRequest(tasklistRequestRef);
+        // held until the body is applied below; see the note at the storeEtag call
+        let responseetag = null;
         debug_log('Fetching task list from', get_url);
         const request_headers = tasklist_pollcache.requestHeaders(get_url, {
             ...csrfHeader(),
@@ -1293,9 +1334,19 @@ export function TaskPage() {
                 redirect: "manual"
             })
             .then((response) => {
-                tasklist_api_request_active = false;
-                if (tasklist_pollcache.noteResponse(get_url, response.status, response.headers.get('ETag'))
-                    === NOT_MODIFIED) {
+                // Checked here as well as below, because everything from this point writes state:
+                // an overtaken failure would otherwise leave "Server error" on screen after a
+                // newer request had succeeded, and an overtaken success would clear the error a
+                // newer failed one had just set. The check below covers the rest of the window,
+                // where a newer request starts while this body is still being parsed.
+                if (!isCurrent()) {
+                    debug_log('discarding a task list response overtaken by a later request');
+                    return null;
+                }
+
+                // held until the body is applied below, and stored beside it; see PollCache.noteResponse
+                responseetag = response.headers.get('ETag');
+                if (tasklist_pollcache.noteResponse(response.status) === NOT_MODIFIED) {
                     debug_log('Task list unchanged (304)', get_url);
                     setState({ tasklist_api_error: '' });
                     return NOT_MODIFIED;
@@ -1336,12 +1387,24 @@ export function TaskPage() {
                 }
                 return null;
             }).catch(error => {
-                tasklist_api_request_active = false;
                 console.log('Get task list HTTP request failed', error);
+                if (!isCurrent()) {
+                    // a newer request is in flight, and its answer is the one worth reporting
+                    return;
+                }
                 // in state, so that this actually reaches the screen. The "last updated" time is
                 // deliberately left where it was: it is what tells the user how stale the page is.
                 setState({ tasklist_api_error: 'Connection error' });
             }).then(data => {
+                // The request is active until its body is here, whatever the outcome above: a
+                // clear at the headers let the next tick start a newer request while this body was
+                // still arriving, and the newer request then discarded it -- with a body slower
+                // than the poll interval, every body, so the list never updated. The flag belongs
+                // to the newest request, so an overtaken one leaves it alone.
+                if (isCurrent()) {
+                    tasklist_api_request_active = false;
+                }
+
                 if (tasklist_refresh_queued && !tasklist_api_request_active) {
                     // something asked for a refresh while this request was in flight; this
                     // response predates whatever prompted that, so fetch again right away.
@@ -1351,6 +1414,15 @@ export function TaskPage() {
                     tasklist_refresh_queued = false;
                     setTimeout(() => { if (!pollingPaused()) { fetchData(false); } }, 0);
                 }
+
+                // A newer request for the task list has started since this one, so this answer is
+                // already out of date; see tasklistRequestRef. Placed above every write below it,
+                // the two caches included: a stale body stored there outlives the response itself.
+                if (!isCurrent()) {
+                    debug_log('discarding a task list response overtaken by a later request');
+                    return;
+                }
+
                 let statechanges = null;
                 if (data === NOT_MODIFIED) {
                     // nothing changed server-side, but the poll did succeed, so the "last updated"
@@ -1396,13 +1468,14 @@ export function TaskPage() {
                     // this request was in flight those differ, and storing the old page's body
                     // under the new page's key would both show the wrong tasks on a later revisit
                     // and let an If-None-Match be sent for a page we do not actually hold
-                    tasklist_fetchcache[get_url] = statechanges;
                     // an If-None-Match is only worth sending once a rendered copy exists to fall
-                    // back on, since a 304 carries no body
+                    // back on, since a 304 carries no body. The tag goes in beside it, never
+                    // before it: the two describe one page and have to move together.
                     tasklist_pollcache.storeBody(get_url, statechanges);
+                    tasklist_pollcache.storeEtag(get_url, responseetag);
                     if (get_url == window.location.href) {
                         debug_log('Applying results from', get_url);
-                        // the flag goes on a copy: statechanges was just stored in both caches,
+                        // the flag goes on a copy: statechanges was just stored in the cache,
                         // and setting it on the shared object polluted every later re-application
                         // of the cached body — the eager pre-request restore and the 304 fallback
                         // would scroll an untouched page to the top on a routine poll.
@@ -1637,7 +1710,9 @@ export function TaskPage() {
     }
 
     if (!singletaskmode) {
-        const allow_stack_rock = new URL(state.dataurl).searchParams.get('allow_stack_rock') == 'true';
+        // a global from the page, set by the server from the same rule the serializer applies. It
+        // was read from the URL, which offered the option to anyone who typed the parameter -- and
+        // the server accepted the request, because nothing there checked.
 
         pagehtml.push(<NewRequest key="newrequest" fetchData={fetchData} allow_stack_rock={allow_stack_rock} />);
     }
@@ -1700,11 +1775,25 @@ export function TaskPage() {
             runnerstatus,
         })));
 
+        // A task with a start time that the runner does not list as running was started once and
+        // given back, for example when the remote machine was unreachable. Known only from a fresh
+        // status of a runner that reports the list, and only from one written a full write
+        // interval after the task started: a snapshot written just before the dispatch cannot
+        // list the task, and the start time is truncated to the second. Otherwise the row keeps
+        // saying "running". An unchanged poll carries its write time onto the kept status, so the
+        // label follows the first snapshot written late enough, at the next render.
+        const attempted = (task) => (
+            task.starttimestamp != null && task.finishtimestamp == null
+            && runnerstatus != null && !runnerstatus.stale
+            && Array.isArray(runnerstatus.running_taskids) && !runnerstatus.running_taskids.includes(task.id)
+            && Date.parse(runnerstatus.written) - Date.parse(task.starttimestamp) > ATTEMPTED_AFTER_MS
+        );
+
         tasklist = [
             <ul key="ultasklist" className="tasks">
                 {state.results.map((task) => (
                     <Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView}
-                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} />))}
+                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} attempted={attempted(task)} />))}
             </ul>,
             <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
         ];

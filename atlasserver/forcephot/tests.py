@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import datetime
 import hashlib
@@ -28,6 +29,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core import mail as django_mail
 from django.core.cache import caches
+from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.db import IntegrityError
 from django.db import models
@@ -43,10 +45,14 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.serializers import ValidationError
 
+from atlasserver import atlastaskrunner
+from atlasserver.forcephot import locks
 from atlasserver.forcephot import misc
 from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot import throttles
 from atlasserver.forcephot import verification
 from atlasserver.forcephot import views
+from atlasserver.forcephot import webhooks
 from atlasserver.forcephot.context_processors import queued_task_count
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
@@ -985,43 +991,36 @@ class TaskDeleteFileTests(TestCase):
         resultfile.touch()
         return task
 
-    def test_datafile_kept_while_an_image_request_needs_it(self) -> None:
+    def test_the_datafile_goes_with_the_parent_even_while_an_image_request_is_queued(self) -> None:
+        # the request works from its own copy (see Task.copy_parent_datafile), so nothing reads
+        # the parent's file once the parent is gone -- and the web server serves the parent's
+        # path without asking Django, so a file kept there stays readable by any old link
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
             parent = self.make_finished_task(Path(tmpdir))
             Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
 
             parent.delete()
 
-            # the queued image request rsyncs this file to the compute host as its input
-            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
 
-    def test_datafile_removed_once_the_image_request_is_deleted(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+    def test_an_image_request_keeps_its_copy_until_it_is_deleted(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+        ):
             parent = self.make_finished_task(Path(tmpdir))
-            Path(tmpdir, f"{parent.localresultfileprefix()}.jpg").touch()
             imagerequest = Task.objects.create(
                 user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent
             )
+            assert imagerequest.copy_parent_datafile()
+            inputcopy = imagerequest.inputfile()
 
             parent.delete()
-            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert inputcopy.is_file(), "the request lost its input when the parent went"
 
             imagerequest.delete()
-
-            # nothing else revisits the parent, so its files must be collected here
-            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
-            assert not Path(tmpdir, f"{parent.localresultfileprefix()}.jpg").exists()
-
-    def test_datafile_kept_while_another_image_request_remains(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
-            parent = self.make_finished_task(Path(tmpdir))
-            first = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
-            Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=parent)
-
-            parent.delete()
-            first.delete()
-
-            assert Path(tmpdir, f"{parent.localresultfileprefix()}.txt").exists()
+            assert not inputcopy.exists(), "the copy outlived the request"
 
     def test_datafile_deleted_when_no_image_request_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
@@ -1072,6 +1071,66 @@ class TaskUpdateTests(TestCase):
         task.refresh_from_db()
         assert task.comment == "just a comment"
         assert task.ra == 1.0
+
+    def test_a_patch_does_not_revert_a_concurrent_runner_write(self) -> None:
+        """The row is loaded at the start of the request and saved at the end of it.
+
+        ModelSerializer.update() ended in a bare instance.save(), which wrote every column from
+        that stale copy. The task runner writes the same row with queryset updates throughout, so
+        a PATCH landing after one of those reverted it -- and a finished task whose finishtimestamp
+        goes back to NULL is dispatched, and emailed, all over again.
+        """
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, comment="before")
+        original_validate = ForcePhotTaskSerializer.validate
+
+        def runner_finishes_it_first(serializer: t.Any, attrs: t.Any) -> t.Any:
+            # runs after get_object() loaded the row and before perform_update saves it, which is
+            # exactly the window. The same statements as taskrunner.main.mark_started/mark_finished
+            Task.objects.filter(pk=task.id).update(
+                starttimestamp=timezone.now(),
+                finishtimestamp=timezone.now(),
+                error_msg="remote failure",
+                attempt_count=1,
+                queuepos_relative=None,
+            )
+            return original_validate(serializer, attrs)
+
+        self.client.force_login(self.owner)
+
+        with mock.patch.object(ForcePhotTaskSerializer, "validate", runner_finishes_it_first):
+            response = self.client.patch(
+                reverse("task-detail", args=[task.id]),
+                data=json.dumps({"comment": "after"}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.comment == "after", "the change the user asked for was lost"
+        assert task.finishtimestamp is not None, "the PATCH reverted the runner's finishtimestamp"
+        assert task.error_msg == "remote failure", "the PATCH reverted the runner's error_msg"
+        assert task.attempt_count == 1, "the PATCH reverted the runner's attempt_count"
+        assert not Task.queued().filter(pk=task.id).exists(), "a finished task went back into the queue"
+
+    def test_a_patch_still_moves_the_modified_time(self) -> None:
+        # task_modified_datetime is auto_now, and Django only refreshes such a field when
+        # update_fields names it. The task list's entity tag is built from it, so a change that
+        # left it alone would be invisible to every polling browser.
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0)
+        before = task.task_modified_datetime
+        self.client.force_login(self.owner)
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"comment": "edited"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.task_modified_datetime > before, "the entity tag would not have moved"
 
 
 class PermissionResponseTests(TestCase):
@@ -1426,6 +1485,21 @@ class UsageChartTickTests(SimpleTestCase):
 # classes build result files from it, and reaching across for another class's attribute made the
 # coupling invisible to a reader of either one.
 RESULTFILE_HEADER = "###MJD m dm uJy duJy F err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
+# one row the plot view keeps: duJy is under its 4000 limit and chi/N under its 100
+RESULTFILE_DATAROW = "59000.0 19.0 0.1 100 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+
+
+def write_plotscript_stubs(staticroot: str) -> None:
+    """Put a plotting script where resultplotdatajs will look for it under STATIC_ROOT.
+
+    The view appends the script to any response that carries data. Both names are written because
+    which one it asks for depends on DEBUG, and Django's test runner turns DEBUG off whatever the
+    settings module says.
+    """
+    for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
+        plotscript = Path(staticroot, name)
+        plotscript.parent.mkdir(parents=True, exist_ok=True)
+        plotscript.write_text("/* stub */\n")
 
 
 class ClientLocationTests(TestCase):
@@ -1657,6 +1731,74 @@ class TaskDetailIsPublicTests(TestCase):
         response = self.get_detail(accept="text/html")
         assert response.status_code == 200, response.status_code
 
+    def test_the_callback_url_is_kept_to_the_submitter(self) -> None:
+        """What is public is the measurement, not the submitter's webhook endpoint.
+
+        The callback carries no signature and no shared secret, so its URL is the whole credential
+        for whatever it points at -- and such URLs routinely hold a secret in the path or query.
+        Task ids are sequential, so a reader who could see this field could walk them and collect
+        every API user's.
+        """
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+
+        for caller, expected in (
+            (None, None),
+            (self.other, None),
+            (self.owner, "https://hooks.example.com/t/secret-token"),
+            (self.staff, "https://hooks.example.com/t/secret-token"),
+        ):
+            with self.subTest(caller=caller and caller.username):
+                self.client.logout()
+                if caller is not None:
+                    self.client.force_login(caller)
+
+                body = self.get_detail().json()
+
+                # the key is always present, so the shape does not depend on who is asking
+                assert "callback_url" in body
+                assert body["callback_url"] == expected, body["callback_url"]
+
+    def test_the_entity_tag_distinguishes_the_two_bodies(self) -> None:
+        # the body now depends on who is asking, so a single tag for both would let a caller
+        # presenting the other one's tag be answered 304 with a body never meant for them
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+
+        self.client.force_login(self.owner)
+        owneretag = self.get_detail()["ETag"]
+
+        self.client.logout()
+        anonetag = self.get_detail()["ETag"]
+
+        assert owneretag
+        assert anonetag
+        assert owneretag != anonetag, "one tag describes two different bodies"
+
+    def test_the_owner_still_reads_it_back_from_the_task_list(self) -> None:
+        # the list is scoped to the requesting user, so it cannot leak; what it must not do is
+        # hide the field from the one caller who is allowed to see it
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+        self.client.force_login(self.owner)
+
+        body = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json").json()
+
+        assert body["results"][0]["callback_url"] == "https://hooks.example.com/t/secret-token"
+
+    def test_a_list_render_blanks_it_for_a_non_owner(self) -> None:
+        # the rule belongs to the serializer rather than to one view, so it has to hold under
+        # many=True as well: the list view is scoped to the requester today, and this is what
+        # keeps the field safe if that ever stops being true
+        self.task.callback_url = "https://hooks.example.com/t/secret-token"
+        self.task.save(update_fields=["callback_url"])
+        request = RequestFactory().get("/")
+        request.user = self.other
+
+        data = ForcePhotTaskSerializer([self.task], many=True, context={"request": request}).data
+
+        assert data[0]["callback_url"] is None
+
     def test_the_same_caller_may_read_but_not_change(self) -> None:
         # the boundary this class exists to describe, asserted on one caller in one test: the
         # refusal on its own is PermissionResponseTests' subject, the contrast is this one's
@@ -1722,9 +1864,384 @@ class TaskResultsArePublicTests(TestCase):
                     assert self.client.get(url).status_code == 200, url
 
 
+class ResultPlotDataColumnTests(TestCase):
+    """A result file this view cannot read must give an empty plot, not a server error.
+
+    The guard turns an unusable file into a blank plot, and the handler around the parse catches
+    ValueError. df.query("F == @filterband") resolves "F" by name, and pandas raises
+    UndefinedVariableError for a name it cannot find -- a NameError, so neither the guard (which
+    did not name the column) nor the handler (which catches a different class) stopped it.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="plotcols", email="pc@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
+        )
+        caches["taskderived"].clear()
+
+    def tearDown(self) -> None:
+        caches["taskderived"].clear()
+
+    def request_plot(self, header: str, rows: str = "") -> t.Any:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, self.task.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text(header + "\n" + rows)
+
+            write_plotscript_stubs(tmpdir)
+
+            return self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
+
+    def test_a_file_with_no_filter_column_gives_an_empty_plot(self) -> None:
+        # every column the view reads except F, so the old guard let it through
+        header = "###MJD m dm uJy duJy err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
+        rows = "59000.0 19.0 0.1 100 10 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+
+        response = self.request_plot(header, rows)
+
+        assert response.status_code == 200, response.status_code
+        assert b"jslcdataglobal" not in response.content, "a file with no F column was plotted anyway"
+
+    def test_a_complete_file_is_still_plotted(self) -> None:
+        response = self.request_plot(RESULTFILE_HEADER, RESULTFILE_DATAROW)
+
+        assert response.status_code == 200, response.status_code
+        assert b"jslcdataglobal" in response.content, "a readable file produced no plot data"
+
+
+class ArchivedTaskResultTests(TestCase):
+    """Deleting a finished task must put its results out of reach, not only out of the list.
+
+    delete() archives the row and reclaims its files. The result file and plot views read the row
+    by id, so without Task.live() they answered for a deleted task -- and while the data file was
+    kept for a live image request, they served it to anyone, and taskpdfplot and resultplotdatajs
+    rebuilt the .pdf and the cached plot data that the delete reclaimed.
+    ForcePhotTaskViewSet.retrieve answers 404 for the same task.
+    """
+
+    def setUp(self) -> None:
+        self.owner = User.objects.create_user(username="archowner", email="ao@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
+        )
+        # a live image request: the case in which the parent's data file used to be kept
+        self.child = self.task.new_imagerequest(user=self.owner, from_api=False)
+        self.child.save()
+        caches["taskderived"].clear()
+
+    def tearDown(self) -> None:
+        caches["taskderived"].clear()
+
+    def urls(self) -> list[str]:
+        return [
+            reverse("taskresultdata", args=[self.task.id]),
+            reverse("taskpreviewimage", args=[self.task.id]),
+            reverse("taskpdfplot", args=[self.task.id]),
+            reverse("resultplotdatajs", args=[self.task.id]),
+        ]
+
+    def write_result_files(self, tmpdir: str) -> None:
+        prefix = Path(tmpdir, self.task.localresultfileprefix())
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        # a real data row, not just the header: the plot view writes nothing to its cache for a
+        # file with no rows, so a header-only fixture would make the cache assertion below hold
+        # whether or not the archived task was refused
+        prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n" + RESULTFILE_DATAROW)
+        for suffix in (".jpg", ".pdf"):
+            prefix.with_suffix(suffix).write_text("results")
+
+        write_plotscript_stubs(tmpdir)
+
+    def test_a_live_task_is_still_served(self) -> None:
+        # the filter must not lock the data that is public on purpose
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+
+            for url in self.urls():
+                with self.subTest(url=url):
+                    assert self.client.get(url).status_code == 200, url
+
+    def test_the_results_of_a_deleted_task_are_not_served(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+            self.task.delete()
+
+            # the data file goes with the row: an image request works from its own copy
+            assert not Path(tmpdir, self.task.localresultfileprefix()).with_suffix(".txt").exists()
+            assert Task.objects.get(id=self.task.id).is_archived
+
+            for url in self.urls():
+                with self.subTest(url=url):
+                    assert self.client.get(url).status_code == 404, url
+
+    def test_the_child_id_does_not_reach_a_deleted_parent_preview(self) -> None:
+        # the preview belongs to the parent and the child shares it, so filtering on the id in the
+        # URL is not enough: the archived parent's image was still served under the child's id,
+        # which is trivially guessable because the ids are sequential
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+            self.child.finishtimestamp = timezone.now()
+            self.child.save()
+
+            assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 200
+
+            self.task.delete()
+
+            # collected with the row, not merely hidden: results are served from STATIC_URL by the
+            # web server without asking Django, so a file left on disk stays readable by any link
+            # published before the delete
+            prefix = Path(tmpdir, self.task.localresultfileprefix())
+            assert not prefix.with_suffix(".jpg").exists(), "the preview outlived its row"
+            assert not prefix.with_suffix(".txt").exists(), "the data file outlived its row"
+            assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
+
+            # and with the file put back -- a row archived before the .jpg went with it, or a
+            # copy that reappears -- the refusal has to come from the model, not from the disk
+            prefix.with_suffix(".jpg").write_text("results")
+            self.child.refresh_from_db()
+            assert self.child.localresultpreviewimagefile is None, "the model resolved an archived parent's preview"
+            assert self.client.get(reverse("taskpreviewimage", args=[self.child.id])).status_code == 404
+
+    def test_the_plot_cache_is_not_repopulated_after_a_delete(self) -> None:
+        # forget_derived_cache() drops the entry as part of the delete; a reader with no filter
+        # re-read the surviving .txt and wrote it straight back, for another thirty days
+        cachekey = misc.resultplotdatajs_cachekey(self.task.id)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_files(tmpdir)
+
+            # the control: this fixture really does produce something worth caching, so the
+            # assertion after the delete is about the delete and not about an empty plot
+            self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
+            assert caches["taskderived"].get(cachekey) is not None, "the fixture caches nothing"
+
+            self.task.delete()
+            assert caches["taskderived"].get(cachekey) is None, "the delete left the entry behind"
+
+            self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
+
+            assert caches["taskderived"].get(cachekey) is None
+
+
 class RequestImagesTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="imgreq", email="i@example.com", password=None)
+
+    def test_creating_an_imgzip_through_the_api_names_the_endpoint_that_does_it(self) -> None:
+        """The old message asked for parent_task_id, which this serializer will not accept.
+
+        parent_task_id is neither a model field name nor a relation name, so ModelSerializer builds
+        it as a ReadOnlyField and to_internal_value drops it. Every such request was therefore a
+        400 the client could not satisfy, for a request type the generated schema advertises.
+        """
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "IMGZIP", "parent_task_id": parent.id, "ra": 1.0, "dec": 2.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        body = json.dumps(response.json())
+        assert "requestimages" in body, body
+        assert "parent_task_id" not in body, "the error still asks for a field this serializer drops"
+        assert not Task.objects.filter(request_type="IMGZIP").exists()
+
+    def test_an_image_request_takes_its_own_copy_of_the_data_file(self) -> None:
+        # outside STATIC_ROOT, named for the request: the parent's file can then go whenever the
+        # parent is deleted, and nothing a deleted task owned stays at a public path for it
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+        ):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+
+            response = self.client.post(reverse("requestimages", args=[parent.id]))
+
+            assert response.status_code == 302, response.status_code
+            child = Task.objects.get(request_type="IMGZIP")
+            assert child.inputfile() == Path(inputsdir, f"job{child.id:05d}.txt")
+            assert child.inputfile().read_text() == "observations"
+            assert not str(child.inputfile()).startswith(tmpdir), "the copy is at a public path"
+
+    def test_the_parent_row_is_locked_while_the_request_is_created(self) -> None:
+        # two overlapping requests for one parent must not both find no live image request, and a
+        # delete of the parent must not reclaim the data file under the copy being made of it.
+        # SQLite has no row locks and Django emits nothing for it there; MySQL, which CI and
+        # production use, does.
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+
+            with CaptureQueriesContext(connection) as queries:
+                self.client.post(reverse("requestimages", args=[parent.id]))
+
+        parentreads = [q["sql"] for q in queries if "forcephot_task" in q["sql"] and f"= {parent.id}" in q["sql"]]
+        assert any("FOR UPDATE" in sql for sql in parentreads), parentreads
+
+    def test_a_queued_request_without_its_own_input_gets_a_copy_before_the_parent_goes(self) -> None:
+        # an image request from before requests had their own copy reads the parent's file when
+        # it is dispatched; deleting the parent used to remove that file and fail the request
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.save()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputs,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputs)),
+        ):
+            datafile = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".txt")
+            datafile.parent.mkdir(parents=True, exist_ok=True)
+            datafile.write_text("observations")
+            assert not child.inputfile().exists()
+
+            parent.delete()
+
+            assert not datafile.exists(), "the parent's data file was kept"
+            assert child.inputfile().read_text() == "observations", "the queued request lost its input"
+
+    def test_a_delete_takes_the_same_lock_before_it_reclaims_files(self) -> None:
+        # a delete of the parent locks its row first, so it waits for a copy of its data file that
+        # an image request is making, rather than reclaiming the file under it
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+
+        with CaptureQueriesContext(connection) as queries:
+            parent.delete()
+
+        assert any("FOR UPDATE" in q["sql"] for q in queries), [q["sql"] for q in queries]
+
+    def test_the_queue_recalculation_waits_for_the_commit(self) -> None:
+        # requested inside the transaction, the runner could read the request, recalculate without
+        # the new row, and count the request as handled; the row would then keep its provisional
+        # position until the backstop
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+
+            with (
+                mock.patch.object(views, "request_queue_recalc") as recalc,
+                self.captureOnCommitCallbacks() as callbacks,
+            ):
+                response = self.client.post(reverse("requestimages", args=[parent.id]))
+                assert response.status_code == 302, response.status_code
+                assert not recalc.called, "the recalculation was requested before the commit"
+
+            assert len(callbacks) == 1, callbacks
+            callbacks[0]()
+            assert recalc.called, "no recalculation was registered for the commit"
+
+    def test_a_request_whose_data_file_has_gone_queues_nothing(self) -> None:
+        # nothing could ever be fetched for it, so the row is rolled back rather than queued for a
+        # run that is certain to fail; the message is the one the runner would have given
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            response = self.client.post(reverse("requestimages", args=[parent.id]))
+
+        assert response.status_code == 404, response.status_code
+        assert "no longer available" in json.dumps(response.json())
+        assert not Task.objects.filter(request_type="IMGZIP").exists(), "a request with no input was queued"
+
+    def test_a_second_image_request_for_the_same_task_is_refused(self) -> None:
+        # the child inherits every field from the parent, so a second one is the same request
+        # again -- and it competes with the first for the result file named for that parent
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n")
+
+            first = self.client.post(reverse("requestimages", args=[parent.id]))
+            second = self.client.post(reverse("requestimages", args=[parent.id]))
+
+        assert first.status_code == 302, first.status_code
+        assert second.status_code == 409, second.status_code
+        assert Task.objects.filter(request_type="IMGZIP").count() == 1
+
+    def test_image_requests_are_throttled_like_other_submissions(self) -> None:
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        self.client.force_login(self.user)
+        caches["throttle"].clear()
+
+        try:
+            with mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephottasks": "2/min"}):
+                statuses = [self.client.post(reverse("requestimages", args=[parent.id])).status_code for _ in range(3)]
+        finally:
+            caches["throttle"].clear()
+
+        assert 429 in statuses, statuses
+
+    def test_an_mpc_name_cannot_smuggle_an_imgzip_task_past_the_refusal(self) -> None:
+        """The refusal used to sit inside the branch that handles ra/dec targets only.
+
+        An IMGZIP task carries whichever target its parent had, so a request naming an mpc_name
+        took the other branch and created a row with no parent. The runner cannot name a result
+        file for one -- it formats parent_task_id, which is NULL -- so the worker dies before it
+        can record a finish time, and the task is dispatched again on every pass forever.
+        """
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "IMGZIP", "mpc_name": "Makemake"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        assert "requestimages" in json.dumps(response.json()), response.content
+        assert not Task.objects.filter(request_type="IMGZIP").exists()
+
+    def test_an_existing_image_request_can_still_be_edited(self) -> None:
+        # the refusal above is for creation only: RequestImages makes the row, and its owner must
+        # still be able to change the ordinary fields of it
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.save()
+        self.client.force_login(self.user)
+
+        response = self.client.patch(
+            reverse("task-detail", args=[child.id]),
+            json.dumps({"comment": "edited"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
+        child.refresh_from_db()
+        assert child.comment == "edited"
+        # via the relation, not the attname: parent_task_id is the implicit column Django adds,
+        # and the type checkers do not see it -- which is the same quirk that made the serializer
+        # build it as a read-only field
+        assert child.parent_task == parent
 
     def test_clearing_the_target_of_an_image_request_is_a_400(self) -> None:
         """An IMGZIP task needs a target like any other, and the database says so.
@@ -1853,6 +2370,256 @@ class RequestImagesTests(TestCase):
         assert not Task.objects.filter(parent_task_id=task.id).exists()
 
 
+class ProperMotionValidationTests(TestCase):
+    def test_a_non_finite_proper_motion_is_a_400(self) -> None:
+        # ra, dec and the MJD bounds each refuse NaN; the proper motions did not, and a NaN reached
+        # the database (a 500 under MySQL) and the remote command line as pmra=nan
+        user = User.objects.create_user(username="pm", email="pm@example.com", password=None)
+        self.client.force_login(user)
+
+        for field in ("propermotion_ra", "propermotion_dec"):
+            with self.subTest(field=field):
+                response = self.client.post(
+                    reverse("task-list"),
+                    data=json.dumps({"ra": 1.0, "dec": 2.0, "radec_epoch_year": 2020.0, field: "NaN"}),
+                    content_type="application/json",
+                    HTTP_ACCEPT="application/json",
+                )
+
+                assert response.status_code == 400, response.content
+                assert field in response.json(), response.content
+
+
+class StackRequestGateTests(TestCase):
+    """The image stack request is offered to the accounts settings.TEST_USERS names, and to staff.
+
+    The queue page's flag was a URL parameter the visitor could type, and the server checked nothing:
+    any token holder could run the stacking script on the science machine.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="stacker", email="st@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def submit_stack(self) -> t.Any:
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "SSOSTACK", "mpc_name": "Makemake"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_an_ordinary_account_cannot_submit_one(self) -> None:
+        response = self.submit_stack()
+
+        assert response.status_code == 400, response.content
+        assert "not enabled" in json.dumps(response.json())
+        assert not Task.objects.filter(request_type="SSOSTACK").exists()
+
+    def test_a_named_account_can(self) -> None:
+        with override_settings(TEST_USERS=[self.user.pk]):
+            response = self.submit_stack()
+
+        assert response.status_code == 201, response.content
+
+    def test_a_patch_cannot_turn_another_task_into_a_stack_request(self) -> None:
+        # the gate covered creation only, so an ordinary account could submit a forced photometry
+        # task for an MPC object and PATCH its request_type
+        task = Task.objects.create(user=self.user, mpc_name="Makemake", request_type="FP")
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"request_type": "SSOSTACK"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        task.refresh_from_db()
+        assert task.request_type == "FP"
+
+    def test_a_named_account_can_still_edit_its_stack_request(self) -> None:
+        # the gate is for a task that becomes a stack request, not for one that already is
+        task = Task.objects.create(user=self.user, mpc_name="Makemake", request_type="SSOSTACK")
+
+        response = self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps({"comment": "edited"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 200, response.content
+
+    def test_the_page_offers_the_option_by_the_same_rule(self) -> None:
+        page = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html").content.decode()
+        assert "const allow_stack_rock = false;" in page
+
+        with override_settings(TEST_USERS=[self.user.pk]):
+            page = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html").content.decode()
+        assert "const allow_stack_rock = true;" in page
+
+
+class AdminBulkDeleteTests(TestCase):
+    """The admin's bulk action calls queryset.delete(), which never reaches Task.delete()."""
+
+    def setUp(self) -> None:
+        self.staff = User.objects.create_superuser(username="root", email="root@example.com", password="pw12345678")
+        self.owner = User.objects.create_user(username="victim", email="v@example.com", password=None)
+        self.client.force_login(self.staff)
+
+    def test_delete_selected_archives_a_finished_task_and_reclaims_its_files(self) -> None:
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            prefix = Path(tmpdir, task.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".pdf").write_text("plot")
+
+            response = self.client.post(
+                reverse("admin:forcephot_task_changelist"),
+                {"action": "delete_selected", "_selected_action": [task.id], "post": "yes"},
+            )
+
+            assert response.status_code == 302, response.status_code
+            task.refresh_from_db()
+            assert task.is_archived, "a finished task was hard-deleted where every other path archives it"
+            assert not prefix.with_suffix(".pdf").exists(), "the result file outlived the row"
+
+    def test_tasks_cannot_be_added_in_the_admin(self) -> None:
+        # a row added there has no queue position, and NULL sorts ahead of every task waiting
+        response = self.client.get(reverse("admin:forcephot_task_add"))
+
+        assert response.status_code == 403, response.status_code
+
+
+class UnverifiedAccountSweepTests(TestCase):
+    """An address registered and never confirmed was held for good.
+
+    The verification link expired, but the row did not, so the real owner could neither register
+    the address, log in, nor reset a password -- reset skips inactive accounts.
+    """
+
+    def make(self, username: str, *, days: int, active: bool = False, marker: bool = True) -> User:
+        user = User.objects.create_user(username=username, email=f"{username}@example.com", password=None)
+        user.is_active = active
+        user.save()
+        if marker:
+            PendingEmailVerification.objects.create(user=user, created=timezone.now() - datetime.timedelta(days=days))
+        return user
+
+    def test_a_resent_link_dates_the_marker_afresh(self) -> None:
+        # the sweep reads the marker's date; a link resent after the cutoff was deleted with its
+        # account by the next hourly pass, so following the mail just sent always failed
+        user = self.make("latecomer", days=8)
+        user.email = "late@example.com"
+        user.save()
+
+        self.client.post(reverse("resend_verification"), {"email": "late@example.com"})
+        taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        assert User.objects.filter(username="latecomer").exists(), "the account went with a fresh link in the mail"
+
+    def test_a_marker_dated_afresh_after_the_ids_were_read_keeps_its_account(self) -> None:
+        # a resend can land between the read of the stale ids and the delete; the delete checks
+        # the cutoff again, so the account with the fresh link stays
+        user = self.make("latecomer", days=8)
+        original_list = list
+
+        def refresh_between(iterable: t.Iterable[int]) -> list[int]:
+            ids = original_list(iterable)
+            PendingEmailVerification.objects.filter(user=user).update(created=timezone.now())
+            return ids
+
+        # the sweep reads the ids with the builtin list; the module attribute shadows it
+        with mock.patch.object(taskrunner_main, "list", refresh_between, create=True):
+            removed = taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        assert removed == 0, removed
+        assert User.objects.filter(username="latecomer").exists(), "the account went with a fresh link in the mail"
+
+    def test_no_link_is_sent_for_an_account_the_sweep_took_first(self) -> None:
+        # the resend dates the marker before it sends, and sends only when that write found a row
+        user = self.make("gone", days=8)
+        user.email = "gone@example.com"
+        user.save()
+
+        lookup = views.unverified_account_for
+
+        def taken_by_the_sweep(email: str) -> User | None:
+            found = lookup(email)
+            User.objects.filter(pk=user.pk).delete()
+            return found
+
+        with (
+            mock.patch.object(views, "unverified_account_for", taken_by_the_sweep),
+            mock.patch.object(views, "send_verification_email") as send,
+        ):
+            self.client.post(reverse("resend_verification"), {"email": "gone@example.com"})
+
+        assert not send.called, "a link was sent for an account that no longer exists"
+
+    def test_only_the_stale_unconfirmed_accounts_go(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        stale = self.make("stale", days=8)
+        recent = self.make("recent", days=1)
+        # confirmed since, so the marker is gone (verify_email deletes it); an old inactive
+        # account without one was switched off by an administrator and is not the sweep's to take
+        disabled = self.make("disabled", days=30, marker=False)
+        confirmed = self.make("confirmed", days=30, active=True)
+
+        removed = taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        assert removed == 1
+        assert not User.objects.filter(pk=stale.pk).exists(), "the stale registration was kept"
+        for user in (recent, disabled, confirmed):
+            assert User.objects.filter(pk=user.pk).exists(), f"{user.username} was removed"
+
+    def test_the_address_can_then_be_registered_again(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make("squatter", days=8)
+        taskrunner_main.remove_unverified_accounts(days_ago=7, logfunc=lambda _msg: None)
+
+        response = self.client.post(
+            reverse("register"),
+            {
+                "username": "owner",
+                "email": "squatter@example.com",
+                "password1": "a-long-pw-123",
+                "password2": "a-long-pw-123",
+            },
+        )
+
+        assert "already exists" not in response.content.decode()
+        assert User.objects.filter(username="owner").exists()
+
+
+class TaskRunnerPidFileTests(TestCase):
+    def test_a_truncated_pid_file_does_not_stop_a_start(self) -> None:
+        # int("") raised out of start(), and a restart had already stopped the runner by then
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "taskrunner.pid")
+            pidfile.write_text("")
+
+            with (
+                mock.patch.object(atlastaskrunner, "TASKRUNNER_PIDFILE", pidfile),
+                mock.patch.object(atlastaskrunner, "taskrunner_session_exists", return_value=False),
+                mock.patch.object(atlastaskrunner, "run_command") as run,
+            ):
+                atlastaskrunner.start()
+
+            assert run.called, "the runner was not started"
+            assert not pidfile.exists(), "the unreadable pid file was left to block the next start"
+
+    def test_a_readable_pid_is_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "taskrunner.pid")
+            pidfile.write_text("4242\n")
+            assert atlastaskrunner.read_pidfile(pidfile) == 4242
+
+
 class TaskCreateLimitTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="submitter", email="s2@example.com", password=None)
@@ -1877,6 +2644,52 @@ class TaskCreateLimitTests(TestCase):
 
         assert response.status_code == 400, response.status_code
         assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS - 1
+
+
+class TaskCreateAtomicityTests(TestCase):
+    """The inserts and the queue positions are one transaction.
+
+    Each insert was committed on its own with queuepos_relative NULL, and the runner dispatches in
+    order_by("queuepos_relative"), where NULL sorts first -- so a task submitted a moment ago ran
+    ahead of everything already waiting, for the length of the window until bulk_update.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="atomic", email="at@example.com", password=None)
+
+    def test_a_failure_to_number_the_tasks_leaves_no_task_behind(self) -> None:
+        self.client.force_login(self.user)
+
+        with mock.patch.object(Task.objects, "bulk_update", side_effect=RuntimeError("numbering failed")):
+            try:
+                self.client.post(
+                    reverse("task-list"),
+                    data=json.dumps({"radeclist": "10.0 20.0\n11.0 21.0\n"}),
+                    content_type="application/json",
+                    HTTP_ACCEPT="application/json",
+                )
+            except RuntimeError:
+                pass
+            else:
+                msg = "the failure did not reach the caller"
+                raise AssertionError(msg)
+
+        assert not Task.objects.filter(user=self.user).exists(), "an unnumbered task was committed"
+
+    def test_the_response_carries_the_positions_without_a_reload_per_task(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"radeclist": "10.0 20.0\n11.0 21.0\n"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 201, response.content
+        positions = [task["queuepos"] for task in response.json()]
+        assert positions == sorted(positions), positions
+        assert None not in positions, positions
 
 
 class TaskCreateResponseTests(TestCase):
@@ -2125,6 +2938,36 @@ class TaskRunnerEmailTests(TestCase):
         for task in (first, finishing):
             assert f"Task {task.id}:" in body
 
+    def test_an_mpc_task_names_its_object_rather_than_empty_coordinates(self) -> None:
+        # the mail read the coordinate columns and nothing else, so every MPC task announced
+        # itself as "RA None Dec None"
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        finishing = Task.objects.create(
+            user=self.user, mpc_name="Makemake", timestamp=self.stamp, send_email=True, finishtimestamp=timezone.now()
+        )
+
+        taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
+
+        body = str(django_mail.outbox[0].body)
+        assert "MPC[Makemake]" in body, body
+        assert "None" not in body, body
+
+    @override_settings(SITE_ORIGIN="https://staging.example")
+    def test_the_link_in_the_mail_names_the_configured_origin(self) -> None:
+        # the link was a hard-coded production host, so a staging deployment mailed its users a
+        # link to somebody else's task on the production server
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        finishing = self.make_batch_task(finished=True)
+
+        taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
+
+        body = str(django_mail.outbox[0].body)
+        assert finishing.public_url() in body, body
+        assert finishing.public_url().startswith("https://staging.example/"), finishing.public_url()
+        assert "fallingstar-data.com" not in body, body
+
     def test_send_failure_does_not_propagate(self) -> None:
         # an exception here used to kill the worker before finishtimestamp was written,
         # so the task was re-dispatched and the remote job re-run forever
@@ -2245,6 +3088,48 @@ class AllowedHostsTests(TestCase):
         assert "fallingstar-data.com" in django_mail.outbox[0].body
 
 
+class PasswordResetLinkOriginTests(TestCase):
+    """The mailed reset link must name SITE_ORIGIN, not the Host header.
+
+    django.contrib.sites is not installed, so Django builds the link from the request. Restricting
+    ALLOWED_HOSTS is not enough on its own: it legitimately holds wildcard entries, so a host that
+    passes validation is not necessarily one this site is served from. Anyone who can serve a
+    subdomain of qub.ac.uk could otherwise have this mail a victim a valid link to their own
+    server, which discloses the token when the victim opens it.
+
+    verification.absolute_url applies this rule to the mail the project sends itself. The reset
+    mail is the one Django owns, and it was left out.
+    """
+
+    def setUp(self) -> None:
+        User.objects.create_user(username="victim3", email="victim3@example.com", password="pw12345678")
+        django_mail.outbox.clear()
+
+    @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
+    def test_a_wildcard_host_does_not_reach_the_link(self) -> None:
+        # .qub.ac.uk is in ALLOWED_HOSTS, so Django accepts this host and only the pinned origin
+        # keeps it out of the mail
+        response = self.client.post(
+            reverse("password_reset"), {"email": "victim3@example.com"}, HTTP_HOST="takeover.qub.ac.uk"
+        )
+
+        assert response.status_code == 302, response.status_code
+        body = str(django_mail.outbox[0].body)
+        assert "https://fallingstar-data.com/" in body, body
+        assert "takeover.qub.ac.uk" not in body, body
+
+    @override_settings(SITE_ORIGIN="")
+    def test_an_unset_origin_falls_back_to_the_request(self) -> None:
+        # what development and the tests want; settings.py makes the variable mandatory when DEBUG
+        # is off. Set explicitly, because CI exports ATLASSERVER_SITE_ORIGIN for its deploy check.
+        response = self.client.post(
+            reverse("password_reset"), {"email": "victim3@example.com"}, HTTP_HOST="fallingstar-data.com"
+        )
+
+        assert response.status_code == 302, response.status_code
+        assert "fallingstar-data.com" in str(django_mail.outbox[0].body)
+
+
 @override_settings(DEBUG=False)
 class BrokenLinkEmailTests(TestCase):
     """A 404 must never mail the managers, whatever the referrer.
@@ -2265,6 +3150,139 @@ class BrokenLinkEmailTests(TestCase):
 
         assert response.status_code == 404, response.status_code
         assert not django_mail.outbox, django_mail.outbox[0].subject
+
+
+class CallbackUrlResolutionTests(TestCase):
+    """The resolution of the caller's hostname blocks a request thread, so it has to be bounded.
+
+    socket.getaddrinfo takes no timeout of its own, and one submission validates the same URL once
+    per row and then once more per row: a radeclist copies callback_url into every row,
+    splitradeclist validates each row, and views.create validates the whole list again. Answered
+    once per request, that is one lookup for a 100-line request rather than 200, on a site with
+    four single-threaded workers.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="cbcost", email="cbc@example.com", password=None)
+
+    def test_a_multi_target_submission_resolves_the_name_once(self) -> None:
+        self.client.force_login(self.user)
+        radeclist = "\n".join(f"{ra}.0 2.0" for ra in range(1, 21))
+
+        with mock.patch(
+            "socket.getaddrinfo", return_value=[(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]
+        ) as resolve:
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"radeclist": radeclist, "callback_url": "https://example.com/hook"}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+        assert Task.objects.filter(user_id=self.user.pk).count() == 20
+        assert resolve.call_count == 1, f"{resolve.call_count} lookups for one submission"
+
+    def test_a_resolver_that_never_answers_does_not_hold_the_request(self) -> None:
+        def never_answers(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            time.sleep(5)
+            msg = "the caller should have given up long before this"
+            raise AssertionError(msg)
+
+        with (
+            mock.patch("socket.getaddrinfo", side_effect=never_answers),
+            mock.patch.object(webhooks, "CALLBACK_RESOLVE_TIMEOUT_SECONDS", 0.1),
+        ):
+            started = time.monotonic()
+            try:
+                validate_callback_url("https://slow.example.com/hook")
+            except CallbackUrlError:
+                elapsed = time.monotonic() - started
+            else:
+                msg = "a resolver that never answers was allowed through"
+                raise AssertionError(msg)
+
+        assert elapsed < 2.0, f"the request waited {elapsed:.1f}s on the resolver"
+
+    def test_a_fault_of_this_server_is_not_reported_as_a_bad_address(self) -> None:
+        # getaddrinfo raises a plain OSError when the process is out of file descriptors. Reporting
+        # that as "your hostname could not be resolved" rejects a perfectly good webhook with a 400
+        # and tells the operators nothing, so anything that is not about the address propagates.
+        with mock.patch("socket.getaddrinfo", side_effect=OSError(24, "Too many open files")):
+            try:
+                validate_callback_url("https://example.com/hook")
+            except CallbackUrlError as ex:
+                msg = f"a server fault was reported to the caller as a bad address: {ex}"
+                raise AssertionError(msg) from ex
+            except OSError:
+                pass
+
+    def test_an_answer_lives_only_within_its_request(self) -> None:
+        # the check made before the request is sent is the one that has to notice a name that has
+        # moved since the task was submitted, so it must never be served from a submission's answer,
+        # and one submission must not inherit the answer of another
+        url = "https://example.com/hook"
+        public = [(socket.AF_INET, None, None, "", ("93.184.216.34", 443))]
+
+        with mock.patch("socket.getaddrinfo", return_value=public) as resolve:
+            with webhooks.callback_urls_validated_once():
+                validate_callback_url(url)
+                validate_callback_url(url)
+            assert resolve.call_count == 1, "a repeat within one submission was resolved again"
+
+            validate_callback_url(url)
+            assert resolve.call_count == 2, "the send path took a submission's answer"
+            validate_callback_url(url)
+            assert resolve.call_count == 3, "the send path remembered its own answer"
+
+            with webhooks.callback_urls_validated_once():
+                validate_callback_url(url)
+            assert resolve.call_count == 4, "a second submission inherited the first one's answer"
+
+    def test_a_refused_url_is_not_remembered_as_validated(self) -> None:
+        # only a URL that passed every check is answered from; a private address that was refused
+        # once must be refused again by the next row
+        private = [(socket.AF_INET, None, None, "", ("10.0.0.5", 443))]
+
+        with (
+            override_settings(DEBUG=False),
+            mock.patch("socket.getaddrinfo", return_value=private),
+            webhooks.callback_urls_validated_once(),
+        ):
+            for _ in range(2):
+                try:
+                    validate_callback_url("https://internal.example.com/hook")
+                except CallbackUrlError:
+                    continue
+                msg = "a refused URL was answered from its earlier refusal"
+                raise AssertionError(msg)
+
+    def test_abandoned_resolver_threads_are_bounded(self) -> None:
+        # a resolver that never answers leaves its thread behind; a caller who names such a host on
+        # every submission must not be able to grow one thread per attempt
+        release = threading.Event()
+
+        def stuck(*args: t.Any, **kwargs: t.Any) -> t.Any:
+            release.wait(5)
+            return []
+
+        with (
+            mock.patch("socket.getaddrinfo", side_effect=stuck) as resolve,
+            mock.patch.object(webhooks, "CALLBACK_RESOLVE_TIMEOUT_SECONDS", 0.1),
+            mock.patch.object(webhooks, "_resolver_slots", threading.BoundedSemaphore(1)),
+        ):
+            try:
+                for _ in range(3):
+                    try:
+                        validate_callback_url("https://slow.example.com/hook")
+                    except CallbackUrlError:
+                        continue
+                    msg = "a stuck resolver was allowed through"
+                    raise AssertionError(msg)
+            finally:
+                release.set()
+
+        assert resolve.call_count == 1, f"{resolve.call_count} resolver threads for one stuck host"
 
 
 @override_settings(DEBUG=False)
@@ -2316,6 +3334,14 @@ class CallbackUrlValidationTests(TestCase):
     def test_unresolvable_host_is_rejected(self) -> None:
         with mock.patch("socket.getaddrinfo", side_effect=socket.gaierror("nope")):
             self.assert_rejected("https://does-not-exist.example/hook")
+
+    def test_an_invalid_port_is_rejected_rather_than_raised(self) -> None:
+        # urlsplit resolves the port lazily and raises ValueError for one out of range, and
+        # Django's URLValidator accepts it -- so without a guard this was a 500 and an admin
+        # email rather than a message naming the field
+        for url in ("https://example.com:99999/hook", "https://example.com:abc/hook"):
+            with self.subTest(url=url):
+                self.assert_rejected(url)
 
     def test_overlong_url_is_rejected(self) -> None:
         self.assert_rejected("https://example.com/" + "a" * 600)
@@ -3379,8 +4405,9 @@ class AtlasCommandTests(TestCase):
         ssostack = self.make_task(ra=None, dec=None, mpc_name="Makemake", request_type="SSOSTACK")
 
         assert taskrunner_main.remote_result_filename(fptask) == f"job{fptask.id:05d}.txt"
-        # the zip belongs to the parent, because that is the task whose images these are
-        assert taskrunner_main.remote_result_filename(imgzip) == f"job{fptask.id:05d}.zip"
+        # named for the image request itself: the remote script names the zip after the data
+        # file it is given, which the runner uploads under the request's own name
+        assert taskrunner_main.remote_result_filename(imgzip) == f"job{imgzip.id:05d}.zip"
         assert taskrunner_main.remote_result_filename(ssostack) == f"job{ssostack.id:05d}.fits"
 
     def test_unknown_request_type_has_no_result_file(self) -> None:
@@ -3417,6 +4444,10 @@ class RunRsyncTests(TestCase):
         assert any("exited with code 12" in line for line in logged), logged
 
 
+def silent(_msg: object) -> None:
+    """Swallow a log line: for a sweep whose output is not what the test is about."""
+
+
 class RemoveOldTasksTests(TestCase):
     """The hourly maintenance sweep, which now writes once per batch rather than once per task."""
 
@@ -3431,6 +4462,28 @@ class RemoveOldTasksTests(TestCase):
             finishtimestamp=timezone.now() - datetime.timedelta(days=days),
             **kwargs,
         )
+
+    def make_imagerequest(self, parent: Task, *, days: int = 0) -> Task:
+        """Return a finished image request of the parent, finished the given number of days ago."""
+        child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
+        child.finishtimestamp = timezone.now() - datetime.timedelta(days=days)
+        child.save()
+        return child
+
+    @staticmethod
+    def write_results(
+        staticroot: str | Path, task: Task, suffixes: tuple[str, ...], *, use_parent: bool = False
+    ) -> Path:
+        """Write a result file per suffix under the task's name, and return the prefix path."""
+        prefix = Path(staticroot, task.localresultfileprefix(use_parent=use_parent))
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        for suffix in suffixes:
+            prefix.with_suffix(suffix).write_text("results")
+        return prefix
+
+    @staticmethod
+    def files_left(prefix: Path) -> list[str]:
+        return sorted(path.name for path in prefix.parent.iterdir())
 
     def test_old_tasks_are_archived_and_recent_ones_are_left_alone(self) -> None:
         old = self.make_old_task(days=200)
@@ -3453,6 +4506,256 @@ class RemoveOldTasksTests(TestCase):
 
         assert list(Task.objects.values_list("id", flat=True)) == [keep.id]
 
+    def test_a_batch_does_not_scale_its_queries_with_its_size(self) -> None:
+        """A batch is read with select_related and one prefetch, so it costs a few queries.
+
+        Each path asks something of the rows' relations: a hard delete reclaims the files of the
+        children it cascades to, an archive gives a queued request its input copy, and a batch of
+        image requests whose parents stay asks which siblings remain. Without the prefetch each was
+        one query per row.
+        """
+
+        def hard_delete_pair() -> None:
+            parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+            self.make_imagerequest(parent)
+
+        def archive_pair() -> None:
+            parent = self.make_old_task(days=200, request_type="FP")
+            self.make_imagerequest(parent)
+            self.write_results(settings.STATIC_ROOT, parent, (".txt",))
+
+        def imagerequest_of_a_kept_parent() -> None:
+            # a web-submitted parent that the API sweep does not select, with an API child it does
+            parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
+            child = parent.new_imagerequest(user=self.user, from_api=True)
+            child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+            child.save()
+
+        def api_hard_delete() -> None:
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=silent)
+
+        def fp_archive() -> None:
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=False, request_type="FP", logfunc=silent)
+
+        def sweep_queries(count: int, make: t.Callable[[], None], sweep: t.Callable[[], None]) -> int:
+            for _ in range(count):
+                make()
+            with CaptureQueriesContext(connection) as queries:
+                sweep()
+            return len(queries)
+
+        scenarios = [
+            ("hard delete", hard_delete_pair, api_hard_delete),
+            ("archive", archive_pair, fp_archive),
+            ("image requests of kept parents", imagerequest_of_a_kept_parent, api_hard_delete),
+        ]
+        for name, make, sweep in scenarios:
+            with (
+                self.subTest(scenario=name),
+                tempfile.TemporaryDirectory() as tmpdir,
+                override_settings(STATIC_ROOT=tmpdir),
+            ):
+                small = sweep_queries(1, make, sweep)
+                large = sweep_queries(6, make, sweep)
+
+                # a constant number of statements per batch, so five more rows must not add
+                # anything like five more queries
+                assert large - small <= 2, f"{name}: {small} queries for one, {large} for six"
+
+    def test_a_hard_delete_leaves_no_file_behind(self) -> None:
+        """Every file of a deleted row goes, whichever rows the batch brought in together.
+
+        parent_task cascades, and the collector never calls delete_result_files(), so a cascaded
+        child's zip was left with no row that could ever name it. A child selected beside its
+        parent, or two children of one parent, each once kept the parent's file for the other. The
+        reclamation weighs one fixed set of doomed rows, so what brought the others in cannot
+        change the answer.
+        """
+
+        def api_sweep() -> None:
+            # selects the parent, and only cascades to its child
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=True, from_api=True, logfunc=silent)
+
+        def widest_sweep() -> None:
+            # names no request_type, so it selects the parent and the child alike
+            taskrunner_main.remove_old_tasks(days_ago=183, harddeleterecord=True, logfunc=silent)
+
+        # (name, children, days since the children finished, sweep): a recent child is not
+        # selected by the sweep, so the parent's deletion cascades to it
+        shapes = [
+            ("cascaded child", 1, 0, api_sweep),
+            ("child selected beside its parent", 1, 200, widest_sweep),
+            ("two children", 2, 200, widest_sweep),
+        ]
+        for name, childcount, childdays, sweep in shapes:
+            with (
+                self.subTest(shape=name),
+                tempfile.TemporaryDirectory() as tmpdir,
+                override_settings(STATIC_ROOT=tmpdir),
+            ):
+                parent = self.make_old_task(days=200, request_type="FP", from_api=True)
+                for _ in range(childcount):
+                    # each child has a zip of its own, and the parent a legacy one under its name
+                    self.write_results(tmpdir, self.make_imagerequest(parent, days=childdays), (".zip",))
+                prefix = self.write_results(tmpdir, parent, (".txt", ".jpg", ".zip"))
+
+                sweep()
+
+                assert not Task.objects.exists(), f"{name}: the rows survived the sweep"
+                left = self.files_left(prefix)
+                assert not left, f"{name}: files left behind with no row that can ever name them: {left}"
+
+    def test_a_deleted_parent_takes_its_data_file_while_the_image_request_keeps_its_copy(self) -> None:
+        """The image request reads its own copy, so the parent's file need not outlive the parent.
+
+        The parent's .txt used to be kept while a live image request existed, at a static path the
+        web server serves without Django, so a deleted task's data stayed readable by any link that
+        was published before. It now goes with the row, and the request runs from the copy made
+        when it was created.
+        """
+        parent = self.make_old_task(days=200, request_type="FP")
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.save()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+        ):
+            prefix = Path(tmpdir, parent.localresultfileprefix())
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            prefix.with_suffix(".txt").write_text("observations")
+            assert child.copy_parent_datafile()
+
+            parent.delete()
+
+            assert not prefix.with_suffix(".txt").exists(), "the parent's data file outlived the parent"
+            assert child.inputfile().read_text() == "observations", "the image request lost its input"
+
+            inputcopy = child.inputfile()
+            child.delete()
+            assert not inputcopy.exists(), "the input copy outlived the image request"
+
+    def test_the_plot_cache_is_dropped_only_once_the_row_is_written(self) -> None:
+        # a reader that arrives between the two finds no cache entry, reads a data file that is
+        # still there, and keeps the plot for thirty days; so the drop has to follow the write
+        archived = self.make_old_task(days=200, request_type="FP")
+        removed = self.make_old_task(days=200, request_type="FP", from_api=True, is_archived=True)
+        rowstate: dict[int, str] = {}
+        original = Task.forget_derived_cache
+
+        def spy(task: Task) -> None:
+            row = Task.objects.filter(id=task.id).values_list("is_archived", flat=True).first()
+            rowstate[task.id] = "gone" if row is None else ("archived" if row else "LIVE")
+            original(task)
+
+        with mock.patch.object(Task, "forget_derived_cache", spy):
+            taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
+            taskrunner_main.remove_old_tasks(
+                days_ago=7, harddeleterecord=True, is_archived=True, from_api=True, logfunc=lambda _msg: None
+            )
+
+        assert rowstate == {archived.id: "archived", removed.id: "gone"}, rowstate
+
+    def test_a_batch_of_image_requests_does_not_query_once_per_parent(self) -> None:
+        """The parents stay, so each child asks its parent which siblings remain.
+
+        A parent reached through select_related carries nothing from prefetch_imagerequests, so
+        without a prefetch through the parent that question was one query per row.
+        """
+
+        def sweep_queries(pairs: int) -> int:
+            for _ in range(pairs):
+                # a web-submitted parent that the API sweep does not select, with an API child it does
+                parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
+                child = parent.new_imagerequest(user=self.user, from_api=True)
+                child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+                child.save()
+
+            with CaptureQueriesContext(connection) as queries:
+                taskrunner_main.remove_old_tasks(
+                    days_ago=31, harddeleterecord=True, from_api=True, logfunc=lambda _msg: None
+                )
+
+            return len(queries)
+
+        small = sweep_queries(1)
+        large = sweep_queries(6)
+
+        assert large - small <= 2, f"{small} queries for one image request, {large} for six"
+
+    def test_each_image_request_owns_its_own_zip(self) -> None:
+        # every image request of one parent used to write, and delete, the same job{parent}.zip,
+        # so the delete of one removed a live sibling's output. A zip named for the parent, from
+        # before requests had their own, still serves a request without one, and a request that
+        # has its own leaves it to that sibling.
+        parent = self.make_old_task(days=200, request_type="FP")
+        own, other, legacy_child = [self.make_imagerequest(parent) for _ in range(3)]
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            ownzip = self.write_results(tmpdir, own, (".zip",)).with_suffix(".zip")
+            otherzip = self.write_results(tmpdir, other, (".zip",)).with_suffix(".zip")
+            legacyzip = self.write_results(tmpdir, parent, (".zip",)).with_suffix(".zip")
+            assert other.localresultimagezipfile == Path(other.localresultfileprefix() + ".zip")
+            assert legacy_child.localresultimagezipfile == Path(parent.localresultfileprefix() + ".zip")
+
+            own.delete()
+
+            assert not ownzip.exists(), "the deleted request left its zip behind"
+            assert otherzip.is_file(), "the delete of one request removed the other's output"
+            assert legacyzip.is_file(), "a request with its own zip reclaimed the one its sibling is served from"
+
+    def test_a_legacy_zip_goes_with_the_last_request_served_from_it(self) -> None:
+        """A zip named for the parent used to stay at its static path until the parent went.
+
+        It goes when the last live request without a zip of its own goes: deleted one by one, or
+        archived together by one sweep, where both rows are still live while the batch reclaims
+        files and each would otherwise see the other as still served.
+        """
+        with (
+            self.subTest(how="deleted one by one"),
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+        ):
+            parent = self.make_old_task(days=200, request_type="FP")
+            first, second = [self.make_imagerequest(parent) for _ in range(2)]
+            legacy = self.write_results(tmpdir, parent, (".zip",)).with_suffix(".zip")
+
+            first.delete()
+            assert legacy.is_file(), "the zip went while another request was still served from it"
+
+            second.delete()
+            assert not legacy.exists(), "the last request served from the legacy zip left it behind"
+
+        with (
+            self.subTest(how="archived by one sweep"),
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+        ):
+            # the parent is recent, so the sweep selects the two requests alone
+            parent = self.make_old_task(days=0, request_type="FP")
+            for _ in range(2):
+                self.make_imagerequest(parent, days=200)
+            legacy = self.write_results(tmpdir, parent, (".zip",)).with_suffix(".zip")
+
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=False, logfunc=lambda _msg: None)
+
+            assert Task.objects.filter(parent_task=parent, is_archived=True).count() == 2
+            assert not legacy.exists(), "the legacy zip outlived every request served from it"
+
+    def test_a_batch_locks_its_rows_before_it_reads_their_children(self) -> None:
+        # RequestImages holds the same lock on a parent while it creates an image request, so a
+        # request created at the same time is either seen by the batch or refused
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        self.make_old_task(days=200, request_type="FP")
+
+        with CaptureQueriesContext(connection) as queries:
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=True, logfunc=lambda _msg: None)
+
+        assert any("FOR UPDATE" in q["sql"] for q in queries), [q["sql"][:80] for q in queries]
+
     def test_unfinished_tasks_are_never_touched(self) -> None:
         queued = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
 
@@ -3470,8 +4773,11 @@ class RemoveOldTasksTests(TestCase):
             taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
 
         assert Task.objects.filter(is_archived=True).count() == 12
-        # one batch: ids, load, prefetch, update. Well under one write per task either way.
-        assert len(queries) <= 6, f"{len(queries)} queries:\n" + "\n".join(q["sql"] or "" for q in queries)
+        # One batch: the count and the examples for the log, the read of the batch, its row lock,
+        # the prefetch of its image requests, the update, and the read that finds no second batch.
+        # Well under one write per task either way. The savepoints are the test transaction's.
+        statements = [q["sql"] or "" for q in queries if "SAVEPOINT" not in (q["sql"] or "")]
+        assert len(statements) <= 7, f"{len(statements)} queries:\n" + "\n".join(statements)
 
     def test_archiving_spans_several_batches(self) -> None:
         # the sweep takes one bounded batch at a time rather than reading every matching id into
@@ -3588,7 +4894,7 @@ class ProcessTimeoutTests(TestCase):
         with mock.patch.object(
             misc, "run_process_with_timeout", side_effect=lambda proc, _timeout: captured.append(proc)
         ):
-            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1, separate_process=True)
+            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1)
 
         assert len(captured) == 1, captured
         # the class, not the constant: this is what was actually handed to the runner
@@ -3683,7 +4989,6 @@ class PdfPlotViewTests(TestCase):
 
         with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=capture):
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
-            caches["default"].delete(f"pdfplot-lock-{self.task.id}")
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
 
         assert len(seen) == 2, seen
@@ -3717,11 +5022,12 @@ class PdfPlotViewTests(TestCase):
         assert concurrent == [503], concurrent
 
     def test_the_lock_is_released_when_a_render_finishes(self) -> None:
-        # a lock left behind would make the task's plot unavailable until the cache entry expired
+        # a lock left behind would make the task's plot unavailable until it counted as abandoned
         with self.result_file(), mock.patch.object(views, "make_pdf_plot", return_value=False):
             self.client.get(reverse("taskpdfplot", args=[self.task.id]))
 
-        assert caches["default"].get(f"pdfplot-lock-{self.task.id}") is None
+        with locks.try_lock(f"pdfplot-lock-{self.task.id}") as held:
+            assert held, "the per-task lock was left behind"
 
 
 class RegistrationVerificationTests(TestCase):
@@ -3905,6 +5211,55 @@ class RegistrationVerificationTests(TestCase):
         count, started = caches["throttle"].get(clientkey)
         assert count == 1, count
         assert started <= time.time(), "the window still starts in the future"
+
+    def test_the_taken_address_answer_is_rate_limited(self) -> None:
+        """The "that address is already registered" reply is an enumeration oracle.
+
+        The limiter used to sit inside `if form.is_valid():`, and RegistrationForm.clean_email is
+        what makes the form invalid -- so the one reply worth probing for was the one reply that
+        never spent the budget.
+        """
+        User.objects.create_user(username="already", email="taken@example.com", password=None)
+
+        # the view reads the limit at call time, so three attempts prove the boundary that twenty
+        # would, at a seventh of the cost
+        with mock.patch.object(views, "REGISTRATION_ATTEMPT_LIMIT", 3):
+            for attempt in range(3):
+                response = self.register(email="taken@example.com")
+                assert "already exists" in response.content.decode(), attempt
+
+            blocked = self.register(email="taken@example.com")
+        page = blocked.content.decode()
+
+        assert "Too many registration attempts" in page, page
+        assert "already exists" not in page, "the rate-limited page still answers the probe"
+
+    def test_the_attempt_limit_answers_429_and_keeps_what_was_typed(self) -> None:
+        # a 200 reads as an ordinary page render in the access log, and a blank form makes a
+        # caller behind a shared institute address retype everything
+        User.objects.create_user(username="already2", email="taken2@example.com", password=None)
+        with mock.patch.object(views, "REGISTRATION_ATTEMPT_LIMIT", 3):
+            for _ in range(3):
+                self.register(email="taken2@example.com")
+
+            blocked = self.register(email="taken2@example.com")
+        page = blocked.content.decode()
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(views.REGISTRATION_WINDOW_SECONDS))
+        assert "taken2@example.com" in page, "the address the caller typed was thrown away"
+        assert "already exists" not in page, "the rate-limited page still answers the probe"
+
+    def test_a_rejected_submission_does_not_spend_the_mail_budget(self) -> None:
+        # the two budgets bound different things: one the outgoing mail, one the probes. A
+        # mistyped password must not use up a colleague's registration.
+        for _ in range(views.REGISTRATION_WINDOW_LIMIT + 1):
+            self.client.post(reverse("register"), {**self.credentials, "password2": "mismatch", "email": "a@b.com"})
+
+        response = self.register(email="fresh@example.com")
+
+        assert "wait a few minutes" not in response.content.decode().lower()
+        assert User.objects.filter(username="newcomer").exists()
 
     def test_losing_the_race_for_a_username_says_so(self) -> None:
         # username is unique too, and the handler used to report every integrity error as an email
@@ -4240,7 +5595,7 @@ class RegistrationVerificationTests(TestCase):
         assert len(calls) == 2, calls  # and it was the second check that refused it
 
     def test_a_disabled_account_cannot_be_reactivated_by_an_old_link(self) -> None:
-        # belt and braces for the check above: the activation view applies the same rule, so a link
+        # the same rule a second time, for the check above: the activation view applies it, so a link
         # obtained by any other route is refused too
         self.register()
         link = self.verification_link()
@@ -4518,6 +5873,381 @@ class ReadThrottleTests(TestCase):
         assert response.status_code == 201, response.content
 
 
+class LoginThrottleTests(TestCase):
+    """The endpoint that takes a password was the only unmetered one on the site.
+
+    DRF's ObtainAuthToken sets throttle_classes = (), which overrides DEFAULT_THROTTLE_CLASSES
+    entirely. A success returns a token that does not expire, so an unbounded guessing loop is
+    worth more here than against a session cookie.
+    """
+
+    def setUp(self) -> None:
+        User.objects.create_user(username="tokenuser", email="tokenuser@example.com", password="pw12345678")
+        caches["throttle"].clear()
+
+    def tearDown(self) -> None:
+        caches["throttle"].clear()
+
+    def test_the_login_scope_is_configured(self) -> None:
+        # a scope with no rate is not throttled at all, so a typo here silently restores the old
+        # unmetered behaviour
+        assert "forcephotlogin" in ForcedPhotRateThrottle.THROTTLE_RATES
+
+    def test_password_guessing_is_throttled_with_or_without_an_authorization_header(self) -> None:
+        """DRF authenticates before it throttles, and BasicAuthentication is enabled site-wide.
+
+        A wrong password in an Authorization header therefore answered 401 from the authenticator,
+        before the throttle ran, so the counter never moved: one extra header turned the whole
+        limit off. The view declares no authenticators of its own now, because it reads the
+        credentials from the body and never looks at request.user.
+        """
+        basic = "Basic " + base64.b64encode(b"tokenuser:wrong").decode()
+
+        for name, headers in (("no header", {}), ("a Basic header", {"Authorization": basic})):
+            caches["throttle"].clear()
+            # SimpleRateThrottle binds THROTTLE_RATES at class-definition time, so override_settings
+            # does not reach it; patch the attribute the throttle actually reads
+            with (
+                self.subTest(name),
+                mock.patch.object(ForcedPhotRateThrottle, "THROTTLE_RATES", {"forcephotlogin": "3/min"}),
+            ):
+                statuses = [
+                    self.client.post(
+                        reverse("api-token-auth"), {"username": "tokenuser", "password": "wrong"}, headers=headers
+                    ).status_code
+                    for _ in range(5)
+                ]
+
+                assert statuses[:3] == [400, 400, 400], statuses
+                assert 429 in statuses, statuses
+
+    def test_a_correct_password_still_returns_a_token(self) -> None:
+        response = self.client.post(reverse("api-token-auth"), {"username": "tokenuser", "password": "pw12345678"})
+
+        assert response.status_code == 200, response.content
+        assert "token" in response.json()
+
+
+class PdfPlotRenderSlotTests(TestCase):
+    """A render holds a request thread for up to two minutes, and the site has four of them.
+
+    The per-task lock stops a herd on one task and says nothing about requests for other tasks, so
+    nothing bounded the total. taskpdfplot needs no credentials and is not a DRF view, so no
+    throttle reaches it either: a few requests for distinct tasks with no .pdf yet could occupy
+    every worker at once and stop the site answering anything, the login page included.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="pdfslot", email="ps@example.com", password=None)
+        self.task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), request_type="FP"
+        )
+        # the slots this test holds, released by tearDown
+        self.heldslots = contextlib.ExitStack()
+
+    def tearDown(self) -> None:
+        self.heldslots.close()
+
+    def take_every_slot(self) -> None:
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            assert self.heldslots.enter_context(locks.try_lock(f"pdfplot-slot-{slot}"))
+
+    @staticmethod
+    def free_slots() -> list[int]:
+        free = []
+        for slot in range(views.PDF_PLOT_RENDER_SLOTS):
+            with locks.try_lock(f"pdfplot-slot-{slot}") as held:
+                if held:
+                    free.append(slot)
+        return free
+
+    def write_result_file(self, tmpdir: str) -> None:
+        prefix = Path(tmpdir, self.task.localresultfileprefix())
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        prefix.with_suffix(".txt").write_text(RESULTFILE_HEADER + "\n")
+
+    def request_plot(self) -> t.Any:
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            self.write_result_file(tmpdir)
+            with mock.patch.object(views, "make_pdf_plot", return_value=True) as render:
+                return self.client.get(reverse("taskpdfplot", args=[self.task.id])), render
+
+    def test_a_render_starts_while_a_slot_is_free(self) -> None:
+        _response, render = self.request_plot()
+
+        assert render.called, "no render was attempted with every slot free"
+
+    def test_no_render_starts_when_every_slot_is_taken(self) -> None:
+        self.take_every_slot()
+
+        response, render = self.request_plot()
+
+        assert not render.called, "a render started with no slot free"
+        assert response.status_code == 503, response.status_code
+        assert response["Retry-After"] == "30"
+
+    def test_a_slot_is_released_once_the_render_is_done(self) -> None:
+        self.request_plot()
+
+        assert self.free_slots() == list(range(views.PDF_PLOT_RENDER_SLOTS)), "a slot is still held after the render"
+
+    def test_the_per_task_lock_is_released_even_when_no_slot_is_free(self) -> None:
+        # the lock is claimed before the slot, so an early return must still give it back or the
+        # task cannot be rendered again until the lock counts as abandoned
+        self.take_every_slot()
+
+        self.request_plot()
+
+        with locks.try_lock(f"pdfplot-lock-{self.task.id}") as held:
+            assert held, "the per-task lock was left behind"
+
+
+class LockFileTests(TestCase):
+    """One lock per name: exactly one holder at a time, and a dead holder's lock is free at once."""
+
+    def test_only_one_holder_at_a_time(self) -> None:
+        with locks.try_lock("test-lock") as first, locks.try_lock("test-lock") as second:
+            assert first, "the first taker did not get the lock"
+            assert not second, "two takers held one lock at once"
+
+    def test_the_lock_is_released_after_the_body_whether_it_returns_or_raises(self) -> None:
+        def fail_while_holding() -> None:
+            with locks.try_lock("test-lock"):
+                msg = "body failed"
+                raise RuntimeError(msg)
+
+        with locks.try_lock("test-lock"):
+            pass
+        with locks.try_lock("test-lock") as held:
+            assert held, "a released lock refused the next taker"
+
+        with contextlib.suppress(RuntimeError):
+            fail_while_holding()
+        with locks.try_lock("test-lock") as held:
+            assert held, "a lock whose body raised was left held"
+
+    def test_a_lock_held_by_another_process_is_respected_and_freed_by_its_death(self) -> None:
+        # the kernel holds the lock for the process, so a holder that is killed mid-body leaves
+        # nothing that a later taker would have to judge abandoned
+        script = (
+            "import fcntl, os, sys, time\n"
+            "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o644)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "print('held', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        path = Path(settings.LOCKS_DIR, "test-lock.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen([sys.executable, "-c", script, str(path)], stdout=subprocess.PIPE, text=True)
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "held"
+
+            with locks.try_lock("test-lock") as held:
+                assert not held, "a lock another process holds was taken"
+        finally:
+            holder.kill()
+            holder.wait()
+
+        with locks.try_lock("test-lock") as held:
+            assert held, "the lock of a dead process was not free"
+
+    def test_a_name_that_is_not_a_plain_file_name_is_refused(self) -> None:
+        for name in ("", "../escape", ".hidden", "a/b"):
+            try:
+                with locks.try_lock(name):
+                    pass
+            except ValueError:
+                continue
+            msg = f"lock name {name!r} was accepted"
+            raise AssertionError(msg)
+
+
+class FailedLoginBudgetTests(TestCase):
+    """Failed password checks are counted per address on every path that takes a password.
+
+    DRF authenticates before it throttles, so a wrong password in a Basic header to any API view
+    was answered 401 before a throttle could count it; Django's login page and the admin's are not
+    DRF views, so no throttle reached them at all. One budget now covers the three, and it refuses
+    the check itself once over: an address over budget must not learn whether a password was right.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="guessed", email="g@example.com", password="pw12345678")
+        caches["throttle"].clear()
+
+    def tearDown(self) -> None:
+        caches["throttle"].clear()
+
+    @staticmethod
+    def basic(password: str) -> str:
+        return "Basic " + base64.b64encode(f"guessed:{password}".encode()).decode()
+
+    def test_concurrent_failures_are_each_counted(self) -> None:
+        # a wave of guesses from one address used to read the same count and each write it plus
+        # one, so the wave counted as one; the read and the write are one critical section now
+        threads, each = 8, 5
+        barrier = threading.Barrier(threads)
+        original_get = LocMemCache.get
+
+        def slow_get(cache: LocMemCache, *args: t.Any, **kwargs: t.Any) -> t.Any:
+            # widens the window between the read and the write, so that a race is certain to show
+            value = original_get(cache, *args, **kwargs)
+            time.sleep(0.002)
+            return value
+
+        def guess() -> None:
+            barrier.wait()
+            for _ in range(each):
+                throttles.count_in_window("test-window", 60)
+
+        # patched on the class: the cache handler is thread-local, so an instance patched here
+        # would slow the main thread's reads and none of the workers'
+        with mock.patch.object(LocMemCache, "get", slow_get):
+            workers = [threading.Thread(target=guess) for _ in range(threads)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+
+        counted = throttles.count_in_window("test-window", 60, increment=False)
+        assert counted == threads * each, f"{counted} of {threads * each} concurrent failures were counted"
+
+    def test_a_basic_header_on_any_api_view_is_metered(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            statuses = [
+                self.client.get(
+                    reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("wrong")
+                ).status_code
+                for _ in range(5)
+            ]
+            # over budget, the check itself is refused: the right password gets the same answer
+            correct = self.client.get(
+                reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("pw12345678")
+            )
+
+        assert statuses[:3] == [401, 401, 401], statuses
+        assert statuses[3:] == [429, 429], statuses
+        assert correct.status_code == 429, correct.status_code
+
+    def test_the_login_page_refuses_the_check_once_over_budget(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert (
+                    self.client.post(reverse("login"), {"username": "guessed", "password": "wrong"}).status_code == 200
+                )
+
+            blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        assert "Too many failed login attempts" in blocked.content.decode()
+        assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
+
+    def test_a_successful_login_does_not_spend_the_budget(self) -> None:
+        # failures are counted, not attempts: a shared institute address must not be locked out
+        # by its own successful logins
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 1):
+            for _ in range(3):
+                response = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+                assert response.status_code == 302, response.status_code
+                self.client.logout()
+
+    def test_the_admin_login_shares_the_budget(self) -> None:
+        User.objects.create_superuser(username="root", email="root@example.com", password="pw12345678")
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("admin:login"), {"username": "root", "password": "wrong"})
+
+            blocked = self.client.post(reverse("admin:login"), {"username": "root", "password": "pw12345678"})
+
+        assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
+        assert "Too many failed login attempts" in blocked.content.decode()
+
+    def test_a_good_password_refused_by_the_admin_is_not_a_failed_guess(self) -> None:
+        # the admin refuses an account without staff access with the same error code as a wrong
+        # password; only a wrong password spends the budget
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                refused = self.client.post(reverse("admin:login"), {"username": "guessed", "password": "pw12345678"})
+                assert refused.status_code == 200, refused.status_code
+                assert "_auth_user_id" not in self.client.session
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 302, viapage.status_code
+
+    def test_a_good_password_for_an_inactive_account_is_not_a_failed_guess(self) -> None:
+        # every door refuses an inactive account, such as one not yet verified, in the same way as
+        # a wrong password; only a wrong password spends the budget, at any of them
+        User.objects.create_user(username="dormant", email="d@example.com", password="pw12345678", is_active=False)
+        credentials = {"username": "dormant", "password": "pw12345678"}
+        header = "Basic " + base64.b64encode(b"dormant:pw12345678").decode()
+        doors = [
+            ("page", lambda: self.client.post(reverse("login"), credentials)),
+            ("token", lambda: self.client.post(reverse("api-token-auth"), credentials)),
+            ("header", lambda: self.client.get(reverse("task-list"), headers={"Authorization": header})),
+        ]
+
+        for name, knock in doors:
+            caches["throttle"].clear()
+            with self.subTest(door=name), mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+                for _ in range(3):
+                    refused = knock()
+                    assert refused.status_code in (200, 400, 401), (name, refused.status_code)
+
+                viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+                assert viapage.status_code == 302, (name, viapage.status_code)
+                self.client.logout()
+
+    def test_a_wrong_password_for_an_unknown_account_is_still_a_failed_guess(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("login"), {"username": "nobody", "password": "wrong"})
+
+            blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert blocked.status_code == 429, blocked.status_code
+
+    def test_a_malformed_token_request_is_not_a_failed_guess(self) -> None:
+        # a body with no password is refused before any password is checked; counting it would let
+        # empty posts from one address spend the budget of every user behind it
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                malformed = self.client.post(reverse("api-token-auth"), {"username": "guessed"})
+                assert malformed.status_code == 400, malformed.status_code
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 302, viapage.status_code
+
+    def test_the_doors_share_one_budget(self) -> None:
+        # one address, one budget, whichever door it tries: failures at the login page block a
+        # Basic header and the token endpoint, and failures at the token endpoint block the page
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("login"), {"username": "guessed", "password": "wrong"})
+
+            viaheader = self.client.get(
+                reverse("task-list"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("pw12345678")
+            )
+            viatoken = self.client.post(reverse("api-token-auth"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viaheader.status_code == 429, viaheader.status_code
+        assert viatoken.status_code == 429, viatoken.content
+
+        caches["throttle"].clear()
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                self.client.post(reverse("api-token-auth"), {"username": "guessed", "password": "wrong"})
+
+            viapage = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert viapage.status_code == 429, viapage.status_code
+        assert "_auth_user_id" not in self.client.session
+
+
 class ThirdPartyScriptTests(TestCase):
     """Every script the site loads from a CDN must carry an integrity hash.
 
@@ -4648,6 +6378,30 @@ class QueueRecalcHandoffTests(TestCase):
         assert self.renumbering_requested() is True
         assert self.renumbering_requested() is False, "the same request was seen twice"
 
+    def test_the_counter_does_not_start_expiring_after_the_first_request(self) -> None:
+        """incr() rewrote the key with the cache's default timeout.
+
+        So the "never expire" that the first request set was lost on the second, and the runner
+        read 0 after five quiet minutes. Against the file-based backend production uses: the
+        in-memory one keeps its own incr() that leaves the expiry alone, and cannot show this.
+        """
+        import pickle
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filecache = {"BACKEND": "django.core.cache.backends.filebased.FileBasedCache", "LOCATION": tmpdir}
+            with override_settings(CACHES={**settings.CACHES, "default": filecache}):
+                taskqueue.request_recalc()
+                taskqueue.request_recalc()
+
+                assert taskqueue.recalc_generation() == 2
+                # one key, so one file; the backend writes the expiry first, and None for a key
+                # that never expires
+                (cachefile,) = Path(tmpdir).glob("*.djcache")
+                with cachefile.open("rb") as f:
+                    expiry = pickle.load(f)  # noqa: S301  # this process wrote it a moment ago
+
+        assert expiry is None, f"the counter expires at {expiry}"
+
     def test_a_request_during_a_renumbering_is_not_swallowed(self) -> None:
         """The lost update a clear-on-consume flag had.
 
@@ -4719,7 +6473,98 @@ class QueueRecalcHandoffTests(TestCase):
         assert self.renumbering_requested() is False
 
 
+class ImageRequestDispatchTests(TestCase):
+    """What the runner sends for an image request, and what it expects back."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="dispatch", email="d@example.com", password=None)
+        self.parent = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now()
+        )
+        self.child = self.parent.new_imagerequest(user=self.user, from_api=False)
+        self.child.save()
+
+    def dispatch(self) -> list[list[str]]:
+        """Run the child up to the remote command and return every rsync it issued."""
+        rsyncs: list[list[str]] = []
+
+        def fake_rsync(command: list[str], logfunc: t.Any) -> int:
+            rsyncs.append(command)
+            return 0
+
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        with (
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=fake_rsync),
+            mock.patch("subprocess.Popen", return_value=proc),
+            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+        ):
+            taskrunner_main.runtask(self.child, logfunc=lambda _msg: None)
+
+        return rsyncs
+
+    def test_the_request_uploads_its_own_copy_under_its_own_name(self) -> None:
+        # the runner reads its settings module directly, so its directories are patched on that
+        # object, as RunRsyncTests and TaskRunnerResultFileTests do; the model reads django.conf
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+        ):
+            inputcopy = self.child.inputfile()
+            inputcopy.parent.mkdir(parents=True, exist_ok=True)
+            inputcopy.write_text("observations")
+
+            rsyncs = self.dispatch()
+
+        upload = rsyncs[0]
+        assert upload[1] == str(inputcopy), upload
+        assert upload[2].endswith(f"job{self.child.id:05d}.txt"), "uploaded under the parent's name"
+        assert taskrunner_main.remote_result_filename(self.child) == f"job{self.child.id:05d}.zip"
+
+    def test_a_request_made_before_the_copy_existed_reads_the_parent_file(self) -> None:
+        # rows created before the copy was made still run, from the parent's own file, and still
+        # upload under their own name so that the zip comes back named for them
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+        ):
+            parentfile = Path(tmpdir, self.parent.localresultfileprefix()).with_suffix(".txt")
+            parentfile.parent.mkdir(parents=True, exist_ok=True)
+            parentfile.write_text("observations")
+
+            rsyncs = self.dispatch()
+
+        upload = rsyncs[0]
+        assert upload[1] == str(parentfile), upload
+        assert upload[2].endswith(f"job{self.child.id:05d}.txt"), upload
+
+
 class TaskRunnerResultFileTests(TestCase):
+    def test_remove_imgzip_resultfiles(self) -> None:
+        # the zip is named for the request, and its private input copy goes with it
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as inputsdir:
+            resultsdir = Path(tmpdir)
+            (resultsdir / "job00042.zip").touch()
+            (resultsdir / "job00007.zip").touch()  # a zip named for the parent, from an older request
+            (Path(inputsdir) / "job00042.txt").touch()
+
+            with (
+                mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", resultsdir),
+                mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+            ):
+                taskrunner_main.remove_task_resultfiles(taskid=42, request_type="IMGZIP", logfunc=lambda _msg: None)
+
+            assert not (resultsdir / "job00042.zip").exists()
+            assert not (Path(inputsdir) / "job00042.txt").exists()
+            assert (resultsdir / "job00007.zip").exists(), "another task's file was removed"
+
     def test_remove_ssostack_resultfiles(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
 
@@ -5151,3 +6996,99 @@ class SiteNoticeTests(TestCase):
 
         assert "data-showqueue" not in self.page(reverse("index"))
         assert "data-showqueue" in self.page(reverse("task-list"))
+
+
+class RequestCostTests(TestCase):
+    """Work that a request did more than once, or for rows that could not use it."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="cost", email="cost@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_the_queue_offset_is_aggregated_once_per_request(self) -> None:
+        # the entity-tag and the serializer both need the front of the global queue; the view
+        # makes the aggregate once and hands it to the serializer
+        for ra in range(3):
+            Task.objects.create(user=self.user, ra=float(ra), dec=2.0, request_type="FP", queuepos_relative=ra)
+        task = Task.objects.filter(user=self.user).first()
+        assert task is not None
+
+        for url in (reverse("task-list"), reverse("task-detail", args=[task.id])):
+            with self.subTest(url=url), CaptureQueriesContext(connection) as queries:
+                response = self.client.get(url, HTTP_ACCEPT="application/json")
+
+                assert response.status_code == 200, response.status_code
+                offsets = [q["sql"] for q in queries if "MIN(" in q["sql"].upper() and "queuepos_relative" in q["sql"]]
+                assert len(offsets) == 1, f"{len(offsets)} queue-offset aggregates for one request"
+
+    def test_a_submission_counts_the_queued_tasks_once(self) -> None:
+        # create() counts them for its limit and perform_create needed the same count for
+        # userqueuedtasks_on_submit; the count is made once and handed over
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.post(
+                reverse("task-list"),
+                data=json.dumps({"ra": 1.0, "dec": 2.0}),
+                content_type="application/json",
+                HTTP_ACCEPT="application/json",
+            )
+
+        assert response.status_code == 201, response.content
+        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper() and "starttimestamp" in q["sql"]]
+        assert len(counts) == 1, f"the user's queued tasks were counted {len(counts)} times"
+        assert Task.objects.get(user=self.user).userqueuedtasks_on_submit == 0
+
+    def test_image_links_are_looked_up_for_the_rows_that_can_have_them(self) -> None:
+        # a light-curve task never has a zip or a stacked image, so its row is not stat-ed for
+        # them -- and a zip that happens to carry its name is not offered on it either
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, request_type="FP", finishtimestamp=timezone.now())
+        child = parent.new_imagerequest(user=self.user, from_api=False)
+        child.finishtimestamp = timezone.now()
+        child.save()
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            for task in (parent, child):
+                zippath = Path(tmpdir, task.localresultfileprefix()).with_suffix(".zip")
+                zippath.parent.mkdir(parents=True, exist_ok=True)
+                zippath.write_text("images")
+
+            response = self.client.get(reverse("task-list"), HTTP_ACCEPT="application/json")
+
+        rows = {row["id"]: row for row in response.json()["results"]}
+        assert rows[parent.id]["result_imagezip_url"] is None, "a zip was offered on a light-curve task"
+        assert rows[parent.id]["result_imagestack_url"] is None
+        assert rows[child.id]["result_imagezip_url"], "the image request's own zip was not offered"
+
+    def test_the_weekly_statistics_read_the_finished_tasks_once(self) -> None:
+        # three figures are made from the same rows; the rows are read once, not once per figure
+        def statistics_queries(taskcount: int) -> int:
+            now = timezone.now()
+            for index in range(taskcount):
+                Task.objects.create(
+                    user=self.user,
+                    ra=float(index),
+                    dec=2.0,
+                    request_type="FP",
+                    starttimestamp=now,
+                    finishtimestamp=now,
+                    userqueuedtasks_on_submit=index % 2,
+                )
+            caches["usagestats"].clear()
+            with CaptureQueriesContext(connection) as queries:
+                response = self.client.get(reverse("statsshortterm"))
+            assert response.status_code == 200, response.status_code
+
+            # the reads of the finished rows themselves: not the counts, not the aggregates
+            reads = [
+                q["sql"]
+                for q in queries
+                if "finishtimestamp" in q["sql"]
+                and "IS NOT NULL" in q["sql"]
+                and not any(word in q["sql"].upper() for word in ("COUNT(", "MIN(", "MAX(", "AVG(", "SUM("))
+            ]
+            assert len(reads) == 1, f"the finished tasks were read {len(reads)} times: {reads}"
+            return len(queries)
+
+        small = statistics_queries(1)
+        large = statistics_queries(20)
+
+        assert large == small, f"{small} queries for one finished task, {large} for twenty-one"

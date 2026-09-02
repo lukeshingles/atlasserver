@@ -9,6 +9,8 @@ sets ATLASSERVER_TEST_DB=mysql so that the suite still runs against the engine u
 """
 
 import os
+import tempfile
+from pathlib import Path
 
 # Set before the star import, because settings.py applies its production hardening under a plain
 # `if not DEBUG:` at import time — assigning DEBUG afterwards would be too late. A plain
@@ -28,7 +30,7 @@ from atlasserver.settings import CACHES as _PRODUCTION_CACHES
 
 DEBUG = True
 
-# Belt and braces for the same settings: the env var above can still lose to BASE_DIR/.env
+# A second guard for the same settings: the env var above can still lose to BASE_DIR/.env
 # (load_dotenv overrides the environment), and these four break the suite outright when they leak
 # in — SECURE_SSL_REDIRECT answers every test-client request with a 301, and the plain-http test
 # client never sends secure-only cookies back.
@@ -55,9 +57,19 @@ if os.environ.get("ATLASSERVER_TEST_DB", "sqlite").lower() != "mysql":
 # the aliases are taken from the real settings rather than listed again: a second list is one that
 # can be forgotten, and an alias missing from it fails as "cache not configured" only once some
 # test happens to touch it.
+# OPTIONS and TIMEOUT are carried over as well, so that the test caches run under the same contract
+# as production.
 CACHES = {
-    name: {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": name} for name in _PRODUCTION_CACHES
+    name: {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": name,
+        **{key: value for key, value in config.items() if key in ("OPTIONS", "TIMEOUT")},
+    }
+    for name, config in _PRODUCTION_CACHES.items()
 }
+
+# a directory of this run alone, so that a lock left by an earlier run cannot refuse a render here
+LOCKS_DIR = Path(tempfile.mkdtemp(prefix="atlasserver-test-locks-"))
 
 # MAILERS is deliberately not overridden here: Django's test runner already swaps every mailer's
 # backend for locmem, so result emails land in django.core.mail.outbox rather than being sent.

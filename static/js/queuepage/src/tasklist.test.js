@@ -482,6 +482,299 @@ describe('TaskPage', () => {
         return control;
     };
 
+    /*
+     * The task-list requests and their answers, scripted by the test.
+     *
+     * Each entry of `scripts` answers one task-list request, in order; the last one answers every
+     * request after it. An entry is a function of the call number and the fetch init, returning
+     * the response object, so a test can hold a body, answer 304 or fail. The other two endpoints
+     * answer at once from the handle, and a POST is a submission that made task 2. The handle
+     * counts the task-list calls.
+     */
+    const listpage = (comment) => ({
+        results: [task(1, { comment })], taskcount: 1, next: null, previous: null, pagefirsttaskposition: 0,
+    });
+    const answer = (body, { status = 200, etag = null } = {}) => ({
+        ok: status < 400, status, headers: { get: (name) => (name === 'ETag' ? etag : null) }, json: () => Promise.resolve(body),
+    });
+    // a response whose headers arrive at once and whose body waits for the returned release
+    const heldBody = (holder) => {
+        let release;
+        const body = new Promise((resolve) => { release = resolve; });
+        holder.release = (page) => release(page);
+        return { ...answer(null), json: () => body };
+    };
+    const stubScriptedList = (scripts, { runnerstatus = {}, positions = {} } = {}) => {
+        const handle = { listcalls: 0, runnerstatus: { stale: false, queued_task_count: 0, ...runnerstatus } };
+        global.fetch = (url, init = {}) => {
+            const href = url.toString();
+            if (init.method === 'POST') {
+                return Promise.resolve({ status: 201, json: () => Promise.resolve([{ id: 2 }]) });
+            }
+            if (href.includes('taskrunnerstatus')) {
+                return Promise.resolve(answer(handle.runnerstatus));
+            }
+            if (href.includes('queuepositions')) {
+                return Promise.resolve(answer({ queuepositions: positions }));
+            }
+            const call = handle.listcalls++;
+            return Promise.resolve(scripts[Math.min(call, scripts.length - 1)](call, init));
+        };
+        return handle;
+    };
+    const mountPage = async () => {
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(120);
+        return rendered;
+    };
+    const submit = (rendered) => rendered.container.querySelector('#newrequest').dispatchEvent(
+        new window.Event('submit', { bubbles: true, cancelable: true }));
+    // one poll interval, and the wait for whatever it started
+    const tick = async () => { mock.timers.tick(6000); await flush(60); };
+
+    test('a task list response overtaken by a later one is discarded', async () => {
+        /*
+         * Two task-list requests can be in flight for the same url: a user-triggered fetch (a
+         * submission, a filter) skips the in-flight flag that keeps the poll to one at a time. The
+         * apply site compares urls, which cannot tell two requests for the same url apart, so the
+         * older answer landing second put the earlier rows back -- and wrote its body into the
+         * cache, where a later 304 restored it again.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        const overtaken = {};
+        stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            () => heldBody(overtaken),   // the poll whose body is held while a submission overtakes it
+            () => answer(listpage('commentnewest')),
+        ]);
+
+        try {
+            const rendered = await mountPage();
+            assert.match(rendered.container.textContent, /commentfirst/);
+            await tick();
+
+            submit(rendered);
+            await flush(60);
+            assert.match(rendered.container.textContent, /commentnewest/, 'the newer answer was not applied');
+
+            overtaken.release(listpage('commentovertaken'));
+            await flush(60);
+
+            assert.match(rendered.container.textContent, /commentnewest/, 'an overtaken answer overwrote a newer one');
+            assert.doesNotMatch(rendered.container.textContent, /commentovertaken/);
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    test('an overtaken failure does not report an error over a newer success', async () => {
+        /*
+         * The generation check used to sit only in the second promise callback, after the response
+         * handler had already written the error state. A submission overtakes a slow poll, and
+         * when that poll then answered 500, "Server error" appeared on a page whose newer request
+         * had succeeded, with nothing there to clear it.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        let failSlowPoll;
+        const slowpoll = new Promise((resolve) => { failSlowPoll = resolve; });
+        stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            () => slowpoll,   // the poll whose answer arrives last, and fails
+            () => answer(listpage('commentnewest')),
+        ]);
+
+        try {
+            const rendered = await mountPage();
+            await tick();
+
+            submit(rendered);
+            await flush(120);
+            assert.match(rendered.container.textContent, /commentnewest/, 'the newer request did not apply');
+
+            failSlowPoll(answer(null, { status: 500 }));
+            await flush(60);
+
+            assert.doesNotMatch(rendered.container.textContent, /Server error/,
+                'an overtaken failure reported an error over a newer success');
+            assert.match(rendered.container.textContent, /commentnewest/);
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    test('an overtaken response does not free the next tick to start another request', async () => {
+        /*
+         * The in-flight flag belongs to the newest request. An overtaken poll used to clear it as
+         * its answer arrived, so the next tick started yet another request while the newer one
+         * was still running -- which overtook that one in turn, and with latency above the poll
+         * interval every body was discarded and the list stayed frozen while requests piled up.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        const held = [];
+        const handle = stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            // every later task-list request is held whole until the test releases it
+            (call) => new Promise((resolve) => { held.push(() => resolve(answer(listpage('comment' + call)))); }),
+        ]);
+
+        try {
+            const rendered = await mountPage();
+            await tick();   // the poll (call 1), held
+
+            submit(rendered);   // overtakes it (call 2), also held
+            await flush(60);
+            assert.equal(handle.listcalls, 3);
+
+            held[0]();   // the overtaken poll answers while the newer request runs
+            await flush(60);
+
+            await tick();   // the next tick must not start a third request
+            assert.equal(handle.listcalls, 3, 'an overtaken response freed the next tick to start another request');
+
+            held[1]();
+            await flush(60);
+            assert.match(rendered.container.textContent, /comment2/, 'the newer request did not apply');
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    for (const [running_taskids, written, label, why] of [
+        [[], '2026-09-01T00:01:00Z', 'Attempted', 'does not list'],
+        [[7], '2026-09-01T00:01:00Z', 'Running', 'lists'],
+        [undefined, '2026-09-01T00:01:00Z', 'Running', 'cannot list'],
+        [[], '2026-09-01T00:00:05Z', 'Running', 'does not list in a snapshot from just after the start'],
+    ]) {
+        test(`a started task the runner ${why} shows as ${label}`, async () => {
+            /*
+             * A task with a start time is running only while the runner lists it. One it started and
+             * gave back -- the remote machine was unreachable, say -- waits for another attempt, and
+             * the row says so rather than "running" for hours. A runner too old to report the list
+             * leaves the row as it was, and so does a snapshot written before the dispatch could
+             * have reached the list.
+             */
+            const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
+            const runnerstatus = { queued_task_count: 1, written };
+            if (running_taskids != null) {
+                runnerstatus.running_taskids = running_taskids;
+            }
+            stubScriptedList([() => answer({ ...listpage(), results: [started] })], { runnerstatus, positions: { 7: 0 } });
+
+            const rendered = await mountPage();
+
+            const badge = rendered.container.querySelector('.taskbadge-queued, .taskbadge-running');
+            assert.ok(badge, 'no status badge on the row');
+            assert.equal(badge.textContent.trim(), label);
+        });
+    }
+
+    test('a started task becomes attempted once a snapshot written late enough omits it', async () => {
+        /*
+         * The snapshot from just after the start says nothing, and the next one may differ from
+         * it only in its write time. The store tells nobody about that one, but the kept status
+         * learns its write time, and the next render of the list reads it.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
+        const handle = stubScriptedList([() => answer({ ...listpage(), results: [started] })], {
+            runnerstatus: { queued_task_count: 1, running_taskids: [], written: '2026-09-01T00:00:05Z' },
+            positions: { 7: 0 },
+        });
+
+        try {
+            const rendered = await mountPage();
+            assert.equal(rendered.container.querySelector('.taskbadge').textContent.trim(), 'Running');
+
+            handle.runnerstatus = { ...handle.runnerstatus, written: '2026-09-01T00:01:00Z' };
+            mock.timers.tick(60000);   // the runner-status poll
+            await flush(120);
+            await tick();   // the next list poll renders the rows again
+
+            assert.equal(rendered.container.querySelector('.taskbadge').textContent.trim(), 'Attempted',
+                'a snapshot that differed only in its write time never reached the page');
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    test('a request stays active until its body has arrived', async () => {
+        /*
+         * The headers of a poll can arrive long before its body. A flag cleared at the headers
+         * let the next tick start a newer request while the body was still arriving, and the newer
+         * request then discarded that body; with every body slower than the poll interval, every
+         * body was discarded and the list never updated.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        const pending = {};
+        const handle = stubScriptedList([
+            () => answer(listpage('commentfirst')),
+            () => heldBody(pending),   // headers at once; the body only when the test releases it
+        ]);
+
+        try {
+            const rendered = await mountPage();
+            await tick();   // the poll: headers arrive, body pending
+            assert.equal(handle.listcalls, 2);
+
+            await tick();   // the next tick must wait for that body
+            assert.equal(handle.listcalls, 2, 'a request whose body was still arriving was overtaken by the next tick');
+
+            pending.release(listpage('comment1'));
+            await flush(60);
+            assert.match(rendered.container.textContent, /comment1/, 'the body was not applied');
+
+            await tick();   // and once the body is applied, polling goes on
+            assert.equal(handle.listcalls, 3);
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    test('a discarded response does not leave its ETag behind', async () => {
+        /*
+         * The tag and the body describe one page, so they have to move together. The tag was
+         * recorded when the response headers arrived, above the guard that later discards the
+         * body: the next poll then sent If-None-Match for a page the cache could not restore, the
+         * server answered 304 because its representation really had not changed, and the 304
+         * branch re-applied the older body -- for as long as that tag stood, not for one poll.
+         *
+         * The stub is the server: it answers 304 to a request that already carries its current
+         * tag, which is the whole point.
+         */
+        mock.timers.enable({ apis: ['setInterval'] });
+        const held = {};
+        const versioned = (etag, response) => (call, init) => (
+            (init.headers && init.headers['If-None-Match']) === etag ? answer(null, { status: 304, etag }) : response(etag)
+        );
+        stubScriptedList([
+            versioned('"v1"', (etag) => answer(listpage('commentfirst'), { etag })),
+            // the rows change server-side: the second call's body is held while a third starts behind it
+            versioned('"v2"', (etag) => ({ ...heldBody(held), headers: { get: (name) => (name === 'ETag' ? etag : null) } })),
+            versioned('"v2"', (etag) => answer(listpage('commentsecond'), { etag })),
+        ]);
+
+        try {
+            const rendered = await mountPage();
+            assert.match(rendered.container.textContent, /commentfirst/);
+
+            await tick();   // headers arrive, body is held
+
+            // a submission's fetch goes out while that body is still in flight; the poll itself
+            // waits for the body now, so only a user-triggered request can overtake it
+            submit(rendered);
+            await flush(60);
+
+            held.release(listpage('commentsecond'));
+            await flush(60);
+
+            assert.match(rendered.container.textContent, /commentsecond/,
+                'the new rows were lost, and a 304 restored the old body from a tag whose body was discarded');
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
     test('the tab title counts tasks that left the queue while the tab was hidden', async () => {
         // the away poll runs on an interval an hour of test time would not reach
         mock.timers.enable({ apis: ['setInterval'] });

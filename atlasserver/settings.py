@@ -134,13 +134,21 @@ filecacheroot = Path("/files/atlasforced/django_cache")
 if not filecacheroot.is_dir():
     filecacheroot = Path("/tmp/atlasforced/django_cache")
 
+# the lock files that the web workers share; see forcephot.locks
+LOCKS_DIR = filecacheroot / "locks"
+
 
 CACHES = {
-    # file-based rather than locmem, because the DRF throttle counters live in the default cache
-    # and each mod_wsgi process would otherwise keep its own, multiplying the effective rate limit
+    # File-based rather than locmem, because the entries here coordinate the mod_wsgi processes
+    # with each other and with the task runner: each process would otherwise keep its own copy.
+    #
+    # MAX_ENTRIES is raised because a full directory culls a third of its files at random, and
+    # this one holds control state such as the queue-recalc counter, where a lost entry is a wrong
+    # answer rather than a slower one. Locks live in forcephot.locks, not here.
     "default": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "default",
+        "OPTIONS": {"MAX_ENTRIES": 10000},
     },
     "taskderived": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
@@ -260,6 +268,11 @@ STATIC_URL = f"{PATHPREFIX}/static/"
 STATIC_ROOT = Path(BASE_DIR, "static")
 RESULTS_DIR = Path(STATIC_ROOT, "results")
 
+# Where an image request keeps its copy of the parent's data file until it has run. Outside
+# STATIC_ROOT on purpose: the web server serves that tree without asking Django, and this copy is
+# what lets the parent's own file go with the parent when the parent is deleted.
+TASK_INPUTS_DIR = Path(BASE_DIR, "taskinputs")
+
 
 def _static_version() -> str:
     """Return a cache-busting suffix that changes whenever a served asset does.
@@ -334,7 +347,9 @@ REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
     # or allow read-only access for unauthenticated users.
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.BasicAuthentication",
+        # DRF's, with the failed-login budget: authentication runs before the throttles, so a
+        # wrong password in a Basic header was answered 401 before any throttle could count it
+        "atlasserver.forcephot.throttles.ThrottledBasicAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.TokenAuthentication",
     ],
@@ -352,6 +367,9 @@ REST_FRAMEWORK = {
         # someone hammering it. Applied to GET/HEAD/OPTIONS, which used to bypass the throttle
         # entirely -- see forcephot.throttles.
         "forcephotread": "600/min",
+        # Credential checks. The endpoint hands back a token that does not expire, so this bounds
+        # password guessing; a legitimate client asks for a token once and then reuses it.
+        "forcephotlogin": "10/min",
     },
     # the same knob as TRUSTED_PROXY_COUNT above, so the throttle's idea of the client address
     # cannot drift from the GeoIP lookup's. Left unset, DRF's get_ident() trusts the whole

@@ -34,6 +34,7 @@ jobs:
               run: uv run -- ruff format --check --exit-non-zero-on-format
 
             - name: Run mypy
+              if: always()
               run: uv run -- mypy --install-types --non-interactive
 
             - name: Run pyrefly

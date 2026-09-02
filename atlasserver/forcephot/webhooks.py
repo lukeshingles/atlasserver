@@ -10,12 +10,16 @@ oracle. validate_callback_url() is applied when the task is submitted and again 
 the request is sent.
 """
 
+import contextlib
 import email.message
 import json
 import socket
+import threading
 import typing as t
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from contextvars import ContextVar
 from typing import override
 from urllib.parse import urlparse
 
@@ -34,9 +38,91 @@ CALLBACK_TIMEOUT_SECONDS = 10
 
 MAX_CALLBACK_URL_LENGTH = 500
 
+# socket.getaddrinfo takes no timeout, so it blocks for as long as the resolver does. The name is
+# the caller's, and production serves the whole site with four single-threaded workers, so one
+# name whose server stalls could take a worker out of service for minutes.
+CALLBACK_RESOLVE_TIMEOUT_SECONDS = 5.0
+
+# The most resolver threads that may run at once. A resolver that does not answer leaves its
+# thread behind (see resolve_within_timeout), and a caller who names such a host on every
+# submission would otherwise grow one thread per attempt until the resolver gave up on each.
+CALLBACK_RESOLVER_THREADS = 8
+_resolver_slots = threading.BoundedSemaphore(CALLBACK_RESOLVER_THREADS)
+
+# The URLs the current submission has validated, or None outside one. A radeclist validates the
+# same URL once per row and once more for the list, 200 resolutions for one 100-line request; the
+# submission view opens a scope with callback_urls_validated_once(), and repeats within it are
+# answered from the first check. A context variable is per request and per thread, so nothing is
+# shared. The send path runs outside any scope, so its check is always current.
+_validated_urls: ContextVar[set[str] | None] = ContextVar("validated_callback_urls", default=None)
+
 
 class CallbackUrlError(ValueError):
     """Raised when a callback URL is missing, malformed or points somewhere it must not."""
+
+
+@contextlib.contextmanager
+def callback_urls_validated_once() -> Iterator[None]:
+    """Open the scope within which each callback URL is validated once. For the submission view."""
+    token = _validated_urls.set(set())
+    try:
+        yield
+    finally:
+        _validated_urls.reset(token)
+
+
+def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
+    """Return what getaddrinfo answers for the name, or raise CallbackUrlError if it is too slow.
+
+    A daemon thread, because a blocking libc call cannot be interrupted any other way; an abandoned
+    one costs a stack until the resolver gives up, where waiting for it would cost a worker.
+    """
+    answer: list[t.Any] = []
+    failure: list[BaseException] = []
+
+    # The slot is the thread's, not the caller's: an abandoned thread keeps it until the resolver
+    # answers or gives up, which is what bounds the number of them. A caller who cannot get a slot
+    # within the timeout is answered as a caller whose name cannot be resolved in time is.
+    # bound to the object the slot was taken from, so that a thread abandoned by its caller gives
+    # the slot back to that semaphore and not to whatever the name refers to by then
+    slots = _resolver_slots
+    if not slots.acquire(timeout=CALLBACK_RESOLVE_TIMEOUT_SECONDS):
+        msg = f"callback_url hostname could not be resolved within {CALLBACK_RESOLVE_TIMEOUT_SECONDS:.0f} seconds"
+        raise CallbackUrlError(msg)
+
+    def resolve() -> None:
+        try:
+            answer.extend(socket.getaddrinfo(hostname, port))
+        except Exception as ex:  # noqa: BLE001  # re-raised by the caller below, never swallowed
+            failure.append(ex)
+        finally:
+            slots.release()
+
+    thread = threading.Thread(target=resolve, name="callback-url-resolve", daemon=True)
+    try:
+        thread.start()
+    except RuntimeError:
+        # no thread could be started; the slot would otherwise be lost with it
+        slots.release()
+        raise
+    thread.join(CALLBACK_RESOLVE_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        msg = f"callback_url hostname could not be resolved within {CALLBACK_RESOLVE_TIMEOUT_SECONDS:.0f} seconds"
+        raise CallbackUrlError(msg)
+
+    if failure:
+        # Only the classes that describe the address itself become a rejection. Anything else is a
+        # fault of this server -- getaddrinfo raises a plain OSError when the process is out of
+        # file descriptors -- and must reach the error handler and the administrators, rather than
+        # telling a caller with a perfectly good webhook that their hostname is wrong.
+        if not isinstance(failure[0], (socket.gaierror, UnicodeError, ValueError)):
+            raise failure[0]
+
+        msg = f"callback_url hostname could not be resolved: {failure[0]}"
+        raise CallbackUrlError(msg) from failure[0]
+
+    return answer
 
 
 def validate_callback_url(url: str) -> str:
@@ -46,10 +132,17 @@ def validate_callback_url(url: str) -> str:
     window entirely — a name can resolve differently between the two checks (DNS rebinding) — so
     the request itself is also sent without following redirects and without credentials, and its
     body is never surfaced to the user.
+
+    Within the scope that callback_urls_validated_once() opens, the second and later checks of one
+    URL are answered from the first. See _validated_urls.
     """
     if not url:
         msg = "callback_url must not be empty"
         raise CallbackUrlError(msg)
+
+    validated = _validated_urls.get()
+    if validated is not None and url in validated:
+        return url
 
     if len(url) > MAX_CALLBACK_URL_LENGTH:
         msg = f"callback_url must be at most {MAX_CALLBACK_URL_LENGTH} characters"
@@ -72,26 +165,33 @@ def validate_callback_url(url: str) -> str:
         raise CallbackUrlError(msg)
 
     try:
-        addrinfo = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-    except (socket.gaierror, UnicodeError, ValueError) as ex:
-        msg = f"callback_url hostname could not be resolved: {ex}"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as ex:
+        # urlsplit resolves the port lazily and raises for one that is not a number or is out of
+        # range, and Django's URLValidator accepts both. Guarded here because the caller reports
+        # only CallbackUrlError, so a bare ValueError would be a server error over a bad address.
+        msg = f"callback_url has an invalid port: {ex}"
         raise CallbackUrlError(msg) from ex
 
-    if settings.DEBUG:
-        # a developer's callback target is usually on their own machine
-        return url
+    addrinfo = resolve_within_timeout(parsed.hostname, port)
 
-    for family, _type, _proto, _canonname, sockaddr in addrinfo:
-        if family not in (socket.AF_INET, socket.AF_INET6):
-            continue
-        # sockaddr is (host, port) for IPv4 and (host, port, flowinfo, scopeid) for IPv6; the
-        # stubs type the first element as str | int because of AF_UNIX
-        host = sockaddr[0]
-        # the same definition of "public" as the GeoIP lookup in views.client_location_fields,
-        # which must skip exactly the addresses this refuses; see the note on drift in netaddr
-        if isinstance(host, str) and not address_is_public(host):
-            msg = "callback_url must resolve to a public address"
-            raise CallbackUrlError(msg)
+    # skipped in development, where a developer's callback target is usually on their own machine.
+    # Written as a guarded block rather than an early return, so that both paths reach the scope.
+    if not settings.DEBUG:
+        for family, _type, _proto, _canonname, sockaddr in addrinfo:
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            # sockaddr is (host, port) for IPv4 and (host, port, flowinfo, scopeid) for IPv6; the
+            # stubs type the first element as str | int because of AF_UNIX
+            host = sockaddr[0]
+            # the same definition of "public" as the GeoIP lookup in views.client_location_fields,
+            # which must skip exactly the addresses this refuses; see the note on drift in netaddr
+            if isinstance(host, str) and not address_is_public(host):
+                msg = "callback_url must resolve to a public address"
+                raise CallbackUrlError(msg)
+
+    if validated is not None:
+        validated.add(url)
 
     return url
 
@@ -131,7 +231,7 @@ def send_task_callback(task: "Task", logfunc: t.Callable[[t.Any], None]) -> bool
 
     payload = {
         "task_id": task.id,
-        "task_url": f"https://fallingstar-data.com/forcedphot/queue/{task.id}/",
+        "task_url": task.public_url(),
         "request_type": task.request_type,
         "finishtimestamp": task.finishtimestamp.isoformat() if task.finishtimestamp else None,
         "error_msg": task.error_msg,

@@ -49,6 +49,36 @@ describe('NewRequest', () => {
         assert.equal(submit.querySelector('.submitspinner'), null, 'not requesting yet');
     });
 
+    test('a browser that refuses site data still renders the form', async () => {
+        // localStorage throws on access rather than answering when a browser is set to block site
+        // data. The read runs inside the useState initialiser of the first render, so an unguarded
+        // one propagates out of render -- and with no error boundary above it React tears down the
+        // whole root, leaving the queue page blank rather than merely forgetful.
+        const stored = Object.getOwnPropertyDescriptor(global, 'localStorage');
+        Object.defineProperty(global, 'localStorage', {
+            configurable: true,
+            get() { throw new Error('site data is blocked'); },
+        });
+
+        try {
+            const { container } = await renderForm();
+
+            const radeclist = container.querySelector('#id_radeclist');
+            assert.ok(radeclist, 'the form did not render at all');
+            assert.equal(radeclist.value, '', 'nothing remembered, so the default stands');
+            assert.ok(container.querySelector('#submitrequest'), 'the submit button did not render');
+
+            // and writing must not throw either, or the first keystroke takes the page down
+            await setValue(radeclist, '150.0 20.0');
+            assert.equal(container.querySelector('#id_radeclist').value, '150.0 20.0');
+        } finally {
+            delete global.localStorage;
+            if (stored) {
+                Object.defineProperty(global, 'localStorage', stored);
+            }
+        }
+    });
+
     test('typing a coordinate updates the field and is remembered', async () => {
         const { container } = await renderForm();
 

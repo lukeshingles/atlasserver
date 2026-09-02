@@ -151,9 +151,16 @@ describe('runnerStatusEqual', () => {
             healthy(), healthy({ written: '2026-01-01T00:01:00Z', status_age_seconds: 8.4 })), true);
     });
 
-    test('the running task ids are not read, so they do not count as a change', () => {
+    test('a change to the running task ids is a change: the queue page reads them', () => {
         assert.equal(runnerStatusEqual(
-            healthy({ running_taskids: [1, 2] }), healthy({ running_taskids: [3, 4] })), true);
+            healthy({ running_taskids: [1, 2] }), healthy({ running_taskids: [3, 4] })), false);
+    });
+
+    test('the same running task ids in two responses are not a change', () => {
+        // each response parses to a new array, so an identity comparison would report a change
+        // at every poll and the guard would be of no use
+        assert.equal(runnerStatusEqual(
+            healthy({ running_taskids: [1, 2] }), healthy({ running_taskids: [1, 2] })), true);
     });
 
     for (const field of ['stale', 'maintenance', 'slots_busy', 'numslots', 'queued_task_count', 'distinct_queued_users']) {
@@ -315,6 +322,9 @@ describe('the store', () => {
         assert.equal(seen.length, 2, 'an unchanged poll must not be reported');
         // the object is kept as well as the notification, because the queue page renders from it
         assert.equal(store.current(), published);
+        // and it learns the newer write time in place: the queue page reads that beside the list
+        // of running task ids, at its next render
+        assert.equal(published.written, '2026-01-01T00:01:00Z', 'the kept status kept the old write time');
         unsubscribe();
     });
 

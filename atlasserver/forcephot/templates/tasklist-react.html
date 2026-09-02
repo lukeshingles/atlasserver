@@ -25,6 +25,8 @@
         const queuepositions_url = '{{ request.scheme }}://{{ request.get_host }}{% url 'queuepositions' %}';
 
         const user_id = {%if request.user.id %}{{ request.user.id|escapejs }}{% else %}-1{% endif %};
+        {# a hint for the form only: the serializer applies the same rule to every submission #}
+        const allow_stack_rock = {{ allow_stack_rock|yesno:"true,false" }};
         var user_is_active = true;
 
         var lcplotheight = 300, markersize = 15, errorbarsize = 4, arrowsize = 7;

@@ -20,6 +20,8 @@ import pandas as pd
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.db import models
+from django.db import transaction
+from django.db.models import prefetch_related_objects
 from django.forms.models import model_to_dict
 
 from atlasserver import settings
@@ -34,7 +36,11 @@ django.setup()
 
 import sys
 
+from django.contrib.auth import get_user_model
+
 from atlasserver.forcephot import queue as taskqueue
+from atlasserver.forcephot.models import jobfilename
+from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import send_task_callback
 
@@ -64,7 +70,7 @@ def mjdnow() -> float:
 
 def localresultfileprefix(taskid: int) -> str:
     """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / f"job{taskid:05d}"))
+    return str(Path(settings.RESULTS_DIR / jobfilename(taskid)))
 
 
 def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
@@ -106,6 +112,12 @@ def run_rsync(copycommand: list[str], logfunc: t.Callable[[t.Any], None]) -> int
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",
+        # replace, not the default strict: one byte of non-UTF-8 in the remote output
+        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
+        # UnicodeDecodeError out of the worker, which then died before mark_finished.
+        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
+        # pass, forever, with no error_msg to say why.
+        errors="replace",
         bufsize=1,
         universal_newlines=True,
     )
@@ -151,25 +163,22 @@ def remove_task_resultfiles(
     logfunc: t.Callable[[t.Any], None] = log_general,
 ) -> None:
     """Delete any associated result files from a deleted task."""
-    if request_type == "FP":
-        # an FP task also produces a .jpg preview (and possibly a .pdf plot). The database row is
-        # already gone by the time this runs, so anything left behind is orphaned forever.
-        # glob patterns must be relative to the globbed directory
-        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
-    elif request_type == "IMGZIP" and parent_task_id is not None:
-        taskfiles = [Path(settings.RESULTS_DIR, localresultfileprefix(parent_task_id) + ".zip")]
-    else:  # SSOSTACK
-        # glob patterns must be relative to the globbed directory
-        taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=f"job{taskid:05d}.*"))
+    # Every file is named for its own task, whatever the type: the results (a .txt, .jpg and
+    # perhaps a .pdf for forced photometry; a .zip for an image request; a .fits, .jpg and .txt
+    # for a stack) and, for an image request, its private copy of the parent's data file. The
+    # database row is already gone by the time this runs, so anything left behind is orphaned.
+    # Glob patterns must be relative to the globbed directory.
+    taskfiles = list(Path(settings.RESULTS_DIR).glob(pattern=jobfilename(taskid, ".*")))
+    taskfiles += list(Path(settings.TASK_INPUTS_DIR).glob(pattern=jobfilename(taskid, ".*")))
 
     for taskfile in taskfiles:
         if Path(taskfile).exists():
             try:
                 Path(taskfile).unlink(missing_ok=True)
             except OSError:
-                logfunc(f"Error deleting file: {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
+                logfunc(f"Error deleting file: {taskfile.name}")
             else:
-                logfunc(f"Deleted {Path(taskfile).relative_to(settings.RESULTS_DIR)}")
+                logfunc(f"Deleted {taskfile.name}")
 
 
 def remote_result_filename(task) -> str | None:
@@ -178,11 +187,13 @@ def remote_result_filename(task) -> str | None:
     A task can produce several files, but this is the one that has to exist.
     """
     if task.request_type == "FP":
-        return f"job{task.id:05d}.txt"
+        return jobfilename(task.id, ".txt")
     if task.request_type == "IMGZIP":
-        return f"job{task.parent_task_id:05d}.zip"
+        # the remote script names the zip after the data file it is given, which is uploaded under
+        # this task's own name below
+        return jobfilename(task.id, ".zip")
     if task.request_type == "SSOSTACK":
-        return f"job{task.id:05d}.fits"
+        return jobfilename(task.id, ".fits")
 
     return None
 
@@ -273,8 +284,13 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         atlascommand += build_fp_command(task, remoteresultfile=remoteresultfile)
 
     elif task.request_type == "IMGZIP":
-        localdatafile = Path(settings.RESULTS_DIR, f"job{task.parent_task_id:05d}.txt")
-        remotedatafile = Path(remoteresultdir, f"job{task.parent_task_id:05d}.txt")
+        # This task's own copy of the parent's data file, made when the request was created. A
+        # request created before that copy existed reads the parent's file itself. Uploaded under
+        # this task's name either way, so the zip the remote script writes is named for it too.
+        localdatafile = task.inputfile()
+        if not localdatafile.exists():
+            localdatafile = Path(settings.RESULTS_DIR, jobfilename(task.parent_task_id, ".txt"))
+        remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
 
         if not localdatafile.exists():
             # the parent forced photometry data file lists the images to fetch. Without it the task
@@ -291,7 +307,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         atlascommand += " red" if task.use_reduced else " diff"
 
     elif task.request_type == "SSOSTACK":
-        remotedatafile = Path(remoteresultdir, f"job{task.id:05d}.txt")
+        remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
         atlascommand += build_ssostack_command(
             task,
             remoteresultfile=remoteresultfile,
@@ -307,6 +323,12 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",
+        # replace, not the default strict: one byte of non-UTF-8 in the remote output
+        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
+        # UnicodeDecodeError out of the worker, which then died before mark_finished.
+        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
+        # pass, forever, with no error_msg to say why.
+        errors="replace",
         bufsize=1,
         universal_newlines=True,
     )
@@ -324,7 +346,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             now = time.perf_counter()
             # the cancellation check is a database query, and the 1s communicate() timeout used to
             # run one per second per slot. Across 16 slots that was ~16 queries/sec forever, and a
-            # single job at the 4 hour limit issued over ten thousand of them. Cancelling a job
+            # single task at the 4 hour limit issued over ten thousand of them. Cancelling a task
             # that has already been running for minutes is not more urgent than this.
             if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
                 lastcancelcheck = now
@@ -357,7 +379,7 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         for line in stderr.split("\n"):
             logfunc(f"{REMOTE_SERVER} STDERR: {line}")
 
-    if not task_exists(taskid=task.id):  # check if job was cancelled
+    if not task_exists(taskid=task.id):  # check if the task was cancelled
         return None, None
 
     # copy files from sc01 to local machine, deleting the remote files after successful copy
@@ -389,13 +411,16 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         copycommands = [
             ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
         ]
-        # the data file should already be copied, but just in case, copy it again (deleting the remote file)
+        # the data file is collected from the remote host too, so it does not accumulate there.
+        # Into the private input directory, never the results directory: the web server serves
+        # that one, and this file is a copy of a data file the parent may since have deleted.
+        settings.TASK_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
         copycommands.append(
             [
                 "rsync",
                 "--remove-source-files",
                 f"{REMOTE_SERVER}:{remotedatafile}",
-                str(settings.RESULTS_DIR),
+                str(task.inputfile()),
             ]
         )
 
@@ -429,10 +454,6 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
             # here, because the task would then never be marked finished and would be retried forever
             logfunc("ERROR: could not parse the result file")
             return localresultfile, "Could not parse the result file"
-
-        # if not task.from_api:
-        #     make_pdf_plot(taskid=task.id, taskcomment=task.comment, localresultfile=localresultfile,
-        #                   logprefix=logprefix, logfunc=log, separate_process=True)
 
     return localresultfile, None
 
@@ -524,11 +545,10 @@ def send_email_if_needed(task, logfunc) -> None:
             batchtasks_unfinished += 1
         else:
             localresultfile = localresultfileprefix(batchtask.id) + ".txt"
-            taskurl = f"https://fallingstar-data.com/forcedphot/queue/{batchtask.id}/"
             strtask = (
-                f"Task {batchtask.id}: RA {batchtask.ra} Dec {batchtask.dec} "
+                f"Task {batchtask.id}: {batchtask.describe_target()} "
                 f"{'img_reduced' if batchtask.use_reduced else 'img_difference'} "
-                f"\n{taskurl}\n"
+                f"\n{batchtask.public_url()}\n"
             )
 
             if batchtask.comment:
@@ -762,10 +782,7 @@ def remove_old_tasks(
 
         # The sweeps reach back up to 183 days, so the widest of them can match a lot of rows.
         # Take one bounded batch at a time rather than reading every matching id into memory, and
-        # do the database write once per batch rather than once per task: the old loop issued a
-        # full-row save() for every archived task and an UPDATE-then-DELETE for every hard-deleted
-        # one. select_related and the prefetch cover the lookups that delete_result_files() makes,
-        # so those cost one query per batch instead of one per task.
+        # do the database write once per batch rather than once per task.
         #
         # No offset is needed: processing a task removes it from this queryset, because it is
         # either deleted or marked archived (and the non-archived case filters on is_archived
@@ -773,31 +790,53 @@ def remove_old_tasks(
         # could not spin here forever.
         maxpasses = taskcount // MAINTENANCE_BATCH_SIZE + 2
         for _ in range(maxpasses):
-            tasks = list(
-                matchingtasks.select_related("parent_task").prefetch_related(Task.prefetch_imagerequests())[
-                    :MAINTENANCE_BATCH_SIZE
-                ]
-            )
-            if not tasks:
-                break
+            # One transaction per batch, with the batch's rows locked before their children are
+            # read. RequestImages holds the same lock on a parent while it creates an image request,
+            # so a request created at the same time is either seen here, and goes with the parent,
+            # or is refused, because the parent has gone. A batch costs a fixed number of queries
+            # whatever its size: the children come from one prefetch.
+            with transaction.atomic():
+                tasks = list(matchingtasks.select_related("parent_task")[:MAINTENANCE_BATCH_SIZE])
+                if not tasks:
+                    break
 
-            taskids = [task.id for task in tasks]
+                taskids = {task.id for task in tasks}
+                list(Task.objects.select_for_update().filter(id__in=taskids).values_list("id", flat=True))
+                prefetch_related_objects(tasks, Task.prefetch_imagerequests())
 
-            for taskindex, task in enumerate(tasks):
-                task.delete_result_files()
-                # inside the batch as well as after it: 500 tasks times several filesystem operations
-                # each can alone outlast the staleness window on a slow results mount. The
-                # heartbeat rate-limits itself, so calling it often costs almost nothing.
-                if heartbeat is not None and taskindex % 50 == 49:
-                    heartbeat()
+                if harddeleterecord:
+                    # Everything this batch removes: the rows it selected, and the image requests
+                    # the delete cascades to, whose files the collector's bulk SQL would never
+                    # reclaim. Read under the lock; the children the batch did not select are the
+                    # ones still needing their files reclaimed.
+                    childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
+                    going = childids | taskids
+                    cascaded = list(Task.objects.filter(id__in=childids - taskids))
+                    batch = tasks + cascaded
+                else:
+                    going = taskids
+                    batch = tasks
 
-            if harddeleterecord:
-                # the rows are about to go, so there is no point marking them archived first
-                Task.objects.filter(id__in=taskids).delete()
-            else:
-                Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
+                for index, task in enumerate(batch):
+                    # the batch is named, because every row in it is still live until the write below
+                    task.delete_result_files(going=going)
+                    # inside the batch as well as after it: 500 tasks times several filesystem
+                    # operations each can alone outlast the staleness window on a slow results
+                    # mount. The heartbeat rate-limits itself, so calling it often costs almost
+                    # nothing.
+                    if heartbeat is not None and index % 50 == 49:
+                        heartbeat()
 
-            for task in tasks:
+                if harddeleterecord:
+                    # one statement for the parents and their image requests alike; the rows are
+                    # about to go, so there is no point marking them archived first
+                    Task.objects.filter(id__in=going).delete()
+                else:
+                    Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
+
+            # After the write, not before it. A reader that arrives between the two finds no cache
+            # entry, reads a data file that is still there, and keeps the plot for thirty days.
+            for task in batch:
                 task.forget_derived_cache()
 
             if heartbeat is not None:
@@ -806,6 +845,37 @@ def remove_old_tasks(
             logfunc(f"  WARNING: stopped after {maxpasses} batches with tasks still matching")
 
         logfunc("  Done.")
+
+
+# How long a registration may wait for its address to be confirmed before the account goes.
+# The verification link stops working after settings.PASSWORD_RESET_TIMEOUT, but the row did not,
+# so an address registered and never confirmed was held for good: the real owner could neither
+# register it, log in, nor reset a password, because reset skips inactive accounts.
+UNVERIFIED_ACCOUNT_DAYS: t.Final = 7
+
+
+def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=log_general) -> int:
+    """Delete the accounts that registered more than `days_ago` ago and never confirmed their address.
+
+    Only inactive rows that carry the pending-verification marker: an account an administrator
+    switched off has no marker, and a confirmed one lost its marker.
+    """
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
+    stale = PendingEmailVerification.objects.filter(created__lt=cutoff, user__is_active=False)
+    userids = list(stale.values_list("user_id", flat=True))
+    if not userids:
+        return 0
+
+    # The cutoff is checked again by the delete itself: a link resent since the ids were read has
+    # dated the marker afresh, and that account stays. The marker goes with the account, by cascade.
+    usermodel = get_user_model()
+    _total, removed = usermodel.objects.filter(
+        id__in=userids, is_active=False, pending_verification__created__lt=cutoff
+    ).delete()
+    count = removed.get(usermodel._meta.label, 0)  # noqa: SLF001
+    logfunc(f"Removed {count} accounts that did not confirm their address within {days_ago} days")
+
+    return count
 
 
 def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
@@ -839,6 +909,8 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
             heartbeat()
         remove_old_tasks(**sweep, logfunc=logfunc, heartbeat=heartbeat)
 
+    remove_unverified_accounts(logfunc=logfunc)
+
 
 def main() -> None:
     """Run queued tasks and clean up on old tasks."""
@@ -853,8 +925,8 @@ def main() -> None:
     mp.set_start_method("spawn")
     numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
-    procs_userids: dict[int, int] = {}  # user_id of currently running job, or None
-    procs_taskids: dict[int, int] = {}  # tasks_id of currently running job, or None
+    procs_userids: dict[int, int] = {}  # user_id of the task each slot runs
+    procs_taskids: dict[int, int] = {}  # id of the task each slot runs
 
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
@@ -908,13 +980,13 @@ def main() -> None:
             recalc_requested = seen_generation != last_recalc_generation
 
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
-            # caught, because this loop is what dispatches every job: unguarded, a lock timeout or
+            # caught, because this loop is what dispatches every task: unguarded, a lock timeout or
             # a bad queue state would take the exception out of main() and stop the runner, and the
             # supervisor would restart it straight back into the same state. Queue positions going
             # stale is a display problem; not dispatching anything is not.
             try:
                 taskqueue.calculate_queue_positions()
-            except Exception as ex:  # noqa: BLE001 (this loop dispatches every job; stale
+            except Exception as ex:  # noqa: BLE001 (this loop dispatches every task; stale
                 # queue positions are a display problem, not dispatching is not)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
             else:
@@ -956,7 +1028,7 @@ def main() -> None:
 
         if task is None:
             # nothing runnable. That is either an empty queue or a queue holding only tasks from
-            # users who already have a job running, and only the former should slow the polling
+            # users who already have a task running, and only the former should slow the polling
             if not printedwaiting and not queuedtasks.exists():
                 logfunc("Waiting for tasks...")
                 printedwaiting = True

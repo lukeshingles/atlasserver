@@ -80,6 +80,8 @@ dmypy.json
 .tags*
 logs
 logs/*.txt
+# an image request's private copy of its parent's data file, until it has run
+taskinputs/
 *.mmdb
 # update_geoipdatabase.sh stages the download next to the target before renaming it into place
 *.mmdb.new

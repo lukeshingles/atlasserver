@@ -1,27 +1,28 @@
 """Django views for the forcephot app."""
 
+import contextlib
 import datetime
 import functools
 import hashlib
-import ipaddress
 import logging
 import math
 import os
 import statistics
-import time
 import typing as t
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from typing import override
+from urllib.parse import urlsplit
 
-import pandas as pd
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import PasswordResetView
 from django.contrib.gis.geoip2 import GeoIP2
 from django.contrib.gis.geoip2 import GeoIP2Exception
 from django.core.cache import caches
@@ -68,27 +69,31 @@ from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.forms import ResendVerificationForm
+from atlasserver.forcephot.locks import try_lock
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
-from atlasserver.forcephot.misc import PDF_PLOT_TIMEOUT_SECONDS
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
-from atlasserver.forcephot.netaddr import client_address
+from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
+from atlasserver.forcephot.serializers import stack_requests_allowed
+from atlasserver.forcephot.throttles import count_in_window
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
 from atlasserver.forcephot.verification import send_verification_email
+from atlasserver.forcephot.verification import site_name as verification_site_name
 from atlasserver.forcephot.verification import token_generator as verification_token_generator
 from atlasserver.forcephot.verification import user_from_uidb64
+from atlasserver.forcephot.webhooks import callback_urls_validated_once
 
 # not atlasserver.taskrunner.main: importing that module runs django.setup() and pulls pandas and
 # multiprocessing into every web worker, permanently, to read two constants
@@ -112,6 +117,18 @@ EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
 # signing up together is ordinary; what it has to stop is a loop. See register.
 REGISTRATION_WINDOW_SECONDS: t.Final = 600
 REGISTRATION_WINDOW_LIMIT: t.Final = 3
+
+# Submissions of any kind allowed from one client address per window, valid or not. The answer
+# "is this address registered here?" is reachable only on the invalid branch, so a limiter that
+# ran after is_valid() metered the mail and left that answer free. Separate from the mail budget
+# above, because a mistyped password must not use up a colleague's registration.
+REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
+
+# PDF plot renders the whole site may have in flight at once. A render holds its request thread
+# for up to PDF_PLOT_TIMEOUT_SECONDS, the view needs no credentials, and production has four
+# single-threaded workers: without a total, a few tasks with no .pdf yet could take every worker.
+# Named slots, each one lock (see forcephot.locks), rather than a counter.
+PDF_PLOT_RENDER_SLOTS: t.Final = 2
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +185,15 @@ def origin_only_referrer(view):
     return wrapper
 
 
-def get_tasklist_etag(request, user_id: int) -> str:
+def get_tasklist_etag(
+    request, user_id: int, *, shows_owner_fields: bool = True, min_queuepos_relative: int | None = None
+) -> str:
     """Return an etag that changes whenever anything the given user's task pages show changes.
+
+    `shows_owner_fields` says which of the two bodies this tag describes. The serializer keeps
+    callback_url to the owner and to staff, so one URL has two representations; without this term
+    the tag would be the same for both, and a caller presenting the other one's tag would be
+    answered 304 with a body that was never meant for them.
 
     Scoped to one user's tasks rather than the whole table. A global aggregate was invalidated by
     every other user's activity, so a busy server would almost never produce a 304, and it cost a
@@ -197,13 +221,15 @@ def get_tasklist_etag(request, user_id: int) -> str:
         request.accepted_renderer.format,
         user_id,
         request.get_full_path(),
+        shows_owner_fields,
         usertasks["id__count"],
         usertasks["timestamp__max"],
         usertasks["starttimestamp__max"],
         usertasks["finishtimestamp__max"],
         usertasks["task_modified_datetime__max"],
-        # the queue position rendered for a task is relative to the front of the global queue
-        Task.min_queuepos_relative(),
+        # the queue position rendered for a task is relative to the front of the global queue.
+        # The caller passes the offset when it has made it already for the serializer.
+        Task.min_queuepos_relative() if min_queuepos_relative is None else min_queuepos_relative,
     )
 
 
@@ -259,20 +285,6 @@ def geoip_reader_forget() -> None:
     The seam tests reset the module state through, rather than reaching into the private dict.
     """
     _geoip_reader_cache.clear()
-
-
-def client_ip(request) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """Return the address the request came from, or None if it cannot be established.
-
-    The policy (and the reasoning behind it) lives in netaddr.client_address; this only supplies
-    the request pieces. NUM_PROXIES in REST_FRAMEWORK is set from the same TRUSTED_PROXY_COUNT so
-    that the throttle's idea of the client cannot drift from this one.
-    """
-    return client_address(
-        remote_addr=request.META.get("REMOTE_ADDR"),
-        forwarded_for=request.META.get("HTTP_X_FORWARDED_FOR"),
-        trusted_proxy_count=settings.TRUSTED_PROXY_COUNT,
-    )
 
 
 def client_location_fields(request) -> dict[str, str | None]:
@@ -355,16 +367,9 @@ class ForcePhotPermission(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        if not request.user or not request.user.is_authenticated:
-            return False
-
-        # staff and instance owner have all permissions.
-        #
-        # pyrefly: ignore [missing-attribute]
-        # is_staff is on the concrete User, and django-stubs types request.user as
-        # AbstractBaseUser because AUTH_USER_MODEL is swappable in principle. It is not swapped
-        # here -- verification.py carries the same note where the checkers disagree about it.
-        return request.user.is_staff or obj.user_id == request.user.id
+        # staff and instance owner have all permissions; the rule itself lives on the model,
+        # because RequestImages and the serializer's callback_url filter apply the same one
+        return obj.is_owned_by(request.user)
 
 
 class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
@@ -393,45 +398,43 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
 
-        usertaskcount = Task.objects.filter(
-            starttimestamp__isnull=True,
-            user_id=self.request.user.pk,
-            is_archived=False,
-        ).count()
+        usertaskcount = Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
 
-        # a radeclist can hold up to 100 targets, so the limit must account for the size of this
-        # request rather than only the tasks that are already queued
-        if "radeclist" in request.data:
-            datalist = splitradeclist(request.data)
-            newtaskcount = len(datalist)
-            serializer = self.get_serializer(data=datalist, many=True)
-        else:
-            newtaskcount = 1
-            serializer = self.get_serializer(data=request.data)
+        # Each callback URL is resolved once for the whole submission: splitradeclist validates
+        # every row, and the serializer validates the list again. See webhooks._validated_urls.
+        with callback_urls_validated_once():
+            # a radeclist can hold up to 100 targets, so the limit must account for the size of
+            # this request rather than only the tasks that are already queued
+            if "radeclist" in request.data:
+                datalist = splitradeclist(request.data)
+                newtaskcount = len(datalist)
+                serializer = self.get_serializer(data=datalist, many=True)
+            else:
+                newtaskcount = 1
+                serializer = self.get_serializer(data=request.data)
 
-        if usertaskcount + newtaskcount > MAX_USER_TASKS:
-            msg = (
-                f"ERROR: You have too many queued tasks ({usertaskcount} queued"
-                f" + {newtaskcount} requested > {MAX_USER_TASKS})."
-            )
-            raise serializers.ValidationError({"non_field_errors": msg})
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
+            if usertaskcount + newtaskcount > MAX_USER_TASKS:
+                msg = (
+                    f"ERROR: You have too many queued tasks ({usertaskcount} queued"
+                    f" + {newtaskcount} requested > {MAX_USER_TASKS})."
+                )
+                raise serializers.ValidationError({"non_field_errors": msg})
+            serializer.is_valid(raise_exception=True)
+
+        self.perform_create(serializer, usertaskcount=usertaskcount)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @override
-    def perform_create(self, serializer: BaseSerializer[Task]) -> None:
-        """Create new task(s)."""
-        usertaskcount_before = (
-            Task.objects.filter(
-                starttimestamp__isnull=True,
-                user_id=self.request.user.pk,
-                is_archived=False,
-            ).count()
-            if self.request.user and self.request.user.pk is not None
-            else 0
-        )
+    def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int | None = None) -> None:
+        """Create new task(s). create() passes the count of queued tasks it has made for its limit."""
+        usertaskcount_before = usertaskcount
+        if usertaskcount_before is None:
+            usertaskcount_before = (
+                Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
+                if self.request.user and self.request.user.pk is not None
+                else 0
+            )
 
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
@@ -441,40 +444,37 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         extra_fields.update(client_location_fields(self.request))
         extra_fields["from_api"] = request_is_from_api(self.request)
 
-        serializer.save(**extra_fields)
+        # One transaction for the inserts and the positions. Each insert is otherwise committed on
+        # its own with queuepos_relative NULL, and the runner polls twice a second with
+        # order_by("queuepos_relative"), where NULL sorts first: a task submitted a moment ago was
+        # dispatched ahead of everything already waiting, which is the window
+        # next_queuepos_relative() exists to close.
+        with transaction.atomic():
+            serializer.save(**extra_fields)
 
-        # take the ids from the saved objects rather than serializer.data: accessing .data here
-        # would cache the response body before the updates below have been applied
-        # save() above populated this, so it is not None; many=True makes it a list. Narrowed
-        # rather than assumed, because everything below indexes into it.
-        created = serializer.instance
-        newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
+            # take the ids from the saved objects rather than serializer.data: accessing .data here
+            # would cache the response body before the updates below have been applied
+            # save() above populated this, so it is not None; many=True makes it a list. Narrowed
+            # rather than assumed, because everything below indexes into it.
+            created = serializer.instance
+            newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
 
-        # Provisional positions at the back of the queue. The real ordering is round-robin across
-        # users and is assigned by the task runner; this only stops a task submitted between two
-        # renumberings from showing no position at all, and costs one aggregate for the whole batch.
-        nextqueuepos = next_queuepos_relative()
+            # Provisional positions at the back of the queue. The real ordering is round-robin
+            # across users and is assigned by the task runner; this only stops a task submitted
+            # between two renumberings from showing no position at all, and costs one aggregate
+            # for the whole batch.
+            nextqueuepos = next_queuepos_relative()
 
-        # one statement rather than an UPDATE per task: a radeclist can hold 100 targets, and that
-        # was 100 round trips inside the request that the user is waiting on
-        Task.objects.bulk_update(
-            [
-                Task(
-                    id=task.id,
-                    userqueuedtasks_on_submit=usertaskcount_before + i,
-                    queuepos_relative=nextqueuepos + i,
-                )
-                for i, task in enumerate(newtasks)
-            ],
-            ["userqueuedtasks_on_submit", "queuepos_relative"],
-        )
+            # set on the instances as well as written, so that the response serialises the values
+            # without a reload per task: a radeclist can hold 100 targets
+            for i, task in enumerate(newtasks):
+                task.userqueuedtasks_on_submit = usertaskcount_before + i
+                task.queuepos_relative = nextqueuepos + i
+
+            # one statement rather than an UPDATE per task
+            Task.objects.bulk_update(newtasks, ["userqueuedtasks_on_submit", "queuepos_relative"])
 
         request_queue_recalc()
-
-        # the updates above went straight to the database, so reload the in-memory objects that
-        # will be serialised into the response
-        for task in newtasks:
-            task.refresh_from_db()
 
     @override
     def perform_update(self, serializer: BaseSerializer[Task]) -> None:
@@ -505,15 +505,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             raise PermissionDenied
 
         if request.accepted_renderer.format == "html":
+            # only what the template reads: it builds its URLs and its user id itself. A COUNT
+            # for a "usertaskcount" it never rendered was paid on every load of the queue page.
             return Response(
                 template_name=self.template_name,
-                data={
-                    "name": "Task Queue",
-                    "singletaskdetail": False,
-                    "paginator": self.paginator,
-                    "usertaskcount": listqueryset.count(),
-                    "debug": settings.DEBUG,
-                },
+                data={"name": "Task Queue", "allow_stack_rock": stack_requests_allowed({"request": request})},
             )
 
         # answer a conditional request before paginating: an unchanged page then costs one
@@ -524,14 +520,16 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if userpk is None:
             raise PermissionDenied
 
-        etag = get_tasklist_etag(request, userpk)
+        # one aggregate for the entity-tag and the serializer both
+        queueoffset = Task.min_queuepos_relative()
+        etag = get_tasklist_etag(request, userpk, min_queuepos_relative=queueoffset)
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
         page = self.paginate_queryset(listqueryset)
 
         if page is not None:
-            serializer = self.get_serializer(page, many=True)
+            serializer = self.get_serializer(page, many=True, context=self.serializer_context(queueoffset))
             paginator = self.paginator
             if not isinstance(paginator, TaskPagination):
                 msg = f"expected TaskPagination, got {type(paginator).__name__}"
@@ -553,25 +551,37 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if request.accepted_renderer.format == "html":
             return Response(
                 template_name=self.template_name,
-                data={
-                    # self.get_object() again here would repeat the lookup query
-                    "name": f"Task {instance.id}",
-                    "singletaskdetail": True,
-                    "debug": settings.DEBUG,
-                },
+                # self.get_object() again here would repeat the lookup query
+                data={"name": f"Task {instance.id}", "allow_stack_rock": stack_requests_allowed({"request": request})},
             )
 
         # scoped to the task's owner, not to request.user: a staff member may be viewing someone
         # else's task, and their own tasks say nothing about whether this one has changed
-        etag = get_tasklist_etag(request, instance.user_id)
+        # the detail view is readable by anyone, so the body depends on who is asking; the list
+        # is scoped to the requester, so its body is always the owner's
+        queueoffset = Task.min_queuepos_relative()
+        etag = get_tasklist_etag(
+            request,
+            instance.user_id,
+            shows_owner_fields=instance.is_owned_by(request.user),
+            min_queuepos_relative=queueoffset,
+        )
         if etag == request.META.get("HTTP_IF_NONE_MATCH"):
             return HttpResponseNotModified()
 
-        return Response(self.get_serializer(instance).data, headers={"ETag": etag})
+        serializer = self.get_serializer(instance, context=self.serializer_context(queueoffset))
+        return Response(serializer.data, headers={"ETag": etag})
+
+    def serializer_context(self, queueoffset: int) -> dict[str, t.Any]:
+        """Return the usual serializer context with the queue offset the view has made already."""
+        return {**self.get_serializer_context(), "min_queuepos_relative": queueoffset}
 
 
 class RequestImages(APIView):
     permission_classes = [ForcePhotPermission]
+    # the same budget as the viewset's create: this creates a task too, and ran a GeoIP lookup, an
+    # aggregate and an insert per call with no limit at all
+    throttle_scope = "forcephottasks"
 
     # this view takes no request body and redirects on success, so the schema generator cannot
     # infer a serializer for it
@@ -590,24 +600,29 @@ class RequestImages(APIView):
         This creates a task, so it must not be reachable by GET: a safe method is not CSRF
         protected, and any page (or link prefetcher) could otherwise queue work for a logged-in user.
         """
-        if not request.user.is_authenticated:
-            raise PermissionDenied
-
-        try:
-            parent_task = Task.objects.get(id=pk, request_type="FP", is_archived=False)
-
-            if parent_task.user.id != request.user.id and not request.user.is_staff:
-                raise PermissionDenied
-
-        except ObjectDoesNotExist:
-            return HttpResponseNotFound("Page not found")
-
+        # ForcePhotPermission refuses an anonymous POST before this runs; the object check below
+        # applies the ownership rule
         redirurl = reverse("task-list")
 
-        if self.request.user and self.request.user.is_authenticated:
-            userimziptaskcount = Task.objects.filter(
-                user_id=self.request.user.pk, request_type="IMGZIP", is_archived=False
-            ).count()
+        # The parent row is locked for the whole transaction: two overlapping requests cannot both
+        # find no live image request, and Task.delete takes the same lock, so a delete of the
+        # parent waits for the copy of its data file rather than reclaiming the file under it.
+        with transaction.atomic():
+            try:
+                parent_task = Task.live().select_for_update().get(id=pk, request_type="FP")
+            except ObjectDoesNotExist:
+                return HttpResponseNotFound("Page not found")
+
+            self.check_object_permissions(request, parent_task)
+
+            # one live image request per task: a second is the same request again, and the queue
+            # page offers the button only while there is none
+            if parent_task.live_imagerequest_ids():
+                return JsonResponse(
+                    {"non_field_errors": "An image request for this task is already queued."}, status=409
+                )
+
+            userimziptaskcount = Task.live().filter(user_id=request.user.pk, request_type="IMGZIP").count()
             if userimziptaskcount >= MAX_USER_IMGZIP_TASKS:
                 msg = (
                     f"You have too many IMGZIP tasks ({userimziptaskcount} >= {MAX_USER_IMGZIP_TASKS})."
@@ -615,16 +630,21 @@ class RequestImages(APIView):
                 )
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
-        if not parent_task.error_msg and parent_task.finishtimestamp:
-            # which fields the child inherits is the model's decision; see Task.new_imagerequest
-            newtask = parent_task.new_imagerequest(user=request.user, from_api=request_is_from_api(request))
-            for field, value in client_location_fields(self.request).items():
-                setattr(newtask, field, value)
-            newtask.queuepos_relative = next_queuepos_relative()
-            newtask.save()
-            request_queue_recalc()
+            if not parent_task.error_msg and parent_task.finishtimestamp:
+                newtask = parent_task.create_imagerequest(
+                    user=request.user, from_api=request_is_from_api(request), **client_location_fields(self.request)
+                )
+                if newtask is None:
+                    # no data file, so nothing could be fetched: the row is rolled back rather than
+                    # queued for a run that is certain to fail
+                    transaction.set_rollback(True)
+                    msg = "The forced photometry data file for this task is no longer available."
+                    return JsonResponse({"non_field_errors": msg}, status=404)
 
-            redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
+                # after the commit: the runner could otherwise recalculate without the new row and
+                # count the request as handled
+                transaction.on_commit(request_queue_recalc)
+                redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
 
         return redirect(redirurl, request=request)
 
@@ -1076,15 +1096,18 @@ def statsshortterm(request):
         mean = mean_seconds(values)
         return "-" if mean is None else f"{mean:.1f}s"
 
-    if sevendaytasks_finished.count() > 0:
-        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in sevendaytasks_finished])
+    # one read of the four columns the figures below use, rather than a full read per figure
+    finished = list(
+        sevendaytasks_finished.only("timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit")
+    )
 
-        sevendaytasks_finished_firstusertasks = sevendaytasks_finished.filter(userqueuedtasks_on_submit=0)
+    if finished:
+        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in finished])
         dictparams["sevendayavgwaittimeuserfirst"] = mean_seconds_str(
-            [tsk.waittime() for tsk in sevendaytasks_finished_firstusertasks]
+            [tsk.waittime() for tsk in finished if tsk.userqueuedtasks_on_submit == 0]
         )
 
-        sevenday_runtimes = [tsk.runtime() for tsk in sevendaytasks_finished]
+        sevenday_runtimes = [tsk.runtime() for tsk in finished]
         dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
         num_job_processors = runnerstatus.NUMSLOTS
         # one definition of which values count, shared with the string above
@@ -1113,9 +1136,12 @@ def queuepositions(request):
     fully serialised tasks and the filesystem stats that go with them.
     """
     queueoffset = Task.min_queuepos_relative()
-    positions = Task.objects.filter(
-        user_id=request.user.pk, finishtimestamp__isnull=True, is_archived=False, queuepos_relative__isnull=False
-    ).values_list("id", "queuepos_relative", "request_type")
+    # the same set the offset was measured against, so the subtraction below cannot drift
+    positions = (
+        Task.queued()
+        .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
+        .values_list("id", "queuepos_relative", "request_type")
+    )
 
     return JsonResponse(
         {
@@ -1187,7 +1213,7 @@ def taskrunnerstatus(request):
     # The medians and the count below can change while `written` does not. But the task runner
     # writes the file every STATUS_WRITE_SECONDS, and thus this version holds for that interval
     # at most. The poll asks each minute.
-    etag = f'"{status["written"]}"'
+    etag = entity_tag(status["written"])
 
     # A browser that holds the current version asks with If-None-Match, and the answer is 304 with
     # no body. This comes before the medians and the count, because a 304 makes both unnecessary.
@@ -1281,40 +1307,75 @@ def stats(request):
     return render(request, "stats.html", dictparams)
 
 
+class SiteOriginPasswordResetView(PasswordResetView):
+    """Django's password reset, with the mailed link pinned to the configured origin.
+
+    Django builds the link from the Host header, and ALLOWED_HOSTS holds wildcard entries, so a
+    host under one of those domains could have a victim sent a reset link that points at itself.
+    The rule is the one verification.absolute_url applies to the mail this project sends itself.
+    An unset SITE_ORIGIN keeps Django's own behaviour, for development and the tests.
+    """
+
+    @override
+    def setup(self, request, *args, **kwargs) -> None:
+        """Pin the values the reset mail template reads, before the form is handled."""
+        super().setup(request, *args, **kwargs)
+
+        if settings.SITE_ORIGIN:
+            # one answer for both, from the helper the other mail uses, so the link and the name
+            # in the text cannot differ
+            host = verification_site_name(request)
+            self.extra_email_context = {
+                "protocol": urlsplit(settings.SITE_ORIGIN).scheme,
+                "domain": host,
+                "site_name": host,
+            }
+
+
 def register(request):
     if request.method == "POST":
+        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+
+        # Counted before the form is bound, so that a rejected submission spends it too; see
+        # REGISTRATION_ATTEMPT_LIMIT for why the answer to a rejected one has to be metered.
+        attempts = count_in_window(f"registration-attempt-{clientkey}", REGISTRATION_WINDOW_SECONDS)
+
+        if attempts > REGISTRATION_ATTEMPT_LIMIT:
+            # An unbound form, and the message passed beside it rather than through add_error:
+            # binding runs clean_email, and its answer is the one this limit exists to meter. The
+            # username and the address are put back as initial values instead, so that a caller
+            # behind an address they share with a whole institute does not lose what they typed.
+            blocked = RegistrationForm(
+                initial={"username": request.POST.get("username", ""), "email": request.POST.get("email", "")}
+            )
+            response = render(
+                request,
+                "registration/register.html",
+                {
+                    "form": blocked,
+                    "name": "Register",
+                    "limitmessage": (
+                        "Too many registration attempts from this address. Please wait a few "
+                        "minutes before trying again."
+                    ),
+                },
+                # 429 like every other limit on the site, rather than a 200 that reads as an
+                # ordinary page render in the access log and to anything watching it
+                status=429,
+            )
+            # the window is fixed, so this is the longest the caller can be asked to wait
+            response["Retry-After"] = str(int(REGISTRATION_WINDOW_SECONDS))
+
+            return response
+
         form = RegistrationForm(request.POST)
         if form.is_valid():
             # Bounded per client address: every valid submission sends mail synchronously, so a
             # loop of distinct addresses is an open relay as far as the SMTP quota is concerned,
             # and plus-addressing aims them all at one inbox without tripping the unique index.
-            # The window start is stored with the count so that it stays fixed. incr() cannot be
-            # used: it rewrites the value with the cache's *default* timeout rather than the
-            # remaining one, which both shortened the window and restarted it on every attempt --
-            # so a client that kept trying kept renewing its own block indefinitely.
-            clientkey = f"registration-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
-            throttlecache = caches["throttle"]
-            # time.time(), not monotonic(): this value is written to a file-based cache that
-            # outlives the process and the host, and monotonic() is measured from an epoch that
-            # does not survive a reboot -- a stored value from the previous boot reads as being in
-            # the future here.
-            #
-            # An elapsed time outside the window is therefore treated as no window at all, which
-            # covers an expiry, a clock stepped by NTP, and any stale epoch. Without that the
-            # arithmetic below could compute a timeout of the machine's former uptime and lock a
-            # shared address out for weeks.
-            now = time.time()
-            window = throttlecache.get(clientkey)
-            elapsed = now - window[1] if window is not None else None
-
-            if elapsed is None or not (0 <= elapsed < REGISTRATION_WINDOW_SECONDS):
-                registrations, started = 1, now
-            else:
-                registrations, started = window[0] + 1, window[1]
-
-            throttlecache.set(
-                clientkey, (registrations, started), timeout=REGISTRATION_WINDOW_SECONDS - (now - started)
-            )
+            # Tighter than the attempt budget above, and separate from it, because this one bounds
+            # the mail rather than the probes.
+            registrations = count_in_window(f"registration-{clientkey}", REGISTRATION_WINDOW_SECONDS)
 
             if registrations > REGISTRATION_WINDOW_LIMIT:
                 form.add_error(
@@ -1497,10 +1558,16 @@ def resend_verification(request):
 
         if may_send:
             user = unverified_account_for(email)
-            if user is not None:
+            # The marker dates the latest link, not the registration, and it is dated before the
+            # send: the sweep of unverified accounts checks the date when it deletes, so an account
+            # still there after this write outlives the sweep, and one the sweep took first gets no
+            # link, because the write finds no row.
+            if user is not None and PendingEmailVerification.objects.filter(user=user).update(
+                created=datetime.datetime.now(datetime.UTC)
+            ):
                 # guarded like the send in register(), and for the same reason: an unreachable mail
                 # relay is a temporary condition, and letting it out of a plain Django view answers
-                # with a 500 rather than the page below. Nothing has been written to undo.
+                # with a 500 rather than the page below.
                 try:
                     send_verification_email(request, user)
                 except Exception:
@@ -1700,7 +1767,12 @@ _plotscript_cache: dict[Path, tuple[float, int, str]] = {}
 # own magnitude and its error: the plot shows those rather than converting the flux itself, so that
 # it agrees with the file the visitor downloads. "mag5sig" is the 5 sigma depth of the image, which
 # is what a point too faint to measure is drawn at. "chi/N" is read by the quality cut below.
-PLOTCOLUMNS = frozenset({"#MJD", "uJy", "duJy", "m", "dm", "mag5sig", "chi/N"})
+#
+# "F" is the filter band, and it is named here because df.query() below resolves it by name: a file
+# without it got past this guard and then raised pandas' UndefinedVariableError, which subclasses
+# NameError rather than ValueError, so it escaped the handler this guard was written to work with
+# and answered 500 (and mailed the admins) instead of drawing an empty plot.
+PLOTCOLUMNS = frozenset({"#MJD", "uJy", "duJy", "m", "dm", "mag5sig", "chi/N", "F"})
 
 
 # the arguments are named for the result file columns they carry, which is why they are not all
@@ -1749,7 +1821,7 @@ def resultplotdatajs(request, taskid):
         return HttpResponseNotFound("Page not found")
 
     try:
-        task = Task.objects.get(id=taskid)
+        task = Task.live().get(id=taskid)
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Page not found")
     if not task.finishtimestamp:
@@ -1783,6 +1855,10 @@ def resultplotdatajs(request, taskid):
 
         dfforcedphot = None
         if resultfilepath is not None:
+            # imported here and not at the top: this is the one view that reads a result file with
+            # pandas, and the import costs every worker half a second at start-up otherwise
+            import pandas as pd
+
             try:
                 dfforcedphot = pd.read_csv(
                     resultfilepath,
@@ -1836,9 +1912,12 @@ def resultplotdatajs(request, taskid):
             divid = f"plotforcedflux-task-{taskid}"
 
             for color, filterband in [(11, "c"), (12, "o"), (8, "w")]:
-                # @filterband is resolved by pandas from this scope, so the names must agree
-                dffilter = dfforcedphot.query("F == @filterband", inplace=False)
+                dffilter = dfforcedphot[dfforcedphot["F"] == filterband]
 
+                # itertuples rather than iterrows: iterrows builds a Series per row, and a result
+                # file holds thousands of them. The cast to float is one operation on the frame,
+                # and it keeps the integer flux columns printing as "100.0", the way the row
+                # iteration upcast them.
                 jsout.extend(
                     (
                         '\njslabels.push({"color": '
@@ -1848,12 +1927,12 @@ def resultplotdatajs(request, taskid):
                         + '"});\n',
                         "jslcdata.push(["
                         + ", ".join(
-                            [
-                                plotpoint(mjd, uJy, duJy, m, dm, mag5sig)
-                                for _, (mjd, uJy, duJy, m, dm, mag5sig) in dffilter[
-                                    ["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]
-                                ].iterrows()
+                            plotpoint(mjd, uJy, duJy, m, dm, mag5sig)
+                            for mjd, uJy, duJy, m, dm, mag5sig in dffilter[
+                                ["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]
                             ]
+                            .astype(float)
+                            .itertuples(index=False, name=None)
                         )
                         + "]);\n",
                     )
@@ -1897,6 +1976,18 @@ def resultplotdatajs(request, taskid):
     return HttpResponse(strjs, content_type="text/javascript", headers=headers)
 
 
+@contextlib.contextmanager
+def pdfplot_render_slot() -> Iterator[bool]:
+    """Hold one of the site's PDF render slots for the body, or yield False if none is free."""
+    for slot in range(PDF_PLOT_RENDER_SLOTS):
+        with try_lock(f"pdfplot-slot-{slot}") as held:
+            if held:
+                yield True
+                return
+
+    yield False
+
+
 def _pdfplot_unavailable() -> HttpResponse:
     """Tell the client the plot is not ready yet, rather than that it does not exist.
 
@@ -1910,27 +2001,21 @@ def _pdfplot_unavailable() -> HttpResponse:
     )
 
 
-def taskpdfplot(request, taskid):
-    if not taskid:
-        return HttpResponseNotFound("Page not found")
+def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpResponse | None:
+    """Render the task's PDF plot at pdfpath, and return None; or return the answer that says why not.
 
-    try:
-        item = Task.objects.get(id=taskid)
-    except ObjectDoesNotExist:
-        return HttpResponseNotFound("Page not found")
-    if resultfile := item.localresultfile():
-        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
-        pdfpath = resultfilepath.with_suffix(".pdf")
+    Herd control: the queue page links a PDF for every finished task, so a crawler or a reload
+    would otherwise fork matplotlib once per concurrent request. One render per task at a time,
+    and a bounded number across the site; the other requests are told to come back.
+    """
+    with try_lock(f"pdfplot-lock-{taskid}") as heldtask:
+        if not heldtask:
+            return _pdfplot_unavailable()
 
-        # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
-        # refresh plots after a change to plot_atlas_fp
-        if not pdfpath.is_file():
-            # Herd control: the queue page links a PDF for every finished task, so a crawler or a
-            # reload would otherwise fork matplotlib once per concurrent request. Not a mutex (see
-            # the note by the limiter constants); losing the race costs one extra render, not the
-            # tenth. The timeout outlives the render so a killed worker cannot wedge the task.
-            lockkey = f"pdfplot-lock-{taskid}"
-            if not caches["default"].add(lockkey, True, timeout=PDF_PLOT_TIMEOUT_SECONDS + 30):
+        with pdfplot_render_slot() as hasslot:
+            # the lock above is keyed on the task, so it says nothing about requests for other
+            # tasks. See PDF_PLOT_RENDER_SLOTS for why the total is bounded as well.
+            if not hasslot:
                 return _pdfplot_unavailable()
 
             # A private path published by rename, so a killed child leaves its wreckage there
@@ -1940,23 +2025,36 @@ def taskpdfplot(request, taskid):
             renderpath = pdfpath.with_name(f"{pdfpath.stem}.{os.getpid()}.{uuid.uuid4().hex}.partial{pdfpath.suffix}")
 
             try:
-                completed = make_pdf_plot(
-                    taskid=taskid,
-                    localresultfile=resultfilepath,
-                    taskcomment=item.comment,
-                    separate_process=True,
-                    outputpath=renderpath,
-                )
+                completed = make_pdf_plot(taskid=taskid, localresultfile=resultfilepath, outputpath=renderpath)
 
                 if completed and renderpath.is_file():
                     renderpath.replace(pdfpath)
             finally:
                 renderpath.unlink(missing_ok=True)
-                caches["default"].delete(lockkey)
 
             if not completed:
                 logger.warning("PDF plot generation for task %d exceeded its time limit and was killed", taskid)
                 return _pdfplot_unavailable()
+
+    return None
+
+
+def taskpdfplot(request, taskid):
+    if not taskid:
+        return HttpResponseNotFound("Page not found")
+
+    try:
+        item = Task.live().get(id=taskid)
+    except ObjectDoesNotExist:
+        return HttpResponseNotFound("Page not found")
+    if resultfile := item.localresultfile():
+        resultfilepath = Path(settings.STATIC_ROOT, resultfile)
+        pdfpath = resultfilepath.with_suffix(".pdf")
+
+        # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
+        # refresh plots after a change to plot_atlas_fp
+        if not pdfpath.is_file() and (refusal := _render_pdfplot(taskid, resultfilepath, pdfpath)) is not None:
+            return refusal
 
         if pdfpath.is_file():
             return FileResponse(pdfpath.open("rb"))
@@ -1969,13 +2067,17 @@ def taskpdfplot(request, taskid):
 # resultplotdatajs above) therefore take a task id and no credentials; note the serializer also
 # links results at their STATIC_URL path, which Apache serves without consulting Django at all.
 #
+# Public is not the same as archived, so they all read Task.live(), like retrieve: a deleted task's
+# data file is not served, and its .pdf and cached plot are not rebuilt. The files go with the row
+# (see Task.delete_result_files), so a static link published before the delete stops with it.
+#
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit
 def _taskresultfile_response(
     taskid: int, getfile: Callable[[Task], str | Path | None]
 ) -> FileResponse | HttpResponseNotFound:
     """Serve one of a task's result files, or 404 when the task or the file does not exist."""
-    task = Task.objects.filter(id=taskid).first() if taskid else None
+    task = Task.live().filter(id=taskid).first() if taskid else None
     resultfile = getfile(task) if task is not None else None
     if resultfile:
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
