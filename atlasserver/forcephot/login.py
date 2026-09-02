@@ -109,7 +109,7 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
             # password fails earlier, with another code.
             codes = ex.get_codes()
             fieldcodes = codes.get("non_field_errors") if isinstance(codes, dict) else None
-            body = request.data if isinstance(request.data, dict) else {}
+            body: dict[str, t.Any] = request.data if isinstance(request.data, dict) else {}
             if (
                 isinstance(fieldcodes, list)
                 and "authorization" in fieldcodes
