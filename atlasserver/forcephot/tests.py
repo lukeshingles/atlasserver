@@ -29,6 +29,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core import mail as django_mail
 from django.core.cache import caches
+from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.db import IntegrityError
 from django.db import models
@@ -6036,11 +6037,11 @@ class FailedLoginBudgetTests(TestCase):
         # one, so the wave counted as one; the read and the write are one critical section now
         threads, each = 8, 5
         barrier = threading.Barrier(threads)
-        original_get = caches["throttle"].get
+        original_get = LocMemCache.get
 
-        def slow_get(*args: t.Any, **kwargs: t.Any) -> t.Any:
+        def slow_get(cache: LocMemCache, *args: t.Any, **kwargs: t.Any) -> t.Any:
             # widens the window between the read and the write, so that a race is certain to show
-            value = original_get(*args, **kwargs)
+            value = original_get(cache, *args, **kwargs)
             time.sleep(0.002)
             return value
 
@@ -6049,7 +6050,9 @@ class FailedLoginBudgetTests(TestCase):
             for _ in range(each):
                 throttles.count_in_window("test-window", 60)
 
-        with mock.patch.object(caches["throttle"], "get", slow_get):
+        # patched on the class: the cache handler is thread-local, so an instance patched here
+        # would slow the main thread's reads and none of the workers'
+        with mock.patch.object(LocMemCache, "get", slow_get):
             workers = [threading.Thread(target=guess) for _ in range(threads)]
             for worker in workers:
                 worker.start()
