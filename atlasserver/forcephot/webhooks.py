@@ -49,16 +49,11 @@ CALLBACK_RESOLVE_TIMEOUT_SECONDS = 5.0
 CALLBACK_RESOLVER_THREADS = 8
 _resolver_slots = threading.BoundedSemaphore(CALLBACK_RESOLVER_THREADS)
 
-# The URLs that the current request has already validated, or None outside a submission.
-#
-# One submission validates the same URL over and over: a radeclist copies callback_url into every
-# row, splitradeclist validates each row, and views.create validates the whole list again -- 200
-# resolutions for one 100-line request. The submission view opens a scope with
-# callback_urls_validated_once(), and the second and later checks of one URL within that scope
-# are answered from the first. Nothing outlives the request, and nothing is shared between
-# requests or threads: a context variable is per task and per thread. The send path runs outside
-# any scope, so the check it makes before a request is always current, which is what lets it
-# notice a name that has moved (see send_task_callback).
+# The URLs the current submission has validated, or None outside one. A radeclist validates the
+# same URL once per row and once more for the list, 200 resolutions for one 100-line request; the
+# submission view opens a scope with callback_urls_validated_once(), and repeats within it are
+# answered from the first check. A context variable is per request and per thread, so nothing is
+# shared. The send path runs outside any scope, so its check is always current.
 _validated_urls: ContextVar[set[str] | None] = ContextVar("validated_callback_urls", default=None)
 
 
@@ -79,9 +74,8 @@ def callback_urls_validated_once() -> Iterator[None]:
 def resolve_within_timeout(hostname: str, port: int) -> list[t.Any]:
     """Return what getaddrinfo answers for the name, or raise CallbackUrlError if it is too slow.
 
-    A thread, because a blocking libc call cannot be interrupted any other way. It is a daemon and
-    is never joined a second time: an abandoned resolver thread costs a stack until the resolver
-    gives up, where waiting for it costs the request that is holding a worker.
+    A daemon thread, because a blocking libc call cannot be interrupted any other way; an abandoned
+    one costs a stack until the resolver gives up, where waiting for it would cost a worker.
     """
     answer: list[t.Any] = []
     failure: list[BaseException] = []

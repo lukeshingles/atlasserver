@@ -63,9 +63,8 @@ TASKRUNNER_PIDFILE = Path("/tmp/atlasforced/taskrunner.pid")
 def read_pidfile(pidfile: Path) -> int | None:
     """Return the pid the file holds, or None for a file that does not hold one.
 
-    A file truncated by an unclean exit says nothing about what is running. atlaswebserver guards
-    its own pid file the same way; here an exception made `start` and `restart` fail until the
-    file was removed by hand, and a restart had already stopped the runner by then.
+    A file truncated by an unclean exit says nothing about what is running, and an exception here
+    made `start` and `restart` fail until the file was removed by hand.
     """
     try:
         return int(pidfile.read_text().strip())

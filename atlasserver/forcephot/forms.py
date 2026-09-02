@@ -1,17 +1,8 @@
-import typing as t
-from typing import override
-
 from django import forms
-from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 from django.utils.translation import gettext_lazy as _
-
-from atlasserver.forcephot.throttles import login_failures_exceeded
-from atlasserver.forcephot.throttles import LOGIN_LIMIT_MESSAGE
-from atlasserver.forcephot.throttles import note_login_failure
 
 
 def email_is_taken(email: str, exclude_user=None) -> bool:
@@ -25,65 +16,6 @@ def email_is_taken(email: str, exclude_user=None) -> bool:
         others = others.exclude(pk=exclude_user.pk)
 
     return others.exists()
-
-
-class LoginFailureLimitMixin(AuthenticationForm):
-    """Refuse the password check itself once an address has failed too many in the window.
-
-    Refused before the check, not after: an over-budget address must not learn whether the
-    password was right. The error is a non-field error with code "throttled", which the login view
-    reads to answer 429 rather than 200.
-
-    An AuthenticationForm subclass rather than a bare mixin, so that super().clean() resolves for
-    the type checkers with the same signature. In the method resolution order of the two forms
-    below, that call still reaches the admin's clean() and then AuthenticationForm's, which is
-    where the password is checked.
-    """
-
-    @override
-    def clean(self) -> dict[str, t.Any]:
-        if self.request is not None and login_failures_exceeded(self.request):
-            raise forms.ValidationError(LOGIN_LIMIT_MESSAGE, code="throttled")
-
-        try:
-            return super().clean()
-        except forms.ValidationError:
-            if self.request is not None and self.password_was_wrong():
-                note_login_failure(self.request)
-            raise
-
-    def password_was_wrong(self) -> bool:
-        """Return whether the refusal was for the password, rather than for the account.
-
-        Only a wrong password is a guess. The admin refuses an account without staff access after
-        the password has checked out, with the same error code as a wrong password; and the default
-        backend refuses an inactive account, such as one not yet verified, before the form learns
-        whether the password was right. So the password is checked here against the named account.
-        A colleague who tries the right password on an account that is refused must not spend the
-        address's budget of guesses.
-        """
-        if getattr(self, "user_cache", None) is not None:
-            return False
-
-        username = self.cleaned_data.get("username")
-        password = self.cleaned_data.get("password")
-        if not username or not password:
-            # no password was offered, so none was guessed
-            return False
-
-        user = User.objects.filter(username=username).first()
-        if user is None:
-            return True
-
-        return not user.check_password(password)
-
-
-class ThrottledAuthenticationForm(LoginFailureLimitMixin, AuthenticationForm):
-    """The login page's form."""
-
-
-class ThrottledAdminAuthenticationForm(LoginFailureLimitMixin, AdminAuthenticationForm):
-    """The admin login's form; the admin reads site.login_form at request time."""
 
 
 class EmailChangeForm(forms.Form):

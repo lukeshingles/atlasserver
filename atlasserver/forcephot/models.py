@@ -256,12 +256,10 @@ class Task(models.Model):
         return "RA Dec: (none)"
 
     def public_url(self) -> str:
-        """Return the absolute URL of this task's page, for a message sent from outside a request.
+        """Return the absolute URL of this task's page, for the runner's mail and callback.
 
-        The task runner sends the result email and the completion callback, and it has no request
-        to build a URL from. SITE_ORIGIN is the same authority the verification mail uses. The
-        script prefix comes from settings when no request has set one, which is the runner's case;
-        inside a request, reverse() already carries it.
+        The runner has no request to build a URL from: SITE_ORIGIN is the authority, and the script
+        prefix comes from settings when no request has set one.
         """
         path = reverse("task-detail", args=[self.id])
         if get_script_prefix() == "/":
@@ -296,9 +294,8 @@ class Task(models.Model):
     def localresultpreviewimagefile(self) -> str | None:
         """Return the relative path to the preview image if it exists, otherwise None.
 
-        An image request shares its parent's preview, so this can resolve to another row's file.
-        This refuses an archived parent, because the views filter only on the id they were asked
-        for: a live image request's id would otherwise reach the parent's image.
+        An image request shares its parent's preview. An archived parent is refused here, because
+        the views filter on the id they were asked for, and a live request's id reached its image.
         """
         if self.finishtimestamp and not (self.parent_task is not None and self.parent_task.is_archived):
             imagefile = f"{self.localresultfileprefix(use_parent=True)}.jpg"
@@ -311,9 +308,7 @@ class Task(models.Model):
     def localresultimagezipfile(self) -> Path | None:
         """Return the relative path to this image request's zip if it exists, otherwise None.
 
-        Named for this task. An image request written before that was named for its parent, so
-        that name is tried second, for the rows that finished under the old rule and have not yet
-        been swept.
+        Named for this task; the parent's name is tried second, for a request from before that rule.
         """
         for prefix in (self.localresultfileprefix(), self.localresultfileprefix(use_parent=True)):
             imagezipfile = Path(f"{prefix}.zip")
@@ -325,9 +320,8 @@ class Task(models.Model):
     def inputfile(self) -> Path:
         """Return the private path of this image request's input: a copy of the parent's data file.
 
-        Outside STATIC_ROOT, which the web server serves without asking Django. The copy is what
-        lets the parent's own file go with the parent: the runner reads this one, so nothing that
-        outlives a deleted task is left at a public path for it.
+        Outside STATIC_ROOT, which the web server serves without Django. The runner reads this
+        copy, so the parent's own file can go with the parent.
         """
         return Path(settings.TASK_INPUTS_DIR, jobfilename(self.id, ".txt"))
 
@@ -403,13 +397,7 @@ class Task(models.Model):
         """Return the tasks that have not been archived: everything a reader may still be shown.
 
         delete() archives a finished task instead of removing it, so archived means the owner
-        deleted it. One definition, because every reader has to agree. A reader that misses this
-        rule serves data the owner asked to have removed, and a writer that misses it keeps a file
-        for an image request that no reader can reach.
-
-        Two readers apply the same predicate on a queryset of their own, because DRF hands them
-        one: ForcePhotTaskViewSet.list filters its queryset, and retrieve tests the instance that
-        get_object() returns.
+        deleted it. One definition, so that no reader serves what the owner asked to have removed.
         """
         return Task.objects.filter(is_archived=False)
 
@@ -457,13 +445,8 @@ class Task(models.Model):
     def is_owned_by(self, user: t.Any) -> bool:
         """Return whether this user may act on the task: its owner, or any staff member.
 
-        One definition, because three places apply it -- ForcePhotPermission, the image request
-        view, and the serializer when it decides who may read back the submitter's callback URL.
-        Each used to spell it out again, so a change to one of them reached only that one.
-
-        user is Any because the type checkers disagree about it: django-stubs declares is_staff on
-        the concrete User, while ty reads Django's own source, where request.user is typed as
-        AbstractBaseUser. AUTH_USER_MODEL is swappable in principle and is not swapped here.
+        One definition for the permission class, the image request view and the serializer. The
+        user is Any because the type checkers disagree about where is_staff is declared.
         """
         return bool(
             user is not None
@@ -510,6 +493,24 @@ class Task(models.Model):
             queryset=Task.live().order_by("id"),
             to_attr="prefetched_imagerequests",
         )
+
+    def create_imagerequest(self, user: User, *, from_api: bool, **fields: t.Any) -> "Task | None":
+        """Save an image request for this task, with its own copy of the data file; None without one.
+
+        The row is saved before the copy, because the copy is named for its id. A parent with no
+        data file cannot have images fetched, so the caller's transaction decides whether the row
+        stays. `fields` are set on the child before it is saved, such as the client location.
+        """
+        # here rather than at the top: queue imports this module
+        from atlasserver.forcephot.queue import next_queuepos_relative
+
+        child = self.new_imagerequest(user=user, from_api=from_api)
+        for field, value in fields.items():
+            setattr(child, field, value)
+        child.queuepos_relative = next_queuepos_relative()
+        child.save()
+
+        return child if child.copy_parent_datafile() else None
 
     def new_imagerequest(self, user: User, *, from_api: bool) -> "Task":
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
@@ -558,17 +559,10 @@ class Task(models.Model):
     def delete_result_files(self, *, going: Collection[int] = ()) -> None:
         """Delete the result files of this task. Every file belongs to one task.
 
-        An image request works from its own copy of the parent's data file (see inputfile) and
-        writes a zip named for itself, so nothing here is read by another row. A zip named for the
-        parent is a legacy name from before that rule; it goes with the last live request served
-        from it.
-
-        `going` names the rows that go together with this one, when a maintenance batch reclaims
-        many at once. Those rows are still live while the batch runs, so a rule that asks which
-        live rows remain has to leave them out.
-
-        Split out of delete() so that the maintenance sweep can reclaim the files of many tasks and
-        then update or remove their rows in one statement, instead of one write per task.
+        An image request works from its own copy of the data file and writes a zip named for
+        itself; a zip named for the parent, from before that rule, goes with the last live request
+        served from it. `going` names the rows a maintenance batch removes together with this one:
+        they are still live while the batch runs, so a rule about the live rows leaves them out.
         """
         if self.request_type == "IMGZIP":
             self._unlink_results([".zip"])

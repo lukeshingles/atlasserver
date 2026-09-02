@@ -282,15 +282,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     def to_representation(self, instance: Task) -> dict[str, t.Any]:
         """Serialise a task, keeping the submitter's callback URL to the submitter.
 
-        Reading a task is public on purpose -- the reasoning is on
-        ForcePhotPermission.has_object_permission -- and that covers the measurements a public
-        survey produced. It does not cover callback_url. The callback carries no signature and no
-        shared secret (see webhooks.send_task_callback), so the URL is the whole credential for
-        whatever it points at, and such URLs routinely hold a secret in their path or query. Task
-        ids are sequential, so without this anyone could walk them and collect every API user's.
-
-        Emptied rather than dropped, so that the shape of the response does not depend on who is
-        asking: a client that reads the field still finds it, and finds nothing in it.
+        Reading a task is public on purpose, but the callback carries no signature, so its URL is
+        the whole credential for whatever it points at. Emptied rather than dropped, so that the
+        shape of the response does not depend on who is asking.
         """
         data = super().to_representation(instance)
 
@@ -303,19 +297,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     def update(self, instance: Task, validated_data: dict[str, t.Any]) -> Task:
         """Apply a change to a task, writing only the columns it touched.
 
-        ModelSerializer.update() ends in a bare instance.save(), which writes every concrete column
-        from the copy that was loaded at the start of the request. The task runner writes
-        starttimestamp, finishtimestamp, error_msg and attempt_count to the same row with queryset
-        updates (taskrunner.main.mark_started and mark_finished), and forcephot.queue renumbers
-        queuepos_relative the same way -- so a PATCH that overlapped one of those reverted it.
-
-        A finished task that loses its finishtimestamp re-enters Task.queued(), so the runner
-        dispatches it again and mails the user a second set of results.
-
-        task_modified_datetime is named as well because it is auto_now: Django only refreshes such
-        a field when update_fields lists it, and the task list's entity tag is built from it, so
-        leaving it out would hide the change from every polling browser. Task.delete() names it for
-        the same reason.
+        A bare save() writes every column from the copy loaded at the start of the request, and the
+        runner and the queue write the same row meanwhile: a PATCH that overlapped a finish
+        reverted it, and the task was dispatched again. task_modified_datetime is named because it
+        is auto_now, which Django refreshes only when update_fields lists it.
         """
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -333,15 +318,11 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         ra_missing = self.submitted(attrs, "ra") in (None, "")
         dec_missing = self.submitted(attrs, "dec") in (None, "")
 
-        # Before the branch on the target below, not inside one arm of it. An IMGZIP task carries
-        # the target of its parent, so these rules hold for an mpc_name request as much as for an
-        # ra/dec one. A row with no parent cannot be named a result file, so the runner fails on
-        # it before it records a finish time, and dispatches it again on every pass.
-        # The stack request is a trial feature, offered on the queue page to the accounts the
-        # settings name. The page's flag is only a hint to the browser, so the rule is applied
-        # here, where a request from any token holder arrives.
-        # On a creation, and on an update that turns another kind of task into one: an ordinary
-        # account could otherwise submit a forced photometry task and PATCH its request_type.
+        # Before the branch on the target: an IMGZIP task carries its parent's target, so these
+        # rules hold for an mpc_name request as much as for an ra/dec one.
+        # The stack request is offered to the accounts the settings name; the page's flag is only a
+        # hint to the browser, so the rule is applied here. On a creation, and on an update that
+        # turns another kind of task into one, or a PATCH of request_type would pass the gate.
         becomes_stack = request_type == "SSOSTACK" and (
             self.instance is None or self.instance.request_type != "SSOSTACK"
         )
@@ -350,13 +331,9 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
             raise serializers.ValidationError(msg)
 
         if request_type == "IMGZIP":
-            # An image request is not created here, and the message says so.
-            #
-            # parent_task_id is neither a model field name nor a relation name, so ModelSerializer
-            # builds it as a ReadOnlyField and to_internal_value drops it. The old message asked
-            # for that field, which made this a 400 the caller could never satisfy. RequestImages
-            # is the path that carries what an image request needs: the parent's ownership rule,
-            # the per-user cap, the client location fields and a queue position.
+            # An image request is not created here, and the message says so: parent_task_id is a
+            # ReadOnlyField that to_internal_value drops, so the old message asked for a field the
+            # caller could never send. RequestImages carries what an image request needs.
             if self.instance is None:
                 msg = (
                     "IMGZIP tasks cannot be created here. Ask for the images of a finished"

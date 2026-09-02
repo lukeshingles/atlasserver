@@ -28,7 +28,9 @@ from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework import routers
 
 from atlasserver.forcephot import views
-from atlasserver.forcephot.forms import ThrottledAdminAuthenticationForm
+from atlasserver.forcephot.login import ObtainAuthTokenThrottled
+from atlasserver.forcephot.login import ThrottledAdminAuthenticationForm
+from atlasserver.forcephot.login import ThrottledLoginView
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
@@ -51,7 +53,7 @@ urlpatterns = [
     # stock view builds the mailed link from the Host header. See SiteOriginPasswordResetView.
     path("password_reset/", views.SiteOriginPasswordResetView.as_view(), name="password_reset"),
     # likewise before django.contrib.auth.urls: the stock view has no limit on password guesses
-    path("login/", views.ThrottledLoginView.as_view(), name="login"),
+    path("login/", ThrottledLoginView.as_view(), name="login"),
     path("emailchange/", views.change_email, name="email_change"),
     path("apitoken/", views.api_token, name="apitoken"),
     path("verify/<uidb64>/<token>/", views.verify_email, name="verify_email"),
@@ -82,6 +84,6 @@ urlpatterns = [
     ),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
-    path("api-token-auth/", views.ObtainAuthTokenThrottled.as_view(), name="api-token-auth"),
+    path("api-token-auth/", ObtainAuthTokenThrottled.as_view(), name="api-token-auth"),
     path("robots.txt", TemplateView.as_view(template_name="robots.txt", content_type="text/plain")),
 ]

@@ -806,14 +806,9 @@ def remove_old_tasks(
 
                 if harddeleterecord:
                     # Everything this batch removes: the rows it selected, and the image requests
-                    # that parent_task cascades to. The collector issues bulk SQL for that cascade,
-                    # which never reaches Task.delete() or delete_result_files(), so a child's files
-                    # would be left on the results volume with no row that could ever name them
-                    # again.
-                    #
-                    # Read under the lock, before anything is deleted. A sweep that names no
-                    # request_type can select a parent and its child alike, so the children the
-                    # batch did not select are the ones that still need their files reclaimed.
+                    # the delete cascades to, whose files the collector's bulk SQL would never
+                    # reclaim. Read under the lock; the children the batch did not select are the
+                    # ones still needing their files reclaimed.
                     childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
                     going = childids | taskids
                     cascaded = list(Task.objects.filter(id__in=childids - taskids))
@@ -862,9 +857,8 @@ UNVERIFIED_ACCOUNT_DAYS: t.Final = 7
 def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=log_general) -> int:
     """Delete the accounts that registered more than `days_ago` ago and never confirmed their address.
 
-    Only the rows that carry the pending-verification marker and are inactive. An account that an
-    administrator switched off has no marker (see PendingEmailVerification), and one that was
-    confirmed lost its marker when it was.
+    Only inactive rows that carry the pending-verification marker: an account an administrator
+    switched off has no marker, and a confirmed one lost its marker.
     """
     cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
     stale = PendingEmailVerification.objects.filter(created__lt=cutoff, user__is_active=False)

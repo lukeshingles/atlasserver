@@ -42,9 +42,8 @@ def _unbracket(hop: str) -> str:
 def client_ip(request: t.Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """Return the address a request came from, or None if it cannot be established.
 
-    The policy is client_address below; this supplies the request pieces. NUM_PROXIES in
-    REST_FRAMEWORK is set from the same TRUSTED_PROXY_COUNT so that the throttle's idea of the
-    client cannot drift from this one.
+    The policy is client_address below; NUM_PROXIES in REST_FRAMEWORK is set from the same
+    TRUSTED_PROXY_COUNT, so the throttle's idea of the client cannot drift from this one.
     """
     from django.conf import settings
 

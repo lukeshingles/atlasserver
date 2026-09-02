@@ -1,17 +1,11 @@
 """Locks that the web workers share through the filesystem.
 
-A lock is an advisory lock (flock) on a file named for it, taken without waiting. The kernel
-grants it to one open file at a time, across processes and across the threads of one process, and
-releases it when the holder closes the file or dies. A holder that is killed mid-render therefore
-leaves nothing behind that a later request would have to judge abandoned and take over, and no
-take-over exists to race.
-
-The file cache offers add(), but add() checks for the key and then writes it, so two workers can
-both take the last render slot, and the cache culls entries when it is full, held ones included.
-
-The lock files are never removed. A lock is a property of the open file, not of the file's
-existence: a contender that opened the file before it was unlinked would hold a lock on a file
-that nobody else can see.
+A lock is an advisory lock (flock) on a file named for it. The kernel grants it to one open file
+at a time, across processes and threads, and releases it when the holder closes the file or dies,
+so a holder killed mid-render leaves nothing to judge abandoned. The file cache's add() checks and
+then writes, so two workers could both take the last render slot, and the cache culls held entries.
+The lock files are never removed: a contender that opened a file before it was unlinked would hold
+a lock nobody else can see.
 """
 
 import contextlib

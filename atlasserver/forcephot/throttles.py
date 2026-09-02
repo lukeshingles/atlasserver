@@ -38,22 +38,13 @@ def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = T
     """Count one event against a fixed window, and return how many the window then holds.
 
     With `increment` false, only report the count. The window start is stored with the count so
-    that it stays fixed. incr() cannot be used: it rewrites the value with the cache's *default*
-    timeout rather than the remaining one, which both shortened the window and restarted it on
-    every attempt -- so a client that kept trying kept renewing its own block indefinitely.
+    that it stays fixed: incr() rewrites the entry with the cache's default timeout, which restarted
+    the window on every attempt. time.time() rather than monotonic(), because the value outlives
+    the process in a file cache; an elapsed time outside the window is treated as no window, which
+    covers an expiry, a stepped clock and a reboot alike.
 
-    time.time(), not monotonic(): this value goes to a file-based cache that outlives the process
-    and the host, and monotonic() is measured from an epoch that does not survive a reboot -- a
-    stored value from the previous boot reads as being in the future here.
-
-    An elapsed time outside the window is therefore treated as no window at all, which covers an
-    expiry, a clock stepped by NTP, and any stale epoch. Without that the arithmetic below could
-    compute a timeout of the machine's former uptime and lock a shared address out for weeks.
-
-    The read and the write are one critical section, under a lock shared by the workers: without
-    it a wave of concurrent attempts each read the same count and wrote the same count plus one,
-    so the wave counted as one attempt. The lock is one of a fixed number of stripes, chosen by
-    the key, so the lock files stay few whatever the number of keys.
+    The read and the write are one critical section under a lock the workers share, one of a fixed
+    number of stripes chosen by the key: a wave of concurrent attempts otherwise counted as one.
     """
     throttlecache = caches["throttle"]
 
@@ -77,12 +68,9 @@ def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = T
 
 
 # Failed password checks allowed from one address per window, on every path that takes a
-# password: the token endpoint, a Basic header on any API view, the login page and the admin's.
-#
-# DRF authenticates before it throttles, so a wrong password in a Basic header was answered 401
-# by the authenticator before any throttle ran and was never counted; and Django's own login
-# views are not DRF views, so no throttle reached them at all. The budget counts failures rather
-# than attempts, so a busy shared address is not locked out by its successful logins.
+# password: the token endpoint, a Basic header on any API view, the login page and the admin's
+# (see login). Failures rather than attempts, so a busy shared address is not locked out by its
+# successful logins.
 LOGIN_FAILURE_WINDOW_SECONDS: t.Final = 600
 LOGIN_FAILURE_LIMIT: t.Final = 10
 

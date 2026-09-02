@@ -22,7 +22,6 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.views import LoginView
 from django.contrib.auth.views import PasswordResetView
 from django.contrib.gis.geoip2 import GeoIP2
 from django.contrib.gis.geoip2 import GeoIP2Exception
@@ -58,8 +57,6 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
-from rest_framework.authtoken.views import ObtainAuthToken
-from rest_framework.exceptions import Throttled
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -72,7 +69,6 @@ from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.forms import ResendVerificationForm
-from atlasserver.forcephot.forms import ThrottledAuthenticationForm
 from atlasserver.forcephot.locks import try_lock
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
@@ -91,10 +87,6 @@ from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import count_in_window
-from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
-from atlasserver.forcephot.throttles import login_failures_exceeded
-from atlasserver.forcephot.throttles import LOGIN_LIMIT_MESSAGE
-from atlasserver.forcephot.throttles import note_login_failure
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
 from atlasserver.forcephot.verification import send_verification_email
@@ -126,31 +118,16 @@ EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
 REGISTRATION_WINDOW_SECONDS: t.Final = 600
 REGISTRATION_WINDOW_LIMIT: t.Final = 3
 
-# Submissions of any kind allowed from one client address per window, valid or not.
-#
-# RegistrationForm.clean_email answers "is this address registered here?", and that answer is only
-# reachable on the invalid branch. A limiter that ran after is_valid() therefore metered the mail
-# and left the answer free, which is an enumeration oracle over the whole user table -- the leak
-# EmailChangeForm.clean_new_email and resend_verification both close.
-#
-# Looser than the budget above, and separate from it, because the two bound different things. That
-# one bounds outgoing mail. This one bounds probes, and a mistyped password must not use up a
-# colleague's registration.
+# Submissions of any kind allowed from one client address per window, valid or not. The answer
+# "is this address registered here?" is reachable only on the invalid branch, so a limiter that
+# ran after is_valid() metered the mail and left that answer free. Separate from the mail budget
+# above, because a mistyped password must not use up a colleague's registration.
 REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
 
-# How many PDF plot renders the whole site may have in flight at once, across every task.
-#
-# The per-task lock in taskpdfplot bounds the renders of one task. This bounds the total. A render
-# holds its request thread for up to PDF_PLOT_TIMEOUT_SECONDS while a spawned interpreter starts
-# and imports matplotlib. Without a total, requests for a few tasks that have no .pdf yet could
-# occupy every worker at once, and the site would answer nothing, the login page included. The
-# view needs no credentials and is not a DRF view, so no throttle reaches it. Production serves
-# the site with four single-threaded workers (ATLASSERVER_NPROCESSES in dotenv_example.txt), so
-# this leaves most of them free whatever a crawler or a flood does.
-#
-# Named slots rather than a counter: each slot is one lock (see forcephot.locks), which is atomic
-# across the workers and released by the kernel when its holder dies, where a counter would need
-# a read-modify-write and a repair after a crash.
+# PDF plot renders the whole site may have in flight at once. A render holds its request thread
+# for up to PDF_PLOT_TIMEOUT_SECONDS, the view needs no credentials, and production has four
+# single-threaded workers: without a total, a few tasks with no .pdf yet could take every worker.
+# Named slots, each one lock (see forcephot.locks), rather than a counter.
 PDF_PLOT_RENDER_SLOTS: t.Final = 2
 
 logger = logging.getLogger(__name__)
@@ -450,12 +427,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
     @override
     def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int | None = None) -> None:
-        """Create new task(s).
-
-        `usertaskcount` is the number of the user's queued tasks before this submission. create()
-        has counted them already for its limit, so it passes the count rather than have it made
-        again.
-        """
+        """Create new task(s). create() passes the count of queued tasks it has made for its limit."""
         usertaskcount_before = usertaskcount
         if usertaskcount_before is None:
             usertaskcount_before = (
@@ -628,14 +600,13 @@ class RequestImages(APIView):
         This creates a task, so it must not be reachable by GET: a safe method is not CSRF
         protected, and any page (or link prefetcher) could otherwise queue work for a logged-in user.
         """
-        # no is_authenticated test here: ForcePhotPermission.has_permission refuses an anonymous
-        # POST before this runs, and the object check below applies the ownership rule
+        # ForcePhotPermission refuses an anonymous POST before this runs; the object check below
+        # applies the ownership rule
         redirurl = reverse("task-list")
 
-        # One transaction, with the parent row locked for its extent. Two overlapping requests
-        # for one parent cannot then both find no live image request, and Task.delete takes the
-        # same lock, so a delete of the parent waits until the copy of its data file below is
-        # done rather than reclaiming the file under it.
+        # The parent row is locked for the whole transaction: two overlapping requests cannot both
+        # find no live image request, and Task.delete takes the same lock, so a delete of the
+        # parent waits for the copy of its data file rather than reclaiming the file under it.
         with transaction.atomic():
             try:
                 parent_task = Task.live().select_for_update().get(id=pk, request_type="FP")
@@ -644,10 +615,8 @@ class RequestImages(APIView):
 
             self.check_object_permissions(request, parent_task)
 
-            # One live image request per task. A second one is the same request again -- the child
-            # inherits every field from the parent -- and it competes with the first for the result
-            # file the runner writes for that parent. The queue page offers the button only while
-            # there is none; this is the same rule for a caller that does not go through the page.
+            # one live image request per task: a second is the same request again, and the queue
+            # page offers the button only while there is none
             if parent_task.live_imagerequest_ids():
                 return JsonResponse(
                     {"non_field_errors": "An image request for this task is already queued."}, status=409
@@ -662,23 +631,18 @@ class RequestImages(APIView):
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
             if not parent_task.error_msg and parent_task.finishtimestamp:
-                # which fields the child inherits is the model's decision; see Task.new_imagerequest
-                newtask = parent_task.new_imagerequest(user=request.user, from_api=request_is_from_api(request))
-                for field, value in client_location_fields(self.request).items():
-                    setattr(newtask, field, value)
-                newtask.queuepos_relative = next_queuepos_relative()
-                newtask.save()
-
-                # the request's own copy of the data file, made now that it has an id. Without the
-                # file nothing could ever be fetched, so the row is rolled back rather than queued
-                # for a run that is certain to fail.
-                if not newtask.copy_parent_datafile():
+                newtask = parent_task.create_imagerequest(
+                    user=request.user, from_api=request_is_from_api(request), **client_location_fields(self.request)
+                )
+                if newtask is None:
+                    # no data file, so nothing could be fetched: the row is rolled back rather than
+                    # queued for a run that is certain to fail
                     transaction.set_rollback(True)
                     msg = "The forced photometry data file for this task is no longer available."
                     return JsonResponse({"non_field_errors": msg}, status=404)
 
-                # after the commit, not inside the transaction: the runner could otherwise read
-                # the request, recalculate without the new row, and count the request as handled
+                # after the commit: the runner could otherwise recalculate without the new row and
+                # count the request as handled
                 transaction.on_commit(request_queue_recalc)
                 redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
 
@@ -1346,16 +1310,10 @@ def stats(request):
 class SiteOriginPasswordResetView(PasswordResetView):
     """Django's password reset, with the mailed link pinned to the configured origin.
 
-    django.contrib.sites is not installed, so Django builds the link from the Host header, and
-    ALLOWED_HOSTS legitimately holds wildcard entries. Anyone who can serve one subdomain of
-    qub.ac.uk or fallingstar-data.com could therefore have this send a victim a valid reset link
-    that points at their own server, which discloses the token when the victim opens it.
-
-    This is the rule verification.absolute_url already applies to the mail this project sends
-    itself. The reset mail is the one Django owns, so it is applied here instead.
-
-    An unset SITE_ORIGIN keeps Django's own behaviour, which is what development and the tests
-    want; settings.py makes the variable mandatory in production.
+    Django builds the link from the Host header, and ALLOWED_HOSTS holds wildcard entries, so a
+    host under one of those domains could have a victim sent a reset link that points at itself.
+    The rule is the one verification.absolute_url applies to the mail this project sends itself.
+    An unset SITE_ORIGIN keeps Django's own behaviour, for development and the tests.
     """
 
     @override
@@ -1372,81 +1330,6 @@ class SiteOriginPasswordResetView(PasswordResetView):
                 "domain": host,
                 "site_name": host,
             }
-
-
-class ThrottledLoginView(LoginView):
-    """Django's login page, with the failed-login budget from throttles applied.
-
-    The form refuses the password check for an address over the budget and records each failure.
-    This view turns that refusal into a 429 with a Retry-After, like every other limit on the
-    site, so it is visible to the access log and to anything watching it.
-    """
-
-    authentication_form = ThrottledAuthenticationForm
-
-    @override
-    def form_invalid(self, form):
-        from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
-
-        refused = any(error.code == "throttled" for error in form.non_field_errors().as_data())
-        response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
-        if refused:
-            response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
-
-        return response
-
-
-class ObtainAuthTokenThrottled(ObtainAuthToken):
-    """DRF's token endpoint, with the rate limit that its base class removes.
-
-    ObtainAuthToken sets throttle_classes = (), which overrides DEFAULT_THROTTLE_CLASSES, so the
-    one endpoint on the site that takes a password was also the only unmetered one. A success
-    returns a token that does not expire, so an unbounded guessing loop is worth more here than
-    against a session cookie.
-
-    ForcedPhotRateThrottle allows any view that declares no throttle_scope, so naming the scope is
-    what turns the limit on.
-
-    No authenticators, because APIView.initial() authenticates before it throttles. With the site
-    defaults in place, a wrong password in an Authorization header made BasicAuthentication answer
-    401 before the throttle ran, so the counter never moved and one extra header turned the limit
-    off. Nothing here reads request.user: ObtainAuthToken takes the credentials from the body
-    through its own serializer, and its permission_classes are already empty. The throttle then
-    keys on the client address, which is what a login endpoint wants.
-
-    Dropping SessionAuthentication also drops the CSRF check it enforces. That is safe here: the
-    view acts only on the credentials in its body, and its JSON reply is unreadable across origins.
-
-    A Basic header on any other view is metered by ThrottledBasicAuthentication (see throttles),
-    which counts failed password checks per address and refuses the check itself once over budget.
-    """
-
-    # a tuple, like the empty throttle_classes and permission_classes ObtainAuthToken itself
-    # declares; DRF only iterates these
-    authentication_classes = ()
-    throttle_classes = [ForcedPhotRateThrottle]
-    throttle_scope = "forcephotlogin"
-
-    @override
-    def post(self, request, *args, **kwargs):
-        # The same failed-login budget as every other door (see throttles): the rate above bounds
-        # how often this endpoint may be asked, and this stops an address that has exhausted its
-        # guesses elsewhere from spending more here, or from getting a token for a lucky one.
-        if login_failures_exceeded(request):
-            raise Throttled(detail=LOGIN_LIMIT_MESSAGE)
-
-        try:
-            return super().post(request, *args, **kwargs)
-        except serializers.ValidationError as ex:
-            # The serializer refuses wrong credentials with a validation error carrying the code
-            # "authorization". A body with no username or no password fails with a different
-            # code, before any password is checked; that is not a guess, and counting it would let
-            # empty posts spend the budget of every user behind one address.
-            codes = ex.get_codes()
-            fieldcodes = codes.get("non_field_errors") if isinstance(codes, dict) else None
-            if isinstance(fieldcodes, list) and "authorization" in fieldcodes:
-                note_login_failure(request)
-            raise
 
 
 def register(request):
@@ -2178,11 +2061,9 @@ def taskpdfplot(request, taskid):
 # resultplotdatajs above) therefore take a task id and no credentials; note the serializer also
 # links results at their STATIC_URL path, which Apache serves without consulting Django at all.
 #
-# Public is not the same as archived, so they all read Task.live(), like retrieve. Without that
-# filter, these views serve a deleted task's data file, and taskpdfplot and resultplotdatajs
-# rebuild the .pdf and the cached plot that the delete reclaimed. The files themselves go with the
-# row (see Task.delete_result_files), so a static link published before the delete stops resolving
-# at the same moment.
+# Public is not the same as archived, so they all read Task.live(), like retrieve: a deleted task's
+# data file is not served, and its .pdf and cached plot are not rebuilt. The files go with the row
+# (see Task.delete_result_files), so a static link published before the delete stops with it.
 #
 # no @cache_page on the result file views: Django's cache middleware skips streaming responses, so
 # decorating a view that returns a FileResponse only adds a lookup that can never hit

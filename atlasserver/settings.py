@@ -142,10 +142,9 @@ CACHES = {
     # File-based rather than locmem, because the entries here coordinate the mod_wsgi processes
     # with each other and with the task runner: each process would otherwise keep its own copy.
     #
-    # MAX_ENTRIES is raised well above the default of 300 because every write culls a third of the
-    # directory at random once that many files are present, and this directory holds control state
-    # rather than a cache of results, for example the queue-recalc counter. Losing that to a cull
-    # is not a slower answer but a wrong one. Locks do not live here at all: see forcephot.locks.
+    # MAX_ENTRIES is raised because a full directory culls a third of its files at random, and
+    # this one holds control state such as the queue-recalc counter, where a lost entry is a wrong
+    # answer rather than a slower one. Locks live in forcephot.locks, not here.
     "default": {
         "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
         "LOCATION": filecacheroot / "default",
