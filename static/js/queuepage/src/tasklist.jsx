@@ -58,6 +58,10 @@ function pageTitle(taskid, finishedwhileaway) {
     return finishedwhileaway > 0 ? '(' + finishedwhileaway + ') ' + title : title;
 }
 
+// How much later than a task's start a runner snapshot must be written before its silence about
+// the task means the task was given back. The runner writes its status every fifteen seconds.
+const ATTEMPTED_AFTER_MS = 15000;
+
 /**
  * Start a request in a family that only honours its newest member, and return the test for it.
  *
@@ -1773,11 +1777,16 @@ export function TaskPage() {
 
         // A task with a start time that the runner does not list as running was started once and
         // given back, for example when the remote machine was unreachable. Known only from a fresh
-        // status of a runner that reports the list; otherwise the row keeps saying "running".
+        // status of a runner that reports the list, and only from one written a full write
+        // interval after the task started: a snapshot written just before the dispatch cannot
+        // list the task, and the start time is truncated to the second. Otherwise the row keeps
+        // saying "running". The page holds the status it was last given, so a later snapshot can
+        // only make the label later, never wrong.
         const attempted = (task) => (
             task.starttimestamp != null && task.finishtimestamp == null
             && runnerstatus != null && !runnerstatus.stale
             && Array.isArray(runnerstatus.running_taskids) && !runnerstatus.running_taskids.includes(task.id)
+            && Date.parse(runnerstatus.written) - Date.parse(task.starttimestamp) > ATTEMPTED_AFTER_MS
         );
 
         tasklist = [

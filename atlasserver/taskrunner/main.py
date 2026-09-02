@@ -20,6 +20,8 @@ import pandas as pd
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.db import models
+from django.db import transaction
+from django.db.models import prefetch_related_objects
 from django.forms.models import model_to_dict
 
 from atlasserver import settings
@@ -788,46 +790,54 @@ def remove_old_tasks(
         # could not spin here forever.
         maxpasses = taskcount // MAINTENANCE_BATCH_SIZE + 2
         for _ in range(maxpasses):
-            # One read of the batch. delete_result_files asks nothing of the database, so a batch
-            # costs a fixed number of queries whatever its size.
-            tasks = list(matchingtasks.select_related("parent_task")[:MAINTENANCE_BATCH_SIZE])
-            if not tasks:
-                break
+            # One transaction per batch, with the batch's rows locked before their children are
+            # read. RequestImages holds the same lock on a parent while it creates an image request,
+            # so a request created at the same time is either seen here, and goes with the parent,
+            # or is refused, because the parent has gone. A batch costs a fixed number of queries
+            # whatever its size: the children come from one prefetch.
+            with transaction.atomic():
+                tasks = list(matchingtasks.select_related("parent_task")[:MAINTENANCE_BATCH_SIZE])
+                if not tasks:
+                    break
 
-            taskids = {task.id for task in tasks}
+                taskids = {task.id for task in tasks}
+                list(Task.objects.select_for_update().filter(id__in=taskids).values_list("id", flat=True))
+                prefetch_related_objects(tasks, Task.prefetch_imagerequests())
 
-            if harddeleterecord:
-                # Everything this batch removes: the rows it selected, and the image requests that
-                # parent_task cascades to. The collector issues bulk SQL for that cascade, which
-                # never reaches Task.delete() or delete_result_files(), so a child's files would be
-                # left on the results volume with no row that could ever name them again.
-                #
-                # Read once, before anything is deleted. A sweep that names no request_type can
-                # select a parent and its child alike, so the children the batch did not select
-                # are the ones that still need their files reclaimed.
-                childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
-                going = childids | taskids
-                cascaded = list(Task.objects.filter(id__in=childids - taskids))
-                batch = tasks + cascaded
-            else:
-                going = taskids
-                batch = tasks
+                if harddeleterecord:
+                    # Everything this batch removes: the rows it selected, and the image requests
+                    # that parent_task cascades to. The collector issues bulk SQL for that cascade,
+                    # which never reaches Task.delete() or delete_result_files(), so a child's files
+                    # would be left on the results volume with no row that could ever name them
+                    # again.
+                    #
+                    # Read under the lock, before anything is deleted. A sweep that names no
+                    # request_type can select a parent and its child alike, so the children the
+                    # batch did not select are the ones that still need their files reclaimed.
+                    childids = set(Task.objects.filter(parent_task_id__in=taskids).values_list("id", flat=True))
+                    going = childids | taskids
+                    cascaded = list(Task.objects.filter(id__in=childids - taskids))
+                    batch = tasks + cascaded
+                else:
+                    going = taskids
+                    batch = tasks
 
-            for index, task in enumerate(batch):
-                # the batch is named, because every row in it is still live until the write below
-                task.delete_result_files(going=going)
-                # inside the batch as well as after it: 500 tasks times several filesystem
-                # operations each can alone outlast the staleness window on a slow results mount.
-                # The heartbeat rate-limits itself, so calling it often costs almost nothing.
-                if heartbeat is not None and index % 50 == 49:
-                    heartbeat()
+                for index, task in enumerate(batch):
+                    # the batch is named, because every row in it is still live until the write below
+                    task.delete_result_files(going=going)
+                    # inside the batch as well as after it: 500 tasks times several filesystem
+                    # operations each can alone outlast the staleness window on a slow results
+                    # mount. The heartbeat rate-limits itself, so calling it often costs almost
+                    # nothing.
+                    if heartbeat is not None and index % 50 == 49:
+                        heartbeat()
 
-            if harddeleterecord:
-                # one statement for the parents and their image requests alike; the rows are about
-                # to go, so there is no point marking them archived first
-                Task.objects.filter(id__in=going).delete()
-            else:
-                Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
+                if harddeleterecord:
+                    # one statement for the parents and their image requests alike; the rows are
+                    # about to go, so there is no point marking them archived first
+                    Task.objects.filter(id__in=going).delete()
+                else:
+                    Task.objects.filter(id__in=taskids).update(is_archived=True, task_modified_datetime=now)
 
             # After the write, not before it. A reader that arrives between the two finds no cache
             # entry, reads a data file that is still there, and keeps the plot for thirty days.

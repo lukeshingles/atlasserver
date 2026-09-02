@@ -671,16 +671,22 @@ describe('TaskPage', () => {
         }
     });
 
-    for (const [running_taskids, label] of [[[], 'Attempted'], [[7], 'Running'], [undefined, 'Running']]) {
-        test(`a started task the runner ${running_taskids == null ? 'cannot list' : running_taskids.length ? 'lists' : 'does not list'} shows as ${label}`, async () => {
+    for (const [running_taskids, written, label, why] of [
+        [[], '2026-09-01T00:01:00Z', 'Attempted', 'does not list'],
+        [[7], '2026-09-01T00:01:00Z', 'Running', 'lists'],
+        [undefined, '2026-09-01T00:01:00Z', 'Running', 'cannot list'],
+        [[], '2026-09-01T00:00:05Z', 'Running', 'does not list in a snapshot from just after the start'],
+    ]) {
+        test(`a started task the runner ${why} shows as ${label}`, async () => {
             /*
              * A task with a start time is running only while the runner lists it. One it started and
              * gave back -- the remote machine was unreachable, say -- waits for another attempt, and
              * the row says so rather than "running" for hours. A runner too old to report the list
-             * leaves the row as it was.
+             * leaves the row as it was, and so does a snapshot written before the dispatch could
+             * have reached the list.
              */
             const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
-            const status = { stale: false, queued_task_count: 1 };
+            const status = { stale: false, queued_task_count: 1, written };
             if (running_taskids != null) {
                 status.running_taskids = running_taskids;
             }

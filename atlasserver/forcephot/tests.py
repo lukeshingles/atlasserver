@@ -4655,6 +4655,45 @@ class RemoveOldTasksTests(TestCase):
             children[1].delete()
             assert not legacy.exists(), "the last request served from the legacy zip left it behind"
 
+    def test_a_batch_locks_its_rows_before_it_reads_their_children(self) -> None:
+        # RequestImages holds the same lock on a parent while it creates an image request, so a
+        # request created at the same time is either seen by the batch or refused
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        self.make_old_task(days=200, request_type="FP")
+
+        with CaptureQueriesContext(connection) as queries:
+            taskrunner_main.remove_old_tasks(days_ago=31, harddeleterecord=True, logfunc=lambda _msg: None)
+
+        assert any("FOR UPDATE" in q["sql"] for q in queries), [q["sql"][:80] for q in queries]
+
+    def test_an_archive_batch_does_not_scale_its_queries_with_the_batch(self) -> None:
+        # the archive path reclaims each parent's data file, and gives a queued request without its
+        # own copy one first; the requests come from one prefetch, not one query per parent
+        def sweep_queries(taskcount: int) -> int:
+            with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+                for _ in range(taskcount):
+                    parent = self.make_old_task(days=200, request_type="FP")
+                    child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
+                    child.finishtimestamp = timezone.now()
+                    child.save()
+                    datafile = Path(tmpdir, parent.localresultfileprefix()).with_suffix(".txt")
+                    datafile.parent.mkdir(parents=True, exist_ok=True)
+                    datafile.write_text("observations")
+
+                with CaptureQueriesContext(connection) as queries:
+                    taskrunner_main.remove_old_tasks(
+                        days_ago=31, harddeleterecord=False, request_type="FP", logfunc=lambda _msg: None
+                    )
+
+            return len(queries)
+
+        small = sweep_queries(1)
+        large = sweep_queries(6)
+
+        assert large - small <= 2, f"{small} queries for one task, {large} for six"
+
     def test_a_sweep_that_archives_every_request_served_from_a_legacy_zip_reclaims_it(self) -> None:
         # both siblings are still live while the batch reclaims files, so each would otherwise see
         # the other as still served and keep the zip; the batch is named, and the batch is left out
@@ -4743,8 +4782,11 @@ class RemoveOldTasksTests(TestCase):
             taskrunner_main.remove_old_tasks(days_ago=183, request_type="FP", logfunc=lambda _msg: None)
 
         assert Task.objects.filter(is_archived=True).count() == 12
-        # one batch: ids, load, prefetch, update. Well under one write per task either way.
-        assert len(queries) <= 6, f"{len(queries)} queries:\n" + "\n".join(q["sql"] or "" for q in queries)
+        # One batch: the count and the examples for the log, the read of the batch, its row lock,
+        # the prefetch of its image requests, the update, and the read that finds no second batch.
+        # Well under one write per task either way. The savepoints are the test transaction's.
+        statements = [q["sql"] or "" for q in queries if "SAVEPOINT" not in (q["sql"] or "")]
+        assert len(statements) <= 7, f"{len(statements)} queries:\n" + "\n".join(statements)
 
     def test_archiving_spans_several_batches(self) -> None:
         # the sweep takes one bounded batch at a time rather than reading every matching id into
