@@ -56,6 +56,17 @@ import warnings
 warnings.filterwarnings("ignore")
 mpl.use('svg')
 
+# THE FILTERS THIS SCRIPT UNDERSTANDS, IN WAVELENGTH ORDER. THE KEY IS THE
+# VALUE OF THE `F` COLUMN IN AN ATLAS FP RESULTS FILE. THIS IS THE SINGLE
+# SOURCE OF TRUTH - READING, CLIPPING, STACKING AND PLOTTING ALL DRIVE OFF IT,
+# SO ADDING A FILTER MEANS ADDING ONE ENTRY HERE.
+FILTERS = {
+    'c': {'colour': '#2aa198', 'label': 'c-band mag '},
+    'o': {'colour': '#FFA500', 'label': 'o-band mag '},
+    'w': {'colour': '#007bff', 'label': 'w-band mag '},
+    'I': {'colour': '#dc322f', 'label': 'I-band mag '},
+}
+
 
 def main(arguments=None):
     """
@@ -115,6 +126,14 @@ def main(arguments=None):
     print(f'Your plots can be found here:\n{plotPaths}')
 
     return
+
+
+# FIGURE-FRACTION Y-COORDINATES FOR THE OBJECT-NAME TITLE AND THE LEGEND ABOVE THE AXES.
+# THE TITLE SITS `TITLE_LEGEND_GAP` ABOVE THE LEGEND SO THE TWO NEVER OVERLAP, WHATEVER THE
+# LEGEND'S WIDTH (I.E. HOWEVER MANY FILTERS ARE PLOTTED).
+LEGEND_Y_FIGCOORD = 1.08
+TITLE_LEGEND_GAP = 0.07
+TITLE_Y_FIGCOORD = LEGEND_Y_FIGCOORD + TITLE_LEGEND_GAP
 
 
 class plotter():
@@ -256,7 +275,7 @@ class plotter():
         # ADD SECOND Y-AXIS
         ax2 = ax.twinx()
         ax2.yaxis.set_major_formatter(y_formatter)
-        ax2.set_ylabel(r'Flux ($\mu$Jy)', rotation=-90., labelpad=27)
+        ax2.set_ylabel('Flux ($\mu$Jy)', rotation=-90., labelpad=27)
         ax2.grid(False)
 
         # ADD SECOND X-AXIS
@@ -317,8 +336,7 @@ class plotter():
             ",,", ",").replace(",,", ",").replace(",,", ",").replace(",,", ",").splitlines()
 
         # PARSE DATA WITH SOME FIXED CLIPPING
-        oepochs = []
-        cepochs = []
+        epochsByFilter = {fil: [] for fil in FILTERS}
         csvReader = csv.DictReader(
             fpData, dialect='excel', delimiter=',', quotechar='"')
 
@@ -334,44 +352,35 @@ class plotter():
             if mjdMin and mjdMax:
                 if row["MJD"] < mjdMin or row["MJD"] > mjdMax:
                     continue
-            if row["F"] == "c":
-                cepochs.append(row)
-            if row["F"] == "o":
-                oepochs.append(row)
+            # SKIP ANY FILTER THIS SCRIPT DOES NOT UNDERSTAND
+            if row["F"] in epochsByFilter:
+                epochsByFilter[row["F"]].append(row)
 
-        # SORT BY MJD
-        cepochs = sorted(cepochs, key=itemgetter('MJD'), reverse=False)
-        oepochs = sorted(oepochs, key=itemgetter('MJD'), reverse=False)
+        # SORT BY MJD, THEN SIGMA-CLIP EACH FILTER INDEPENDENTLY WITH A ROLLING
+        # WINDOW - EPOCHS IN ONE FILTER NEVER INFLUENCE ANOTHER FILTER
+        cleanedEpochs = []
+        for fil in FILTERS:
+            epochs = sorted(
+                epochsByFilter[fil], key=itemgetter('MJD'), reverse=False)
 
-        # SIGMA-CLIP THE DATA WITH A ROLLING WINDOW
-        cdataFlux = []
-        cdataFlux[:] = [row["uJy"] for row in cepochs]
-        odataFlux = []
-        odataFlux[:] = [row["uJy"] for row in oepochs]
+            dataFlux = []
+            dataFlux[:] = [row["uJy"] for row in epochs]
 
-        maskList = []
-        for flux in [cdataFlux, odataFlux]:
             fullMask = rolling_window_sigma_clip(
                 log=self.log,
-                array=flux,
+                array=dataFlux,
                 clippingSigma=clippingSigma,
                 windowSize=11)
-            maskList.append(fullMask)
 
-        try:
-            cepochs = [e for e, m in zip(
-                cepochs, maskList[0]) if m == False]
-        except:
-            cepochs = []
+            try:
+                epochs = [e for e, m in zip(epochs, fullMask) if m == False]
+            except:
+                epochs = []
 
-        try:
-            oepochs = [e for e, m in zip(
-                oepochs, maskList[1]) if m == False]
-        except:
-            oepochs = []
+            cleanedEpochs += epochs
 
         self.log.debug('completed the ``read_and_sigma_clip_data`` function')
-        return cepochs + oepochs
+        return cleanedEpochs
 
     def plot_single_result(
             self,
@@ -400,16 +409,13 @@ class plotter():
         # ax = fig.gca()
         epochs = self.read_and_sigma_clip_data(fpFile)
 
-        # c = cyan, o = arange
-        magnitudes = {
-            'c': {'mjds': [], 'mags': [], 'magErrs': []},
-            'o': {'mjds': [], 'mags': [], 'magErrs': []},
-            'I': {'mjds': [], 'mags': [], 'magErrs': []},
-        }
+        # ONE DATA SET PER FILTER WE UNDERSTAND
+        magnitudes = {fil: {'mjds': [], 'mags': [], 'magErrs': []}
+                      for fil in FILTERS}
 
         # SPLIT BY FILTER
         for epoch in epochs:
-            if epoch["F"] in ["c", "o", "I"]:
+            if epoch["F"] in magnitudes:
                 magnitudes[epoch["F"]]["mjds"].append(epoch["MJD"])
                 magnitudes[epoch["F"]]["mags"].append(epoch["uJy"])
                 magnitudes[epoch["F"]]["magErrs"].append(epoch["duJy"])
@@ -419,84 +425,80 @@ class plotter():
             magnitudes = self.stack_photometry(
                 magnitudes, binningDays=self.stackBinSize, fpFile=fpFile)
 
-        # ATLAS OBJECT NAME LABEL AS TITLE
+        # ATLAS OBJECT NAME LABEL AS TITLE (ANCHORED BY ITS BOTTOM EDGE, ABOVE THE LEGEND)
         if objectName and len(objectName):
-            fig.text(0.1, 1.02, objectName, ha="left", fontsize=40)
-
-        # ADD MAGNITUDES AND LIMITS FOR EACH FILTER
-        handles = []
+            fig.text(0.1, TITLE_Y_FIGCOORD, objectName,
+                     ha="left", va="bottom", fontsize=40)
 
         # SET AXIS LIMITS FOR MAGNTIUDES
         upperMag = -99999999999
         lowerMag = 99999999999
 
+        # THE FILTERS THAT ACTUALLY CARRY DATA FOR THIS OBJECT
+        populatedFilters = [
+            fil for fil in FILTERS if len(magnitudes[fil]['mjds'])]
+
         # DETERMINE THE TIME-RANGE OF DETECTION FOR THE SOURCE
-        mjdList = magnitudes['o']['mjds'] + \
-            magnitudes['c']['mjds'] + magnitudes['I']['mjds']
+        mjdList = []
+        for fil in populatedFilters:
+            mjdList += magnitudes[fil]['mjds']
         if len(mjdList) == 0:
             self.log.error(f'{fpFile} does not contain enough data')
             return None
-        lowerDetectionMjd = min(mjdList)
-        upperDetectionMjd = max(mjdList)
 
         # DETERMIN MAGNITUDE RANGE
-        allMags = magnitudes['o']['mags'] + magnitudes['c']['mags']
+        allMags = []
+        for fil in populatedFilters:
+            allMags += magnitudes[fil]['mags']
         magRange = max(allMags) - min(allMags)
         deltaMag = magRange * 0.1
 
-        if len(magnitudes['o']['mjds']):
-            orangeMag = ax.errorbar(magnitudes['o']['mjds'], magnitudes['o']['mags'], yerr=magnitudes[
-                'o']['magErrs'], color='#FFA500', fmt='o', mfc='#FFA500', mec='#FFA500', zorder=1, ms=12., alpha=0.8, linewidth=1.2, label='o-band mag ', capsize=10)
+        # PLOT ONE ERRORBAR SET PER POPULATED FILTER, KEEPING HOLD OF THE
+        # ARTISTS SO THEY CAN BE REMOVED AGAIN - THE FIGURE IS REUSED ACROSS
+        # RESULT FILES, SO POINTS LEFT BEHIND WOULD BLEED INTO THE NEXT PLOT.
+        # DRAW IN REVERSE WAVELENGTH ORDER SO THAT THE SHORTEST-WAVELENGTH
+        # FILTER ENDS UP ON TOP WHERE POINTS OVERLAP, WHICH IS HOW c AND o HAVE
+        # ALWAYS STACKED. THE LEGEND IS BUILT SEPARATELY, IN WAVELENGTH ORDER.
+        artistsByFilter = {}
+        for fil in reversed(populatedFilters):
+            colour = FILTERS[fil]['colour']
+            filterMag = ax.errorbar(magnitudes[fil]['mjds'], magnitudes[fil]['mags'], yerr=magnitudes[
+                fil]['magErrs'], color=colour, fmt='o', mfc=colour, mec=colour, zorder=1, ms=12., alpha=0.8, linewidth=1.2, label=FILTERS[fil]['label'], capsize=10)
 
             # ERROBAR CAP THICKNESS
-            orangeMag[1][0].set_markeredgewidth('0.7')
-            orangeMag[1][1].set_markeredgewidth('0.7')
-            handles.append(orangeMag)
-            errMask = np.array(magnitudes['o']['magErrs'])
+            filterMag[1][0].set_markeredgewidth('0.7')
+            filterMag[1][1].set_markeredgewidth('0.7')
+            artistsByFilter[fil] = filterMag
+
+            errMask = np.array(magnitudes[fil]['magErrs'])
             np.putmask(errMask, errMask > 30, 30)
 
-            if max(np.array(magnitudes['o']['mags']) + errMask) > upperMag:
+            if max(np.array(magnitudes[fil]['mags']) + errMask) > upperMag:
                 upperMag = max(
-                    np.array(magnitudes['o']['mags']) + errMask)
-                upperMagIndex = np.argmax((
-                    magnitudes['o']['mags']) + errMask)
+                    np.array(magnitudes[fil]['mags']) + errMask)
 
-            if min(np.array(magnitudes['o']['mags']) - errMask) < lowerMag:
+            if min(np.array(magnitudes[fil]['mags']) - errMask) < lowerMag:
                 lowerMag = min(
-                    np.array(magnitudes['o']['mags']) - errMask)
-                lowerMagIndex = np.argmin((
-                    magnitudes['o']['mags']) - errMask)
+                    np.array(magnitudes[fil]['mags']) - errMask)
 
-        if len(magnitudes['c']['mjds']):
-            cyanMag = ax.errorbar(magnitudes['c']['mjds'], magnitudes['c']['mags'], yerr=magnitudes[
-                'c']['magErrs'], color='#2aa198', fmt='o', mfc='#2aa198', mec='#2aa198', zorder=1, ms=12., alpha=0.8, linewidth=1.2, label='c-band mag ', capsize=10)
-            # ERROBAR CAP THICKNESS
-            cyanMag[1][0].set_markeredgewidth('0.7')
-            cyanMag[1][1].set_markeredgewidth('0.7')
-            handles.append(cyanMag)
-            errMask = np.array(magnitudes['c']['magErrs'])
-            np.putmask(errMask, errMask > 30, 30)
-
-            if max(np.array(magnitudes['c']['mags']) + errMask) > upperMag:
-                upperMag = max(
-                    np.array(magnitudes['c']['mags']) + errMask)
-                upperMagIndex = np.argmax((
-                    magnitudes['c']['mags']) + errMask)
-
-            if min(np.array(magnitudes['c']['mags']) - errMask) < lowerMag:
-                lowerMag = min(
-                    np.array(magnitudes['c']['mags']) - errMask)
-                lowerMagIndex = np.argmin(
-                    (magnitudes['c']['mags']) - errMask)
+        # LEGEND ENTRIES IN WAVELENGTH ORDER, WHATEVER ORDER THEY WERE DRAWN IN
+        handles = [artistsByFilter[fil] for fil in populatedFilters]
+        plottedArtists = list(handles)
 
         if self.firstPlot:
+            # `LOC='LOWER RIGHT'` HERE ONLY PICKS WHICH CORNER OF THE LEGEND BOX ALIGNS TO
+            # `BBOX_TO_ANCHOR` (IT DOES NOT SEARCH FOR FREE SPACE, UNLIKE `LOC=0`/"BEST", WHICH
+            # IS ILL-DEFINED ONCE AN EXPLICIT ANCHOR IS GIVEN AND WAS THE CAUSE OF THE LEGEND
+            # DRIFTING INTO THE TITLE ABOVE). ANCHORING IN FIGURE COORDINATES KEEPS THE LEGEND'S
+            # POSITION INDEPENDENT OF THE NUMBER OF FILTERS PLOTTED.
             plt.legend(handles=handles, prop={
-                'size': 13.5}, bbox_to_anchor=(0.95, 1.2), loc=0, borderaxespad=0., ncol=4, scatterpoints=1)
+                'size': 13.5}, bbox_to_anchor=(0.95, LEGEND_Y_FIGCOORD), bbox_transform=fig.transFigure,
+                # SMALL PADDING SO THE LEGEND DOESN'T VISUALLY TOUCH ITS ANCHOR CORNER
+                loc='lower right', borderaxespad=0.3, ncol=4, scatterpoints=1)
 
-        # SET THE TEMPORAL X-RANGE
-        allMjd = magnitudes['o']['mjds'] + magnitudes['c']['mjds']
-        xmin = min(allMjd) - 5.
-        xmax = max(allMjd) + 5.
+        # SET THE TEMPORAL X-RANGE - THE SAME MJDS USED FOR THE DETECTION RANGE
+        xmin = min(mjdList) - 5.
+        xmax = max(mjdList) + 5.
         mjdRange = xmax - xmin
         ax.set_xlim([xmin, xmax])
         ax.set_ylim([lowerMag - deltaMag, upperMag + deltaMag])
@@ -559,15 +561,13 @@ class plotter():
         plt.savefig(filePath, bbox_inches='tight', transparent=False,
                     pad_inches=0.1)
 
-        try:
-            cyanMag.remove()
-        except:
-            pass
-
-        try:
-            orangeMag.remove()
-        except:
-            pass
+        for artist in plottedArtists:
+            try:
+                artist.remove()
+            except Exception as e:
+                # SOME MATPLOTLIB VERSIONS CANNOT REMOVE A CONTAINER ARTIST.
+                # LOG IT RATHER THAN FAILING THE WHOLE PLOT RUN
+                self.log.debug(f'could not remove plotted artist: {e}')
 
         self.firstPlot = False
 
@@ -594,11 +594,8 @@ class plotter():
         self.log.debug('starting the ``stack_photometry`` method')
 
         # IF WE WANT TO 'STACK' THE PHOTOMETRY
-        summedMagnitudes = {
-            'c': {'mjds': [], 'mags': [], 'magErrs': [], 'n': []},
-            'o': {'mjds': [], 'mags': [], 'magErrs': [], 'n': []},
-            'I': {'mjds': [], 'mags': [], 'magErrs': [], 'n': []},
-        }
+        summedMagnitudes = {fil: {'mjds': [], 'mags': [], 'magErrs': [], 'n': []}
+                            for fil in FILTERS}
 
         # MAGNITUDES/FLUXES ARE DIVIDED IN UNIQUE FILTER SETS - SO ITERATE OVER
         # FILTERS
