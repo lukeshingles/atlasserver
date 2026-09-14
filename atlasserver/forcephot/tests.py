@@ -7434,40 +7434,6 @@ class UserDeletionReclaimsFilesTests(TestCase):
         assert not Task.objects.filter(id=task.id).exists()
 
 
-class TaskAttemptLimitTests(TestCase):
-    """A task that fails without an error message is abandoned after MAX_TASK_ATTEMPTS."""
-
-    def setUp(self) -> None:
-        self.user = User.objects.create_user(username="giveup", email="giveup@example.com", password=None)
-
-    def run_failing_task(self, task: Task) -> None:
-        with (
-            mock.patch.object(taskrunner_main, "runtask", return_value=(None, None)),
-            mock.patch.object(taskrunner_main.time, "sleep"),
-            mock.patch.object(taskrunner_main, "log_general"),
-        ):
-            taskrunner_main.do_task(task, slotid=0)
-
-    def test_the_last_attempt_finishes_the_task_with_an_error(self) -> None:
-        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, attempt_count=taskrunner_main.MAX_TASK_ATTEMPTS - 1)
-
-        self.run_failing_task(task)
-
-        task.refresh_from_db()
-        assert task.finishtimestamp is not None
-        assert task.error_msg, "the task was left for another attempt"
-        assert task.attempt_count == taskrunner_main.MAX_TASK_ATTEMPTS
-
-    def test_an_earlier_attempt_leaves_the_task_for_another(self) -> None:
-        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
-
-        self.run_failing_task(task)
-
-        task.refresh_from_db()
-        assert task.finishtimestamp is None
-        assert task.attempt_count == 1
-
-
 class ResultFileProblemTests(SimpleTestCase):
     """The plain read that replaced pandas in the runner keeps the same answers."""
 
@@ -7501,20 +7467,6 @@ class ChartQueryStringTests(TestCase):
 
         assert response.status_code == 302, response.status_code
         assert response["Location"] == reverse("statscoordchart")
-
-
-class SshOutageIsNotAnAttemptTests(TestCase):
-    """A failed ssh connection does not spend one of the task's attempts."""
-
-    def test_the_attempt_is_taken_back(self) -> None:
-        user = User.objects.create_user(username="outage", email="outage@example.com", password=None)
-        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
-        taskrunner_main.mark_started(task)
-
-        taskrunner_main.unmark_attempt(task)
-
-        task.refresh_from_db()
-        assert task.attempt_count == 0
 
 
 class PasswordResetLimitPageTests(TestCase):

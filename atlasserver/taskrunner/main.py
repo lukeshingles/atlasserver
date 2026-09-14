@@ -45,11 +45,6 @@ from atlasserver.forcephot.webhooks import send_task_callback
 
 TASK_MAXTIME_SECONDS: int = 4 * 3600
 
-# How many attempts a task gets. A task that fails without an error message is picked up again by
-# the dispatch loop, so without a limit one that fails every time held a slot for ever, and
-# because the runner takes one task per user at a time, it held up the rest of that user's queue.
-MAX_TASK_ATTEMPTS: int = 3
-
 # the exit status ssh itself gives when the connection fails, as opposed to the status of the
 # remote command
 SSH_CONNECTION_FAILED: int = 255
@@ -402,9 +397,6 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
         # already, empty, and collecting it would finish the task with "No data returned" for a
         # target that has data; a retry runs the command again
         logfunc("ERROR: the ssh connection failed, so the task will be retried")
-        # not one of the task's attempts: an outage of the connection says nothing about the task,
-        # and MAX_TASK_ATTEMPTS would otherwise abandon every queued task within a short outage
-        unmark_attempt(task)
         return None, None
 
     if stdout:
@@ -504,12 +496,6 @@ def mark_started(task) -> None:
 
     task.starttimestamp = starttimestamp
     task.attempt_count += 1
-
-
-def unmark_attempt(task) -> None:
-    """Take back the attempt mark_started recorded, for a failure that was not the task's."""
-    Task.objects.filter(pk=task.id, attempt_count__gt=0).update(attempt_count=models.F("attempt_count") - 1)
-    task.attempt_count = max(0, task.attempt_count - 1)
 
 
 def mark_finished(task, error_msg: str | None) -> None:
@@ -745,15 +731,10 @@ def do_task(task, slotid: int) -> None:
 
             notify_finished(task=task, logfunc=logfunc)
 
-        elif task.attempt_count >= MAX_TASK_ATTEMPTS:
-            # the row is left unfinished after a failed attempt, so that the dispatch loop picks it
-            # up again; after the last attempt it is finished with an error, or it holds a slot
-            # for ever and blocks the rest of its user's queue
-            logfunc(f"ERROR: Task was not completed successfully after {task.attempt_count} attempts. Giving up.")
-            mark_finished(task=task, error_msg=f"The task failed {task.attempt_count} times and was abandoned.")
-            notify_finished(task=task, logfunc=logfunc)
-
         else:
+            # left unfinished on purpose, with no limit on the attempts: the dispatch loop picks
+            # the task up again, so a task that fails while the remote host is down completes
+            # when the host is back
             waittime = 5
             logfunc(f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries...")
             time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
