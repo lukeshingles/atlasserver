@@ -13,6 +13,7 @@ from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.views import LoginView
 from django.http import HttpResponse
+from django.views.decorators.debug import sensitive_variables
 from rest_framework import serializers
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.exceptions import Throttled
@@ -97,6 +98,7 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
     throttle_scope = "forcephotlogin"
 
     @override
+    @sensitive_variables("body")
     def post(self, request: Request, *args: t.Any, **kwargs: t.Any) -> Response:
         if login_failures_exceeded(request):
             raise Throttled(detail=LOGIN_LIMIT_MESSAGE)

@@ -1,9 +1,8 @@
 {% extends "base.html" %}
 
-{# The site's login page, for Django's LoginView via include("django.contrib.auth.urls"). The #}
-{# markup used to live in an override of DRF's rest_framework/login.html, which this extended; #}
-{# that override is gone, so the browsable API gets DRF's own login page and this one is free to #}
-{# be an ordinary page of the site. #}
+{# The site's login page, served by ThrottledLoginView at /login/. The browsable API's login at #}
+{# /api-auth/login/ is the same view with rest_framework/login.html, which extends this file, so #}
+{# a change here reaches both pages. #}
 
 {# Without a title these pages are all just "ATLAS Forced Photometry" in the tab and in the #}
 {# history. The pages this project routes itself pass `name` instead (see urls.py and the #}

@@ -1184,7 +1184,8 @@ class PermissionResponseTests(TestCase):
         response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
 
         assert response.status_code == 302, response.status_code
-        assert reverse("rest_framework:login") in response["Location"]
+        # the site's login page (settings.LOGIN_URL), which has the failed-login budget
+        assert response["Location"].startswith(f"{reverse('login')}?next="), response["Location"]
 
     def test_the_next_url_is_url_quoted_not_html_escaped(self) -> None:
         # escape() turns an "&" in the query string into "&amp;", which would send the user
@@ -3104,6 +3105,8 @@ class PasswordResetLinkOriginTests(TestCase):
     def setUp(self) -> None:
         User.objects.create_user(username="victim3", email="victim3@example.com", password="pw12345678")
         django_mail.outbox.clear()
+        # the one-mail-per-address interval of the reset view; both tests mail the same address
+        caches["throttle"].clear()
 
     @override_settings(SITE_ORIGIN="https://fallingstar-data.com")
     def test_a_wildcard_host_does_not_reach_the_link(self) -> None:
@@ -3502,9 +3505,20 @@ class QueuePositionsEndpointTests(TestCase):
         self.other = User.objects.create_user(username="qpother", email="qp2@example.com", password=None)
 
     def test_requires_login(self) -> None:
+        # a DRF view: an anonymous caller is refused, and not redirected to a login page that a
+        # script cannot use
         response = self.client.get(reverse("queuepositions"))
-        assert response.status_code == 302
-        assert reverse("login") in response["Location"]
+        assert response.status_code in {401, 403}, response.status_code
+
+    def test_a_token_authenticates_like_the_rest_of_the_api(self) -> None:
+        # the API guide documents this endpoint for scripts, which send a token and no session
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, queuepos_relative=0)
+        token = Token.objects.create(user=self.user)
+
+        response = self.client.get(reverse("queuepositions"), HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        assert response.status_code == 200, response.content
+        assert str(task.id) in response.json()["queuepositions"]
 
     def test_reports_positions_matching_the_task_list(self) -> None:
         # the other user's tasks are interleaved by the round robin, so this user's positions are
@@ -6559,7 +6573,7 @@ class TaskRunnerResultFileTests(TestCase):
                 mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", resultsdir),
                 mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
             ):
-                taskrunner_main.remove_task_resultfiles(taskid=42, request_type="IMGZIP", logfunc=lambda _msg: None)
+                taskrunner_main.remove_task_resultfiles(taskid=42, logfunc=lambda _msg: None)
 
             assert not (resultsdir / "job00042.zip").exists()
             assert not (Path(inputsdir) / "job00042.txt").exists()
@@ -6574,7 +6588,7 @@ class TaskRunnerResultFileTests(TestCase):
                 (resultsdir / f"job00042{ext}").touch()
 
             with mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", resultsdir):
-                taskrunner_main.remove_task_resultfiles(taskid=42, request_type="SSOSTACK", logfunc=lambda _msg: None)
+                taskrunner_main.remove_task_resultfiles(taskid=42, logfunc=lambda _msg: None)
 
             assert not list(resultsdir.glob("job00042.*"))
 
@@ -6589,7 +6603,7 @@ class TaskRunnerResultFileTests(TestCase):
             (resultsdir / "job00420.txt").touch()  # a different task, must be left alone
 
             with mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", resultsdir):
-                taskrunner_main.remove_task_resultfiles(taskid=42, request_type="FP", logfunc=lambda _msg: None)
+                taskrunner_main.remove_task_resultfiles(taskid=42, logfunc=lambda _msg: None)
 
             assert not list(resultsdir.glob("job00042.*"))
             assert (resultsdir / "job00420.txt").exists()
@@ -7092,3 +7106,380 @@ class RequestCostTests(TestCase):
         large = statistics_queries(20)
 
         assert large == small, f"{small} queries for one finished task, {large} for twenty-one"
+
+
+class BrowsableApiLoginBudgetTests(TestCase):
+    """The browsable API's login page shares the failed-login budget of the site's login page.
+
+    rest_framework.urls serves the stock LoginView, which checks passwords with no limit, so it was
+    the one password door without a budget. atlasserver/urls.py serves it with ThrottledLoginView.
+    """
+
+    def setUp(self) -> None:
+        User.objects.create_user(username="guessed", email="g@example.com", password="pw12345678")
+        caches["throttle"].clear()
+
+    def test_the_page_refuses_the_check_once_over_budget(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                response = self.client.post(reverse("rest_framework:login"), {"username": "guessed", "password": "x"})
+                assert response.status_code == 200, response.status_code
+
+            blocked = self.client.post(
+                reverse("rest_framework:login"), {"username": "guessed", "password": "pw12345678"}
+            )
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert "_auth_user_id" not in self.client.session, "the right password logged in while over budget"
+
+    def test_the_two_login_pages_share_one_budget(self) -> None:
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 2):
+            for _ in range(2):
+                self.client.post(reverse("rest_framework:login"), {"username": "guessed", "password": "x"})
+
+            blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
+
+        assert blocked.status_code == 429, blocked.status_code
+
+    def test_an_unauthenticated_browser_is_sent_to_a_page_with_a_budget(self) -> None:
+        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
+
+        assert response.status_code == 302, response.status_code
+        assert response["Location"].startswith(reverse("login")), response["Location"]
+
+
+class PasswordResetLimitTests(TestCase):
+    """The reset page sends one mail per POST, so it is metered like the other mail-sending pages."""
+
+    def setUp(self) -> None:
+        User.objects.create_user(username="resetme", email="resetme@example.com", password="pw12345678")
+        caches["throttle"].clear()
+        django_mail.outbox.clear()
+
+    def test_one_mail_per_address_per_interval(self) -> None:
+        first = self.client.post(reverse("password_reset"), {"email": "resetme@example.com"})
+        second = self.client.post(reverse("password_reset"), {"email": "resetme@example.com"})
+
+        # the same answer both times, so a stranger cannot tell a metered request from a sent mail
+        assert first.status_code == 302, first.status_code
+        assert second.status_code == 302, second.status_code
+        assert len(django_mail.outbox) == 1, len(django_mail.outbox)
+
+    def test_a_client_address_is_refused_once_over_its_budget(self) -> None:
+        with mock.patch.object(views, "PASSWORD_RESET_WINDOW_LIMIT", 2):
+            statuses = [
+                self.client.post(reverse("password_reset"), {"email": f"nobody{n}@example.com"}).status_code
+                for n in range(3)
+            ]
+
+        assert statuses == [302, 302, 429], statuses
+
+
+class RadecListColumnTests(TestCase):
+    """A radeclist line holds one RA and one Dec: a third column is refused, not silently dropped."""
+
+    def test_a_line_with_the_arcseconds_left_out_is_refused(self) -> None:
+        # '00 52 20.21 +56 34' gave RA 0 and Dec 52: the first two tokens read as decimal degrees
+        assert splitradeclist_rejects({"radeclist": "00 52 20.21 +56 34"})
+
+    def test_a_trailing_name_is_refused(self) -> None:
+        assert splitradeclist_rejects({"radeclist": "10.0 20.0 M31"})
+        assert splitradeclist_rejects({"radeclist": "10.0, 20.0, M31"})
+
+    def test_a_sexagesimal_pair_of_six_tokens_is_still_accepted(self) -> None:
+        datalist = splitradeclist({"radeclist": "00 52 20.21 +56 34 03.9"})
+
+        assert len(datalist) == 1
+        assert abs(datalist[0]["ra"] - 13.084) < 0.01, datalist[0]["ra"]
+
+
+class CoordinateRangeTests(TestCase):
+    """A JSON submission is held to the same coordinate ranges as a radeclist line."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="ranges", email="ranges@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def submit(self, ra: float, dec: float) -> t.Any:
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": ra, "dec": dec}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_a_position_off_the_sky_is_refused(self) -> None:
+        for ra, dec in ((400.0, 10.0), (-10.0, 10.0), (10.0, 95.0), (10.0, -100.0)):
+            response = self.submit(ra, dec)
+            assert response.status_code == 400, (ra, dec, response.content)
+
+        assert not Task.objects.exists()
+
+    def test_the_edges_of_the_sky_are_accepted(self) -> None:
+        for ra, dec in ((0.0, -90.0), (360.0, 90.0)):
+            response = self.submit(ra, dec)
+            assert response.status_code == 201, (ra, dec, response.content)
+
+
+class StackRequestFromTheQueuePageTests(TestCase):
+    """The queue page submits a stack request as a radeclist, and the caller's rule applies to it.
+
+    splitradeclist validated each row with a serializer that had no request in its context, so the
+    stack rule judged every row as an anonymous caller's and refused it for the accounts it allows.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="stacklist", email="sl@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def submit(self) -> t.Any:
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"request_type": "SSOSTACK", "radeclist": "mpc Makemake"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_a_named_account_can_submit_one_as_a_list(self) -> None:
+        with override_settings(TEST_USERS=[self.user.pk]):
+            response = self.submit()
+
+        assert response.status_code == 201, response.content
+        assert Task.objects.filter(request_type="SSOSTACK", mpc_name="Makemake").exists()
+
+    def test_an_ordinary_account_still_cannot(self) -> None:
+        response = self.submit()
+
+        assert response.status_code == 400, response.content
+        assert not Task.objects.filter(request_type="SSOSTACK").exists()
+
+
+class SubmissionBodyShapeTests(TestCase):
+    """A JSON body that is not an object is a 400, not a server error."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="bodyshape", email="bs@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_a_string_body_naming_the_list_field_is_refused(self) -> None:
+        # "radeclist" in "radeclist" is True for a string, and the subscript that followed raised
+        for body in ('"radeclist"', '["radeclist"]'):
+            response = self.client.post(
+                reverse("task-list"), data=body, content_type="application/json", HTTP_ACCEPT="application/json"
+            )
+            assert response.status_code == 400, (body, response.status_code)
+
+
+class FullUpdateValidationTests(TestCase):
+    """A PUT writes only the fields it sends, so it is validated against the stored task as a PATCH is."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="putter", email="put@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def put(self, task: Task, body: dict[str, t.Any]) -> t.Any:
+        return self.client.put(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps(body),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_coordinates_cannot_be_added_to_an_mpc_task(self) -> None:
+        task = Task.objects.create(user=self.user, mpc_name="Ceres")
+
+        response = self.put(task, {"ra": 10.0, "dec": 20.0})
+
+        # a 400, where the check constraint answered the write with a 500
+        assert response.status_code == 400, response.content
+        task.refresh_from_db()
+        assert task.ra is None
+
+    def test_an_upper_bound_is_checked_against_the_stored_lower_bound(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, mjd_min=80000.0)
+
+        response = self.put(task, {"mjd_max": 70000.0})
+
+        assert response.status_code == 400, response.content
+
+    def test_a_comment_alone_is_accepted(self) -> None:
+        task = Task.objects.create(user=self.user, mpc_name="Ceres")
+
+        response = self.put(task, {"comment": "edited"})
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.comment == "edited"
+        assert task.mpc_name == "Ceres"
+
+
+class ImageRequestTypeIsFixedTests(TestCase):
+    """An image request stays one, so the per-user cap on live image requests counts them all."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="flipper", email="flip@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_an_image_request_cannot_be_changed_into_a_photometry_task(self) -> None:
+        parent = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        child = Task.objects.create(user=self.user, ra=1.0, dec=2.0, parent_task=parent, request_type="IMGZIP")
+
+        response = self.client.patch(
+            reverse("task-detail", args=[child.id]),
+            data=json.dumps({"request_type": "FP"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.content
+        child.refresh_from_db()
+        assert child.request_type == "IMGZIP"
+
+
+class InvalidCursorTests(TestCase):
+    """A cursor whose position the column cannot read is an invalid cursor, not a server error."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="cursor", email="cursor@example.com", password=None)
+        self.client.force_login(self.user)
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+    def test_a_position_that_is_not_a_number_answers_404(self) -> None:
+        cursor = base64.b64encode(b"p=abc").decode()
+
+        response = self.client.get(f"{reverse('task-list')}?cursor={cursor}", HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 404, response.content
+
+    def test_a_position_that_is_not_a_date_answers_404(self) -> None:
+        cursor = base64.b64encode(b"p=abc").decode()
+
+        response = self.client.get(
+            f"{reverse('task-list')}?ordering=timestamp&cursor={cursor}", HTTP_ACCEPT="application/json"
+        )
+
+        assert response.status_code == 404, response.content
+
+
+class ImageRequestOfAnUnfinishedTaskTests(TestCase):
+    """The 404 the schema documents, where a redirect read the same as a created request."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="early", email="early@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def test_a_task_still_in_the_queue_answers_404(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+
+        response = self.client.post(reverse("requestimages", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 404, response.status_code
+        assert not Task.objects.filter(parent_task_id=task.id).exists()
+
+    def test_a_task_that_finished_with_an_error_answers_404(self) -> None:
+        task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), error_msg="No data returned"
+        )
+
+        response = self.client.post(reverse("requestimages", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 404, response.status_code
+
+
+class ArchivedTaskWritesTests(TestCase):
+    """A task the owner deleted is gone for every action of the viewset, not only for retrieve."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="archiver", email="arch@example.com", password=None)
+        self.client.force_login(self.user)
+        self.task = Task.objects.create(
+            user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now(), is_archived=True
+        )
+
+    def test_an_archived_task_cannot_be_edited(self) -> None:
+        response = self.client.patch(
+            reverse("task-detail", args=[self.task.id]),
+            data=json.dumps({"comment": "back from the dead"}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 404, response.content
+
+    def test_an_archived_task_cannot_be_deleted_again(self) -> None:
+        response = self.client.delete(reverse("task-detail", args=[self.task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 404, response.content
+
+
+class UserDeletionReclaimsFilesTests(TestCase):
+    """Deleting an account reclaims the result files of its tasks, which the cascade never does."""
+
+    def test_the_result_files_go_with_the_account(self) -> None:
+        user = User.objects.create_user(username="leaver", email="leaver@example.com", password=None)
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.touch()
+            pdffile = resultfile.with_suffix(".pdf")
+            pdffile.touch()
+
+            user.delete()
+
+            assert not resultfile.exists(), "the data file outlived its account"
+            assert not pdffile.exists(), "the plot outlived its account"
+
+        assert not Task.objects.filter(id=task.id).exists()
+
+
+class ResultFileProblemTests(SimpleTestCase):
+    """The plain read that replaced pandas in the runner keeps the same answers."""
+
+    def check(self, content: str) -> str | None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir, "job00001.txt")
+            path.write_text(content)
+            return taskrunner_main.result_file_problem(path)
+
+    def test_an_empty_file_has_no_data(self) -> None:
+        assert self.check("") == "No data returned"
+
+    def test_a_header_alone_has_no_data(self) -> None:
+        assert self.check("###MJD m dm uJy duJy\n") == "No data returned"
+
+    def test_a_ragged_row_cannot_be_parsed(self) -> None:
+        assert (
+            self.check("###MJD m dm\n1 2 3\nwarning: something odd happened here\n")
+            == "Could not parse the result file"
+        )
+
+    def test_a_data_row_is_fine(self) -> None:
+        assert self.check("###MJD m dm\n59000.1 18.2 0.1\n") is None
+
+
+class ChartQueryStringTests(TestCase):
+    """The chart endpoints send a query string back to the bare path, so the page cache is one entry."""
+
+    def test_a_query_string_is_redirected_to_the_path(self) -> None:
+        response = self.client.get(f"{reverse('statscoordchart')}?r=1")
+
+        assert response.status_code == 302, response.status_code
+        assert response["Location"] == reverse("statscoordchart")
+
+    def test_a_query_string_that_parses_to_nothing_is_redirected_too(self) -> None:
+        # "?&&" gives an empty QueryDict but a distinct cache key
+        response = self.client.get(f"{reverse('statscoordchart')}?&&")
+
+        assert response.status_code == 302, response.status_code
+
+
+class PasswordResetLimitPageTests(TestCase):
+    def test_the_over_budget_page_says_why(self) -> None:
+        caches["throttle"].clear()
+        with mock.patch.object(views, "PASSWORD_RESET_WINDOW_LIMIT", 0):
+            response = self.client.post(reverse("password_reset"), {"email": "x@example.com"})
+
+        assert response.status_code == 429, response.status_code
+        assert "Too many password reset requests" in response.content.decode()

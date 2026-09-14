@@ -7,6 +7,8 @@ from pathlib import Path
 
 import psutil
 
+from atlasserver.taskrunner.status import LOG_DIR
+
 ATLASSERVERPATH = Path(__file__).resolve().parent.parent
 
 
@@ -109,8 +111,7 @@ def stop() -> None:
     else:
         print("task runner tmux session does not exist")
 
-    if Path("/tmp/atlasforced/taskrunner.pid").is_file():
-        Path("/tmp/atlasforced/taskrunner.pid").unlink()
+    TASKRUNNER_PIDFILE.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -132,7 +133,8 @@ def main() -> None:
                 "-f",
                 "-n30",
                 *sys.argv[2:],  # pass any additional arguments to tail
-                str(ATLASSERVERPATH / "atlasserver" / "taskrunner" / "logs" / "fprunnerlog_latest.txt"),
+                # the directory the runner writes to, from the module both processes read it from
+                str(LOG_DIR / "fprunnerlog_latest.txt"),
             ]
         )
 

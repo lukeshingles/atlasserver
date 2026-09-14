@@ -1,11 +1,9 @@
 {% load static %}
 {% load i18n %}
 
-{# The site's own layout. This used to be a 409-line copy of DRF's rest_framework/base.html, which #}
-{# coupled every public page to the browsable API's internals: a DRF upgrade drifted silently from #}
-{# the copy, and it was the reason the site was stuck on the Bootstrap 3 that DRF 3 targets. The #}
-{# browsable API now extends DRF's own base template and is styled with the same Bootstrap 5 as #}
-{# this file, so this one only has to serve the pages this project actually writes. #}
+{# The site's own layout, for the pages this project writes. The browsable API extends DRF's own #}
+{# base template instead, styled with the same Bootstrap 5 as this file, so a DRF upgrade cannot #}
+{# drift from a copy here. #}
 
 <!DOCTYPE html>
 <html lang="en">

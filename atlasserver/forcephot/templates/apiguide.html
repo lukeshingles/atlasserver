@@ -11,7 +11,6 @@
 
     <p>First, let's import some useful packages and set the API URL:</p>
 <pre class="codeblock prettyprint lang-py"><code>import io
-import re
 import sys
 import time
 
@@ -46,14 +45,8 @@ while not task_url:
         elif resp.status_code == 429:  # throttled
             message = resp.json()["detail"]
             print(f'{resp.status_code} {message}')
-            t_sec = re.findall(r'available in (\d+) seconds', message)
-            t_min = re.findall(r'available in (\d+) minutes', message)
-            if t_sec:
-                waittime = int(t_sec[0])
-            elif t_min:
-                waittime = int(t_min[0]) * 60
-            else:
-                waittime = 10
+            # the server says how long to wait in the Retry-After header
+            waittime = int(resp.headers.get('Retry-After', 10))
             print(f'Waiting {waittime} seconds')
             time.sleep(waittime)
         else:
@@ -116,7 +109,7 @@ print(dfresult)
 
 <h3>Queue positions and machine-readable schema</h3>
 
-<p>To check where your queued tasks sit without fetching the whole task list, GET <code>{BASEURL}/queuepositions.json</code>. It returns a mapping of task id to queue position (0 is next to run).</p>
+<p>To check where your queued tasks sit without fetching the whole task list, GET <code>{BASEURL}/queuepositions.json</code> with the same <code>Authorization</code> header. The JSON answer holds <code>queuepositions</code>, a mapping of task id to queue position (0 is next to run), <code>queuedtypes</code>, a mapping of task id to request type, and <code>queueoffset</code>.</p>
 
 <p>An OpenAPI 3 schema for this API is generated from the server code and served at <a href="{% url 'schema' %}">/api/schema/</a>, with a browsable version at <a href="{% url 'swagger-ui' %}">/api/docs/</a>.</p>
 

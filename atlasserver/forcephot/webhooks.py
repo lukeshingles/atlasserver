@@ -33,8 +33,11 @@ if t.TYPE_CHECKING:
     from atlasserver.forcephot.models import Task
 
 # a callback is a courtesy, not part of finishing the task: keep it short so that a slow or
-# blackholed endpoint cannot hold a worker slot open
+# blackholed endpoint cannot hold a worker slot open. The socket timeout bounds each read and
+# write; the total bounds the whole exchange, because an endpoint that sends one byte every few
+# seconds satisfies the socket timeout for ever.
 CALLBACK_TIMEOUT_SECONDS = 10
+CALLBACK_TOTAL_TIMEOUT_SECONDS = 30
 
 MAX_CALLBACK_URL_LENGTH = 500
 
@@ -246,10 +249,13 @@ def send_task_callback(task: "Task", logfunc: t.Callable[[t.Any], None]) -> bool
     )
 
     opener = urllib.request.build_opener(_NoRedirects)
-    try:
+
+    def exchange() -> int:
         with opener.open(request, timeout=CALLBACK_TIMEOUT_SECONDS) as response:
-            logfunc(f"Callback for task {task.id} returned HTTP {response.status}")
-            return 200 <= response.status < 300
+            return int(response.status)
+
+    try:
+        status = _run_within_deadline(exchange, CALLBACK_TOTAL_TIMEOUT_SECONDS)
     except urllib.error.HTTPError as ex:
         # the endpoint answered, just not with a success status
         logfunc(f"Callback for task {task.id} returned HTTP {ex.code}")
@@ -257,3 +263,36 @@ def send_task_callback(task: "Task", logfunc: t.Callable[[t.Any], None]) -> bool
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as ex:
         logfunc(f"Callback for task {task.id} failed: {ex}")
         return False
+
+    logfunc(f"Callback for task {task.id} returned HTTP {status}")
+    return 200 <= status < 300
+
+
+def _run_within_deadline(exchange: t.Callable[[], int], deadline_seconds: float) -> int:
+    """Run the exchange in a daemon thread and return its status, or raise TimeoutError at the deadline.
+
+    A thread, as resolve_within_timeout does: a blocking socket read cannot be interrupted any
+    other way. A thread left behind holds its socket until the endpoint stops, and costs nothing
+    the caller waits for; the worker process exits when its task is done, and the thread with it.
+    """
+    answer: list[int] = []
+    failure: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            answer.append(exchange())
+        except Exception as ex:  # noqa: BLE001  # re-raised by the caller below, never swallowed
+            failure.append(ex)
+
+    thread = threading.Thread(target=run, name="callback-send", daemon=True)
+    thread.start()
+    thread.join(deadline_seconds)
+
+    if thread.is_alive():
+        msg = f"the endpoint did not complete the exchange within {deadline_seconds:.0f} seconds"
+        raise TimeoutError(msg)
+
+    if failure:
+        raise failure[0]
+
+    return answer[0]

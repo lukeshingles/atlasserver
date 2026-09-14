@@ -743,16 +743,15 @@ img.previewimage {
   margin-left: 1em;
 }
 
-/* the per-task status line and error text, which used to be written as inline styles in
-   tasklist.jsx and so could not be adjusted without rebuilding the bundle */
+/* the per-task status line and error text. Styled here and not inline in tasklist.jsx, so that
+   a change needs no rebuild of the bundle */
 .taskstatus {
   font-style: italic;
   margin-top: 1em;
 }
 
-/* Amber, matching the badge and the left edge of a running row. This line was red, which now sits on
-   a row whose other two marks of the same state are amber -- and red on a task that is running
-   perfectly well says failure, which is what the Error badge is for. */
+/* Amber, the colour of the badge and of the left edge of a running row. Red on a task that runs
+   says failure, and the Error badge says that. */
 .taskstatus.running {
   color: var(--bs-warning-text-emphasis);
 }
@@ -763,13 +762,11 @@ p.taskerror {
   margin-top: 1em;
 }
 
-/* Bootstrap 3's button palette, which the two frameworks disagree about: .btn-warning was orange
-   and is now yellow, .btn-primary was a muted blue and is now a brighter one, .btn-info was pale
-   blue and is now cyan. The class names on the queue page never changed, only what they render as.
-   Given as Bootstrap 5's own button custom properties, so the variants keep every other behaviour
-   (focus ring, disabled, active) that the framework gives them. Values are Bootstrap 3.4.1's, read
-   off the copy DRF still ships. :active takes Bootstrap 3's :hover shade, which is what it used.
-   .btn-danger is deliberately absent: the Delete and Cancel buttons keep Bootstrap 5's red. */
+/* Bootstrap 3's button palette: orange for .btn-warning, a muted blue for .btn-primary and a pale
+   blue for .btn-info. Given as Bootstrap 5's own button custom properties, so the variants keep
+   every other behaviour (focus ring, disabled, active) that the framework gives them. The values
+   are Bootstrap 3.4.1's, read off the copy DRF ships. :active takes Bootstrap 3's :hover shade.
+   .btn-danger is absent on purpose: the Delete and Cancel buttons keep Bootstrap 5's red. */
 .btn-primary {
   --bs-btn-bg: #337ab7;
   --bs-btn-border-color: #2e6da4;

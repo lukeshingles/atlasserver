@@ -262,19 +262,17 @@ def calculate_queue_positions() -> None:
 
             passnum += 1
 
-        # Only the rows that actually move. This used to write every queued row every time, which
-        # was harmless when it ran on submit or delete, but the task runner now calls it on a
-        # 30-second backstop: an unchanged queue was rewriting every row, and with it every row's
-        # task_modified_datetime -- which get_tasklist_etag() aggregates, so every user with a
-        # queued task had their ETag invalidated twice a minute and every open queue page was
-        # pushed from a cheap 304 into a full serialisation on its next poll.
+        # Only the rows that move. The task runner calls this on a 30-second backstop, and a write
+        # of an unchanged row changes its task_modified_datetime, which get_tasklist_etag()
+        # aggregates. Such a write invalidates the ETag of every user with a queued task twice a
+        # minute, and the next poll of each open queue page then pays a full serialisation.
         currentpositions = {tsk.id: tsk.queuepos_relative for tsk in queuedtasks}
         moved = {taskid: newpos for taskid, newpos in queuepos_updates.items() if currentpositions[taskid] != newpos}
 
         if moved:
-            # task_modified_datetime is written explicitly: it is an auto_now field, and auto_now
-            # is applied by Model.save(), not by a bulk write. Without it a reordering would be
-            # invisible to get_tasklist_etag() and a user could be served a stale queue position.
+            # This writes task_modified_datetime by name: Model.save() applies auto_now, and a
+            # bulk write does not. Without it get_tasklist_etag() cannot see a reordering, and the
+            # server could serve a stale queue position.
             now = datetime.datetime.now(datetime.UTC)
             Task.objects.bulk_update(
                 [

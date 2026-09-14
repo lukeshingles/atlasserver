@@ -1,9 +1,7 @@
 import typing as t
-import urllib.parse
 
+from django.contrib.auth.views import redirect_to_login
 from django.http import HttpResponseRedirect
-from django.urls import NoReverseMatch
-from django.urls import reverse
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
@@ -37,13 +35,7 @@ def custom_exception_handler(exc: Exception, context: dict[str, t.Any]) -> Respo
         # login form for the account they are already using
         return response
 
-    try:
-        login_url = reverse("rest_framework:login")
-    except NoReverseMatch:
-        return HttpResponseRedirect("/")
-
-    # quote, not escape: this is a URL, and HTML-escaping an "&" in the path into "&amp;" would send
-    # the user somewhere other than where they asked to go
-    nexturl = urllib.parse.quote(request.get_full_path())
-
-    return HttpResponseRedirect(f"{login_url}?next={nexturl}")
+    # the same helper login_required uses, so this sends the browser to settings.LOGIN_URL: the
+    # site's login page, with its failed-login budget. It quotes the next URL rather than
+    # HTML-escaping it, so an "&" in the query string survives the round trip.
+    return redirect_to_login(request.get_full_path())

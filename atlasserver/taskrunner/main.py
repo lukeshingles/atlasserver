@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Task runner for forced photometry jobs that are dispatched to ATLAS sc01 over ssh."""
+"""Task runner: it runs the forced photometry tasks on ATLAS sc01 over ssh."""
 
 import contextlib
 import datetime
@@ -16,7 +16,7 @@ from signal import signal
 from signal import SIGTERM
 
 import django
-import pandas as pd
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.db import models
@@ -24,7 +24,6 @@ from django.db import transaction
 from django.db.models import prefetch_related_objects
 from django.forms.models import model_to_dict
 
-from atlasserver import settings
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.taskrunner import status as runnerstatus
 
@@ -45,6 +44,10 @@ from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import send_task_callback
 
 TASK_MAXTIME_SECONDS: int = 4 * 3600
+
+# the exit status ssh itself gives when the connection fails, as opposed to the status of the
+# remote command
+SSH_CONNECTION_FAILED: int = 255
 
 # how often a running task asks the database whether it has been cancelled
 CANCEL_CHECK_SECONDS: float = 15.0
@@ -156,12 +159,7 @@ def task_exists(taskid: int) -> bool:
     return True
 
 
-def remove_task_resultfiles(
-    taskid: int,
-    parent_task_id: int | None = None,
-    request_type: str | None = None,
-    logfunc: t.Callable[[t.Any], None] = log_general,
-) -> None:
+def remove_task_resultfiles(taskid: int, logfunc: t.Callable[[t.Any], None] = log_general) -> None:
     """Delete any associated result files from a deleted task."""
     # Every file is named for its own task, whatever the type: the results (a .txt, .jpg and
     # perhaps a .pdf for forced photometry; a .zip for an image request; a .fits, .jpg and .txt
@@ -261,7 +259,30 @@ def build_ssostack_command(task, remoteresultfile: Path, remotedatafile: Path, r
     return atlascommand
 
 
-def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
+def result_file_problem(localresultfile: Path) -> str | None:
+    """Return why a forced photometry result file holds no usable data, or None if it does.
+
+    A plain read rather than pandas: this runs once per task in a process spawned for that task,
+    and importing pandas there cost each of them a quarter of a second and eighty megabytes.
+    """
+    lines = [line for line in localresultfile.read_text(errors="replace").splitlines() if line.strip()]
+    if not lines:
+        return "No data returned"
+
+    # the header names the columns; a row with more fields than the header is not a data row but
+    # a diagnostic line mixed into the output
+    columncount = len(lines[0].lstrip("#").split())
+    datarows = lines[1:]
+    if not datarows:
+        return "No data returned"
+
+    if any(len(row.split()) > columncount for row in datarows):
+        return "Could not parse the result file"
+
+    return None
+
+
+def runtask(task, logfunc) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
 
     returns (resultfilename, error_msg)
@@ -371,6 +392,13 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
     stdout, stderr = proc.communicate()
     logfunc(f"ssh finished after running for {time.perf_counter() - starttime:.1f} seconds")
 
+    if proc.returncode == SSH_CONNECTION_FAILED:
+        # the connection dropped, not the remote command. The remote tee has made the result file
+        # already, empty, and collecting it would finish the task with "No data returned" for a
+        # target that has data; a retry runs the command again
+        logfunc("ERROR: the ssh connection failed, so the task will be retried")
+        return None, None
+
     if stdout:
         stdoutlines = stdout.split("\n")
         logfunc(f"{REMOTE_SERVER} STDOUT: ({len(stdoutlines)} lines of output)")
@@ -440,20 +468,9 @@ def runtask(task, logfunc, **kwargs) -> tuple[Path | None, str | None]:
         # task failed somehow
         return None, None
 
-    if task.request_type == "FP":
-        try:
-            dfforcedphot = pd.read_csv(localresultfile, sep=r"\s+", escapechar="#", skipinitialspace=True)
-
-            if dfforcedphot.empty:
-                # file is just a header row without data
-                return localresultfile, "No data returned"
-        except pd.errors.EmptyDataError:
-            return localresultfile, "No data returned"
-        except pd.errors.ParserError:
-            # a ragged file (e.g. a diagnostic line mixed into the output) must not raise out of
-            # here, because the task would then never be marked finished and would be retried forever
-            logfunc("ERROR: could not parse the result file")
-            return localresultfile, "Could not parse the result file"
+    if task.request_type == "FP" and (problem := result_file_problem(localresultfile)):
+        logfunc(f"ERROR: {problem}")
+        return localresultfile, problem
 
     return localresultfile, None
 
@@ -691,9 +708,7 @@ def do_task(task, slotid: int) -> None:
         logfunc("Task was cancelled during execution (no longer in database)")
 
         # in case a result file was created, delete it
-        remove_task_resultfiles(
-            taskid=task.id, parent_task_id=task.parent_task_id, request_type=task.request_type, logfunc=logfunc
-        )
+        remove_task_resultfiles(taskid=task.id, logfunc=logfunc)
     else:
         runtask_duration = time.perf_counter() - runtask_starttime
 
@@ -717,6 +732,9 @@ def do_task(task, slotid: int) -> None:
             notify_finished(task=task, logfunc=logfunc)
 
         else:
+            # left unfinished on purpose, with no limit on the attempts: the dispatch loop picks
+            # the task up again, so a task that fails while the remote host is down completes
+            # when the host is back
             waittime = 5
             logfunc(f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries...")
             time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
@@ -964,8 +982,14 @@ def main() -> None:
             last_maintenancetime = time.perf_counter()
             # the sweep blocks this loop, so it refreshes the status file itself; without that a
             # sweep lasting longer than STATUS_WRITE_SECONDS * 4 makes the queue page tell every
-            # user that their tasks are not being processed while all the slots are still busy
-            do_maintenance(heartbeat=maintenance_heartbeat)
+            # user that their tasks are not being processed while all the slots are still busy.
+            # Caught for the reason the renumbering below is: an exception here leaves main(),
+            # the interpreter then waits for every running worker, and the supervisor restarts
+            # into the same sweep before any dispatch. A failed sweep is retried in an hour.
+            try:
+                do_maintenance(heartbeat=maintenance_heartbeat)
+            except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
+                logfunc(f"ERROR: the maintenance sweep failed: {ex}")
             refresh_status()
             printedwaiting = False
 
@@ -982,12 +1006,12 @@ def main() -> None:
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
             # caught, because this loop is what dispatches every task: unguarded, a lock timeout or
             # a bad queue state would take the exception out of main() and stop the runner, and the
-            # supervisor would restart it straight back into the same state. Queue positions going
-            # stale is a display problem; not dispatching anything is not.
+            # supervisor would restart it into the same state. Stale queue positions only change
+            # the display. An exception that stops this loop stops every dispatch.
             try:
                 taskqueue.calculate_queue_positions()
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task; stale
-                # queue positions are a display problem, not dispatching is not)
+                # queue positions only change the display)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
             else:
                 # only on success, and the value read *before* renumbering: a request that arrived

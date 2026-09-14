@@ -105,6 +105,10 @@ def get_httpd_pid() -> int | None:
     return None
 
 
+# how many times `apachectl start` is tried before `start` gives up
+START_ATTEMPTS = 30
+
+
 def run_command(commands: list[str], print_output: bool = True) -> int:
     """Run a command and print the output."""
     proc = subprocess.Popen(
@@ -194,13 +198,25 @@ def start() -> None:
 
     os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)
 
-    # socket might not be released, so try until it is
-    while run_command([f"{APACHEPATH / 'apachectl'}", "start"]):
-        print("Start command unsuccessful. Trying again in one second...")
+    # The socket might not be released yet, so try again for a while. Bounded: a start that fails
+    # for another reason (the port held by a stray httpd, a bad httpconf.txt, a moved interpreter)
+    # fails every time, and an unbounded loop presented that as a hang.
+    for attempt in range(START_ATTEMPTS):
+        if run_command([f"{APACHEPATH / 'apachectl'}", "start"]) == 0:
+            break
+        print(f"Start command unsuccessful ({attempt + 1} of {START_ATTEMPTS}). Trying again in one second...")
         time.sleep(1)
+    else:
+        print(f"ERROR: apachectl start failed {START_ATTEMPTS} times. See the messages above.")
+        sys.exit(1)
 
-    while not get_httpd_pid():
+    for _ in range(START_ATTEMPTS * 5):
+        if get_httpd_pid():
+            break
         time.sleep(0.2)
+    else:
+        print("ERROR: apachectl start succeeded but no httpd process appeared.")
+        sys.exit(1)
 
     print(f"ATLAS Apache server is running with pid {get_httpd_pid()}")
 

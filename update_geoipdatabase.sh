@@ -18,7 +18,14 @@ for edition in GeoLite2-ASN GeoLite2-City; do
     if curl --fail -J -L -u "$MAXMIND_ACCOUNT_ID:$MAXMIND_LICENSE_KEY" \
         "https://download.maxmind.com/geoip/databases/$edition/download?suffix=tar.gz" \
         --output "$tempdir/$edition.tar.gz"; then
-        tar -zxvf "$tempdir/$edition.tar.gz" -C "$tempdir"
+        # the exit status of tar is checked too: a partly extracted .mmdb would otherwise pass
+        # the guard below and be published over the working database
+        if ! tar -zxvf "$tempdir/$edition.tar.gz" -C "$tempdir"; then
+            echo "ERROR: failed to extract $edition.tar.gz"
+            exitcode=1
+            rm -rf "$tempdir"
+            continue
+        fi
         # copy alongside the target and rename, rather than cp'ing over it: the web server holds
         # the database memory-mapped, and cp truncates and rewrites the same inode, so a plain cp
         # rewrites the bytes underneath the running process. A rename leaves the old inode intact

@@ -225,7 +225,7 @@ describe('runnerMessage', () => {
     test('the outage is told to everybody, waiting or not', () => {
         // this one is not an answer about a queue position: it says what to expect of the site
         const message = runnerMessage({ stale: true, status_age_seconds: 600 }, { showQueue: false });
-        assert.match(message, /not currently processing jobs/);
+        assert.match(message, /does not process tasks at the moment/);
     });
 
     test('no answer yet says nothing', () => {
@@ -234,13 +234,13 @@ describe('runnerMessage', () => {
 
     test('a stopped runner says so, and how long it has been quiet', () => {
         const message = runnerMessage(healthy({ stale: true, status_age_seconds: 7200 }));
-        assert.match(message, /^The task runner is not currently processing jobs\. It last reported 2 hours ago\./);
+        assert.match(message, /^The task runner does not process tasks at the moment\. It last reported 2 hours ago\./);
         assert.match(message, /no need to submit them again/);
     });
 
     test('a stopped runner of unknown age still says it is stopped', () => {
         const message = runnerMessage({ stale: true });
-        assert.match(message, /^The task runner is not currently processing jobs\. Queued/);
+        assert.match(message, /^The task runner does not process tasks at the moment\. Queued/);
     });
 });
 
@@ -910,7 +910,7 @@ describe('the module as a page loads it', () => {
             answer({ ok: true, status: 200, json: () => Promise.resolve({ stale: true, status_age_seconds: 4000 }) });
             await settle();
             assert.equal(box.classList.contains('stale'), true);
-            assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
+            assert.match(window.document.getElementById('runnerstatus').textContent, /does not process tasks at the moment/);
         } finally {
             module?.stopPageStore();
             delete global.fetch;
@@ -997,7 +997,7 @@ describe('the box', () => {
         assert.equal(mark.hasAttribute('hidden'), false, 'the colours must not be the only sign of an outage');
         assert.equal(mark.getAttribute('aria-hidden'), 'true', 'the sentence next to it already says this');
         // the sentence is the same sentence, with the mark or without it
-        assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
+        assert.match(window.document.getElementById('runnerstatus').textContent, /does not process tasks at the moment/);
     });
 
     test('an unchanged sentence is not written again', () => {
@@ -1059,7 +1059,7 @@ describe('the box', () => {
         renderInto(box(), { stale: true, status_age_seconds: 3600 });
 
         assert.equal(box().classList.contains('stale'), true);
-        assert.match(window.document.getElementById('runnerstatus').textContent, /not currently processing jobs/);
+        assert.match(window.document.getElementById('runnerstatus').textContent, /does not process tasks at the moment/);
         assert.equal(note(), 'Standing note about the data.');
     });
 

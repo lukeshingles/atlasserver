@@ -2,6 +2,7 @@
 """Input a job data file and produce a zip of FITS images. This script is to be run on sc01."""
 
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -10,11 +11,22 @@ from pathlib import Path
 import pandas as pd
 
 
+def exit_on_signal(signum: int, frame: object) -> None:
+    """Turn the signal into SystemExit, so that the finally block below runs.
+
+    The task runner wraps this script in `timeout`, which sends SIGTERM. Python's default action
+    for SIGTERM ends the process at once, and the temporary folder stayed behind.
+    """
+    sys.exit(128 + signum)
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         print("ERROR: exactly two argument must be specified: [DATAFILE] ['red' or 'diff']")
         sys.exit(1)
         return
+
+    signal.signal(signal.SIGTERM, exit_on_signal)
 
     tmpfolder = Path(tempfile.mkdtemp())
     try:

@@ -13,6 +13,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from typing import override
@@ -37,10 +38,11 @@ from django.http import FileResponse
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
 from django.http import HttpResponseNotFound
-from django.http import HttpResponseNotModified
+from django.http import HttpResponseRedirect
 from django.http import JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
+from django.utils.cache import get_conditional_response
 from django.views.decorators.cache import cache_control
 from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
@@ -57,6 +59,7 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
+from rest_framework.renderers import JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -124,6 +127,13 @@ REGISTRATION_WINDOW_LIMIT: t.Final = 3
 # above, because a mistyped password must not use up a colleague's registration.
 REGISTRATION_ATTEMPT_LIMIT: t.Final = 20
 
+# Password reset requests allowed from one client address per window, and the shortest gap between
+# two reset mails to one address. Every POST sends a mail synchronously, so without a limit one
+# caller can flood an inbox and spend the mail quota that every other mail on the site shares.
+PASSWORD_RESET_WINDOW_SECONDS: t.Final = 600
+PASSWORD_RESET_WINDOW_LIMIT: t.Final = 5
+PASSWORD_RESET_INTERVAL_SECONDS: t.Final = 60
+
 # PDF plot renders the whole site may have in flight at once. A render holds its request thread
 # for up to PDF_PLOT_TIMEOUT_SECONDS, the view needs no credentials, and production has four
 # single-threaded workers: without a total, a few tasks with no .pdf yet could take every worker.
@@ -185,9 +195,29 @@ def origin_only_referrer(view):
     return wrapper
 
 
-def get_tasklist_etag(
-    request, user_id: int, *, shows_owner_fields: bool = True, min_queuepos_relative: int | None = None
-) -> str:
+def path_only(view):
+    """Redirect a request that carries a query string to the bare path, before the page cache.
+
+    For the chart endpoints, which read no parameter and cost a table scan and a bokeh figure to
+    build. cache_page keys its entries on the full URL, query string included, so every distinct
+    query string was a cache miss and a full rebuild, and a loop of them could occupy every worker
+    and cull the cache directory. The redirect costs nothing, and the bare path is what the stats
+    page requests.
+    """
+
+    @functools.wraps(view)
+    def wrapper(request, *args, **kwargs):
+        # the raw string, not request.GET: "?&" parses to an empty QueryDict but is still a
+        # distinct URL, and so a distinct cache key
+        if request.META.get("QUERY_STRING"):
+            return HttpResponseRedirect(request.path)
+
+        return view(request, *args, **kwargs)
+
+    return wrapper
+
+
+def get_tasklist_etag(request, user_id: int, *, min_queuepos_relative: int, shows_owner_fields: bool = True) -> str:
     """Return an etag that changes whenever anything the given user's task pages show changes.
 
     `shows_owner_fields` says which of the two bodies this tag describes. The serializer keeps
@@ -228,8 +258,8 @@ def get_tasklist_etag(
         usertasks["finishtimestamp__max"],
         usertasks["task_modified_datetime__max"],
         # the queue position rendered for a task is relative to the front of the global queue.
-        # The caller passes the offset when it has made it already for the serializer.
-        Task.min_queuepos_relative() if min_queuepos_relative is None else min_queuepos_relative,
+        # The caller has made the offset already, for the serializer, and passes it here.
+        min_queuepos_relative,
     )
 
 
@@ -377,8 +407,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
     # the prefetch feeds Task._imagerequest_task(), so serialising a page of tasks costs one query
     # for the whole page rather than one (in practice three) per task
+    # Task.live(): an archived row is one the owner deleted, and get_object() serves every action
+    # (retrieve, update, partial_update, destroy) from this queryset, so no action can read or
+    # write one. retrieve() checked is_archived by hand, and the write actions did not.
     queryset = (
-        Task.objects.all()
+        Task.live()
         .order_by("-timestamp", "-id")
         .select_related("user", "parent_task")
         .prefetch_related(Task.prefetch_imagerequests())
@@ -404,9 +437,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         # every row, and the serializer validates the list again. See webhooks._validated_urls.
         with callback_urls_validated_once():
             # a radeclist can hold up to 100 targets, so the limit must account for the size of
-            # this request rather than only the tasks that are already queued
-            if "radeclist" in request.data:
-                datalist = splitradeclist(request.data)
+            # this request rather than only the tasks that are already queued.
+            # Mapping: a JSON body can be a list or a string, where `in` is an element or substring
+            # test and the subscript in splitradeclist raised TypeError. The serializer below
+            # answers such a body with a 400 of its own.
+            if isinstance(request.data, Mapping) and "radeclist" in request.data:
+                # the context carries the request, which the serializer's stack-request rule reads
+                datalist = splitradeclist(request.data, context=self.get_serializer_context())
                 newtaskcount = len(datalist)
                 serializer = self.get_serializer(data=datalist, many=True)
             else:
@@ -426,15 +463,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @override
-    def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int | None = None) -> None:
+    def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int) -> None:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         """Create new task(s). create() passes the count of queued tasks it has made for its limit."""
         usertaskcount_before = usertaskcount
-        if usertaskcount_before is None:
-            usertaskcount_before = (
-                Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
-                if self.request.user and self.request.user.pk is not None
-                else 0
-            )
 
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
@@ -470,6 +501,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             for i, task in enumerate(newtasks):
                 task.userqueuedtasks_on_submit = usertaskcount_before + i
                 task.queuepos_relative = nextqueuepos + i
+                # a row inserted a moment ago has no image requests, so the response need not ask
+                task.prefetched_imagerequests = []
 
             # one statement rather than an UPDATE per task
             Task.objects.bulk_update(newtasks, ["userqueuedtasks_on_submit", "queuepos_relative"])
@@ -493,9 +526,9 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
     @override
     # pyrefly: ignore [bad-override]
-    # returns HttpResponseNotModified/NotFound as well as Response, which the
-    # base's annotation does not allow but DRF supports: finalize_response passes
-    # anything that is not a Response straight through.
+    # returns HttpResponseNotModified as well as Response, which the base's annotation does not
+    # allow but DRF supports: finalize_response passes anything that is not a Response straight
+    # through.
     def list(self, request: Request, *args: t.Any, **kwargs: t.Any):
         """List tasks belonging to the current user."""
         if request.user.is_authenticated:
@@ -523,8 +556,10 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         # one aggregate for the entity-tag and the serializer both
         queueoffset = Task.min_queuepos_relative()
         etag = get_tasklist_etag(request, userpk, min_queuepos_relative=queueoffset)
-        if etag == request.META.get("HTTP_IF_NONE_MATCH"):
-            return HttpResponseNotModified()
+        # get_conditional_response applies the weak comparison and accepts a list of tags, which
+        # a plain string equality did not: a client that sent W/"..." never got its 304
+        if (notmodified := get_conditional_response(request, etag=etag)) is not None:
+            return notmodified
 
         page = self.paginate_queryset(listqueryset)
 
@@ -540,13 +575,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
     @override
     # pyrefly: ignore [bad-override]
-    # returns HttpResponseNotModified/NotFound as well as Response, which the
-    # base's annotation does not allow but DRF supports: finalize_response passes
-    # anything that is not a Response straight through.
+    # returns HttpResponseNotModified as well as Response, which the base's annotation does not
+    # allow but DRF supports: finalize_response passes anything that is not a Response straight
+    # through.
     def retrieve(self, request: Request, *args: t.Any, **kwargs: t.Any):
         instance = self.get_object()
-        if instance.is_archived:
-            return HttpResponseNotFound("Page not found")
 
         if request.accepted_renderer.format == "html":
             return Response(
@@ -566,8 +599,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             shows_owner_fields=instance.is_owned_by(request.user),
             min_queuepos_relative=queueoffset,
         )
-        if etag == request.META.get("HTTP_IF_NONE_MATCH"):
-            return HttpResponseNotModified()
+        if (notmodified := get_conditional_response(request, etag=etag)) is not None:
+            return notmodified
 
         serializer = self.get_serializer(instance, context=self.serializer_context(queueoffset))
         return Response(serializer.data, headers={"ETag": etag})
@@ -630,25 +663,31 @@ class RequestImages(APIView):
                 )
                 return JsonResponse({"non_field_errors": msg}, status=429)
 
-            if not parent_task.error_msg and parent_task.finishtimestamp:
-                newtask = parent_task.create_imagerequest(
-                    user=request.user, from_api=request_is_from_api(request), **client_location_fields(self.request)
-                )
-                if newtask is None:
-                    # no data file, so nothing could be fetched: the row is rolled back rather than
-                    # queued for a run that is certain to fail
-                    transaction.set_rollback(True)
-                    msg = "The forced photometry data file for this task is no longer available."
-                    return JsonResponse({"non_field_errors": msg}, status=404)
+            if parent_task.error_msg or not parent_task.finishtimestamp:
+                # the 404 the schema documents. A redirect here was the same answer as a created
+                # request, so a script that asked too early believed that images were on their way
+                msg = "No such finished forced photometry task."
+                return JsonResponse({"non_field_errors": msg}, status=404)
 
-                # after the commit: the runner could otherwise recalculate without the new row and
-                # count the request as handled
-                transaction.on_commit(request_queue_recalc)
-                redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
+            newtask = parent_task.create_imagerequest(
+                user=request.user, from_api=request_is_from_api(request), **client_location_fields(self.request)
+            )
+            if newtask is None:
+                # no data file, so nothing could be fetched: the row is rolled back rather than
+                # queued for a run that is certain to fail
+                transaction.set_rollback(True)
+                msg = "The forced photometry data file for this task is no longer available."
+                return JsonResponse({"non_field_errors": msg}, status=404)
+
+            # after the commit: the runner could otherwise recalculate without the new row and
+            # count the request as handled
+            transaction.on_commit(request_queue_recalc)
+            redirurl = replace_query_param(reverse("task-list"), "newids", str(newtask.id))
 
         return redirect(redirurl, request=request)
 
 
+@path_only
 @cache_page(60 * 60 * 24, cache="usagestats")
 def statscoordchart(request):
     # deferred for the same reason as atlasserver.taskrunner.main above: bokeh pulls in numpy and a
@@ -658,7 +697,8 @@ def statscoordchart(request):
     import bokeh.plotting
     from bokeh.embed import json_item
 
-    tasks = list(Task.objects.all().order_by("-timestamp")[:20000].select_related("user"))
+    # Task.live(): an archived task is one its owner deleted, and no reader serves that
+    tasks = list(Task.live().order_by("-timestamp")[:20000].select_related("user"))
 
     dictsource: dict[str, Any] = {
         "ra": [tsk.ra for tsk in tasks],
@@ -760,6 +800,7 @@ def _usage_arm_ticks(peak: float) -> list[float]:
 # the same 15 minutes as statsshortterm, which windows over the same data. This was 30 seconds,
 # which had the most expensive chart on the stats page being rebuilt from a 14-day scan of the task
 # table for practically every visitor.
+@path_only
 @cache_page(60 * 15, cache="usagestats")
 def statsusagechart(request):
     # deferred: see statscoordchart
@@ -785,7 +826,18 @@ def statsusagechart(request):
 
     # A task the runner has started at least once and has not finished is a different fact from a
     # task that is waiting its turn: the first says the runner is letting go of work it picked up.
-    # main.py increments attempt_count as it starts a task, so a count above zero is that signal.
+    # main.py increments attempt_count as it starts a task, so a count above zero is that signal,
+    # except for the tasks the runner is running at this moment, which the status file names. Read
+    # once; a snapshot that cannot be read, or one too old to describe a live runner, names no
+    # task, and a running task then counts as a fault until the next render.
+    running_taskids: list[int] = []
+    with contextlib.suppress(OSError, KeyError, TypeError, ValueError):
+        snapshot, age_seconds = runnerstatus.read_status()
+        if age_seconds <= runnerstatus.STALE_AFTER_SECONDS:
+            running_taskids = [int(taskid) for taskid in snapshot.get("running_taskids", [])]
+    waiting = unfinished.filter(attempt_count=0) | unfinished.filter(id__in=running_taskids)
+    stalled = unfinished.filter(attempt_count__gte=1).exclude(id__in=running_taskids)
+
     counts = {}
     for origin, from_api in (("api", True), ("web", False)):
         # Each half of the chart counts the image requests of its own submitters. An unfiltered
@@ -799,8 +851,8 @@ def statsusagechart(request):
         counts[origin] = {
             "fp": get_days_ago_counts(finished.filter(from_api=from_api, request_type="FP")),
             "img": get_days_ago_counts(finished.filter(from_api=from_api).exclude(request_type="FP")),
-            "queue": get_days_ago_counts(unfinished.filter(from_api=from_api, attempt_count=0)),
-            "stall": get_days_ago_counts(unfinished.filter(from_api=from_api, attempt_count__gte=1)),
+            "queue": get_days_ago_counts(waiting.filter(from_api=from_api)),
+            "stall": get_days_ago_counts(stalled.filter(from_api=from_api)),
         }
 
     # The API carries about a hundred times the traffic of the web form, so the two halves cannot
@@ -1126,34 +1178,51 @@ def statsshortterm(request):
     return render(request, "statsshortterm.html", dictparams)
 
 
-@login_required
-def queuepositions(request):
+class QueuePositions(APIView):
     """Return just the queue position of each of the current user's unfinished tasks.
 
     The queue page polls the full task list every couple of seconds, and most of the time the only
     thing that has changed is how far up the queue the user's tasks have moved. This endpoint
     answers that question with two indexed queries and a few hundred bytes, rather than a page of
     fully serialised tasks and the filesystem stats that go with them.
-    """
-    queueoffset = Task.min_queuepos_relative()
-    # the same set the offset was measured against, so the subtraction below cannot drift
-    positions = (
-        Task.queued()
-        .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
-        .values_list("id", "queuepos_relative", "request_type")
-    )
 
-    return JsonResponse(
-        {
-            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
-            # What each of those tasks is. Dispatch runs one task per user at a time, so a user's
-            # own tasks ahead of this one are waited through in series -- and an IMGZIP among them
-            # is a quarter of an hour of that wait where an FP task is a minute. Another column on
-            # a query already being made, and only ever this user's own tasks.
-            "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
-            "queueoffset": queueoffset,
-        }
+    A DRF view, so that a token or a Basic header authenticates here as it does on the rest of the
+    API: the API guide documents this endpoint for scripts, and a plain login_required view saw
+    only the session and sent every script to the HTML login page.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    renderer_classes = [JSONRenderer]
+    # No throttle, as before: the queue page polls this every two seconds per tab, and under the
+    # read budget of the task list a user with many tabs open would have every read refused. The
+    # answer is two indexed queries for a signed-in user only.
+    throttle_classes = ()
+
+    @extend_schema(
+        responses={200: OpenApiResponse(description="The queue position and request type of each queued task")},
+        summary="The queue positions of the caller's unfinished tasks",
     )
+    def get(self, request):
+        queueoffset = Task.min_queuepos_relative()
+        # the same set the offset was measured against, so the subtraction below cannot drift
+        positions = (
+            Task.queued()
+            .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
+            .values_list("id", "queuepos_relative", "request_type")
+        )
+
+        return Response(
+            {
+                "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
+                # What each of those tasks is. Dispatch runs one task per user at a time, so a
+                # user's own tasks ahead of this one are waited through in series -- and an IMGZIP
+                # among them is a quarter of an hour of that wait where an FP task is a minute.
+                # Another column on a query already being made, and only ever this user's own
+                # tasks.
+                "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
+                "queueoffset": queueoffset,
+            }
+        )
 
 
 # A browser can answer a second request from its cache, for one write interval of the task runner.
@@ -1217,8 +1286,8 @@ def taskrunnerstatus(request):
 
     # A browser that holds the current version asks with If-None-Match, and the answer is 304 with
     # no body. This comes before the medians and the count, because a 304 makes both unnecessary.
-    if not stale and request.headers.get("If-None-Match") == etag:
-        return HttpResponseNotModified()
+    if not stale and (notmodified := get_conditional_response(request, etag=etag)) is not None:
+        return notmodified
 
     # Only when the task runner runs. A wait estimate is a claim about work in progress. When the
     # status file is stale, no work is in progress, and the queue page discards the figure. A
@@ -1330,6 +1399,46 @@ class SiteOriginPasswordResetView(PasswordResetView):
                 "domain": host,
                 "site_name": host,
             }
+
+    @override
+    def post(self, request, *args, **kwargs):
+        """Meter the requests of one client address, like the registration page does.
+
+        Counted before the form is bound, so that a rejected submission spends it too.
+        """
+        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+        attempts = count_in_window(f"passwordreset-{clientkey}", PASSWORD_RESET_WINDOW_SECONDS)
+
+        if attempts > PASSWORD_RESET_WINDOW_LIMIT:
+            response = self.render_to_response(
+                self.get_context_data(
+                    form=self.get_form_class()(),
+                    limitmessage=(
+                        "Too many password reset requests from this address. Please wait a few "
+                        "minutes before trying again."
+                    ),
+                ),
+                status=429,
+            )
+            response["Retry-After"] = str(int(PASSWORD_RESET_WINDOW_SECONDS))
+            return response
+
+        return super().post(request, *args, **kwargs)
+
+    @override
+    def form_valid(self, form):
+        """Send at most one reset mail per address per interval; report every request as sent.
+
+        The same shape as resend_verification: the throttle cache holds one key per address, and
+        a request inside the interval gets the same page as one that sent a mail, so a stranger
+        cannot learn from the answer whether the address is registered.
+        """
+        emailkey = hashlib.sha256(form.cleaned_data["email"].lower().encode()).hexdigest()
+        may_send = caches["throttle"].add(f"passwordreset-{emailkey}", True, timeout=PASSWORD_RESET_INTERVAL_SECONDS)
+        if not may_send:
+            return HttpResponseRedirect(self.get_success_url())
+
+        return super().form_valid(form)
 
 
 def register(request):
@@ -1838,8 +1947,8 @@ def resultplotdatajs(request, taskid):
     # variable: $" until midnight. Quoted, because a bare token is not a valid entity-tag.
     etag = None if settings.DEBUG else entity_tag(settings.STATIC_VERSION, task.task_modified_datetime)
 
-    if "HTTP_IF_NONE_MATCH" in request.META and etag == request.META["HTTP_IF_NONE_MATCH"]:
-        return HttpResponseNotModified()
+    if etag is not None and (notmodified := get_conditional_response(request, etag=etag)) is not None:
+        return notmodified
 
     strjs = caches["taskderived"].get(resultplotdatajs_cachekey(taskid), default=None)
 
@@ -2047,13 +2156,21 @@ def taskpdfplot(request, taskid):
         item = Task.live().get(id=taskid)
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Page not found")
+    # the same rule as the serializer's pdfplot_url: a task that finished with an error has a data
+    # file with no points, and a render of it makes no PDF, so nothing is cached and every request
+    # started matplotlib again
     if resultfile := item.localresultfile():
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
         pdfpath = resultfilepath.with_suffix(".pdf")
 
         # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
-        # refresh plots after a change to plot_atlas_fp
-        if not pdfpath.is_file() and (refusal := _render_pdfplot(taskid, resultfilepath, pdfpath)) is not None:
+        # refresh plots after a change to plot_atlas_fp. A plot that exists is served whatever the
+        # task's error_msg says; only a render is refused for a task that finished with an error.
+        if (
+            not pdfpath.is_file()
+            and not item.error_msg
+            and (refusal := _render_pdfplot(taskid, resultfilepath, pdfpath)) is not None
+        ):
             return refusal
 
         if pdfpath.is_file():
