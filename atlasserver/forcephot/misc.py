@@ -27,13 +27,22 @@ TERMINATE_GRACE_SECONDS: t.Final = 5.0
 PLOT_PROCESS_CONTEXT: t.Final = multiprocessing.get_context("spawn")
 
 
-def splitradeclist(data, form=None):
+def splitradeclist(data, context=None):
+    """Return one row of task data per target in a submission's radeclist.
+
+    `context` is the serializer context of the submitting view. The per-row validation below reads
+    the request from it: the stack-request rule answers for the caller, and without the request it
+    answers for nobody, so every stack request from the queue page was refused.
+    """
     from rest_framework import serializers
 
     from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 
     if "radeclist" not in data:
         return [data]
+
+    if context is None:
+        context: dict[str, t.Any] = {}
 
     if not isinstance(data["radeclist"], str):
         raise serializers.ValidationError(
@@ -77,7 +86,7 @@ def splitradeclist(data, form=None):
             ForcePhotTaskSerializer.validate_mpc_name(mpc_name, prefix=f"Error on line {index}: ", field="radeclist")
             datalist.append(newrow)
 
-            serializer = ForcePhotTaskSerializer(data=newrow, many=False)
+            serializer = ForcePhotTaskSerializer(data=newrow, many=False, context=context)
             serializer.is_valid(raise_exception=True)
             continue
 
@@ -99,6 +108,18 @@ def splitradeclist(data, form=None):
                         )
                     }
                 )
+            # a line of three or more columns is not a target. The first two were taken before,
+            # and astrocalc reads '00 52' as decimal degrees, so '00 52 20.21 +56 34' (the arc
+            # seconds of the Dec left out) queued a task at RA 0 Dec 52 with no error.
+            if len(row) > 2:
+                raise serializers.ValidationError(
+                    {
+                        "radeclist": (
+                            f"Error on line {index}: Found {len(row)} columns, but a line holds one RA and one Dec."
+                            " Separate them by a comma, or give a sexagesimal pair as 'hh mm ss.s +dd mm ss.s'."
+                        )
+                    }
+                )
             try:
                 newrow = data.copy()
                 newrow["ra"] = converter.ra_sexegesimal_to_decimal(ra=row[0])
@@ -108,7 +129,7 @@ def splitradeclist(data, form=None):
                 ForcePhotTaskSerializer.validate_dec(
                     newrow["dec"], prefix=f"Error on line {index}: ", field="radeclist"
                 )
-                serializer = ForcePhotTaskSerializer(data=newrow, many=False)
+                serializer = ForcePhotTaskSerializer(data=newrow, many=False, context=context)
                 serializer.is_valid(raise_exception=True)
                 datalist.append(newrow)
 

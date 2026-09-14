@@ -195,13 +195,17 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return value
 
+    # The ranges astrocalc applies on the radeclist path, so that a JSON submission cannot queue a
+    # position the sky does not have and the runner run force.sh on it.
     @staticmethod
     def validate_ra(value, prefix="", field="ra"):
         if value is None or value == "":
             return value
 
-        if not is_finite_float(value):
-            raise serializers.ValidationError({field: f"{prefix}ra must be a finite floating-point number."})
+        if not is_finite_float(value) or not 0.0 <= float(value) <= 360.0:
+            raise serializers.ValidationError(
+                {field: f"{prefix}ra must be a finite floating-point number of degrees between 0 and 360."}
+            )
 
         return value
 
@@ -210,8 +214,10 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         if value is None or value == "":
             return value
 
-        if not is_finite_float(value):
-            raise serializers.ValidationError({field: f"{prefix}dec must be a finite floating-point number."})
+        if not is_finite_float(value) or not -90.0 <= float(value) <= 90.0:
+            raise serializers.ValidationError(
+                {field: f"{prefix}dec must be a finite floating-point number of degrees between -90 and 90."}
+            )
 
         return value
 
@@ -265,15 +271,17 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return value
 
     def submitted(self, attrs, field, default=None):
-        """Return the value of a field, falling back to the stored task for a partial update.
+        """Return the value of a field, falling back to the stored task on an update.
 
-        Without the fallback, a PATCH is judged only on the fields it changes, so changing
-        (say) just the comment of an existing task is rejected for having no target.
+        Without the fallback, an update is judged only on the fields it changes, so changing
+        (say) just the comment of an existing task is rejected for having no target. On a PUT as
+        much as on a PATCH: every field is optional, and update() writes only the fields sent, so
+        the row after either is the stored row with those fields changed.
         """
         if field in attrs:
             return attrs[field]
 
-        if self.partial and self.instance is not None:
+        if self.instance is not None:
             return getattr(self.instance, field, default)
 
         return default
@@ -329,6 +337,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         if becomes_stack and not stack_requests_allowed(self.context):
             msg = "Image stack requests are not enabled for this account."
             raise serializers.ValidationError(msg)
+
+        # A task keeps its kind of image request. MAX_USER_IMGZIP_TASKS counts live IMGZIP rows at
+        # creation, so a request changed to FP and back would not be counted against it.
+        if self.instance is not None and (self.instance.request_type == "IMGZIP") != (request_type == "IMGZIP"):
+            msg = "The request_type of an image request cannot be changed, and a task cannot become one."
+            raise serializers.ValidationError({"request_type": msg})
 
         if request_type == "IMGZIP":
             # An image request is not created here, and the message says so: parent_task_id is a

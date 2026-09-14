@@ -2,7 +2,9 @@ import typing as t
 from collections import OrderedDict
 from typing import override
 
+from django.core.exceptions import ValidationError
 from django.db.models import QuerySet
+from rest_framework.exceptions import NotFound
 from rest_framework.pagination import _reverse_ordering
 from rest_framework.pagination import CursorPagination
 from rest_framework.request import Request
@@ -86,7 +88,7 @@ class TaskPagination(CursorPagination):
             else:
                 kwargs = {f"{order_attr}__gt": current_position}
 
-            queryset = queryset.filter(**kwargs)
+            queryset = self._filter_by_position(queryset, kwargs)
 
         # If we have an offset cursor then offset the entire page by that amount.
         # We also always fetch an extra item in order to determine if there is a
@@ -112,7 +114,7 @@ class TaskPagination(CursorPagination):
         if reverse:
             # rows before the boundary, minus those skipped by the offset and the page itself
             totalbefore = (
-                queryset_full.filter(**strictlybefore).count()
+                self._filter_by_position(queryset_full, strictlybefore).count()
                 if current_position is not None
                 else (self.querysetcount or 0)  # a positionless reverse cursor pages from the end
             )
@@ -120,7 +122,7 @@ class TaskPagination(CursorPagination):
         else:
             prev_records = offset
             if current_position is not None:
-                prev_records += queryset_full.filter(**beforeorat).count()
+                prev_records += self._filter_by_position(queryset_full, beforeorat).count()
 
         self.pagefirsttaskposition = prev_records
         # any cursor (including the offset-only kind that paging through tied values produces)
@@ -166,6 +168,39 @@ class TaskPagination(CursorPagination):
             self.display_page_controls = True
 
         return self.page
+
+    def _filter_by_position(self, queryset: QuerySet[Task], kwargs: dict[str, t.Any]) -> QuerySet[Task]:
+        """Filter on the cursor's position, or answer an invalid cursor with the 404 DRF gives one.
+
+        The position is the client's string. decode_cursor checks the offset and the direction and
+        not the position, and an id or timestamp column refuses a value it cannot convert with a
+        ValueError or a ValidationError, which answered 500 and mailed the administrators.
+        """
+        try:
+            return queryset.filter(**kwargs)
+        except (ValueError, ValidationError) as ex:
+            raise NotFound(self.invalid_cursor_message) from ex
+
+    @override
+    def get_paginated_response_schema(self, schema: dict[str, t.Any]) -> dict[str, t.Any]:
+        """Describe the two fields get_paginated_response adds, so the published schema has them."""
+        base = super().get_paginated_response_schema(schema)
+        base["properties"] = {
+            "next": base["properties"]["next"],
+            "previous": base["properties"]["previous"],
+            "pagefirsttaskposition": {
+                "type": "integer",
+                "description": "How many tasks are listed before the first task of this page.",
+                "example": 0,
+            },
+            "taskcount": {
+                "type": "integer",
+                "description": "How many tasks the whole list holds.",
+                "example": 123,
+            },
+            "results": base["properties"]["results"],
+        }
+        return base
 
     @override
     def get_previous_link(self) -> str | None:

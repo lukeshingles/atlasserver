@@ -121,7 +121,7 @@ export function runnerMessage(status, { showQueue = true } = {}) {
         const age = status.status_age_seconds != null
             ? ' It last reported ' + describeAge(status.status_age_seconds) + '.'
             : '';
-        return 'The task runner is not currently processing jobs.' + age
+        return 'The task runner does not process tasks at the moment.' + age
             + ' Queued tasks will start once it is back; there is no need to submit them again.';
     }
 

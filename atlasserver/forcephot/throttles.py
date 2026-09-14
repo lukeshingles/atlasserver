@@ -4,6 +4,7 @@ import typing as t
 from typing import override
 
 from django.core.cache import caches
+from django.views.decorators.debug import sensitive_variables
 from rest_framework import exceptions
 from rest_framework.authentication import BasicAuthentication
 
@@ -95,21 +96,38 @@ def note_login_failure(request: t.Any) -> int:
     return count_in_window(login_failures_key(request), LOGIN_FAILURE_WINDOW_SECONDS)
 
 
+@sensitive_variables("password")
 def password_was_wrong(username: object, password: object) -> bool:
     """Return whether a refused login offered a wrong password, rather than a refused account.
 
     Only a wrong password is a guess. The backends refuse an inactive account, such as one not yet
     verified, and the admin one without staff access, in the same way as a wrong password; so the
     password is checked here against the named account. No password offered is no guess.
+
+    A username or password that is a number counts as its text: the token endpoint's serializer
+    reads a JSON number as a string, so a numeric username is a real account there.
     """
     # here rather than at the top: this module is imported while the apps are still loading
     from django.contrib.auth import get_user_model
 
+    if isinstance(username, int | float) and not isinstance(username, bool):
+        username = str(username)
+    if isinstance(password, int | float) and not isinstance(password, bool):
+        password = str(password)
+
     if not isinstance(username, str) or not isinstance(password, str) or not username or not password:
         return False
 
-    user = get_user_model()._default_manager.filter(username=username).first()  # noqa: SLF001
-    return user is None or not user.check_password(password)
+    usermodel = get_user_model()
+    user = usermodel._default_manager.filter(username=username).first()  # noqa: SLF001
+    if user is None:
+        # the same hash the check below costs, so that the answer takes as long for a name that
+        # has no account as for one that has: ModelBackend does the same, and this check would
+        # otherwise undo it and tell a caller which usernames exist
+        usermodel().set_password(password)
+        return True
+
+    return not user.check_password(password)
 
 
 class ThrottledBasicAuthentication(BasicAuthentication):
@@ -120,6 +138,7 @@ class ThrottledBasicAuthentication(BasicAuthentication):
     """
 
     @override
+    @sensitive_variables("password")
     def authenticate_credentials(self, userid: str, password: str, request: t.Any = None) -> t.Any:
         if request is not None and login_failures_exceeded(request):
             raise exceptions.Throttled(detail=LOGIN_LIMIT_MESSAGE)

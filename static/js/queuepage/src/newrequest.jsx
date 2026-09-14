@@ -194,7 +194,12 @@ export function NewRequest({ allow_stack_rock, fetchData }) {
                             newtaskids.push(task.id);
                         })
                     });
-                    window.history.pushState({}, document.title, api_url_base);
+                    // only when the page moves: the form is usually on the task list already, and a
+                    // push of the URL the page is at leaves an entry that Back appears to do
+                    // nothing for
+                    if (api_url_base != window.location.href) {
+                        window.history.pushState({}, document.title, api_url_base);
+                    }
                     fetchData(true);
                 }
                 else if (response.status == 400) {

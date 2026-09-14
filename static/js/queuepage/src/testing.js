@@ -125,7 +125,6 @@ export function setupDom({ url = 'http://testserver/queue/' } = {}) {
     global.user_id = 1;
     global.allow_stack_rock = false;
     global.user_is_active = true;
-    global.hidden = 'hidden';
     global.newtaskids = [];
     global.jslcdataglobal = {};
     global.jslabelsglobal = {};

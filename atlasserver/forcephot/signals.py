@@ -14,10 +14,13 @@ Model.save() path is covered. If you do activate accounts with update(), delete 
 import typing as t
 
 from django.conf import settings
+from django.db.models import Q
 from django.db.models.signals import post_save
+from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
 from atlasserver.forcephot.models import PendingEmailVerification
+from atlasserver.forcephot.models import Task
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL, dispatch_uid="forcephot.clear_verification_marker")
@@ -31,3 +34,23 @@ def clear_verification_marker(sender: t.Any, instance: t.Any, **kwargs: t.Any) -
 
     if instance.is_active:
         PendingEmailVerification.objects.filter(user=instance).delete()
+
+
+@receiver(pre_delete, sender=settings.AUTH_USER_MODEL, dispatch_uid="forcephot.reclaim_task_files")
+def reclaim_task_files(sender: t.Any, instance: t.Any, **kwargs: t.Any) -> None:
+    """Remove the result files of the tasks that go with an account, before the cascade takes the rows.
+
+    The collector deletes the rows with bulk SQL and never calls Task.delete(), so the data files,
+    the private input copies and the cached plot data stayed on disk, where the web server serves
+    the results without Django. The image requests that other users made from this account's tasks
+    go with them too, by cascade, so their files are reclaimed here as well.
+    """
+    going = (
+        Task.objects.filter(Q(user=instance) | Q(parent_task__user=instance))
+        .select_related("parent_task")
+        .prefetch_related(Task.prefetch_imagerequests())
+    )
+    goingids = {task.id for task in going}
+    for task in going:
+        task.delete_result_files(going=goingids)
+        task.forget_derived_cache()

@@ -24,6 +24,21 @@ http to a host other than localhost -- the API is unavailable there, so the butt
     button.setAttribute('aria-live', 'polite');
     button.setAttribute('aria-label', 'Copy code to clipboard');
 
+    // Put the code under the selection, so that the "Press Ctrl-C" the failure path offers has
+    // something to copy: the focus is on the button, and with nothing selected a keyboard copy
+    // takes whatever the reader had selected before, or nothing.
+    function selectCode() {
+      var selection = window.getSelection();
+      if (!selection) {
+        return;
+      }
+
+      var range = document.createRange();
+      range.selectNodeContents(code);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
     var restore = null;
     button.addEventListener('click', function () {
       navigator.clipboard.writeText(code.textContent).then(
@@ -33,6 +48,7 @@ http to a host other than localhost -- the API is unavailable there, so the butt
         function () {
           // the browser can refuse the write (permissions, or a document without focus), and a
           // button that silently does nothing is worse than one that says so
+          selectCode();
           button.textContent = 'Press Ctrl-C';
         }
       );

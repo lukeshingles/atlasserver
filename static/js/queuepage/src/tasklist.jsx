@@ -482,7 +482,11 @@ export const Task = React.memo(function Task(props) {
                     debug_log('requestimages created task', newimgtask_id);
                     const new_page_url = new URL(response.url);
                     new_page_url.searchParams.delete('newids');
-                    window.history.pushState({}, document.title, new_page_url);
+                    // only when the page moves: a push of the URL the page is at leaves an entry
+                    // that Back appears to do nothing for
+                    if (new_page_url.href != window.location.href) {
+                        window.history.pushState({}, document.title, new_page_url);
+                    }
                     props.fetchData(true);
                 } else {
                     // the body is not always JSON (e.g. a plain-text 404), and DRF reports its
@@ -1021,6 +1025,13 @@ export function TaskPage() {
             return;
         }
 
+        // A visitor who is not signed in has no queue to ask about, and the endpoint refuses the
+        // request. The back-off below engages only after an answer, so without this a shared
+        // task link was polled at the full rate for as long as the page stayed open.
+        if (user_id < 0) {
+            return;
+        }
+
         /*
          * Skipped only when the last answer said the queue is empty and no row on screen could change
          * that. Anything else -- including not having asked yet -- is worth a request.
@@ -1093,7 +1104,7 @@ export function TaskPage() {
                  * it whole left the count measuring against a set from before the submission, missing
                  * the one task the user was waiting on.
                  */
-                if (!document[hidden] || queuedIdsRef.current == null) {
+                if (!document.hidden || queuedIdsRef.current == null) {
                     queuedIdsRef.current = queuedids;
                 } else {
                     const alreadyknown = new Set(queuedIdsRef.current);
@@ -1216,7 +1227,7 @@ export function TaskPage() {
      */
     const countFinishedWhileAway = React.useCallback(() => {
         const waiting = queuedIdsRef.current;
-        if (!document[hidden] || waiting == null || waiting.length == 0) {
+        if (!document.hidden || waiting == null || waiting.length == 0) {
             return;
         }
 
@@ -1241,7 +1252,7 @@ export function TaskPage() {
                 // Without it a response landing just after the user came back would put a count in
                 // the title of a tab they are looking at, and handleVisibilityChange has already run
                 // and will not run again until the next time they leave and return.
-                if (!document[hidden] || data == null || data.queuepositions == null) {
+                if (!document.hidden || data == null || data.queuepositions == null) {
                     return;
                 }
 
@@ -1271,7 +1282,7 @@ export function TaskPage() {
      * right way to be wrong here -- the alternative repeats a completion the user has already seen.
      */
     const handleVisibilityChange = React.useCallback(() => {
-        if (document[hidden]) {
+        if (document.hidden) {
             return;
         }
 
@@ -1371,8 +1382,10 @@ export function TaskPage() {
                     if (response.status == 404) {
                         // a handled case (the viewed task was deleted), not a server error: without
                         // this return it fell through to the message below and flashed
-                        // "Server error (HTTP 404)" during a perfectly normal navigation
-                        window.history.pushState({}, document.title, api_url_base);
+                        // "Server error (HTTP 404)" during a perfectly normal navigation.
+                        // replaceState, not pushState: the entry for the deleted task is replaced,
+                        // so Back does not land on it, get 404 again and push the list again.
+                        window.history.replaceState({}, document.title, api_url_base);
                         setState({ scrollToTopAfterUpdate: true });
                         fetchData(true);
                         return null;

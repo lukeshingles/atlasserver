@@ -1,9 +1,8 @@
 """Email address verification for new registrations.
 
-Registration used to log the new account straight in without proving the address belonged to
-whoever typed it, so the address that receives job completion mail (and password resets) was
-unverified. Anyone could sign up as someone else's address, and the owner's only sign would be
-unexpected mail from a service they had never used.
+A new account stays inactive until its owner follows a link sent to the address. The address
+receives the result mail and the password resets, so an unproved address would let anyone sign up
+with the address of somebody else.
 
 Django ships no verification flow, but it ships the pieces: the same signed-token machinery the
 password reset views use. Reusing it means no new column on auth_user and nothing to expire by

@@ -87,13 +87,6 @@
         return mjd;
     }
 
-    function mjdUTC(Y, M, D, H, m, s, ms) { // M is Jan = 0, Feb = 1, etc.
-        // Add local hour offset to `H` or minute offset to `m` for local time
-        const jd = Date.UTC.apply(Date, arguments) / 86400000 + 2440587.5;
-        const mjd = jd - 2400000.5;
-        return mjd;
-    }
-
     function dateFromMJD(mjd) { // Any time of day to nearest millisecond
         const jd = mjd + 2400000.5;
         var obj = new Date();
@@ -103,40 +96,17 @@
         return obj;
     }
 
-    // Set the name of the hidden property and the change event for visibility
-    var hidden, visibilityChange;
-    if (typeof document.hidden !== "undefined") { // Opera 12.10 and Firefox 18 and later support
-      hidden = "hidden";
-      visibilityChange = "visibilitychange";
-    } else if (typeof document.msHidden !== "undefined") {
-      hidden = "msHidden";
-      visibilityChange = "msvisibilitychange";
-    } else if (typeof document.webkitHidden !== "undefined") {
-      hidden = "webkitHidden";
-      visibilityChange = "webkitvisibilitychange";
-    }
-
-    // Warn if the browser doesn't support addEventListener or the Page Visibility API
-    if (typeof document.addEventListener === "undefined" || hidden === undefined) {
-      console.log("This demo requires a browser, such as Google Chrome or Firefox, that supports the Page Visibility API.");
-    } else {
-      // Handle page visibility change
-      // document.addEventListener(visibilityChange, handleVisibilityChange, false);
-    }
-
-    // function handleVisibilityChange() {
-    //   if (!document[hidden]) {
-    //   }
-    // }
-
     function inactivityTimer() {
       var active_timeout = null;
       window.onload = setActive;
-      // DOM Events
+      // DOM Events. keydown as well as the pointer events: a reader who drives the page with the
+      // keyboard, or a screen reader, moved no mouse and was counted as away after two minutes,
+      // and every poll stopped while the page looked live.
       document.addEventListener('mousemove', setActive, true);
       document.addEventListener('mousedown', setActive, true);
+      document.addEventListener('keydown', setActive, true);
       document.addEventListener('touchmove', setActive, true);
-      document.addEventListener('touchdown', setActive, true);
+      document.addEventListener('touchstart', setActive, true);
       setActive();
 
       function setActive() {

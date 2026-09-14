@@ -65,7 +65,7 @@ urlpatterns = [
         TemplateView.as_view(template_name="resultdesc.html", extra_context={"name": "Output Description"}),
         name="resultdesc",
     ),
-    path("queuepositions.json", views.queuepositions, name="queuepositions"),
+    path("queuepositions.json", views.QueuePositions.as_view(), name="queuepositions"),
     path("taskrunnerstatus.json", views.taskrunnerstatus, name="taskrunnerstatus"),
     path("stats/", views.stats, name="stats"),
     path("stats/shortterm.html", views.statsshortterm, name="statsshortterm"),

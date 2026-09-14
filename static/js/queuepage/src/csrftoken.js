@@ -1,6 +1,5 @@
-// Reading the CSRF cookie. This used to come from DRF's rest_framework/js/csrf.js, which the
-// vendored copy of DRF's base template loaded on every page -- and which is written against
-// jQuery, so it was one of the things keeping jQuery on the site.
+// Reading the CSRF cookie, without jQuery: the fetch calls of the queue page send the token in a
+// header, and this is the one place that reads it.
 
 /** Return the value of a cookie, or null when it is not set. */
 export function getCookie(name) {

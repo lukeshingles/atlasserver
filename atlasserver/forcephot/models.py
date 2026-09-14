@@ -150,6 +150,8 @@ class Task(models.Model):
     id: int
     user_id: int
     parent_task_id: int | None
+    # set by prefetch_imagerequests(), or by a caller that knows the answer; see live_imagerequests
+    prefetched_imagerequests: "list[Task]"
 
     # per-instance memoisation slots, declared as class attributes so that no __init__ override is
     # needed. Model instances do not outlive a request, so a stale entry is not a concern.
@@ -244,8 +246,8 @@ class Task(models.Model):
     def describe_target(self) -> str:
         """Return the target of this task as one short string, for logs and mail.
 
-        One definition: the result email used to print "RA None Dec None" for every MPC task,
-        because it read the coordinate columns and nothing else.
+        One definition, so that the result email and the log describe an MPC task by its name and
+        not by its empty coordinate columns.
         """
         if self.mpc_name:
             return f"MPC[{self.mpc_name}]"
@@ -516,11 +518,9 @@ class Task(models.Model):
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
 
         Here rather than in the view, so that the decision of which fields a child inherits sits
-        next to the field declarations it reads. This used to be model_to_dict(exclude=["id"]) in
-        the view, which took every editable field and then corrected the ones that must not carry
-        over one at a time — so each field added to Task was inherited by default, and
-        callback_url (the parent submitter's completion webhook, fired for a task they never
-        created) was one of them. Anything not named here is left at the model default on purpose.
+        next to the field declarations it reads. The fields are named one by one, and anything not
+        named is left at the model default on purpose: a field that carried over by default, such
+        as callback_url, would fire the parent submitter's webhook for a task they never created.
         """
         return Task(
             user=user,
@@ -641,8 +641,8 @@ class PendingEmailVerification(models.Model):
     This exists because "inactive" alone cannot say why. Unchecking is_active is equally how an
     administrator disables an account -- Django's own help text recommends it in place of deleting
     -- so a resend path that treats every inactive account as unverified hands a disabled one a way
-    back in. The previous answer inferred the difference from a null last_login, which is wrong for
-    any account that was disabled before it ever logged in, or that only ever used an API token.
+    back in. A null last_login cannot answer it either: an account can be disabled before it ever
+    logs in, or only ever use an API token.
 
     A table this project owns, rather than a column on auth_user: the user model is
     django.contrib.auth's and adding to it means either a custom user model or a sidecar column
