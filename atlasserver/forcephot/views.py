@@ -207,7 +207,9 @@ def path_only(view):
 
     @functools.wraps(view)
     def wrapper(request, *args, **kwargs):
-        if request.GET:
+        # the raw string, not request.GET: "?&" parses to an empty QueryDict but is still a
+        # distinct URL, and so a distinct cache key
+        if request.META.get("QUERY_STRING"):
             return HttpResponseRedirect(request.path)
 
         return view(request, *args, **kwargs)

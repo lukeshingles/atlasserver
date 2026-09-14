@@ -7468,6 +7468,12 @@ class ChartQueryStringTests(TestCase):
         assert response.status_code == 302, response.status_code
         assert response["Location"] == reverse("statscoordchart")
 
+    def test_a_query_string_that_parses_to_nothing_is_redirected_too(self) -> None:
+        # "?&&" gives an empty QueryDict but a distinct cache key
+        response = self.client.get(f"{reverse('statscoordchart')}?&&")
+
+        assert response.status_code == 302, response.status_code
+
 
 class PasswordResetLimitPageTests(TestCase):
     def test_the_over_budget_page_says_why(self) -> None:
