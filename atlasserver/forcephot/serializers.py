@@ -414,7 +414,6 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return attrs
 
-    # pyrefly: ignore [bad-override]
     class Meta:
         model = Task
 
