@@ -1,10 +1,10 @@
 {
   "type": "module",
   "dependencies": {
-    "@babel/cli": "8.0.4",
+    "@babel/cli": "8.0.6",
     "@babel/preset-react": "^8.0.1",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "scripts": {
     "build": "./build.sh",
@@ -15,8 +15,8 @@
     "esbuild@0.28.2": true
   },
   "devDependencies": {
-    "@testing-library/dom": "10.4.1",
+    "@testing-library/dom": "10.4.2",
     "esbuild": "0.28.2",
-    "jsdom": "30.0.1"
+    "jsdom": "30.1.0"
   }
 }
