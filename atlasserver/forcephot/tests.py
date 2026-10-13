@@ -7459,6 +7459,23 @@ class ResultFileProblemTests(SimpleTestCase):
         assert self.check("###MJD m dm\n59000.1 18.2 0.1\n") is None
 
 
+class CoordChartTests(TestCase):
+    """The coordinate chart is public, so the JSON it sends must not name the owner of a task."""
+
+    def test_the_chart_does_not_carry_usernames(self) -> None:
+        user = User.objects.create_user("chartowner", "chartowner@example.com", "pw")
+        Task.objects.create(user=user, ra=10.0, dec=20.0)
+        caches["usagestats"].clear()
+
+        response = self.client.get(reverse("statscoordchart"))
+
+        assert response.status_code == 200, response.status_code
+        body = response.content.decode()
+        assert "@taskid" in body
+        assert "chartowner" not in body
+        assert "username" not in body
+
+
 class ChartQueryStringTests(TestCase):
     """The chart endpoints send a query string back to the bare path, so the page cache is one entry."""
 

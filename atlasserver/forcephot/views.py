@@ -698,13 +698,13 @@ def statscoordchart(request):
     from bokeh.embed import json_item
 
     # Task.live(): an archived task is one its owner deleted, and no reader serves that
-    tasks = list(Task.live().order_by("-timestamp")[:20000].select_related("user"))
+    tasks = list(Task.live().order_by("-timestamp")[:20000])
 
+    # No username: this chart is public, and the owner of a task is not part of the plot
     dictsource: dict[str, Any] = {
         "ra": [tsk.ra for tsk in tasks],
         "dec": [tsk.dec for tsk in tasks],
         "taskid": [tsk.id for tsk in tasks],
-        "username": [tsk.user.username for tsk in tasks],
     }
     source = bokeh.plotting.ColumnDataSource(dictsource)
 
@@ -737,7 +737,7 @@ def statscoordchart(request):
 
     plot.add_tools(
         bokeh.models.HoverTool(
-            tooltips="Task @taskid, RA Dec: @ra @dec, user: @username",
+            tooltips="Task @taskid, RA Dec: @ra @dec",
             mode="mouse",
             point_policy="follow_mouse",
             renderers=[rcirc],
