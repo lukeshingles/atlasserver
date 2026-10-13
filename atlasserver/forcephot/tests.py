@@ -4099,6 +4099,31 @@ class TaskAttemptCountTests(TestCase):
         assert body["attempt_count"] == 2
 
 
+def import_atlaswebserver() -> t.Any:
+    """Import the CLI module with a project path its module body will accept.
+
+    That body rejects a path containing a space, which a checkout may well have; the override
+    exists for exactly that case and has to be in the environment before the first import.
+    """
+    os.environ.setdefault("ATLASSERVER_PATH", "/tmp/atlasserver-clitest")
+    from atlasserver import atlaswebserver
+
+    return atlaswebserver
+
+
+class WebserverStartTests(SimpleTestCase):
+    """A start empties the page cache, so that the new code builds every stats page itself."""
+
+    def test_a_start_empties_the_page_cache(self) -> None:
+        atlaswebserver = import_atlaswebserver()
+        caches["usagestats"].set("page", "built by the earlier code")
+        self.addCleanup(caches["usagestats"].clear)
+
+        atlaswebserver.clear_page_cache()
+
+        assert caches["usagestats"].get("page") is None
+
+
 class WebserverStopTests(SimpleTestCase):
     """Stopping the server when apachectl cannot run.
 
@@ -4107,20 +4132,8 @@ class WebserverStopTests(SimpleTestCase):
     with no way to stop it through the normal route.
     """
 
-    @staticmethod
-    def _atlaswebserver() -> t.Any:
-        """Import the CLI module with a project path its module body will accept.
-
-        That body rejects a path containing a space, which a checkout may well have; the override
-        exists for exactly that case and has to be in the environment before the first import.
-        """
-        os.environ.setdefault("ATLASSERVER_PATH", "/tmp/atlasserver-clitest")
-        from atlasserver import atlaswebserver
-
-        return atlaswebserver
-
     def test_a_server_that_apachectl_stops_is_not_also_signalled(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4133,7 +4146,7 @@ class WebserverStopTests(SimpleTestCase):
         assert not ourprocess.called, "the normal route worked, so nothing should be signalled"
 
     def test_a_server_apachectl_cannot_stop_is_signalled_instead(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
         process = mock.Mock()
 
         with (
@@ -4151,7 +4164,7 @@ class WebserverStopTests(SimpleTestCase):
     def test_a_pid_reused_while_apachectl_ran_is_not_signalled(self) -> None:
         # apachectl blocks, so the server can exit and its number be handed to something else
         # between the check that found it and the fallback that would signal it
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4164,7 +4177,7 @@ class WebserverStopTests(SimpleTestCase):
         assert not signalstop.called, "a pid that is no longer this server must not be signalled"
 
     def test_a_server_that_is_not_running_is_neither_stopped_nor_signalled(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=None),
@@ -4179,7 +4192,7 @@ class WebserverStopTests(SimpleTestCase):
     def test_a_process_that_exits_before_the_signal_is_not_an_error(self) -> None:
         # the pid is read, then checked, then signalled, and the server can finish stopping in
         # between -- which is the outcome being asked for, not a failure
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4197,7 +4210,7 @@ class WebserverStopTests(SimpleTestCase):
         Without an identity check the fallback signals whatever inherited the pid, and restart then
         waits forever for an unrelated process to exit.
         """
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with mock.patch.object(atlaswebserver.psutil, "Process") as process:
             process.return_value.cmdline.return_value = ["/usr/bin/some-other-daemon", "--serve"]
@@ -4205,7 +4218,7 @@ class WebserverStopTests(SimpleTestCase):
             assert atlaswebserver.our_httpd_process(4242) is None
 
     def test_a_pid_running_this_server_is_the_server(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
         conf = str(atlaswebserver.APACHEPATH / "httpd.conf")
 
         with mock.patch.object(atlaswebserver.psutil, "Process") as process:
@@ -4215,7 +4228,7 @@ class WebserverStopTests(SimpleTestCase):
             assert atlaswebserver.our_httpd_process(4242) is process.return_value
 
     def test_a_process_that_cannot_be_inspected_is_not_assumed_to_be_ours(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         # a dead pid and one belonging to another user both arrive as psutil.Error
         for failure in (psutil.NoSuchProcess(4242), psutil.AccessDenied(4242)):
@@ -4223,7 +4236,7 @@ class WebserverStopTests(SimpleTestCase):
                 assert atlaswebserver.our_httpd_process(4242) is None, failure
 
     def test_a_stale_pid_file_is_removed_rather_than_believed(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "httpd.pid")
@@ -4244,7 +4257,7 @@ class WebserverStopTests(SimpleTestCase):
         get_httpd_pid then reports nothing running, so start() tries to bind a port that is already
         held and retries for as long as it is left to.
         """
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "httpd.pid")
@@ -4262,7 +4275,7 @@ class WebserverStopTests(SimpleTestCase):
     def test_an_unreadable_pid_file_is_reported_rather_than_raised(self) -> None:
         # every command begins by asking whether the server is up, so raising here makes the tool
         # unusable until the file is removed by hand
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "httpd.pid").write_text("")  # truncated by an unclean exit
@@ -4271,7 +4284,7 @@ class WebserverStopTests(SimpleTestCase):
                 assert atlaswebserver.get_httpd_pid() is None
 
     def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),

@@ -59,6 +59,8 @@ atlaswebserver restart
 atlastaskrunner restart
 ```
 
+The restart empties the page cache of the stats pages, so they show the new code at once.
+
 `migrate` is not optional: a pulled commit may change a model, and until its migration is applied
 every query against that table fails with an "Unknown column" error. It is safe to run when there
 is nothing to do.
