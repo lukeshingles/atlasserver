@@ -18,7 +18,7 @@ import threading
 import typing as t
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextvars import ContextVar
 from typing import override
 from urllib.parse import urlparse
@@ -65,7 +65,7 @@ class CallbackUrlError(ValueError):
 
 
 @contextlib.contextmanager
-def callback_urls_validated_once() -> Iterator[None]:
+def callback_urls_validated_once() -> Generator[None]:
     """Open the scope within which each callback URL is validated once. For the submission view."""
     token = _validated_urls.set(set())
     try:

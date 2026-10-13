@@ -1,4 +1,4 @@
-import datetime
+import datetime as dt
 import logging
 import multiprocessing
 import typing as t
@@ -154,8 +154,8 @@ def resultplotdatajs_cachekey(taskid: int) -> str:
     return f"task{taskid}_resultplotdatajs_v3"
 
 
-def datetime_to_mjd(dt: datetime.datetime) -> float:
-    return julian.to_jd(dt) - 2400000.5
+def datetime_to_mjd(dtime: dt.datetime) -> float:
+    return julian.to_jd(dtime) - 2400000.5
 
 
 def make_pdf_plot_worker(

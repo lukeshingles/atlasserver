@@ -1,6 +1,6 @@
 import base64
 import contextlib
-import datetime
+import datetime as dt
 import hashlib
 import ipaddress
 import itertools
@@ -537,7 +537,7 @@ class PaginationTests(TestCase):
         self.user = User.objects.create_user(username="pager", email="p@example.com", password=None)
         now = timezone.now()
         for i in range(10):
-            Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=now + datetime.timedelta(seconds=i))
+            Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=now + dt.timedelta(seconds=i))
 
     def get_json(self, url, **params):
         response = self.client.get(url, params, HTTP_ACCEPT="application/json")
@@ -566,7 +566,7 @@ class PaginationTests(TestCase):
         Task.objects.all().delete()
         now = timezone.now()
         for batch in range(3):
-            stamp = now + datetime.timedelta(minutes=batch)
+            stamp = now + dt.timedelta(minutes=batch)
             for _ in range(9):
                 Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=stamp)
         self.client.force_login(self.user)
@@ -2506,7 +2506,7 @@ class UnverifiedAccountSweepTests(TestCase):
         user.is_active = active
         user.save()
         if marker:
-            PendingEmailVerification.objects.create(user=user, created=timezone.now() - datetime.timedelta(days=days))
+            PendingEmailVerification.objects.create(user=user, created=timezone.now() - dt.timedelta(days=days))
         return user
 
     def test_a_resent_link_dates_the_marker_afresh(self) -> None:
@@ -2630,7 +2630,7 @@ class TaskCreateLimitTests(TestCase):
 
         Task.objects.bulk_create(
             [
-                Task(user=self.user, ra=1.0, dec=2.0, timestamp=timezone.now() - datetime.timedelta(seconds=1))
+                Task(user=self.user, ra=1.0, dec=2.0, timestamp=timezone.now() - dt.timedelta(seconds=1))
                 for _ in range(MAX_USER_TASKS - 1)
             ]
         )
@@ -3742,14 +3742,14 @@ class TaskRunnerStatusTests(TestCase):
         # one user for the whole test rather than one per call: auth_user.email carries a unique
         # index (migration 0005), so a second call with a fixed address is an IntegrityError
         user, _ = User.objects.get_or_create(username="ranbefore", defaults={"email": "rb@example.com"})
-        finished = timezone.now() - datetime.timedelta(minutes=5)
+        finished = timezone.now() - dt.timedelta(minutes=5)
         for seconds in runtimes:
             Task.objects.create(
                 user=user,
                 ra=1.0,
                 dec=2.0,
-                timestamp=finished - datetime.timedelta(seconds=seconds + 1),
-                starttimestamp=finished - datetime.timedelta(seconds=seconds),
+                timestamp=finished - dt.timedelta(seconds=seconds + 1),
+                starttimestamp=finished - dt.timedelta(seconds=seconds),
                 finishtimestamp=finished,
             )
 
@@ -3770,7 +3770,7 @@ class TaskRunnerStatusTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
-            stale_written = timezone.now() - datetime.timedelta(hours=1)
+            stale_written = timezone.now() - dt.timedelta(hours=1)
             statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
@@ -3795,7 +3795,7 @@ class TaskRunnerStatusTests(TestCase):
     def test_old_status_file_reports_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
-            stale_written = timezone.now() - datetime.timedelta(hours=1)
+            stale_written = timezone.now() - dt.timedelta(hours=1)
             statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
@@ -3818,7 +3818,7 @@ class TaskRunnerStatusTests(TestCase):
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
-            written = timezone.now() - datetime.timedelta(hours=1)
+            written = timezone.now() - dt.timedelta(hours=1)
             statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}))
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
@@ -3881,8 +3881,8 @@ class TypicalRuntimeTests(TestCase):
         past.
         """
         self.created += 1
-        finished = timezone.now() - datetime.timedelta(hours=1) + datetime.timedelta(milliseconds=self.created)
-        started = finished - datetime.timedelta(seconds=runtime_seconds)
+        finished = timezone.now() - dt.timedelta(hours=1) + dt.timedelta(milliseconds=self.created)
+        started = finished - dt.timedelta(seconds=runtime_seconds)
         return Task.objects.create(
             user=self.user,
             ra=1.0,
@@ -3891,7 +3891,7 @@ class TypicalRuntimeTests(TestCase):
             # submitted before it started, which the default of `now` would not be: these tasks
             # finish in the past, so the default leaves every one of them with a wait of minus an
             # hour for anything that reads waittime()
-            timestamp=started - datetime.timedelta(seconds=1),
+            timestamp=started - dt.timedelta(seconds=1),
             starttimestamp=started,
             finishtimestamp=finished,
             **kwargs,
@@ -3939,7 +3939,7 @@ class TypicalRuntimeTests(TestCase):
 
         # finished longer ago than TYPICAL_RUNTIME_WINDOW_HOURS, so out of scope however many
         # there are
-        old = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 1)
+        old = timezone.now() - dt.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 1)
         Task.objects.filter(user=self.user).update(finishtimestamp=old)
 
         assert taskqueue.typical_runtime_seconds() == {}
@@ -3951,7 +3951,7 @@ class TypicalRuntimeTests(TestCase):
         inside it — which is exactly when a waiting user most wants the estimate.
         """
         self._finished_tasks(10.0, 20.0, 30.0, 40.0, 50.0)
-        long_ago = timezone.now() - datetime.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 5)
+        long_ago = timezone.now() - dt.timedelta(hours=taskqueue.TYPICAL_RUNTIME_WINDOW_HOURS + 5)
         Task.objects.filter(user=self.user).update(timestamp=long_ago)
 
         assert taskqueue.typical_runtime_seconds()["FP"] == 30.0
@@ -3989,14 +3989,14 @@ class TaskTimingSerializerTests(TestCase):
         self.client.force_login(self.user)
 
     def test_a_finished_task_reports_both(self) -> None:
-        submitted = timezone.now() - datetime.timedelta(seconds=170)
+        submitted = timezone.now() - dt.timedelta(seconds=170)
         task = Task.objects.create(
             user=self.user,
             ra=1.0,
             dec=2.0,
             timestamp=submitted,
-            starttimestamp=submitted + datetime.timedelta(seconds=40),
-            finishtimestamp=submitted + datetime.timedelta(seconds=170),
+            starttimestamp=submitted + dt.timedelta(seconds=40),
+            finishtimestamp=submitted + dt.timedelta(seconds=170),
         )
 
         body = self.client.get(reverse("task-detail", args=[task.id])).json()
@@ -4066,7 +4066,7 @@ class TaskAttemptCountTests(TestCase):
     def test_the_run_time_measures_the_attempt_that_produced_the_result(self) -> None:
         """Not the whole history of them; the count is what carries that. See mark_started."""
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
-        Task.objects.filter(pk=task.id).update(starttimestamp=timezone.now() - datetime.timedelta(minutes=10))
+        Task.objects.filter(pk=task.id).update(starttimestamp=timezone.now() - dt.timedelta(minutes=10))
 
         taskrunner_main.mark_started(task)
         taskrunner_main.mark_finished(task=task, error_msg=None)
@@ -4473,14 +4473,14 @@ class RemoveOldTasksTests(TestCase):
             user=self.user,
             ra=1.0,
             dec=2.0,
-            finishtimestamp=timezone.now() - datetime.timedelta(days=days),
+            finishtimestamp=timezone.now() - dt.timedelta(days=days),
             **kwargs,
         )
 
     def make_imagerequest(self, parent: Task, *, days: int = 0) -> Task:
         """Return a finished image request of the parent, finished the given number of days ago."""
         child = parent.new_imagerequest(user=self.user, from_api=parent.from_api)
-        child.finishtimestamp = timezone.now() - datetime.timedelta(days=days)
+        child.finishtimestamp = timezone.now() - dt.timedelta(days=days)
         child.save()
         return child
 
@@ -4542,7 +4542,7 @@ class RemoveOldTasksTests(TestCase):
             # a web-submitted parent that the API sweep does not select, with an API child it does
             parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
             child = parent.new_imagerequest(user=self.user, from_api=True)
-            child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+            child.finishtimestamp = timezone.now() - dt.timedelta(days=200)
             child.save()
 
         def api_hard_delete() -> None:
@@ -4683,7 +4683,7 @@ class RemoveOldTasksTests(TestCase):
                 # a web-submitted parent that the API sweep does not select, with an API child it does
                 parent = self.make_old_task(days=200, request_type="FP", is_archived=True)
                 child = parent.new_imagerequest(user=self.user, from_api=True)
-                child.finishtimestamp = timezone.now() - datetime.timedelta(days=200)
+                child.finishtimestamp = timezone.now() - dt.timedelta(days=200)
                 child.save()
 
             with CaptureQueriesContext(connection) as queries:
@@ -6976,7 +6976,7 @@ class SiteNoticeTests(TestCase):
         # while the page paints the box as though it were up is the fault that split them.
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
-            written = timezone.now() - datetime.timedelta(hours=1)
+            written = timezone.now() - dt.timedelta(hours=1)
             statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}))
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
