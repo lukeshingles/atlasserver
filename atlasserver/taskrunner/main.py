@@ -2,7 +2,7 @@
 """Task runner: it runs the forced photometry tasks on ATLAS sc01 over ssh."""
 
 import contextlib
-import datetime
+import datetime as dt
 import json
 import multiprocessing as mp
 import os
@@ -68,7 +68,7 @@ MAINTENANCE_BATCH_SIZE: int = 500
 
 def mjdnow() -> float:
     """Return the current MJD."""
-    return datetime_to_mjd(datetime.datetime.now(datetime.UTC))
+    return datetime_to_mjd(dt.datetime.now(dt.UTC))
 
 
 def localresultfileprefix(taskid: int) -> str:
@@ -78,7 +78,7 @@ def localresultfileprefix(taskid: int) -> str:
 
 def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
     """Log a message to the console and to a log file (with given filename suffix)."""
-    dtnow = datetime.datetime.now(datetime.UTC)
+    dtnow = dt.datetime.now(dt.UTC)
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
     if not suffix:
@@ -90,7 +90,7 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
     # mtime-based so that the short-lived worker processes also rotate their slot logs
     openmode = "a"
     if logfile_latest.exists():
-        lastwrite = datetime.datetime.fromtimestamp(logfile_latest.stat().st_mtime, tz=datetime.UTC)
+        lastwrite = dt.datetime.fromtimestamp(logfile_latest.stat().st_mtime, tz=dt.UTC)
         if lastwrite.date() < dtnow.date():
             import shutil
 
@@ -490,7 +490,7 @@ def mark_started(task) -> None:
     the reasons given in mark_finished below -- `task` is a copy read when the queue was scanned,
     and do_task logs model_to_dict(task) immediately after calling this.
     """
-    starttimestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    starttimestamp = dt.datetime.now(dt.UTC).replace(microsecond=0)
 
     Task.objects.filter(pk=task.id).update(starttimestamp=starttimestamp, attempt_count=models.F("attempt_count") + 1)
 
@@ -508,7 +508,7 @@ def mark_finished(task, error_msg: str | None) -> None:
     this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
     had actually happened, because the instance still held the values it was loaded with.
     """
-    finishtimestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    finishtimestamp = dt.datetime.now(dt.UTC).replace(microsecond=0)
 
     Task.objects.filter(pk=task.id).update(finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg)
 
@@ -653,7 +653,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     }
 
     status = {
-        "written": datetime.datetime.now(datetime.UTC).isoformat(),
+        "written": dt.datetime.now(dt.UTC).isoformat(),
         "pid": os.getpid(),
         "numslots": numslots,
         "slots_busy": len(procs_taskids),
@@ -754,10 +754,10 @@ def remove_old_tasks(
     `heartbeat` is called after every batch so that a long sweep does not look like a dead runner
     to whatever is watching the status file.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     filteropts: dict[str, t.Any] = {
         "finishtimestamp__isnull": False,
-        "finishtimestamp__lt": now - datetime.timedelta(days=days_ago),
+        "finishtimestamp__lt": now - dt.timedelta(days=days_ago),
     }
 
     if request_type is not None:
@@ -878,7 +878,7 @@ def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=
     Only inactive rows that carry the pending-verification marker: an account an administrator
     switched off has no marker, and a confirmed one lost its marker.
     """
-    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=days_ago)
     stale = PendingEmailVerification.objects.filter(created__lt=cutoff, user__is_active=False)
     userids = list(stale.values_list("user_id", flat=True))
     if not userids:

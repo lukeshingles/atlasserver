@@ -4,7 +4,7 @@ Lives outside views.py so that the task runner can import it without pulling in 
 rest of the web stack, and so that the two processes cannot drift on what "queue position" means.
 """
 
-import datetime
+import datetime as dt
 import operator
 import statistics
 import time
@@ -145,7 +145,7 @@ def typical_runtime_seconds() -> dict[str, float]:
         _typical_runtime_memo = (time.monotonic() + TYPICAL_RUNTIME_MEMO_SECONDS, cached)
         return cached
 
-    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=TYPICAL_RUNTIME_WINDOW_HOURS)
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=TYPICAL_RUNTIME_WINDOW_HOURS)
 
     medians = {}
     for request_type in Task.RequestType.values:
@@ -164,7 +164,7 @@ def typical_runtime_seconds() -> dict[str, float]:
         # queryset was filtered; the isnull=False pair is what actually guarantees them. The cast
         # says so once, next to the filter that earns it.
         recent = t.cast(
-            "Iterable[tuple[datetime.datetime, datetime.datetime]]",
+            "Iterable[tuple[dt.datetime, dt.datetime]]",
             Task.objects.filter(request_type=request_type, finishtimestamp__gt=cutoff, starttimestamp__isnull=False)
             .order_by("-finishtimestamp")
             .values_list("starttimestamp", "finishtimestamp")[:TYPICAL_RUNTIME_SAMPLE_LIMIT],
@@ -273,7 +273,7 @@ def calculate_queue_positions() -> None:
             # This writes task_modified_datetime by name: Model.save() applies auto_now, and a
             # bulk write does not. Without it get_tasklist_etag() cannot see a reordering, and the
             # server could serve a stale queue position.
-            now = datetime.datetime.now(datetime.UTC)
+            now = dt.datetime.now(dt.UTC)
             Task.objects.bulk_update(
                 [
                     Task(id=taskid, queuepos_relative=newpos, task_modified_datetime=now)
