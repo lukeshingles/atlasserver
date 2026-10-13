@@ -7473,7 +7473,11 @@ class ResultFileProblemTests(SimpleTestCase):
 
 
 class CoordChartTests(TestCase):
-    """The coordinate chart is public, so the JSON it sends must not name the owner of a task."""
+    """The coordinate chart is public, so the JSON it sends must not lead to the owner of a task.
+
+    The task page shows the owner to any reader, so a task id in the chart would name the owner of
+    each point in one more request.
+    """
 
     def setUp(self) -> None:
         caches["usagestats"].clear()
@@ -7503,23 +7507,23 @@ class CoordChartTests(TestCase):
         assert len(found) == 1, found
         return dict(found[0]["attributes"]["data"]["entries"])
 
-    def test_the_chart_does_not_carry_usernames(self) -> None:
+    def test_the_chart_carries_only_coordinates(self) -> None:
         Task.objects.create(user=self.user, ra=10.0, dec=20.0)
 
         body = self.chart_body()
 
-        assert set(self.columns_of(body)) == {"ra", "dec", "taskid"}, body
-        assert "@taskid" in body
+        assert set(self.columns_of(body)) == {"ra", "dec"}, body
+        assert "@ra" in body
+        assert "taskid" not in body
         assert "chartowner" not in body
         assert "username" not in body
 
     def test_a_task_without_coordinates_is_not_a_point(self) -> None:
-        point = Task.objects.create(user=self.user, ra=10.0, dec=20.0)
+        Task.objects.create(user=self.user, ra=10.0, dec=20.0)
         Task.objects.create(user=self.user, ra=None, dec=None, mpc_name="Makemake", mjd_min=None)
 
         columns = self.columns_of(self.chart_body())
 
-        assert columns["taskid"] == [point.id], columns
         assert columns["ra"] == [10.0], columns
         assert columns["dec"] == [20.0], columns
 
