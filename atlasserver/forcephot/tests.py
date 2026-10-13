@@ -7462,18 +7462,50 @@ class ResultFileProblemTests(SimpleTestCase):
 class CoordChartTests(TestCase):
     """The coordinate chart is public, so the JSON it sends must not name the owner of a task."""
 
-    def test_the_chart_does_not_carry_usernames(self) -> None:
-        user = User.objects.create_user("chartowner", "chartowner@example.com", "pw")
-        Task.objects.create(user=user, ra=10.0, dec=20.0)
+    def setUp(self) -> None:
         caches["usagestats"].clear()
+        self.addCleanup(caches["usagestats"].clear)
+        self.user = User.objects.create_user("chartowner", "chartowner@example.com", "pw")
 
+    def chart_columns(self) -> dict[str, list]:
+        """Fetch the chart and return the columns of its one data source, by name."""
         response = self.client.get(reverse("statscoordchart"))
-
         assert response.status_code == 200, response.status_code
-        body = response.content.decode()
-        assert "@taskid" in body
-        assert "chartowner" not in body
-        assert "username" not in body
+        self.body = response.content.decode()
+
+        def sources(node: object) -> t.Iterator[dict]:
+            if isinstance(node, dict):
+                if node.get("name") == "ColumnDataSource":
+                    yield node
+                for value in node.values():
+                    yield from sources(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from sources(value)
+
+        found = list(sources(json.loads(self.body)["item"]))
+        assert len(found) == 1, found
+        return dict(found[0]["attributes"]["data"]["entries"])
+
+    def test_the_chart_does_not_carry_usernames(self) -> None:
+        Task.objects.create(user=self.user, ra=10.0, dec=20.0)
+
+        columns = self.chart_columns()
+
+        assert set(columns) == {"ra", "dec", "taskid"}, columns
+        assert "@taskid" in self.body
+        assert "chartowner" not in self.body
+        assert "username" not in self.body
+
+    def test_a_task_without_coordinates_is_not_a_point(self) -> None:
+        point = Task.objects.create(user=self.user, ra=10.0, dec=20.0)
+        Task.objects.create(user=self.user, ra=None, dec=None, mpc_name="Makemake", mjd_min=None)
+
+        columns = self.chart_columns()
+
+        assert columns["taskid"] == [point.id], columns
+        assert columns["ra"] == [10.0], columns
+        assert columns["dec"] == [20.0], columns
 
 
 class ChartQueryStringTests(TestCase):

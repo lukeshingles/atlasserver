@@ -688,7 +688,9 @@ class RequestImages(APIView):
 
 
 @path_only
-@cache_page(60 * 60 * 24, cache="usagestats")
+# key_prefix: cache_page keys an entry on the URL alone, so a change to what the chart sends needs
+# a new prefix. The file cache would otherwise serve the earlier shape until the entry expires.
+@cache_page(60 * 60 * 24, cache="usagestats", key_prefix="coordchart-v2")
 def statscoordchart(request):
     # deferred for the same reason as atlasserver.taskrunner.main above: bokeh pulls in numpy and a
     # good deal else, and a module-scope import puts all of it permanently in every web worker to
@@ -697,14 +699,18 @@ def statscoordchart(request):
     import bokeh.plotting
     from bokeh.embed import json_item
 
-    # Task.live(): an archived task is one its owner deleted, and no reader serves that
-    tasks = list(Task.live().order_by("-timestamp")[:20000])
+    # Task.live(): an archived task is one its owner deleted, and no reader serves that.
+    # The chart is public, so the rows carry only what the plot draws: the id and the coordinates,
+    # not the owner. A task that names a Minor Planet Center object has no coordinates, so it is
+    # not a point.
+    tasks = list(
+        Task.live().filter(ra__isnull=False, dec__isnull=False).order_by("-timestamp").values("id", "ra", "dec")[:20000]
+    )
 
-    # No username: this chart is public, and the owner of a task is not part of the plot
     dictsource: dict[str, Any] = {
-        "ra": [tsk.ra for tsk in tasks],
-        "dec": [tsk.dec for tsk in tasks],
-        "taskid": [tsk.id for tsk in tasks],
+        "ra": [tsk["ra"] for tsk in tasks],
+        "dec": [tsk["dec"] for tsk in tasks],
+        "taskid": [tsk["id"] for tsk in tasks],
     }
     source = bokeh.plotting.ColumnDataSource(dictsource)
 
