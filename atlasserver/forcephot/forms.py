@@ -94,7 +94,7 @@ class RegistrationForm(UserCreationForm[User]):
         return email
 
     # pyrefly: ignore [bad-override]
-    class Meta:
+    class Meta:  # ty: ignore[invalid-attribute-override]
         model = get_user_model()
         fields = (
             "username",
