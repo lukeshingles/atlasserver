@@ -1,4 +1,4 @@
-import datetime
+import datetime as dt
 import shutil
 import typing as t
 from collections.abc import Collection
@@ -26,7 +26,7 @@ from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 
 
 def get_mjd_min_default() -> float:
-    return round(datetime_to_mjd(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=30)), 5)
+    return round(datetime_to_mjd(dt.datetime.now(dt.UTC) - dt.timedelta(days=30)), 5)
 
 
 # marks a memoised value that has not been computed yet. None is a meaningful result for every
@@ -526,7 +526,7 @@ class Task(models.Model):
             user=user,
             parent_task_id=self.id,
             request_type=Task.RequestType.IMGZIP,
-            timestamp=datetime.datetime.now(datetime.UTC).replace(microsecond=0),
+            timestamp=dt.datetime.now(dt.UTC).replace(microsecond=0),
             # the images to fetch are the observations the parent reported, so the image request
             # describes the same target over the same window
             mpc_name=self.mpc_name,

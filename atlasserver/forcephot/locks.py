@@ -11,7 +11,7 @@ a lock nobody else can see.
 import contextlib
 import fcntl
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 
 from django.conf import settings
@@ -26,7 +26,7 @@ def _lockpath(name: str) -> Path:
 
 
 @contextlib.contextmanager
-def hold_lock(name: str) -> Iterator[None]:
+def hold_lock(name: str) -> Generator[None]:
     """Hold the named lock for the body, waiting for it if another holder has it.
 
     For a short critical section, such as a read-modify-write of one cache entry, where a caller
@@ -44,7 +44,7 @@ def hold_lock(name: str) -> Iterator[None]:
 
 
 @contextlib.contextmanager
-def try_lock(name: str) -> Iterator[bool]:
+def try_lock(name: str) -> Generator[bool]:
     """Hold the named lock for the body, or yield False at once if another holder has it."""
     path = _lockpath(name)
     path.parent.mkdir(parents=True, exist_ok=True)
