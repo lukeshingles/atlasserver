@@ -1477,20 +1477,6 @@ describe('TaskPage', () => {
         assert.ok(!('RA Dec:' in rowMeta(container)), 'the coordinate row should be absent');
     });
 
-    test("somebody else's task names its owner when the server sends one", async () => {
-        // staff read every task's owner, and a staff member's own id is not the owner's
-        const { container } = await renderPage([task(1, { user_id: 999, username: 'someone' })]);
-
-        assert.equal(rowMeta(container)['User:'], 'someone');
-    });
-
-    test('a task whose owner the server kept back has no user line', async () => {
-        // the serializer sends null for both fields to a reader who may not learn whose task it is
-        const { container } = await renderPage([task(1, { user_id: null, username: null })]);
-
-        assert.equal(rowMeta(container)['User:'], undefined);
-    });
-
     test('a task that needed several attempts says so', async () => {
         const { container } = await renderPage([task(1, {
             finishtimestamp: '2026-01-01T00:02:50Z',

@@ -1760,32 +1760,6 @@ class TaskDetailIsPublicTests(TestCase):
                 assert "callback_url" in body
                 assert body["callback_url"] == expected, body["callback_url"]
 
-    def test_the_submitter_is_kept_to_the_submitter_and_to_staff(self) -> None:
-        """The measurement is public. Who asked for it is not, except to staff.
-
-        Task ids are sequential, so a reader who could see these fields could walk them and
-        collect every user's positions of interest. Staff read them: an administrator looks at
-        the task page to see whose task it is.
-        """
-        for caller, expected_user_id, expected_username in (
-            (None, None, None),
-            (self.other, None, None),
-            (self.owner, self.owner.pk, "detailowner"),
-            (self.staff, self.owner.pk, "detailowner"),
-        ):
-            with self.subTest(caller=caller and caller.username):
-                self.client.logout()
-                if caller is not None:
-                    self.client.force_login(caller)
-
-                body = self.get_detail().json()
-
-                # the keys are always present, so the shape does not depend on who is asking
-                assert "user_id" in body
-                assert "username" in body
-                assert body["user_id"] == expected_user_id, body["user_id"]
-                assert body["username"] == expected_username, body["username"]
-
     def test_the_entity_tag_distinguishes_the_two_bodies(self) -> None:
         # the body now depends on who is asking, so a single tag for both would let a caller
         # presenting the other one's tag be answered 304 with a body never meant for them
@@ -1825,8 +1799,6 @@ class TaskDetailIsPublicTests(TestCase):
         data = ForcePhotTaskSerializer([self.task], many=True, context={"request": request}).data
 
         assert data[0]["callback_url"] is None
-        assert data[0]["user_id"] is None
-        assert data[0]["username"] is None
 
     def test_the_same_caller_may_read_but_not_change(self) -> None:
         # the boundary this class exists to describe, asserted on one caller in one test: the

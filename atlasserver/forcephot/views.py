@@ -221,8 +221,7 @@ def get_tasklist_etag(request, user_id: int, *, min_queuepos_relative: int, show
     """Return an etag that changes whenever anything the given user's task pages show changes.
 
     `shows_owner_fields` says which of the two bodies this tag describes. The serializer keeps
-    callback_url, user_id and username to the owner and to staff, so one URL has two
-    representations; without this term
+    callback_url to the owner and to staff, so one URL has two representations; without this term
     the tag would be the same for both, and a caller presenting the other one's tag would be
     answered 304 with a body that was never meant for them.
 

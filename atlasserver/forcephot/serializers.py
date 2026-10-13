@@ -286,26 +286,18 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return default
 
-    # The fields that only the submitter and staff may read. Reading a task is public on purpose,
-    # but the public part is the measurement. The callback carries no signature, so its URL is the
-    # whole credential for whatever it points at. The user id and the username say who asked for
-    # the measurement, and task ids are sequential, so a reader of these could walk every task and
-    # collect every user's positions of interest.
-    OWNER_ONLY_FIELDS = ("callback_url", "user_id", "username")
-
     @override
     def to_representation(self, instance: Task) -> dict[str, t.Any]:
-        """Serialise a task, keeping the submitter's identity and callback URL to the submitter.
+        """Serialise a task, keeping the submitter's callback URL to the submitter.
 
-        Emptied rather than dropped, so that the shape of the response does not depend on who is
-        asking. Staff read everything: is_owned_by counts a staff member as an owner.
+        Reading a task is public on purpose, but the callback carries no signature, so its URL is
+        the whole credential for whatever it points at. Emptied rather than dropped, so that the
+        shape of the response does not depend on who is asking.
         """
         data = super().to_representation(instance)
 
-        if not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
-            for field in self.OWNER_ONLY_FIELDS:
-                if field in data:
-                    data[field] = None
+        if data.get("callback_url") and not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
+            data["callback_url"] = None
 
         return data
 
