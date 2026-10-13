@@ -7467,11 +7467,14 @@ class CoordChartTests(TestCase):
         self.addCleanup(caches["usagestats"].clear)
         self.user = User.objects.create_user("chartowner", "chartowner@example.com", "pw")
 
-    def chart_columns(self) -> dict[str, list]:
-        """Fetch the chart and return the columns of its one data source, by name."""
+    def chart_body(self) -> str:
         response = self.client.get(reverse("statscoordchart"))
         assert response.status_code == 200, response.status_code
-        self.body = response.content.decode()
+        return response.content.decode()
+
+    @staticmethod
+    def columns_of(body: str) -> dict[str, list]:
+        """Return the columns of the one data source in the chart JSON, by name."""
 
         def sources(node: object) -> t.Iterator[dict]:
             if isinstance(node, dict):
@@ -7483,25 +7486,25 @@ class CoordChartTests(TestCase):
                 for value in node:
                     yield from sources(value)
 
-        found = list(sources(json.loads(self.body)["item"]))
+        found = list(sources(json.loads(body)["item"]))
         assert len(found) == 1, found
         return dict(found[0]["attributes"]["data"]["entries"])
 
     def test_the_chart_does_not_carry_usernames(self) -> None:
         Task.objects.create(user=self.user, ra=10.0, dec=20.0)
 
-        columns = self.chart_columns()
+        body = self.chart_body()
 
-        assert set(columns) == {"ra", "dec", "taskid"}, columns
-        assert "@taskid" in self.body
-        assert "chartowner" not in self.body
-        assert "username" not in self.body
+        assert set(self.columns_of(body)) == {"ra", "dec", "taskid"}, body
+        assert "@taskid" in body
+        assert "chartowner" not in body
+        assert "username" not in body
 
     def test_a_task_without_coordinates_is_not_a_point(self) -> None:
         point = Task.objects.create(user=self.user, ra=10.0, dec=20.0)
         Task.objects.create(user=self.user, ra=None, dec=None, mpc_name="Makemake", mjd_min=None)
 
-        columns = self.chart_columns()
+        columns = self.columns_of(self.chart_body())
 
         assert columns["taskid"] == [point.id], columns
         assert columns["ra"] == [10.0], columns

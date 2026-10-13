@@ -688,8 +688,9 @@ class RequestImages(APIView):
 
 
 @path_only
-# key_prefix: cache_page keys an entry on the URL alone, so a change to what the chart sends needs
-# a new prefix. The file cache would otherwise serve the earlier shape until the entry expires.
+# key_prefix: the name of this response shape in the cache key. cache_page keys an entry on the URL
+# alone, and the usagestats cache keeps an entry for a day, so a response with a new shape takes a
+# new prefix and starts from an empty cache at deployment.
 @cache_page(60 * 60 * 24, cache="usagestats", key_prefix="coordchart-v2")
 def statscoordchart(request):
     # deferred for the same reason as atlasserver.taskrunner.main above: bokeh pulls in numpy and a
