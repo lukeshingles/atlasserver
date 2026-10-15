@@ -592,7 +592,9 @@ export const Task = React.memo(function Task(props) {
     // the values tabular figures, so the digits line up between rows as well as within one.
     const meta = [];
 
-    if (task.user_id != user_id) {
+    // the serializer keeps the owner to the owner and to staff, so a null username is somebody
+    // else's task seen by a reader who may not learn whose it is
+    if (task.username != null && task.user_id != user_id) {
         meta.push(['user', 'User:', task.username]);
     }
 
