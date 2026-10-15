@@ -145,6 +145,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         """Seconds the task took to run."""
         return self._rounded_seconds(obj.runtime())
 
+    # declared rather than left to ModelSerializer, which infers both as never null from the
+    # model. to_representation empties them for a reader who is not the owner or staff, so the
+    # published schema says that they can be null.
+    user_id = serializers.IntegerField(read_only=True, allow_null=True)
+    username = serializers.CharField(read_only=True, allow_null=True)
+
     queuepos = serializers.SerializerMethodField("get_queuepos")
     # declared rather than left to ModelSerializer, which would resolve these two model methods to
     # a plain ReadOnlyField and render their full float precision
@@ -286,18 +292,24 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return default
 
+    # The fields that only the submitter and staff may read. Reading a task is public on purpose,
+    # but the public part is the measurement. The callback carries no signature, so its URL is the
+    # whole credential for whatever it points at. The user id and the username say who asked for
+    # the measurement, and task ids are sequential, so a reader of these could walk every task and
+    # collect every user's positions of interest.
+    OWNER_ONLY_FIELDS = ("callback_url", "user_id", "username")
+
     @override
     def to_representation(self, instance: Task) -> dict[str, t.Any]:
-        """Serialise a task, keeping the submitter's callback URL to the submitter.
+        """Serialise a task, keeping the submitter's identity and callback URL to the submitter.
 
-        Reading a task is public on purpose, but the callback carries no signature, so its URL is
-        the whole credential for whatever it points at. Emptied rather than dropped, so that the
-        shape of the response does not depend on who is asking.
+        Emptied rather than dropped, so that the shape of the response does not depend on who is
+        asking. Staff read everything: is_owned_by counts a staff member as an owner.
         """
         data = super().to_representation(instance)
 
-        if data.get("callback_url") and not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
-            data["callback_url"] = None
+        if not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
+            data.update(dict.fromkeys(self.OWNER_ONLY_FIELDS))
 
         return data
 

@@ -132,6 +132,19 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
     return proc.returncode
 
 
+def clear_page_cache() -> None:
+    """Empty the usagestats cache, so that the new server builds every stats page itself.
+
+    cache_page keys a page on its URL alone and keeps it for up to a day. A restart is how new code
+    goes live, so the pages that the earlier code built go with the earlier process. The cache also
+    holds the typical runtime medians, which the next request computes again.
+    """
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
+    from django.core.cache import caches
+
+    caches["usagestats"].clear()
+
+
 def start() -> None:
     """Start the ATLAS Apache server."""
     if pid := get_httpd_pid():
@@ -197,6 +210,8 @@ def start() -> None:
     run_command(command)
 
     os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)
+
+    clear_page_cache()
 
     # The socket might not be released yet, so try again for a while. Bounded: a start that fails
     # for another reason (the port held by a stray httpd, a bad httpconf.txt, a moved interpreter)

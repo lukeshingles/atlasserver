@@ -1732,23 +1732,27 @@ class TaskDetailIsPublicTests(TestCase):
         response = self.get_detail(accept="text/html")
         assert response.status_code == 200, response.status_code
 
-    def test_the_callback_url_is_kept_to_the_submitter(self) -> None:
-        """What is public is the measurement, not the submitter's webhook endpoint.
+    def test_the_owner_fields_are_kept_to_the_owner_and_to_staff(self) -> None:
+        """What is public is the measurement, not who asked for it or where their webhook goes.
 
         The callback carries no signature and no shared secret, so its URL is the whole credential
         for whatever it points at -- and such URLs routinely hold a secret in the path or query.
-        Task ids are sequential, so a reader who could see this field could walk them and collect
-        every API user's.
+        The user id and the username say who asked for the measurement. Task ids are sequential,
+        so a reader who could see these fields could walk them and collect every user's. Staff
+        read them: an administrator looks at the task page to see whose task it is.
         """
         self.task.callback_url = "https://hooks.example.com/t/secret-token"
         self.task.save(update_fields=["callback_url"])
+        shown = {
+            "callback_url": "https://hooks.example.com/t/secret-token",
+            "user_id": self.owner.pk,
+            "username": "detailowner",
+        }
+        # a field added to the tuple fails here until this test says what each caller sees
+        assert set(shown) == set(ForcePhotTaskSerializer.OWNER_ONLY_FIELDS)
+        hidden = dict.fromkeys(shown)
 
-        for caller, expected in (
-            (None, None),
-            (self.other, None),
-            (self.owner, "https://hooks.example.com/t/secret-token"),
-            (self.staff, "https://hooks.example.com/t/secret-token"),
-        ):
+        for caller, expected in ((None, hidden), (self.other, hidden), (self.owner, shown), (self.staff, shown)):
             with self.subTest(caller=caller and caller.username):
                 self.client.logout()
                 if caller is not None:
@@ -1756,9 +1760,8 @@ class TaskDetailIsPublicTests(TestCase):
 
                 body = self.get_detail().json()
 
-                # the key is always present, so the shape does not depend on who is asking
-                assert "callback_url" in body
-                assert body["callback_url"] == expected, body["callback_url"]
+                # every key is present for every caller, so the shape does not depend on who asks
+                assert {field: body[field] for field in expected} == expected, body
 
     def test_the_entity_tag_distinguishes_the_two_bodies(self) -> None:
         # the body now depends on who is asking, so a single tag for both would let a caller
@@ -1787,10 +1790,10 @@ class TaskDetailIsPublicTests(TestCase):
 
         assert body["results"][0]["callback_url"] == "https://hooks.example.com/t/secret-token"
 
-    def test_a_list_render_blanks_it_for_a_non_owner(self) -> None:
+    def test_a_list_render_blanks_them_for_a_non_owner(self) -> None:
         # the rule belongs to the serializer rather than to one view, so it has to hold under
         # many=True as well: the list view is scoped to the requester today, and this is what
-        # keeps the field safe if that ever stops being true
+        # keeps the owner fields safe if that ever stops being true
         self.task.callback_url = "https://hooks.example.com/t/secret-token"
         self.task.save(update_fields=["callback_url"])
         request = RequestFactory().get("/")
@@ -1798,7 +1801,8 @@ class TaskDetailIsPublicTests(TestCase):
 
         data = ForcePhotTaskSerializer([self.task], many=True, context={"request": request}).data
 
-        assert data[0]["callback_url"] is None
+        for field in ForcePhotTaskSerializer.OWNER_ONLY_FIELDS:
+            assert data[0][field] is None, field
 
     def test_the_same_caller_may_read_but_not_change(self) -> None:
         # the boundary this class exists to describe, asserted on one caller in one test: the
@@ -4099,6 +4103,31 @@ class TaskAttemptCountTests(TestCase):
         assert body["attempt_count"] == 2
 
 
+def import_atlaswebserver() -> t.Any:
+    """Import the CLI module with a project path its module body will accept.
+
+    That body rejects a path containing a space, which a checkout may well have; the override
+    exists for exactly that case and has to be in the environment before the first import.
+    """
+    os.environ.setdefault("ATLASSERVER_PATH", "/tmp/atlasserver-clitest")
+    from atlasserver import atlaswebserver
+
+    return atlaswebserver
+
+
+class WebserverStartTests(SimpleTestCase):
+    """A start empties the page cache, so that the new code builds every stats page itself."""
+
+    def test_a_start_empties_the_page_cache(self) -> None:
+        atlaswebserver = import_atlaswebserver()
+        caches["usagestats"].set("page", "built by the earlier code")
+        self.addCleanup(caches["usagestats"].clear)
+
+        atlaswebserver.clear_page_cache()
+
+        assert caches["usagestats"].get("page") is None
+
+
 class WebserverStopTests(SimpleTestCase):
     """Stopping the server when apachectl cannot run.
 
@@ -4107,20 +4136,8 @@ class WebserverStopTests(SimpleTestCase):
     with no way to stop it through the normal route.
     """
 
-    @staticmethod
-    def _atlaswebserver() -> t.Any:
-        """Import the CLI module with a project path its module body will accept.
-
-        That body rejects a path containing a space, which a checkout may well have; the override
-        exists for exactly that case and has to be in the environment before the first import.
-        """
-        os.environ.setdefault("ATLASSERVER_PATH", "/tmp/atlasserver-clitest")
-        from atlasserver import atlaswebserver
-
-        return atlaswebserver
-
     def test_a_server_that_apachectl_stops_is_not_also_signalled(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4133,7 +4150,7 @@ class WebserverStopTests(SimpleTestCase):
         assert not ourprocess.called, "the normal route worked, so nothing should be signalled"
 
     def test_a_server_apachectl_cannot_stop_is_signalled_instead(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
         process = mock.Mock()
 
         with (
@@ -4151,7 +4168,7 @@ class WebserverStopTests(SimpleTestCase):
     def test_a_pid_reused_while_apachectl_ran_is_not_signalled(self) -> None:
         # apachectl blocks, so the server can exit and its number be handed to something else
         # between the check that found it and the fallback that would signal it
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4164,7 +4181,7 @@ class WebserverStopTests(SimpleTestCase):
         assert not signalstop.called, "a pid that is no longer this server must not be signalled"
 
     def test_a_server_that_is_not_running_is_neither_stopped_nor_signalled(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=None),
@@ -4179,7 +4196,7 @@ class WebserverStopTests(SimpleTestCase):
     def test_a_process_that_exits_before_the_signal_is_not_an_error(self) -> None:
         # the pid is read, then checked, then signalled, and the server can finish stopping in
         # between -- which is the outcome being asked for, not a failure
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4197,7 +4214,7 @@ class WebserverStopTests(SimpleTestCase):
         Without an identity check the fallback signals whatever inherited the pid, and restart then
         waits forever for an unrelated process to exit.
         """
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with mock.patch.object(atlaswebserver.psutil, "Process") as process:
             process.return_value.cmdline.return_value = ["/usr/bin/some-other-daemon", "--serve"]
@@ -4205,7 +4222,7 @@ class WebserverStopTests(SimpleTestCase):
             assert atlaswebserver.our_httpd_process(4242) is None
 
     def test_a_pid_running_this_server_is_the_server(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
         conf = str(atlaswebserver.APACHEPATH / "httpd.conf")
 
         with mock.patch.object(atlaswebserver.psutil, "Process") as process:
@@ -4215,7 +4232,7 @@ class WebserverStopTests(SimpleTestCase):
             assert atlaswebserver.our_httpd_process(4242) is process.return_value
 
     def test_a_process_that_cannot_be_inspected_is_not_assumed_to_be_ours(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         # a dead pid and one belonging to another user both arrive as psutil.Error
         for failure in (psutil.NoSuchProcess(4242), psutil.AccessDenied(4242)):
@@ -4223,7 +4240,7 @@ class WebserverStopTests(SimpleTestCase):
                 assert atlaswebserver.our_httpd_process(4242) is None, failure
 
     def test_a_stale_pid_file_is_removed_rather_than_believed(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "httpd.pid")
@@ -4244,7 +4261,7 @@ class WebserverStopTests(SimpleTestCase):
         get_httpd_pid then reports nothing running, so start() tries to bind a port that is already
         held and retries for as long as it is left to.
         """
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "httpd.pid")
@@ -4262,7 +4279,7 @@ class WebserverStopTests(SimpleTestCase):
     def test_an_unreadable_pid_file_is_reported_rather_than_raised(self) -> None:
         # every command begins by asking whether the server is up, so raising here makes the tool
         # unusable until the file is removed by hand
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "httpd.pid").write_text("")  # truncated by an unclean exit
@@ -4271,7 +4288,7 @@ class WebserverStopTests(SimpleTestCase):
                 assert atlaswebserver.get_httpd_pid() is None
 
     def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
-        atlaswebserver = self._atlaswebserver()
+        atlaswebserver = import_atlaswebserver()
 
         with (
             mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=4242),
@@ -4291,15 +4308,26 @@ class OpenApiSchemaTests(TestCase):
 
         assert response.status_code == 200, response.content
 
-    def test_schema_describes_the_queue_endpoint(self) -> None:
+    def get_schema(self) -> dict[str, t.Any]:
         import yaml
 
-        schema = yaml.safe_load(self.client.get(reverse("schema")).content)
+        return yaml.safe_load(self.client.get(reverse("schema")).content)
+
+    def test_schema_describes_the_queue_endpoint(self) -> None:
+        schema = self.get_schema()
 
         assert "/queue/" in schema["paths"], sorted(schema["paths"])
         properties = schema["components"]["schemas"]["ForcePhotTask"]["properties"]
         for field in ("ra", "dec", "mjd_min", "mjd_max", "callback_url"):
             assert field in properties, sorted(properties)
+
+    def test_the_owner_fields_are_nullable_in_the_schema(self) -> None:
+        # the serializer empties these for a reader who is not the owner or staff, so a client
+        # generated from the schema must accept null for each of them
+        properties = self.get_schema()["components"]["schemas"]["ForcePhotTask"]["properties"]
+
+        for field in ForcePhotTaskSerializer.OWNER_ONLY_FIELDS:
+            assert properties[field].get("nullable") is True, (field, properties[field])
 
 
 class AtlasCommandTests(TestCase):
@@ -7457,6 +7485,59 @@ class ResultFileProblemTests(SimpleTestCase):
 
     def test_a_data_row_is_fine(self) -> None:
         assert self.check("###MJD m dm\n59000.1 18.2 0.1\n") is None
+
+
+class CoordChartTests(TestCase):
+    """The coordinate chart is public, so the JSON it sends carries only the coordinates.
+
+    It names no owner, and it carries no task id that leads to one.
+    """
+
+    def setUp(self) -> None:
+        caches["usagestats"].clear()
+        self.addCleanup(caches["usagestats"].clear)
+        self.user = User.objects.create_user("chartowner", "chartowner@example.com", "pw")
+
+    def chart_body(self) -> str:
+        response = self.client.get(reverse("statscoordchart"))
+        assert response.status_code == 200, response.status_code
+        return response.content.decode()
+
+    @staticmethod
+    def columns_of(body: str) -> dict[str, list]:
+        """Return the columns of the one data source in the chart JSON, by name."""
+
+        def sources(node: object) -> t.Iterator[dict]:
+            if isinstance(node, dict):
+                if node.get("name") == "ColumnDataSource":
+                    yield node
+                for value in node.values():
+                    yield from sources(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from sources(value)
+
+        found = list(sources(json.loads(body)["item"]))
+        assert len(found) == 1, found
+        return dict(found[0]["attributes"]["data"]["entries"])
+
+    def test_the_chart_carries_only_coordinates(self) -> None:
+        Task.objects.create(user=self.user, ra=10.0, dec=20.0)
+
+        body = self.chart_body()
+
+        assert set(self.columns_of(body)) == {"ra", "dec"}, body
+        assert "@ra" in body
+        assert "chartowner" not in body
+
+    def test_a_task_without_coordinates_is_not_a_point(self) -> None:
+        Task.objects.create(user=self.user, ra=10.0, dec=20.0)
+        Task.objects.create(user=self.user, ra=None, dec=None, mpc_name="Makemake", mjd_min=None)
+
+        columns = self.columns_of(self.chart_body())
+
+        assert columns["ra"] == [10.0], columns
+        assert columns["dec"] == [20.0], columns
 
 
 class ChartQueryStringTests(TestCase):
