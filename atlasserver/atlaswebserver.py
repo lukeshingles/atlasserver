@@ -84,7 +84,7 @@ def get_httpd_pid() -> int | None:
         return None
 
     try:
-        pid = int(pidfile.read_text().strip())
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
     except ValueError:
         # a file truncated by an unclean exit, which says nothing about what is running. Reported
         # rather than raised: every command here begins by asking whether the server is up, so an

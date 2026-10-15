@@ -98,8 +98,7 @@ with requests.Session() as s:
 
     filename = f"result_{resp.json()['id']}.txt"
     # save the data file to disk with a file containing the task id
-    with Path(filename).open("w", encoding="utf-8") as f:
-        f.write(textdata)
+    Path(filename).write_text(textdata, encoding="utf-8")
 
     # delete the task from the server, now that its results are safely on disk. No .json() on the
     # reply: a successful delete is 204 with an empty body, which is not JSON.

@@ -1208,7 +1208,7 @@ class PermissionResponseTests(TestCase):
         # the poll asks for JSON, so it now gets a real 403 instead of the redirect it used to
         # follow. Nothing navigates on the page's behalf any more, so the polling code has to
         # recognise the status itself or the page sits showing pre-logout tasks forever.
-        frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text()
+        frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text(encoding="utf-8")
         # matched on the name rather than on the exact declaration, which this has now pinned twice:
         # once on the parameter list (a second parameter broke it) and once on it being a class
         # method (converting the component to hooks broke it). Both failed with a message about the
@@ -1500,7 +1500,7 @@ def write_plotscript_stubs(staticroot: str) -> None:
     for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
         plotscript = Path(staticroot, name)
         plotscript.parent.mkdir(parents=True, exist_ok=True)
-        plotscript.write_text("/* stub */\n")
+        plotscript.write_text("/* stub */\n", encoding="utf-8")
 
 
 class ClientLocationTests(TestCase):
@@ -2355,7 +2355,7 @@ class RequestImagesTests(TestCase):
         # APPEND_SLASH answers a slashless POST with a 301, and a browser retries a redirected
         # POST as a GET, which this endpoint no longer accepts
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
-        frontendpath = Path(settings.BASE_DIR, "static/js/queuepage/src/tasklist.jsx").read_text()
+        frontendpath = Path(settings.BASE_DIR, "static/js/queuepage/src/tasklist.jsx").read_text(encoding="utf-8")
         assert "'requestimages/'" in frontendpath, "tasklist.jsx must post to the slashed URL"
 
         self.client.force_login(self.user)
@@ -2606,7 +2606,7 @@ class TaskRunnerPidFileTests(TestCase):
         # int("") raised out of start(), and a restart had already stopped the runner by then
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "taskrunner.pid")
-            pidfile.write_text("")
+            pidfile.write_text("", encoding="utf-8")
 
             with (
                 mock.patch.object(atlastaskrunner, "TASKRUNNER_PIDFILE", pidfile),
@@ -2621,7 +2621,7 @@ class TaskRunnerPidFileTests(TestCase):
     def test_a_readable_pid_is_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "taskrunner.pid")
-            pidfile.write_text("4242\n")
+            pidfile.write_text("4242\n", encoding="utf-8")
             assert atlastaskrunner.read_pidfile(pidfile) == 4242
 
 
@@ -2781,7 +2781,9 @@ class ResultPlotDataTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
             resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
             resultfile.parent.mkdir(parents=True, exist_ok=True)
-            resultfile.write_text(RESULTFILE_HEADER + "\nWARNING: bad line\n" + self.datarow(0) + "\n")
+            resultfile.write_text(
+                RESULTFILE_HEADER + "\nWARNING: bad line\n" + self.datarow(0) + "\n", encoding="utf-8"
+            )
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200
@@ -2790,9 +2792,13 @@ class ResultPlotDataTests(TestCase):
             # the view appends the plotting script from STATIC_ROOT: the minified bundle
             # normally, the source file when DEBUG is on (as it is in the CI settings)
             Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True)
-            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n")
-            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text("// plot script\n")
-            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n", encoding="utf-8")
+            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text(
+                "// plot script\n", encoding="utf-8"
+            )
+            resultfile.write_text(
+                RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n", encoding="utf-8"
+            )
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200
@@ -2819,16 +2825,20 @@ class ResultPlotDataTests(TestCase):
             resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
             resultfile.parent.mkdir(parents=True, exist_ok=True)
             Path(tmpdir, "js").mkdir(exist_ok=True)
-            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n")
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n", encoding="utf-8")
             Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True, exist_ok=True)
-            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text("// plot script\n")
+            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text(
+                "// plot script\n", encoding="utf-8"
+            )
 
             # mag5sig is 19.0 in every row. m=18.0 is brighter than that, so it is a measurement;
             # m=20.0 is fainter, and a negative flux is no measurement at any depth.
             detected = "59000.00000 18.0 0.05 100 10 o 0 1.0 10.0 20.0 100 100 2 2 0 -0.5 19.0 18.0 01a00000o0235o"
             toofaint = "59001.00000 20.0 0.90 20 10 o 0 1.0 10.0 20.0 100 100 2 2 0 -0.5 19.0 18.0 01a00001o0235o"
             negative = "59002.00000 -21.0 1.50 -8 10 o 0 1.0 10.0 20.0 100 100 2 2 0 -0.5 19.0 18.0 01a00002o0235o"
-            resultfile.write_text(RESULTFILE_HEADER + "\n" + detected + "\n" + toofaint + "\n" + negative + "\n")
+            resultfile.write_text(
+                RESULTFILE_HEADER + "\n" + detected + "\n" + toofaint + "\n" + negative + "\n", encoding="utf-8"
+            )
 
             response = self.client.get(reverse("resultplotdatajs", args=[task.id]))
             assert response.status_code == 200
@@ -2853,10 +2863,12 @@ class ResultPlotDataTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "js").mkdir()
             script = Path(tmpdir, "js", "lightcurveplotly.min.js")
-            script.write_text("// the deployed plot script\n")
+            script.write_text("// the deployed plot script\n", encoding="utf-8")
             resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
             resultfile.parent.mkdir(parents=True, exist_ok=True)
-            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n")
+            resultfile.write_text(
+                RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n", encoding="utf-8"
+            )
 
             with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN="", STATIC_VERSION="before-deploy"):
                 first = self.client.get(reverse("resultplotdatajs", args=[task.id]))
@@ -2883,10 +2895,10 @@ class ResultPlotDataTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "js").mkdir()
-            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// the deployed plot script\n")
+            Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// the deployed plot script\n", encoding="utf-8")
             resultfile = Path(tmpdir, f"{task.localresultfileprefix()}.txt")
             resultfile.parent.mkdir(parents=True, exist_ok=True)
-            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n")
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n", encoding="utf-8")
             with override_settings(STATIC_ROOT=tmpdir, SITE_ORIGIN=""):
                 etag = self.client.get(reverse("resultplotdatajs", args=[task.id]))["ETag"]
 
@@ -3021,7 +3033,7 @@ class ApiGuideTests(TestCase):
         import html as htmlmodule
         import re
 
-        page = Path(settings.BASE_DIR, "atlasserver/forcephot/templates/apiguide.html").read_text()
+        page = Path(settings.BASE_DIR, "atlasserver/forcephot/templates/apiguide.html").read_text(encoding="utf-8")
         # <pre[^>]*>, because the blocks carry a class that copycode.js and main.css key off
         blocks = re.findall(r"<pre[^>]*><code>(.*?)</code></pre>", page, flags=re.DOTALL)
         assert blocks, "no code blocks found in the API guide"
@@ -3775,7 +3787,7 @@ class TaskRunnerStatusTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
             stale_written = timezone.now() - dt.timedelta(hours=1)
-            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
+            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}), encoding="utf-8")
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
@@ -3789,7 +3801,7 @@ class TaskRunnerStatusTests(TestCase):
         # out which kind of failure it got
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
-            statuspath.write_text("half a fi")
+            statuspath.write_text("half a fi", encoding="utf-8")
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
@@ -3800,7 +3812,7 @@ class TaskRunnerStatusTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
             stale_written = timezone.now() - dt.timedelta(hours=1)
-            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}))
+            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}), encoding="utf-8")
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 response = self.client.get(reverse("taskrunnerstatus"))
@@ -3823,7 +3835,7 @@ class TaskRunnerStatusTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
             written = timezone.now() - dt.timedelta(hours=1)
-            statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}))
+            statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}), encoding="utf-8")
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 old = self.client.get(reverse("taskrunnerstatus"))
@@ -3853,7 +3865,7 @@ class TaskRunnerStatusTests(TestCase):
         for description, contents in unusable.items():
             with tempfile.TemporaryDirectory() as tmpdir:
                 statuspath = Path(tmpdir, "taskrunner_status.json")
-                statuspath.write_text(contents)
+                statuspath.write_text(contents, encoding="utf-8")
 
                 with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                     response = self.client.get(reverse("taskrunnerstatus"))
@@ -4244,7 +4256,7 @@ class WebserverStopTests(SimpleTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "httpd.pid")
-            pidfile.write_text("4242\n")
+            pidfile.write_text("4242\n", encoding="utf-8")
 
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
@@ -4265,7 +4277,7 @@ class WebserverStopTests(SimpleTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pidfile = Path(tmpdir, "httpd.pid")
-            pidfile.write_text("4242\n")
+            pidfile.write_text("4242\n", encoding="utf-8")
 
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
@@ -4282,7 +4294,7 @@ class WebserverStopTests(SimpleTestCase):
         atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir, "httpd.pid").write_text("")  # truncated by an unclean exit
+            Path(tmpdir, "httpd.pid").write_text("", encoding="utf-8")  # truncated by an unclean exit
 
             with mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)):
                 assert atlaswebserver.get_httpd_pid() is None
@@ -6975,7 +6987,7 @@ class SiteNoticeTests(TestCase):
         """Patch STATUS_PATH at a snapshot the runner has just written."""
         tmpdir = tempfile.mkdtemp()
         statuspath = Path(tmpdir, "taskrunner_status.json")
-        statuspath.write_text(json.dumps({"written": timezone.now().isoformat(), "slots_busy": 0}))
+        statuspath.write_text(json.dumps({"written": timezone.now().isoformat(), "slots_busy": 0}), encoding="utf-8")
         return mock.patch.object(runnerstatus, "STATUS_PATH", statuspath)
 
     def test_the_box_is_painted_in_its_warning_colours_by_the_server(self) -> None:
@@ -7005,7 +7017,7 @@ class SiteNoticeTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             statuspath = Path(tmpdir, "taskrunner_status.json")
             written = timezone.now() - dt.timedelta(hours=1)
-            statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}))
+            statuspath.write_text(json.dumps({"written": written.isoformat(), "slots_busy": 0}), encoding="utf-8")
 
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 content = self.page(reverse("index"))
@@ -7468,7 +7480,7 @@ class ResultFileProblemTests(SimpleTestCase):
     def check(self, content: str) -> str | None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir, "job00001.txt")
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8")
             return taskrunner_main.result_file_problem(path)
 
     def test_an_empty_file_has_no_data(self) -> None:

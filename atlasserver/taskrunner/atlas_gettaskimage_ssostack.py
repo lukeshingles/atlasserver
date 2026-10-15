@@ -16,7 +16,6 @@ def main() -> None:
     if len(sys.argv) != 2:
         print("ERROR: exactly one argument must be specified: [FITSFILE]")
         sys.exit(1)
-        return
 
     stackedfitsfile = sys.argv[1]
 

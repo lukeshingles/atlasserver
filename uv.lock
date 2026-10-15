@@ -3,10 +3,10 @@ revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version < '3.14' and sys_platform == 'emscripten'",
@@ -349,7 +349,7 @@ dev = [
     { name = "mypy", specifier = ">=2.3.0" },
     { name = "pip", specifier = ">=26.1.2" },
     { name = "prek", specifier = ">=0.4.12" },
-    { name = "pyrefly", specifier = ">=1.2.0" },
+    { name = "pyrefly", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.16.2" },
     { name = "ty", specifier = ">=0.0.71" },
     { name = "types-markdown" },

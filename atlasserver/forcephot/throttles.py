@@ -165,7 +165,11 @@ class ForcedPhotRateThrottle(SimpleRateThrottle):
     # share a directory with the queue-recalc flag and the PDF render locks
     cache = caches["throttle"]
 
-    def __init__(self) -> None:
+    # allow_request() sets these. SimpleRateThrottle.__init__ also sets them, but it does not run.
+    num_requests: int | None
+    duration: int | None
+
+    def __init__(self) -> None:  # pyrefly: ignore[missing-super-call]
         """Do none of SimpleRateThrottle's setup: the rate is not known until the view is known."""
 
     @override

@@ -53,7 +53,7 @@ dev = [
     "mypy>=2.3.0",
     "pip>=26.1.2",
     "prek>=0.4.12",
-    "pyrefly>=1.2.0",
+    "pyrefly>=1.4.0",
     "ruff>=0.16.2",
     "ty>=0.0.71",
     "types-pyyaml>=6.0.12.20240311",
@@ -198,12 +198,43 @@ matches = "atlasserver/forcephot/forms.py"
 implicit-any-parameter = false
 
 [tool.pyrefly.errors]
-redundant-cast = "warn"
 missing-import = false
-unbound-name = false
-unsupported-operation = false
 implicit-any-empty-container = true
-implicit-any-lambda = false
+# the kinds below are off or warnings by default. The code obeys them, thus they are errors here.
+attribute-assign-on-never = "error"
+deprecated = "error"
+division-by-zero = "error"
+empty-body = "error"
+implicit-abstract-class = "error"
+implicit-import = "error"
+implicit-reexport = "error"
+implicitly-defined-attribute = "error"
+incompatible-comparison = "error"
+invalid-abstract-method = "error"
+invalid-cast = "error"
+invalid-decorator = "error"
+misplaced-ignore = "error"
+missing-attribute-patch-target = "error"
+missing-super-call = "error"
+name-mismatch = "error"
+no-any-return-implicit = "error"
+non-convergent-recursion = "error"
+non-exhaustive-match = "error"
+non-exhaustive-match-open-type = "error"
+not-required-key-access = "error"
+redundant-cast = "error"
+redundant-condition = "error"
+string-as-iterable = "error"
+unknown-attribute-type = "error"
+unnecessary-comparison = "error"
+unnecessary-type-conversion = "error"
+unreachable = "error"
+unreachable-except-clause = "error"
+unreachable-match-case = "error"
+unresolvable-dunder-all = "error"
+unsupported-dynamic-base = "error"
+untyped-class-decorator = "error"
+untyped-function-decorator = "error"
 
 [tool.pyright]
 typeCheckingMode = "off"
@@ -229,6 +260,16 @@ show-fixes = true
 
 [tool.ruff.lint]
 select = ["ALL"]
+# preview rules apply only when they are named here, not through "ALL"
+preview = true
+explicit-preview-rules = true
+extend-select = [
+    "FURB103", # write-whole-file
+    "FURB140", # reimplemented-starmap
+    "PLW1514", # unspecified-encoding
+]
+# the micro sign in the "Flux / µJy" axis label of the light curve plot
+allowed-confusables = ["µ"]
 ignore = [
     # the rest of ANN is on; Any is genuinely the right annotation at the DRF and Django hook
     # boundaries (a paginator's `view`, a serialized response body), where the framework passes
@@ -248,8 +289,6 @@ ignore = [
     "DJ001",
     "E402",
     "FBT",
-    "FIX002",  # line contains TODO
-    "INP001",
     "ISC001",  # implicit string concat (conflicts with the formatter)
     "PLC0415", # import-outside-toplevel
     # the complexity thresholds. The functions over them are the task runner's dispatch loop

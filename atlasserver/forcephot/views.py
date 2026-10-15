@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
+from itertools import starmap
 from pathlib import Path
 from typing import Any
 from typing import override
@@ -385,7 +386,7 @@ class ForcePhotPermission(permissions.BasePermission):
 
     @override
     def has_permission(self, request, view) -> bool:
-        return bool(request.method in permissions.SAFE_METHODS or request.user.is_authenticated)
+        return request.method in permissions.SAFE_METHODS or request.user.is_authenticated
 
     @override
     def has_object_permission(self, request, view, obj) -> bool:
@@ -1086,7 +1087,7 @@ def statsusagechart(request):
 
 @cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
-    dictparams = {}
+    dictparams: dict[str, t.Any] = {}
     now = dt.datetime.now(dt.UTC)
     thirtydaytasks = Task.objects.filter(timestamp__gt=now - dt.timedelta(days=30))
 
@@ -1136,8 +1137,8 @@ def statsshortterm(request):
 
     # excluding "" as well as NULL: both mean no MPC target, and task_mpc_name_not_blank keeps
     # anything else that would have meant it out of the column
-    dictparams["sevendaympctasks"] = int(sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count())
-    dictparams["sevendayimgtasks"] = int(sevendaytasks.filter(request_type="IMGZIP").count())
+    dictparams["sevendaympctasks"] = sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count()
+    dictparams["sevendayimgtasks"] = sevendaytasks.filter(request_type="IMGZIP").count()
 
     sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
 
@@ -2039,12 +2040,12 @@ def resultplotdatajs(request, taskid):
                         + '"});\n',
                         "jslcdata.push(["
                         + ", ".join(
-                            plotpoint(mjd, uJy, duJy, m, dm, mag5sig)
-                            for mjd, uJy, duJy, m, dm, mag5sig in dffilter[
-                                ["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]
-                            ]
-                            .astype(float)
-                            .itertuples(index=False, name=None)
+                            starmap(
+                                plotpoint,
+                                dffilter[["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]]
+                                .astype(float)
+                                .itertuples(index=False, name=None),
+                            )
                         )
                         + "]);\n",
                     )

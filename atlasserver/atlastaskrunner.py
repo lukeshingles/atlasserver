@@ -69,7 +69,7 @@ def read_pidfile(pidfile: Path) -> int | None:
     made `start` and `restart` fail until the file was removed by hand.
     """
     try:
-        return int(pidfile.read_text().strip())
+        return int(pidfile.read_text(encoding="utf-8").strip())
     except ValueError:
         print(f"Ignoring unreadable pid file {pidfile}")
         return None
