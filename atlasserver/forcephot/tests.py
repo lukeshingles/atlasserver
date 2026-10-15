@@ -7488,9 +7488,9 @@ class ResultFileProblemTests(SimpleTestCase):
 
 
 class CoordChartTests(TestCase):
-    """The coordinate chart is public, so the JSON it sends carries only the coordinates.
+    """The coordinate chart is public, so the JSON it sends carries the task ids and the coordinates.
 
-    It names no owner, and it carries no task id that leads to one.
+    It names no owner. The task page shows the owner only to the owner and to staff.
     """
 
     def setUp(self) -> None:
@@ -7521,12 +7521,15 @@ class CoordChartTests(TestCase):
         assert len(found) == 1, found
         return dict(found[0]["attributes"]["data"]["entries"])
 
-    def test_the_chart_carries_only_coordinates(self) -> None:
-        Task.objects.create(user=self.user, ra=10.0, dec=20.0)
+    def test_the_chart_carries_the_task_ids_and_coordinates(self) -> None:
+        task = Task.objects.create(user=self.user, ra=10.0, dec=20.0)
 
         body = self.chart_body()
+        columns = self.columns_of(body)
 
-        assert set(self.columns_of(body)) == {"ra", "dec"}, body
+        assert set(columns) == {"taskid", "ra", "dec"}, body
+        assert columns["taskid"] == [task.id], columns
+        assert "@taskid" in body
         assert "@ra" in body
         assert "chartowner" not in body
 
