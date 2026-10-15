@@ -6,7 +6,6 @@ import datetime as dt
 import json
 import multiprocessing as mp
 import os
-import smtplib
 import subprocess
 import time
 import typing as t
@@ -603,7 +602,8 @@ def send_email_if_needed(task, logfunc) -> None:
 
         try:
             message.send()
-        except (OSError, smtplib.SMTPException) as ex:
+        except OSError as ex:
+            # smtplib.SMTPException is a subclass of OSError, thus this clause also catches it.
             # a refused recipient or an unreachable mail server must not propagate: it would kill
             # the worker before the task is marked finished, and the task would be re-run forever
             logfunc(f"ERROR: could not send email to {task.user.email}: {ex}")

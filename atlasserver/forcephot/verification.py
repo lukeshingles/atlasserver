@@ -197,7 +197,7 @@ def user_from_uidb64(uidb64: str) -> t.Any:
     # invalid-link page.
     try:
         pk = int(urlsafe_base64_decode(uidb64).decode())
-    except (TypeError, ValueError, OverflowError, UnicodeDecodeError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
     return get_user_model().objects.filter(pk=pk).first()
