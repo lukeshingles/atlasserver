@@ -273,7 +273,7 @@ class Task(models.Model):
     def localresultfileprefix(self, use_parent: bool = False) -> str:
         """Return the relative path prefix for the job (no file extension)."""
         # the id column, so that a child answers without loading its parent row
-        int_id = int(self.parent_task_id) if use_parent and self.parent_task_id else int(self.id)
+        int_id = self.parent_task_id if use_parent and self.parent_task_id else self.id
         return f"results/{jobfilename(int_id)}"
 
     def localresultfile(self) -> str | None:

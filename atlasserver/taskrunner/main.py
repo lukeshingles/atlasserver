@@ -6,7 +6,6 @@ import datetime as dt
 import json
 import multiprocessing as mp
 import os
-import smtplib
 import subprocess
 import time
 import typing as t
@@ -265,7 +264,9 @@ def result_file_problem(localresultfile: Path) -> str | None:
     A plain read rather than pandas: this runs once per task in a process spawned for that task,
     and importing pandas there cost each of them a quarter of a second and eighty megabytes.
     """
-    lines = [line for line in localresultfile.read_text(errors="replace").splitlines() if line.strip()]
+    lines = [
+        line for line in localresultfile.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()
+    ]
     if not lines:
         return "No data returned"
 
@@ -296,6 +297,8 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
     remoteresultdir = Path("~/atlasserver/results/")
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
     remoteresultfile = Path(remoteresultdir, filename)
+    # the IMGZIP and SSOSTACK tasks use this file. The FP tasks do not use it.
+    remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
 
     localresultfile = Path(settings.RESULTS_DIR, filename)
     settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -311,7 +314,6 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
         localdatafile = task.inputfile()
         if not localdatafile.exists():
             localdatafile = Path(settings.RESULTS_DIR, jobfilename(task.parent_task_id, ".txt"))
-        remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
 
         if not localdatafile.exists():
             # the parent forced photometry data file lists the images to fetch. Without it the task
@@ -328,7 +330,6 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
         atlascommand += " red" if task.use_reduced else " diff"
 
     elif task.request_type == "SSOSTACK":
-        remotedatafile = Path(remoteresultdir, jobfilename(task.id, ".txt"))
         atlascommand += build_ssostack_command(
             task,
             remoteresultfile=remoteresultfile,
@@ -603,7 +604,8 @@ def send_email_if_needed(task, logfunc) -> None:
 
         try:
             message.send()
-        except (OSError, smtplib.SMTPException) as ex:
+        except OSError as ex:
+            # smtplib.SMTPException is a subclass of OSError, thus this clause also catches it.
             # a refused recipient or an unreachable mail server must not propagate: it would kill
             # the worker before the task is marked finished, and the task would be re-run forever
             logfunc(f"ERROR: could not send email to {task.user.email}: {ex}")

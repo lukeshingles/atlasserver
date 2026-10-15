@@ -49,7 +49,7 @@ def read_status() -> tuple[dict[str, t.Any], float]:
     were up is the visible fault. Thus the read and the threshold below live here, next to the
     interval they are derived from, rather than once in each caller.
     """
-    status = json.loads(STATUS_PATH.read_text())
+    status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
     # this doubles as the check that the payload is an object at all: subscripting a JSON list,
     # string or number raises TypeError, which every caller catches with the rest
     written = dt.datetime.fromisoformat(status["written"])

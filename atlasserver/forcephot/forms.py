@@ -35,7 +35,7 @@ class EmailChangeForm(forms.Form):
         label=_("New email address"), max_length=254, help_text=_("Give a valid email address.")
     )
 
-    def __init__(self, user, *args, **kwargs) -> None:
+    def __init__(self, user: User, *args, **kwargs) -> None:
         """Bind the form to the account whose address is being changed."""
         self.user = user
         super().__init__(*args, **kwargs)

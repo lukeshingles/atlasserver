@@ -12,7 +12,6 @@ from rest_framework.reverse import reverse
 from atlasserver.forcephot.models import get_mjd_min_default
 from atlasserver.forcephot.models import MPC_NAME_WHITESPACE
 from atlasserver.forcephot.models import Task
-from atlasserver.forcephot.models import UNSET
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import validate_callback_url
 
@@ -40,12 +39,13 @@ def is_finite_float(val):
         # belongs, and float() raises TypeError for those, which would surface as a 500
         return False
 
-    return bool(math.isfinite(f_val))
+    return math.isfinite(f_val)
 
 
 class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
-    # memoised queue offset. 0 is a normal value, so it cannot double as "not computed yet".
-    _min_queuepos_cache: t.Any = UNSET
+    # memoised queue offset, or None before the first computation. 0 is a normal value, thus
+    # it cannot be the marker for "not computed yet".
+    _min_queuepos_cache: int | None = None
 
     # The result links below name the file's static path, which the web server answers without
     # Django. A check that a Django view makes (see views._taskresultfile_response) does not reach
@@ -123,13 +123,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         Under many=True this serializer instance is reused for every task in the page, so the memo
         turns N aggregate queries into one.
         """
-        if self._min_queuepos_cache is UNSET:
+        if self._min_queuepos_cache is None:
             given = self.context.get("min_queuepos_relative")
             self._min_queuepos_cache = Task.min_queuepos_relative() if given is None else given
 
         return self._min_queuepos_cache
 
-    def get_queuepos(self, obj) -> int | None:
+    def get_queuepos(self, obj: Task) -> int | None:
         return obj.queuepos_from(self.min_queuepos_relative)
 
     @staticmethod

@@ -24,7 +24,6 @@ def main() -> None:
     if len(sys.argv) != 3:
         print("ERROR: exactly two argument must be specified: [DATAFILE] ['red' or 'diff']")
         sys.exit(1)
-        return
 
     signal.signal(signal.SIGTERM, exit_on_signal)
 
