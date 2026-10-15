@@ -145,6 +145,12 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         """Seconds the task took to run."""
         return self._rounded_seconds(obj.runtime())
 
+    # declared rather than left to ModelSerializer, which infers both as never null from the
+    # model. to_representation empties them for a reader who is not the owner or staff, so the
+    # published schema says that they can be null.
+    user_id = serializers.IntegerField(read_only=True, allow_null=True)
+    username = serializers.CharField(read_only=True, allow_null=True)
+
     queuepos = serializers.SerializerMethodField("get_queuepos")
     # declared rather than left to ModelSerializer, which would resolve these two model methods to
     # a plain ReadOnlyField and render their full float precision

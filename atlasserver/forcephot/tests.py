@@ -4342,6 +4342,17 @@ class OpenApiSchemaTests(TestCase):
         for field in ("ra", "dec", "mjd_min", "mjd_max", "callback_url"):
             assert field in properties, sorted(properties)
 
+    def test_the_owner_fields_are_nullable_in_the_schema(self) -> None:
+        # the serializer empties these for a reader who is not the owner or staff, so a client
+        # generated from the schema must accept null for each of them
+        import yaml
+
+        schema = yaml.safe_load(self.client.get(reverse("schema")).content)
+        properties = schema["components"]["schemas"]["ForcePhotTask"]["properties"]
+
+        for field in ForcePhotTaskSerializer.OWNER_ONLY_FIELDS:
+            assert properties[field].get("nullable") is True, (field, properties[field])
+
 
 class AtlasCommandTests(TestCase):
     """The remote shell command is assembled by string concatenation and run over ssh.
