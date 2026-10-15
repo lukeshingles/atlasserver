@@ -1,7 +1,7 @@
 """Django views for the forcephot app."""
 
 import contextlib
-import datetime
+import datetime as dt
 import functools
 import hashlib
 import logging
@@ -12,7 +12,7 @@ import typing as t
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -470,7 +470,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
-            "timestamp": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         }
 
         extra_fields.update(client_location_fields(self.request))
@@ -822,8 +822,8 @@ def statsusagechart(request):
 
         return [dictcounts.get(d, 0.0) for d in reversed(range(days_back))]
 
-    today = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    windowstart = today - datetime.timedelta(days=days_back)
+    today = dt.datetime.now(dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    windowstart = today - dt.timedelta(days=days_back)
 
     unfinished = Task.objects.filter(timestamp__gt=windowstart, finishtimestamp__isnull=True)
     finished = Task.objects.filter(timestamp__gt=windowstart, finishtimestamp__isnull=False)
@@ -869,7 +869,7 @@ def statsusagechart(request):
     armticks = {origin: _usage_arm_ticks(peak) for origin, peak in peaks.items()}
 
     data: dict[str, Any] = {
-        "queueday": [(today - datetime.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))]
+        "queueday": [(today - dt.timedelta(days=d)).strftime("%b %d") for d in reversed(range(days_back))]
     }
 
     for origin, direction in (("api", 1.0), ("web", -1.0)):
@@ -1088,8 +1088,8 @@ def statsusagechart(request):
 @cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
     dictparams = {}
-    now = datetime.datetime.now(datetime.UTC)
-    thirtydaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=30))
+    now = dt.datetime.now(dt.UTC)
+    thirtydaytasks = Task.objects.filter(timestamp__gt=now - dt.timedelta(days=30))
 
     dictparams["thirtydaytasks"] = thirtydaytasks.count()
     dictparams["thirtydaytaskrate"] = "{:.1f}/day".format(dictparams["thirtydaytasks"] / 30.0)
@@ -1125,8 +1125,8 @@ def statslongterm(request):
 
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
-    now = datetime.datetime.now(datetime.UTC)
-    sevendaytasks = Task.objects.filter(timestamp__gt=now - datetime.timedelta(days=7))
+    now = dt.datetime.now(dt.UTC)
+    sevendaytasks = Task.objects.filter(timestamp__gt=now - dt.timedelta(days=7))
     sevendaytaskcount = sevendaytasks.count()
 
     dictparams: dict[str, t.Any] = {
@@ -1676,7 +1676,7 @@ def resend_verification(request):
             # still there after this write outlives the sweep, and one the sweep took first gets no
             # link, because the write finds no row.
             if user is not None and PendingEmailVerification.objects.filter(user=user).update(
-                created=datetime.datetime.now(datetime.UTC)
+                created=dt.datetime.now(dt.UTC)
             ):
                 # guarded like the send in register(), and for the same reason: an unreachable mail
                 # relay is a temporary condition, and letting it out of a plain Django view answers
@@ -2050,7 +2050,7 @@ def resultplotdatajs(request, taskid):
                         + "]);\n",
                     )
                 )
-            mjd_today = datetime_to_mjd(datetime.datetime.now(datetime.UTC))
+            mjd_today = datetime_to_mjd(dt.datetime.now(dt.UTC))
             xmin = dfforcedphot["#MJD"].min()
             xmax = dfforcedphot["#MJD"].max()
             ymin = max(-200, dfforcedphot.uJy.min())
@@ -2090,7 +2090,7 @@ def resultplotdatajs(request, taskid):
 
 
 @contextlib.contextmanager
-def pdfplot_render_slot() -> Iterator[bool]:
+def pdfplot_render_slot() -> Generator[bool]:
     """Hold one of the site's PDF render slots for the body, or yield False if none is free."""
     for slot in range(PDF_PLOT_RENDER_SLOTS):
         with try_lock(f"pdfplot-slot-{slot}") as held:

@@ -12,7 +12,7 @@ cannot reach: a value defined in both places can drift, and NUMSLOTS below is on
 and the runner's own pool size have to derive from the same number.
 """
 
-import datetime
+import datetime as dt
 import json
 import typing as t
 from pathlib import Path
@@ -52,8 +52,8 @@ def read_status() -> tuple[dict[str, t.Any], float]:
     status = json.loads(STATUS_PATH.read_text())
     # this doubles as the check that the payload is an object at all: subscripting a JSON list,
     # string or number raises TypeError, which every caller catches with the rest
-    written = datetime.datetime.fromisoformat(status["written"])
-    return status, (datetime.datetime.now(datetime.UTC) - written).total_seconds()
+    written = dt.datetime.fromisoformat(status["written"])
+    return status, (dt.datetime.now(dt.UTC) - written).total_seconds()
 
 
 def runner_is_stale() -> bool:
