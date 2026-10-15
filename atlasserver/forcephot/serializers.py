@@ -309,9 +309,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         data = super().to_representation(instance)
 
         if not instance.is_owned_by(getattr(self.context.get("request"), "user", None)):
-            for field in self.OWNER_ONLY_FIELDS:
-                if field in data:
-                    data[field] = None
+            data.update(dict.fromkeys(self.OWNER_ONLY_FIELDS))
 
         return data
 

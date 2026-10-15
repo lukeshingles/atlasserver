@@ -1732,23 +1732,27 @@ class TaskDetailIsPublicTests(TestCase):
         response = self.get_detail(accept="text/html")
         assert response.status_code == 200, response.status_code
 
-    def test_the_callback_url_is_kept_to_the_submitter(self) -> None:
-        """What is public is the measurement, not the submitter's webhook endpoint.
+    def test_the_owner_fields_are_kept_to_the_owner_and_to_staff(self) -> None:
+        """What is public is the measurement, not who asked for it or where their webhook goes.
 
         The callback carries no signature and no shared secret, so its URL is the whole credential
         for whatever it points at -- and such URLs routinely hold a secret in the path or query.
-        Task ids are sequential, so a reader who could see this field could walk them and collect
-        every API user's.
+        The user id and the username say who asked for the measurement. Task ids are sequential,
+        so a reader who could see these fields could walk them and collect every user's. Staff
+        read them: an administrator looks at the task page to see whose task it is.
         """
         self.task.callback_url = "https://hooks.example.com/t/secret-token"
         self.task.save(update_fields=["callback_url"])
+        shown = {
+            "callback_url": "https://hooks.example.com/t/secret-token",
+            "user_id": self.owner.pk,
+            "username": "detailowner",
+        }
+        # a field added to the tuple fails here until this test says what each caller sees
+        assert set(shown) == set(ForcePhotTaskSerializer.OWNER_ONLY_FIELDS)
+        hidden = dict.fromkeys(shown)
 
-        for caller, expected in (
-            (None, None),
-            (self.other, None),
-            (self.owner, "https://hooks.example.com/t/secret-token"),
-            (self.staff, "https://hooks.example.com/t/secret-token"),
-        ):
+        for caller, expected in ((None, hidden), (self.other, hidden), (self.owner, shown), (self.staff, shown)):
             with self.subTest(caller=caller and caller.username):
                 self.client.logout()
                 if caller is not None:
@@ -1756,35 +1760,8 @@ class TaskDetailIsPublicTests(TestCase):
 
                 body = self.get_detail().json()
 
-                # the key is always present, so the shape does not depend on who is asking
-                assert "callback_url" in body
-                assert body["callback_url"] == expected, body["callback_url"]
-
-    def test_the_submitter_is_kept_to_the_submitter_and_to_staff(self) -> None:
-        """The measurement is public. Who asked for it is not, except to staff.
-
-        Task ids are sequential, so a reader who could see these fields could walk them and
-        collect every user's positions of interest. Staff read them: an administrator looks at
-        the task page to see whose task it is.
-        """
-        for caller, expected_user_id, expected_username in (
-            (None, None, None),
-            (self.other, None, None),
-            (self.owner, self.owner.pk, "detailowner"),
-            (self.staff, self.owner.pk, "detailowner"),
-        ):
-            with self.subTest(caller=caller and caller.username):
-                self.client.logout()
-                if caller is not None:
-                    self.client.force_login(caller)
-
-                body = self.get_detail().json()
-
-                # the keys are always present, so the shape does not depend on who is asking
-                assert "user_id" in body
-                assert "username" in body
-                assert body["user_id"] == expected_user_id, body["user_id"]
-                assert body["username"] == expected_username, body["username"]
+                # every key is present for every caller, so the shape does not depend on who asks
+                assert {field: body[field] for field in expected} == expected, body
 
     def test_the_entity_tag_distinguishes_the_two_bodies(self) -> None:
         # the body now depends on who is asking, so a single tag for both would let a caller
@@ -1813,10 +1790,10 @@ class TaskDetailIsPublicTests(TestCase):
 
         assert body["results"][0]["callback_url"] == "https://hooks.example.com/t/secret-token"
 
-    def test_a_list_render_blanks_it_for_a_non_owner(self) -> None:
+    def test_a_list_render_blanks_them_for_a_non_owner(self) -> None:
         # the rule belongs to the serializer rather than to one view, so it has to hold under
         # many=True as well: the list view is scoped to the requester today, and this is what
-        # keeps the field safe if that ever stops being true
+        # keeps the owner fields safe if that ever stops being true
         self.task.callback_url = "https://hooks.example.com/t/secret-token"
         self.task.save(update_fields=["callback_url"])
         request = RequestFactory().get("/")
@@ -1824,9 +1801,8 @@ class TaskDetailIsPublicTests(TestCase):
 
         data = ForcePhotTaskSerializer([self.task], many=True, context={"request": request}).data
 
-        assert data[0]["callback_url"] is None
-        assert data[0]["user_id"] is None
-        assert data[0]["username"] is None
+        for field in ForcePhotTaskSerializer.OWNER_ONLY_FIELDS:
+            assert data[0][field] is None, field
 
     def test_the_same_caller_may_read_but_not_change(self) -> None:
         # the boundary this class exists to describe, asserted on one caller in one test: the
@@ -4332,10 +4308,13 @@ class OpenApiSchemaTests(TestCase):
 
         assert response.status_code == 200, response.content
 
-    def test_schema_describes_the_queue_endpoint(self) -> None:
+    def get_schema(self) -> dict[str, t.Any]:
         import yaml
 
-        schema = yaml.safe_load(self.client.get(reverse("schema")).content)
+        return yaml.safe_load(self.client.get(reverse("schema")).content)
+
+    def test_schema_describes_the_queue_endpoint(self) -> None:
+        schema = self.get_schema()
 
         assert "/queue/" in schema["paths"], sorted(schema["paths"])
         properties = schema["components"]["schemas"]["ForcePhotTask"]["properties"]
@@ -4345,10 +4324,7 @@ class OpenApiSchemaTests(TestCase):
     def test_the_owner_fields_are_nullable_in_the_schema(self) -> None:
         # the serializer empties these for a reader who is not the owner or staff, so a client
         # generated from the schema must accept null for each of them
-        import yaml
-
-        schema = yaml.safe_load(self.client.get(reverse("schema")).content)
-        properties = schema["components"]["schemas"]["ForcePhotTask"]["properties"]
+        properties = self.get_schema()["components"]["schemas"]["ForcePhotTask"]["properties"]
 
         for field in ForcePhotTaskSerializer.OWNER_ONLY_FIELDS:
             assert properties[field].get("nullable") is True, (field, properties[field])
@@ -7512,10 +7488,9 @@ class ResultFileProblemTests(SimpleTestCase):
 
 
 class CoordChartTests(TestCase):
-    """The coordinate chart is public, so the JSON it sends must not lead to the owner of a task.
+    """The coordinate chart is public, so the JSON it sends carries only the coordinates.
 
-    The task page shows the owner to any reader, so a task id in the chart would name the owner of
-    each point in one more request.
+    It names no owner, and it carries no task id that leads to one.
     """
 
     def setUp(self) -> None:
@@ -7553,9 +7528,7 @@ class CoordChartTests(TestCase):
 
         assert set(self.columns_of(body)) == {"ra", "dec"}, body
         assert "@ra" in body
-        assert "taskid" not in body
         assert "chartowner" not in body
-        assert "username" not in body
 
     def test_a_task_without_coordinates_is_not_a_point(self) -> None:
         Task.objects.create(user=self.user, ra=10.0, dec=20.0)

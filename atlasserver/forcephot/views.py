@@ -221,10 +221,9 @@ def get_tasklist_etag(request, user_id: int, *, min_queuepos_relative: int, show
     """Return an etag that changes whenever anything the given user's task pages show changes.
 
     `shows_owner_fields` says which of the two bodies this tag describes. The serializer keeps
-    callback_url, user_id and username to the owner and to staff, so one URL has two
-    representations; without this term
-    the tag would be the same for both, and a caller presenting the other one's tag would be
-    answered 304 with a body that was never meant for them.
+    ForcePhotTaskSerializer.OWNER_ONLY_FIELDS to the owner and to staff, so one URL has two
+    representations; without this term the tag would be the same for both, and a caller presenting
+    the other one's tag would be answered 304 with a body that was never meant for them.
 
     Scoped to one user's tasks rather than the whole table. A global aggregate was invalidated by
     every other user's activity, so a busy server would almost never produce a 304, and it cost a
@@ -699,9 +698,9 @@ def statscoordchart(request):
     from bokeh.embed import json_item
 
     # Task.live(): an archived task is one its owner deleted, and no reader serves that.
-    # The chart is public, so the rows carry only the coordinates. The task page shows the owner to
-    # any reader, so a task id here would name the owner of each point in one more request. A task
-    # that names a Minor Planet Center object has no coordinates, so it is not a point.
+    # The chart is public, so the rows carry only the coordinates: no owner, and no task id that
+    # leads to one. A task that names a Minor Planet Center object has no coordinates, so it is not
+    # a point.
     tasks = list(
         Task.live().filter(ra__isnull=False, dec__isnull=False).order_by("-timestamp").values("ra", "dec")[:20000]
     )
