@@ -14,7 +14,7 @@ import { after, before, describe, test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
-const NAVBAR_JS = join(SRC, '..', '..', 'navbar.js');
+const NAVBAR_JS = join(SRC, '..', '..', 'static', 'js', 'navbar.js');
 
 // the shape of navbar.html that navbar.js cares about: the wrapper it puts the sentinel in, the
 // left-hand list, and one link marked as the current page

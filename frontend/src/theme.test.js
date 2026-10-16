@@ -14,7 +14,7 @@ import { after, before, describe, test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
-const THEME_JS = join(SRC, '..', '..', 'theme.js');
+const THEME_JS = join(SRC, '..', '..', 'static', 'js', 'theme.js');
 
 // the part of navbar.html the script drives: the three choices, the icon for each, and the wrapper
 // it reveals

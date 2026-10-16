@@ -832,7 +832,7 @@ describe('the status kept for the next page', () => {
  */
 describe('the module as a page loads it', () => {
     test('it imports nothing, because most pages have no import map to resolve a name with', async () => {
-        const built = await readFile(join(SRC, '..', '..', 'runnerstatus.min.js'), 'utf8');
+        const built = await readFile(join(SRC, '..', '..', 'static', 'js', 'runnerstatus.min.js'), 'utf8');
 
         assert.equal(/\bfrom\s*["']/.test(built), false, 'a bare specifier here fails on every page but the queue');
         assert.equal(/\bimport\s*\(/.test(built), false);

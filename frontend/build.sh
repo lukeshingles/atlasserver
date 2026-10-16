@@ -6,6 +6,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# the web server publishes all of static/, so only the built bundles go there. The source, the
+# tests and node_modules stay in this directory, which the web server does not serve.
+outdir=../static/js
+
 # --minified only takes out the whitespace: babel writes comments through by default, so every
 # bundle was shipping the source's explanatory comments to every visitor (--no-comments cuts
 # tasklist.min.js from 42kB to 26kB). Shared, so that a flag added here cannot reach some of the
@@ -16,7 +20,7 @@ cd "$(dirname "$0")"
 babelopts=(--minified --no-comments)
 
 for module in newrequest.jsx tasklist.jsx pollcache.js runnerstatus.js waitestimate.js csrftoken.js lightcurveplotly.js; do
-    npx babel "${babelopts[@]}" "src/${module}" -o "../${module%.js*}.min.js"
+    npx babel "${babelopts[@]}" "src/${module}" -o "${outdir}/${module%.js*}.min.js"
 done
 
 # React, self-hosted. The import map used to point "react" and "react-dom" at esm.sh, which put a
@@ -27,7 +31,7 @@ done
 #
 # esbuild converts React's CommonJS to ESM (v19 ships no ESM and no UMD). It is used for nothing
 # else: this project's own code is still compiled by babel above, one file at a time, unbundled.
-mkdir -p ../vendor
+mkdir -p "${outdir}/vendor"
 
 # NODE_ENV is what selects React's production branch and strips its development warnings; without
 # the define, the bundle keeps both branches and the `process` reference fails in a browser.
@@ -56,8 +60,8 @@ mkdir -p ../vendor
 # The old chunks are removed first: their names change with their contents, so they would
 # otherwise accumulate in the repo one stale copy per React upgrade. The glob also sweeps up the
 # unhashed react-shared.js this replaced.
-rm -f ../vendor/react-shared*.js
+rm -f "${outdir}"/vendor/react-shared*.js
 npx esbuild --bundle --format=esm --splitting --minify --log-level=warning \
     '--define:process.env.NODE_ENV="production"' \
-    --outdir=../vendor --entry-names='[name].min' --chunk-names='react-shared-[hash]' \
+    "--outdir=${outdir}/vendor" --entry-names='[name].min' --chunk-names='react-shared-[hash]' \
     vendor/entries/react.js vendor/entries/react-dom-client.js

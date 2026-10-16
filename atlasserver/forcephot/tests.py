@@ -1208,7 +1208,7 @@ class PermissionResponseTests(TestCase):
         # the poll asks for JSON, so it now gets a real 403 instead of the redirect it used to
         # follow. Nothing navigates on the page's behalf any more, so the polling code has to
         # recognise the status itself or the page sits showing pre-logout tasks forever.
-        frontendpath = Path(settings.STATIC_ROOT, "js", "queuepage", "src", "tasklist.jsx").read_text(encoding="utf-8")
+        frontendpath = Path(settings.FRONTEND_SRC_DIR, "tasklist.jsx").read_text(encoding="utf-8")
         # matched on the name rather than on the exact declaration, which this has now pinned twice:
         # once on the parameter list (a second parameter broke it) and once on it being a class
         # method (converting the component to hooks broke it). Both failed with a message about the
@@ -1493,14 +1493,13 @@ RESULTFILE_DATAROW = "59000.0 19.0 0.1 100 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0
 def write_plotscript_stubs(staticroot: str) -> None:
     """Put a plotting script where resultplotdatajs will look for it under STATIC_ROOT.
 
-    The view appends the script to any response that carries data. Both names are written because
-    which one it asks for depends on DEBUG, and Django's test runner turns DEBUG off whatever the
-    settings module says.
+    The view appends the script to any response that carries data. Only the minified bundle is
+    written: Django's test runner turns DEBUG off whatever the settings module says, and with DEBUG
+    off the view reads the bundle from STATIC_ROOT and not the source from FRONTEND_SRC_DIR.
     """
-    for name in ("js/lightcurveplotly.min.js", "js/queuepage/src/lightcurveplotly.js"):
-        plotscript = Path(staticroot, name)
-        plotscript.parent.mkdir(parents=True, exist_ok=True)
-        plotscript.write_text("/* stub */\n", encoding="utf-8")
+    plotscript = Path(staticroot, "js", "lightcurveplotly.min.js")
+    plotscript.parent.mkdir(parents=True, exist_ok=True)
+    plotscript.write_text("/* stub */\n", encoding="utf-8")
 
 
 class ClientLocationTests(TestCase):
@@ -2355,7 +2354,7 @@ class RequestImagesTests(TestCase):
         # APPEND_SLASH answers a slashless POST with a 301, and a browser retries a redirected
         # POST as a GET, which this endpoint no longer accepts
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
-        frontendpath = Path(settings.BASE_DIR, "static/js/queuepage/src/tasklist.jsx").read_text(encoding="utf-8")
+        frontendpath = Path(settings.FRONTEND_SRC_DIR, "tasklist.jsx").read_text(encoding="utf-8")
         assert "'requestimages/'" in frontendpath, "tasklist.jsx must post to the slashed URL"
 
         self.client.force_login(self.user)
@@ -2789,13 +2788,10 @@ class ResultPlotDataTests(TestCase):
             assert response.status_code == 200
             assert response.content == b""
 
-            # the view appends the plotting script from STATIC_ROOT: the minified bundle
-            # normally, the source file when DEBUG is on (as it is in the CI settings)
-            Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True)
+            # the view appends the minified plotting script from STATIC_ROOT, because the test
+            # runner turns DEBUG off
+            Path(tmpdir, "js").mkdir()
             Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n", encoding="utf-8")
-            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text(
-                "// plot script\n", encoding="utf-8"
-            )
             resultfile.write_text(
                 RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n" + self.datarow(1) + "\n", encoding="utf-8"
             )
@@ -2826,10 +2822,6 @@ class ResultPlotDataTests(TestCase):
             resultfile.parent.mkdir(parents=True, exist_ok=True)
             Path(tmpdir, "js").mkdir(exist_ok=True)
             Path(tmpdir, "js", "lightcurveplotly.min.js").write_text("// plot script\n", encoding="utf-8")
-            Path(tmpdir, "js", "queuepage", "src").mkdir(parents=True, exist_ok=True)
-            Path(tmpdir, "js", "queuepage", "src", "lightcurveplotly.js").write_text(
-                "// plot script\n", encoding="utf-8"
-            )
 
             # mag5sig is 19.0 in every row. m=18.0 is brighter than that, so it is a measurement;
             # m=20.0 is fainter, and a negative flux is no measurement at any depth.
@@ -2907,6 +2899,25 @@ class ResultPlotDataTests(TestCase):
         # and nothing an entity-tag may not hold: the task timestamp it is built from stringifies
         # as "2026-08-11 12:34:56+00:00", with a space in the middle
         assert all(c == "\x21" or "\x23" <= c <= "\x7e" for c in etag[1:-1]), etag
+
+    def test_debug_appends_the_source_plot_script(self) -> None:
+        # the source is in FRONTEND_SRC_DIR, outside STATIC_ROOT, because the web server publishes
+        # all of STATIC_ROOT
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as staticroot, tempfile.TemporaryDirectory() as srcdir:
+            Path(staticroot, "js").mkdir()
+            Path(staticroot, "js", "lightcurveplotly.min.js").write_text("// the bundle\n", encoding="utf-8")
+            Path(srcdir, "lightcurveplotly.js").write_text("// the source\n", encoding="utf-8")
+            resultfile = Path(staticroot, f"{task.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text(RESULTFILE_HEADER + "\n" + self.datarow(0) + "\n", encoding="utf-8")
+
+            with override_settings(DEBUG=True, STATIC_ROOT=staticroot, FRONTEND_SRC_DIR=srcdir, SITE_ORIGIN=""):
+                content = self.client.get(reverse("resultplotdatajs", args=[task.id])).content.decode()
+
+        assert content.endswith("// the source\n"), content[-200:]
+        assert "// the bundle" not in content
 
 
 class TaskRunnerEmailTests(TestCase):

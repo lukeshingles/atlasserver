@@ -2,4 +2,4 @@ graft atlasserver/forcephot/templates
 exclude atlasserver/forcephot/static
 prune atlasserver/taskrunner/logs
 prune static/results
-prune static/js/queuepage/node_modules
+prune frontend/node_modules
