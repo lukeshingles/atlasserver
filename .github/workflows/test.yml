@@ -135,7 +135,7 @@ jobs:
               continue-on-error: true
               env:
                   MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
-              run: ./update_geoipdatabase.sh
+              run: ./deploy/update_geoipdatabase.sh
 
             - name: Set up database
               # the mysql service container has already created the database and passed its
