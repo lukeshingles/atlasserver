@@ -19,14 +19,14 @@ git clone https://github.com/lukeshingles/atlasserver.git
 python3 -m pip install -e .
 ```
 
-Copy dotenv_example.txt to .env and edit the relevant sections.
+Copy deploy/dotenv_example.txt to .env. Then edit the relevant sections.
 ```sh
-cp dotenv_example.txt .env
+cp deploy/dotenv_example.txt .env
 ```
 
 Then download the geoip database files with your MaxMind API key (stored in .env).
 ```sh
-./update_geoipdatabase.sh
+./deploy/update_geoipdatabase.sh
 ```
 
 A MySQL or MariaDB server and tmux are required. These can be installed with homebrew on macOS:

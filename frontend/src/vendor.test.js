@@ -1,4 +1,4 @@
-// Checks the self-hosted React bundles that build.sh generates into ../../vendor.
+// Checks the self-hosted React bundles that build.sh generates into static/js/vendor.
 //
 // These replaced an import map pointing at esm.sh, so the thing most worth proving is that the
 // replacement actually works as a pair: React 19 ships CommonJS only, the conversion is done by
@@ -13,8 +13,8 @@ import { flush, setupDom, teardownDom } from './testing.js';
 // the DOM has to exist before the bundled react-dom is imported: it decides at import time whether
 // it is running in a browser and caches the answer. See loadReact in testing.js.
 const window = setupDom();
-const React = (await import('../../vendor/react.min.js')).default;
-const ReactDOM = (await import('../../vendor/react-dom-client.min.js')).default;
+const React = (await import('../../static/js/vendor/react.min.js')).default;
+const ReactDOM = (await import('../../static/js/vendor/react-dom-client.min.js')).default;
 
 describe('self-hosted react bundles', () => {
     after(() => teardownDom(window));
@@ -54,7 +54,7 @@ describe('self-hosted react bundles', () => {
 
     test('the bundles are self-contained, with no CDN or bare specifiers left', async () => {
         const { readFile, readdir } = await import('node:fs/promises');
-        const vendordir = new URL('../../vendor/', import.meta.url);
+        const vendordir = new URL('../../static/js/vendor/', import.meta.url);
 
         // the shared chunk carries a content hash in its name, so it is discovered rather than
         // spelled out; finding none at all would mean the split silently stopped happening
@@ -62,7 +62,7 @@ describe('self-hosted react bundles', () => {
         assert.equal(chunks.length, 1, `expected exactly one react-shared chunk, found ${chunks.length}`);
 
         for (const name of ['react.min.js', 'react-dom-client.min.js', ...chunks]) {
-            const source = await readFile(new URL(`../../vendor/${name}`, import.meta.url), 'utf8');
+            const source = await readFile(new URL(`../../static/js/vendor/${name}`, import.meta.url), 'utf8');
             assert.ok(!source.includes('esm.sh'), `${name} still references esm.sh`);
             // a leftover require() shim is how the --external:react attempt failed: it builds and
             // it imports cleanly in node, and it breaks only once a browser reaches that line

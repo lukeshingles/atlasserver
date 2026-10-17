@@ -268,6 +268,11 @@ STATIC_URL = f"{PATHPREFIX}/static/"
 STATIC_ROOT = Path(BASE_DIR, "static")
 RESULTS_DIR = Path(STATIC_ROOT, "results")
 
+# The JavaScript source. Outside STATIC_ROOT, because the web server publishes that tree;
+# frontend/build.sh compiles this source into STATIC_ROOT/js. With DEBUG on, the result plot
+# appends lightcurveplotly.js from here instead of the minified bundle.
+FRONTEND_SRC_DIR = Path(BASE_DIR, "frontend", "src")
+
 # Where an image request keeps its copy of the parent's data file until it has run. Outside
 # STATIC_ROOT on purpose: the web server serves that tree without asking Django, and this copy is
 # what lets the parent's own file go with the parent when the parent is deleted.

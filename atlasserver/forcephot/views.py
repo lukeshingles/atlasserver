@@ -2080,8 +2080,12 @@ def resultplotdatajs(request, taskid):
     if strjs:
         # the plotting code is appended outside of the cache, so that a redeployed
         # lightcurveplotly script takes effect immediately rather than after the cache timeout
-        plotscript = "js/queuepage/src/lightcurveplotly.js" if settings.DEBUG else "js/lightcurveplotly.min.js"
-        strjs += read_plotscript(Path(settings.STATIC_ROOT, plotscript))
+        plotscript = (
+            Path(settings.FRONTEND_SRC_DIR, "lightcurveplotly.js")
+            if settings.DEBUG
+            else Path(settings.STATIC_ROOT, "js", "lightcurveplotly.min.js")
+        )
+        strjs += read_plotscript(plotscript)
 
     # only set the header when there is one: Django stringifies whatever it is given, so passing the
     # DEBUG-mode None sent the literal header "ETag: None"

@@ -55,7 +55,7 @@ jobs:
         runs-on: ubuntu-latest
         defaults:
             run:
-                working-directory: static/js/queuepage
+                working-directory: frontend
         steps:
             - name: Checkout Code
               uses: actions/checkout@v7
@@ -73,12 +73,12 @@ jobs:
 
             - name: Check the committed bundles are up to date
               # the built .min.js files are committed and served directly, so a source change that
-              # was never rebuilt would ship stale JavaScript. ../vendor is covered too: it holds
-              # the self-hosted react that the queue page's import map points at, so a react bump
-              # in package.json that was never rebuilt would leave the page on the old copy.
+              # was never rebuilt would ship stale JavaScript. The diff also checks static/js/vendor:
+              # it holds the self-hosted react that the queue page's import map points at, so a react
+              # bump in package.json that was never rebuilt would leave the page on the old copy.
               run: |
                   ./build.sh
-                  git diff --exit-code -- ../*.min.js ../vendor
+                  git diff --exit-code -- ../static/js/*.min.js ../static/js/vendor
 
     test:
         name: Run tests
@@ -135,7 +135,7 @@ jobs:
               continue-on-error: true
               env:
                   MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
-              run: ./update_geoipdatabase.sh
+              run: ./deploy/update_geoipdatabase.sh
 
             - name: Set up database
               # the mysql service container has already created the database and passed its

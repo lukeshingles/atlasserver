@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-ATLASSERVERPATH="$(dirname "$(realpath "$0")")"
+# the checkout is the parent of deploy/, the directory of this script
+ATLASSERVERPATH="$(dirname "$(dirname "$(realpath "$0")")")"
 
 # resolve .env relative to the script, so that this works from any working directory (e.g. cron)
 if [ -f "$ATLASSERVERPATH/.env" ]; then

@@ -177,7 +177,7 @@ def start() -> None:
         includefile: list[str] = []
     else:
         port = 8086
-        includefile = ["--include-file", str(ATLASSERVERPATH / "httpconf.txt")]
+        includefile = ["--include-file", str(ATLASSERVERPATH / "deploy" / "httpconf.txt")]
 
     command = [
         "mod_wsgi-express",
