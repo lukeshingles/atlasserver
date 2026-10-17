@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # the web server publishes all of static/, so only the built bundles go there. The source, the
-# tests and node_modules stay in this directory, which the web server does not serve.
+# tests and node_modules stay in frontend/, outside the published tree.
 outdir=../static/js
 
 # --minified only takes out the whitespace: babel writes comments through by default, so every

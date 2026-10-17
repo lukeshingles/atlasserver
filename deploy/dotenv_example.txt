@@ -1,4 +1,4 @@
-# copy this file to .env in the top-level directory of the checkout, then edit the copy
+# Copy this file to .env in the top-level directory of the checkout. Then edit the copy.
 
 # no space before the "=": update_geoipdatabase.sh sources this file with bash, which prints the
 # rest of such a line, the key included, in its error message

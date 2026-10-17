@@ -1493,9 +1493,9 @@ RESULTFILE_DATAROW = "59000.0 19.0 0.1 100 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0
 def write_plotscript_stubs(staticroot: str) -> None:
     """Put a plotting script where resultplotdatajs will look for it under STATIC_ROOT.
 
-    The view appends the script to any response that carries data. Only the minified bundle is
-    written: Django's test runner turns DEBUG off whatever the settings module says, and with DEBUG
-    off the view reads the bundle from STATIC_ROOT and not the source from FRONTEND_SRC_DIR.
+    The view appends the script to any response that carries data. This function writes only the
+    minified bundle. Django's test runner turns DEBUG off whatever the settings module says, and
+    with DEBUG off the view reads the bundle from STATIC_ROOT, not the source from FRONTEND_SRC_DIR.
     """
     plotscript = Path(staticroot, "js", "lightcurveplotly.min.js")
     plotscript.parent.mkdir(parents=True, exist_ok=True)
@@ -2906,8 +2906,7 @@ class ResultPlotDataTests(TestCase):
         task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
 
         with tempfile.TemporaryDirectory() as staticroot, tempfile.TemporaryDirectory() as srcdir:
-            Path(staticroot, "js").mkdir()
-            Path(staticroot, "js", "lightcurveplotly.min.js").write_text("// the bundle\n", encoding="utf-8")
+            write_plotscript_stubs(staticroot)
             Path(srcdir, "lightcurveplotly.js").write_text("// the source\n", encoding="utf-8")
             resultfile = Path(staticroot, f"{task.localresultfileprefix()}.txt")
             resultfile.parent.mkdir(parents=True, exist_ok=True)
@@ -2917,7 +2916,7 @@ class ResultPlotDataTests(TestCase):
                 content = self.client.get(reverse("resultplotdatajs", args=[task.id])).content.decode()
 
         assert content.endswith("// the source\n"), content[-200:]
-        assert "// the bundle" not in content
+        assert "/* stub */" not in content
 
 
 class TaskRunnerEmailTests(TestCase):

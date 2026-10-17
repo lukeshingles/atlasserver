@@ -19,7 +19,7 @@ git clone https://github.com/lukeshingles/atlasserver.git
 python3 -m pip install -e .
 ```
 
-Copy deploy/dotenv_example.txt to .env and edit the relevant sections.
+Copy deploy/dotenv_example.txt to .env. Then edit the relevant sections.
 ```sh
 cp deploy/dotenv_example.txt .env
 ```
