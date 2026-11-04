@@ -110,7 +110,11 @@ class ObtainAuthTokenThrottled(ObtainAuthToken):
             # "authorization", for a wrong password and a refused account alike; a body with no
             # password fails earlier, with another code.
             codes = ex.get_codes()
-            fieldcodes = codes.get("non_field_errors") if isinstance(codes, dict) else None
+            # get_codes() keys its mapping by field name, or by list index for a list serializer.
+            # Only the field-named form carries "non_field_errors", so a lookup by name on the
+            # index-keyed form is a miss and not an error.
+            codesbyfield = t.cast("dict[str, t.Any]", codes) if isinstance(codes, dict) else {}
+            fieldcodes = codesbyfield.get("non_field_errors")
             body: dict[str, t.Any] = request.data if isinstance(request.data, dict) else {}
             if (
                 isinstance(fieldcodes, list)
