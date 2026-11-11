@@ -44,7 +44,7 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     rowcount = len(dfforcedphot)
     commands = []
 
-    for index, row in dfforcedphot[:1000].iterrows():
+    for index, (_, row) in enumerate(dfforcedphot[:1000].iterrows()):
         obs = row["Obs"]  # looks like '01a59309o0235c'
         imgfolder = "red" if reduced else "diff"
         fitsext = "fits" if reduced else "diff"

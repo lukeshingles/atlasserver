@@ -1373,8 +1373,9 @@ def stats(request):
     }
 
     lastfinishedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last()
-    if lastfinishedtask is not None:
-        dictparams["lastfinishtime"] = f"{lastfinishedtask.finishtimestamp:%Y-%m-%d %H:%M:%S %Z}"
+    lastfinishtime = lastfinishedtask.finishtimestamp if lastfinishedtask is not None else None
+    if lastfinishtime is not None:
+        dictparams["lastfinishtime"] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
     else:
         dictparams["lastfinishtime"] = "N/A"
 

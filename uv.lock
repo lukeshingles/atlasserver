@@ -3,10 +3,10 @@ revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version < '3.14' and sys_platform == 'emscripten'",
@@ -307,12 +307,15 @@ dev = [
     { name = "django-stubs", extra = ["compatible-mypy"] },
     { name = "djangorestframework-stubs" },
     { name = "mypy" },
+    { name = "pandas-stubs" },
     { name = "pip" },
     { name = "prek" },
     { name = "pyrefly" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "types-django-filter" },
     { name = "types-markdown" },
+    { name = "types-psutil" },
     { name = "types-pycurl" },
     { name = "types-python-dateutil" },
     { name = "types-pyyaml" },
@@ -347,12 +350,15 @@ dev = [
     { name = "django-stubs", extras = ["compatible-mypy"], specifier = ">=6.1.0" },
     { name = "djangorestframework-stubs", specifier = ">=3.18.0" },
     { name = "mypy", specifier = ">=2.3.0" },
+    { name = "pandas-stubs" },
     { name = "pip", specifier = ">=26.1.2" },
     { name = "prek", specifier = ">=0.4.12" },
     { name = "pyrefly", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.16.2" },
     { name = "ty", specifier = ">=0.0.71" },
+    { name = "types-django-filter" },
     { name = "types-markdown" },
+    { name = "types-psutil" },
     { name = "types-pycurl" },
     { name = "types-python-dateutil" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20240311" },
@@ -1826,6 +1832,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pandas-stubs"
+version = "3.1.0.261029"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f9/f8/0346629264426a6693affbc9a0fb52143acfa38112d569f68da514ea503a/pandas_stubs-3.1.0.261029.tar.gz", hash = "sha256:dcfb5b14d399beae72cce558db6d2a0d89c10301275557f1c00d5393e9cb190e", size = 119466, upload-time = "2026-10-29T17:09:31.352Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/2c/ecbc04b2a8d05d737351a54398f843223cb66edf42ec5c0fcc6198f17d3a/pandas_stubs-3.1.0.261029-py3-none-any.whl", hash = "sha256:70f631f2d0781c4500b1cd5f84cab7d7279a3d114674d69655536a4a99a3a67f", size = 179851, upload-time = "2026-10-29T17:09:30.112Z" },
+]
+
+[[package]]
 name = "pathspec"
 version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2478,12 +2496,33 @@ wheels = [
 ]
 
 [[package]]
+name = "types-django-filter"
+version = "26.2.0.20261107"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django-stubs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/fd/8087b502f1624410aba99199fe4b9c55b6cefcc1cb88b7fabfa38970e3bd/types_django_filter-26.2.0.20261107.tar.gz", hash = "sha256:1e114c9bdd107dd0639c6009d77355516e5d46aab54974743e6f24f21ef85864", size = 16588, upload-time = "2026-11-07T07:55:38.906Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/e0/8e4ff4e5b33e1ec8078488fbe6eb4d0679543d9a3924bfb10e654ecbaf4a/types_django_filter-26.2.0.20261107-py3-none-any.whl", hash = "sha256:86312a808af5be6b3a3656c33789376c10a29fc69c6367c345e81b16567cd04f", size = 19437, upload-time = "2026-11-07T07:55:38.022Z" },
+]
+
+[[package]]
 name = "types-markdown"
 version = "3.11.3.20261108"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/56/49/b7e71464ac2a88112202cc19885169703897be958801ddc13d6f6b911e52/types_markdown-3.11.3.20261108.tar.gz", hash = "sha256:eac0188fc8dacbf9bbbea68a0aee98c7d3b0008f8b1def1a141cd669dd7c708a", size = 21043, upload-time = "2026-11-08T08:12:43.96Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/01/c8/d6538cf551ca721782891de6455a129679eab0d2fedd39570e66e5057c77/types_markdown-3.11.3.20261108-py3-none-any.whl", hash = "sha256:f906be98f35c745906ce2b88bd803f5e2af78d2f2f146d700110152ac20ffc38", size = 26452, upload-time = "2026-11-08T08:12:43.074Z" },
+]
+
+[[package]]
+name = "types-psutil"
+version = "7.2.2.20261111"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/30/9eb9f10b074aa0cb3456ad3469716169d0af6de58096719f31cb065aac68/types_psutil-7.2.2.20261111.tar.gz", hash = "sha256:d677119c44fb80cc9be41d8ac731f08bf89974bb1daa49b6688665a9d7224f42", size = 27439, upload-time = "2026-11-11T08:32:33.155Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/c2/6a9d0b3e4f55ad008891dda1f9316b077f28c22274c58869f8047f7d6b74/types_psutil-7.2.2.20261111-py3-none-any.whl", hash = "sha256:054f7b635fc908d3d27e49e8d274fbfed115a1a859f2edeae17519c0238286a1", size = 33394, upload-time = "2026-11-11T08:32:32.097Z" },
 ]
 
 [[package]]
