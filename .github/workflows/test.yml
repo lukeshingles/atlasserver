@@ -36,7 +36,7 @@ jobs:
 
             - name: Run mypy
               if: always()
-              run: uv run -- mypy --install-types --non-interactive
+              run: uv run -- mypy
 
             - name: Run pyrefly
               if: always()

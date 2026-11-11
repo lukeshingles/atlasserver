@@ -350,7 +350,7 @@ dev = [
     { name = "django-stubs", extras = ["compatible-mypy"], specifier = ">=6.1.0" },
     { name = "djangorestframework-stubs", specifier = ">=3.18.0" },
     { name = "mypy", specifier = ">=2.3.0" },
-    { name = "pandas-stubs" },
+    { name = "pandas-stubs", specifier = ">=3.0" },
     { name = "pip", specifier = ">=26.1.2" },
     { name = "prek", specifier = ">=0.4.12" },
     { name = "pyrefly", specifier = ">=1.4.0" },

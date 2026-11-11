@@ -50,7 +50,7 @@ dev = [
     "djangorestframework-stubs>=3.18.0",
     "django-stubs[compatible-mypy]>=6.1.0",
     "mypy>=2.3.0",
-    "pandas-stubs",
+    "pandas-stubs>=3.0",
     "pip>=26.1.2",
     "prek>=0.4.12",
     "pyrefly>=1.4.0",

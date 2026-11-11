@@ -208,13 +208,12 @@ def make_pdf_plot_worker(
     )
 
     if plotfilepath_requested.exists():
-        if logfunc and plotfilepath == plotfilepath_requested:
-            logfunc(f"{logprefix}Created plot file {plotfilepath_requested.relative_to(localresultdir)}")
-        elif logfunc:
-            logfunc(
-                f"{logprefix}plot_atlas_fp returned an error but the PDF file "
-                f"{plotfilepath_requested.relative_to(localresultdir)} exists"
-            )
+        if logfunc:
+            relplotpath = plotfilepath_requested.relative_to(localresultdir)
+            if plotfilepath == plotfilepath_requested:
+                logfunc(f"{logprefix}Created plot file {relplotpath}")
+            else:
+                logfunc(f"{logprefix}plot_atlas_fp returned an error but the PDF file {relplotpath} exists")
         return plotfilepath_requested
 
     if logfunc:
