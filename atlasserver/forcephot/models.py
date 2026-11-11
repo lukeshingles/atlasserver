@@ -611,7 +611,7 @@ class Task(models.Model):
 
     # returns None rather than Model.delete's (count, per-type counts): a finished task is archived
     # instead of deleted, so there is no honest count to report for that branch
-    def delete(  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def delete(  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         self, using: str | None = None, keep_parents: bool = False
     ) -> None:
         with transaction.atomic(using=using):

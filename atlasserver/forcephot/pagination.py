@@ -41,7 +41,7 @@ class TaskPagination(CursorPagination):
 
     # narrower than the base signature, which also accepts a plain Sequence: the body filters and
     # orders, and this paginator is only ever given the task queryset
-    def paginate_queryset(  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def paginate_queryset(  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         self, queryset: QuerySet[Task], request: Request, view: t.Any = None
     ) -> list[Task] | None:
         queryset_full = queryset

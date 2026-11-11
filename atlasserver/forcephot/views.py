@@ -464,7 +464,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @override
-    def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int) -> None:  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int) -> None:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         """Create new task(s). create() passes the count of queued tasks it has made for its limit."""
         usertaskcount_before = usertaskcount
 

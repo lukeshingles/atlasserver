@@ -426,7 +426,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return attrs
 
-    class Meta:  # ty: ignore[invalid-attribute-override]
+    class Meta:  # ty: ignore[incompatible-attribute-override]
         model = Task
 
         fields = [
