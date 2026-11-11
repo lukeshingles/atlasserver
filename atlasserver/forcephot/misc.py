@@ -209,8 +209,7 @@ def make_pdf_plot_worker(
 
     if plotfilepath_requested.exists():
         if logfunc and plotfilepath == plotfilepath_requested:
-            # pyrefly: ignore [bad-argument-type]
-            logfunc(f"{logprefix}Created plot file {Path(plotfilepath).relative_to(localresultdir)}")
+            logfunc(f"{logprefix}Created plot file {plotfilepath_requested.relative_to(localresultdir)}")
         elif logfunc:
             logfunc(
                 f"{logprefix}plot_atlas_fp returned an error but the PDF file "
