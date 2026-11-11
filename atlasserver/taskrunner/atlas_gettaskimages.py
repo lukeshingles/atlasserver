@@ -44,8 +44,9 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     rowcount = len(dfforcedphot)
     commands = []
 
-    for index, (_, row) in enumerate(dfforcedphot[:1000].iterrows()):
-        obs = row["Obs"]  # looks like '01a59309o0235c'
+    dfimages = dfforcedphot[:1000]
+    for index, (obs, ra, dec) in enumerate(zip(dfimages["Obs"], dfimages["RA"], dfimages["Dec"], strict=True)):
+        # obs looks like '01a59309o0235c'
         imgfolder = "red" if reduced else "diff"
         fitsext = "fits" if reduced else "diff"
         fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
@@ -61,7 +62,7 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
             f"echo Image {index:04d} of {rowcount}: {obs}; "
             "/atlas/vendor/monsta/bin/monsta /atlas/lib/monsta/subarray.pro "
             f"{fitsinput} {fitsoutpath} "
-            f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {row['RA']} {row['Dec']}) 400"
+            f"$(/atlas/bin/pix2sky -sky2pix {fitsinput} {ra} {dec}) 400"
             "\n"
         )
 

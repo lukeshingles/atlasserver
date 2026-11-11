@@ -1372,8 +1372,12 @@ def stats(request):
         "bokehscripts": bokeh_cdn_scripts(),
     }
 
-    lastfinishedtask = Task.objects.filter(finishtimestamp__isnull=False).order_by("finishtimestamp").last()
-    lastfinishtime = lastfinishedtask.finishtimestamp if lastfinishedtask is not None else None
+    lastfinishtime = (
+        Task.objects.filter(finishtimestamp__isnull=False)
+        .order_by("finishtimestamp")
+        .values_list("finishtimestamp", flat=True)
+        .last()
+    )
     if lastfinishtime is not None:
         dictparams["lastfinishtime"] = f"{lastfinishtime:%Y-%m-%d %H:%M:%S %Z}"
     else:

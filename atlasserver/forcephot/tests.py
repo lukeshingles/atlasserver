@@ -6312,6 +6312,26 @@ class FailedLoginBudgetTests(TestCase):
         assert "_auth_user_id" not in self.client.session
 
 
+class StatsPageTests(TestCase):
+    def test_lastfinishtime_is_na_with_no_finished_task(self) -> None:
+        user = User.objects.create_user(username="statsuser", password=None)
+        Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        response = self.client.get(reverse("stats"))
+
+        assert response.context["lastfinishtime"] == "N/A"
+
+    def test_lastfinishtime_shows_the_most_recent_finish(self) -> None:
+        user = User.objects.create_user(username="statsuser", password=None)
+        newest = dt.datetime(2026, 3, 4, 5, 6, 7, tzinfo=dt.UTC)
+        for finishtime in (newest - dt.timedelta(days=1), newest):
+            Task.objects.create(user=user, ra=1.0, dec=2.0, finishtimestamp=finishtime)
+
+        response = self.client.get(reverse("stats"))
+
+        assert response.context["lastfinishtime"] == "2026-03-04 05:06:07 UTC"
+
+
 class ThirdPartyScriptTests(TestCase):
     """Every script the site loads from a CDN must carry an integrity hash.
 
