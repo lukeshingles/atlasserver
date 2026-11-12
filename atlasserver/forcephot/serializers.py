@@ -350,8 +350,11 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
     @staticmethod
     def _same_input(submitted: t.Any, stored: t.Any) -> bool:
         """Return whether a submitted input value is the value that the task already has."""
+        # an empty string and None both mean "not given", e.g. a stored blank mpc_name
         if submitted == "":
             submitted = None
+        if stored == "":
+            stored = None
         if submitted is None or stored is None:
             return submitted is stored
         if isinstance(stored, bool) or isinstance(submitted, bool):

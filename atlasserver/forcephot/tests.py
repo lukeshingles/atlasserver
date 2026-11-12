@@ -1125,6 +1125,13 @@ class TaskUpdateTests(TestCase):
         task.refresh_from_db()
         assert task.comment == "same target"
 
+    def test_a_stored_blank_mpc_name_is_unchanged_by_a_blank_or_null_value(self) -> None:
+        task = Task.objects.create(user=self.owner, mpc_name="", ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        for mpc_name in ("", None, " "):
+            response = self.patch_task(task, {"mpc_name": mpc_name, "ra": 1.0, "dec": 2.0, "comment": "kept"})
+            assert response.status_code == 200, (mpc_name, response.content)
+
     def test_a_patch_does_not_revert_a_concurrent_runner_write(self) -> None:
         """The row is loaded at the start of the request and saved at the end of it.
 
