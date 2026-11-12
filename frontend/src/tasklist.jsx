@@ -22,6 +22,9 @@ function debug_log(...args) {
 // immediate full fetch, so "my task is done" still appears within one short interval.
 const TASKLIST_POLL_MS = 6000;
 const QUEUEPOS_POLL_MS = 2000;
+// How long the queue position poll waits for a request in flight before it starts another. fetch()
+// has no timeout of its own, so a request that never ends must not stop the poll for ever.
+const QUEUEPOS_INFLIGHT_LIMIT_MS = 30000;
 
 const SITE_TITLE = 'ATLAS Forced Photometry';
 
@@ -940,6 +943,8 @@ export function TaskPage() {
      * of the next absence.
      */
     const queueposRequestRef = React.useRef(0);
+    // the time at which the queue position request in flight started, or null if none is in flight
+    const queueposInFlightRef = React.useRef(null);
 
     /*
      * The same for the away poll, which asks the same endpoint on its own interval and so has the same
@@ -989,8 +994,10 @@ export function TaskPage() {
     }, []);
 
     function singleTaskViewTaskId(strurl) {
-        const pathext = strurl.toString().replace(
-            api_url_base.toString(), '').split('/').filter(el => { return el.length != 0 });
+        // the pathname alone: a query string or a fragment is not part of the task address
+        const pathname = new URL(strurl.toString(), window.location.href).pathname;
+        const basepath = new URL(api_url_base.toString(), window.location.href).pathname;
+        const pathext = pathname.replace(basepath, '').split('/').filter(el => { return el.length != 0 });
 
         if (pathext.length == 1 && !isNaN(pathext[0])) {
             return parseInt(pathext[0]);
@@ -1021,7 +1028,7 @@ export function TaskPage() {
      * no longer listed here has finished (or been deleted), which is the transition worth reacting
      * to immediately, so that case falls back to a full fetch straight away.
      */
-    const fetchQueuePositions = React.useCallback(() => {
+    const fetchQueuePositions = React.useCallback((immediate = false) => {
         // no pollingPaused() check: see pollInterval()
         if (stateRef.current.results == null) {
             return;
@@ -1060,7 +1067,19 @@ export function TaskPage() {
             emptyticksRef.current = 0;
         }
 
+        /*
+         * One request at a time from the poll. A request makes every older request out of date, so
+         * if each request took longer than the poll interval, the page would drop every response
+         * and the positions would never move. A caller that needs an answer about new rows passes
+         * `immediate`, and that request replaces the one in flight.
+         */
+        const inflightsince = queueposInFlightRef.current;
+        if (!immediate && inflightsince != null && Date.now() - inflightsince < QUEUEPOS_INFLIGHT_LIMIT_MS) {
+            return;
+        }
+
         const isCurrent = startRequest(queueposRequestRef);
+        queueposInFlightRef.current = Date.now();
 
         fetch(queuepositions_url,
             {
@@ -1201,6 +1220,11 @@ export function TaskPage() {
                 // the full task list poll is what reports a connection problem; a failure here just
                 // means the positions are refreshed a few seconds later than they might have been
                 debug_log('Queue positions request failed', error);
+            })
+            .finally(() => {
+                if (isCurrent()) {
+                    queueposInFlightRef.current = null;
+                }
             });
     }, [setState]);
 
@@ -1292,7 +1316,7 @@ export function TaskPage() {
             setState({ finishedwhileaway: 0 });
         }
         queuedIdsRef.current = null;
-        fetchQueuePositions();
+        fetchQueuePositions(true);
     }, [setState, fetchQueuePositions]);
 
     const fetchData = React.useCallback((usertriggered, scrolltotop = usertriggered) => {
@@ -1532,7 +1556,7 @@ export function TaskPage() {
                             task => tracksQueuePosition(task) && !askedabout.has(String(task.id)));
                         if (queuedIdsRef.current == null || unasked.length > 0) {
                             unasked.forEach(task => askedabout.add(String(task.id)));
-                            fetchQueuePositions();
+                            fetchQueuePositions(true);
                         }
                     } else {
                         debug_log('Not applying results from', get_url, 'location.href', window.location.href);
@@ -1722,6 +1746,9 @@ export function TaskPage() {
 
     if (state.tasklist_last_fetch_time != null) {
         pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'>Last updated: {state.tasklist_last_fetch_time.toLocaleString()} <span className="errors">{state.tasklist_api_error}</span></p>);
+    } else if (state.tasklist_api_error) {
+        // no fetch has succeeded yet, so there is no time to show, but the error must show
+        pagehtml.push(<p key="tasklistfetchstatus" id='tasklistfetchstatus'><span className="errors">{state.tasklist_api_error}</span></p>);
     }
 
     if (!singletaskmode) {

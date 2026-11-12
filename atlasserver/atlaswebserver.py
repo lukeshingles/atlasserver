@@ -207,7 +207,12 @@ def start() -> None:
         command.extend(("--processes", os.environ["ATLASSERVER_NPROCESSES"]))
     if "ATLASSERVER_NTHREADPERPROC" in os.environ:
         command.extend(("--threads", os.environ["ATLASSERVER_NTHREADPERPROC"]))
-    run_command(command)
+
+    # apachectl reads the configuration that setup-server writes. After a failed setup, it would
+    # start the server from an older configuration.
+    if (setupstatus := run_command(command)) != 0:
+        print(f"ERROR: mod_wsgi-express setup-server failed with exit code {setupstatus}. The server did not start.")
+        sys.exit(setupstatus)
 
     os.environ["PYTHONPATH"] = str(ATLASSERVERPATH)
 

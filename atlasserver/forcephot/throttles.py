@@ -68,6 +68,17 @@ def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = T
     return count
 
 
+def take_send_permit(cachekey: str, interval_seconds: float) -> bool:
+    """Take the one permit for cachekey in its interval. Return whether this caller has it.
+
+    The file cache's add() checks for the key and then writes it, so two concurrent callers can
+    both get True. The lock makes the check and the write one critical section across the workers.
+    The lock uses the same stripes as count_in_window.
+    """
+    with hold_lock(f"window-{int(hashlib.sha256(cachekey.encode()).hexdigest(), 16) % WINDOW_LOCK_STRIPES}"):
+        return caches["throttle"].add(cachekey, True, timeout=interval_seconds)
+
+
 # Failed password checks allowed from one address per window, on every path that takes a
 # password: the token endpoint, a Basic header on any API view, the login page and the admin's
 # (see login). Failures rather than attempts, so a busy shared address is not locked out by its

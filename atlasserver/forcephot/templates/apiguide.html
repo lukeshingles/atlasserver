@@ -63,6 +63,10 @@ while not result_url:
 
         if resp.status_code == 200:  # HTTP OK
             if resp.json()['finishtimestamp']:
+                if resp.json()['error_msg']:
+                    # the task finished without a result file, so there is nothing to download
+                    print(f"Task failed with error: {resp.json()['error_msg']}")
+                    sys.exit(1)
                 result_url = resp.json()['result_url']
                 print(f"Task is complete with results available at {result_url}")
                 break
@@ -77,8 +81,19 @@ while not result_url:
             sys.exit()
 
 with requests.Session() as s:
-    textdata = s.get(result_url, headers=headers).text
-    s.delete(task_url, headers=headers)
+    result = s.get(result_url, headers=headers)
+    # stop before the delete if the download failed: an error response also has a body
+    result.raise_for_status()
+    textdata = result.text
+
+    # keep a copy on disk before the delete removes the copy on the server
+    with open(f"result_{resp.json()['id']}.txt", "w", encoding="utf-8") as f:
+        f.write(textdata)
+
+    # a successful delete returns 204 with an empty body
+    deleted = s.delete(task_url, headers=headers)
+    if deleted.status_code != 204:
+        print(f"WARNING: could not delete {task_url}: HTTP {deleted.status_code}")
 </code></pre>
 
 <p>The raw text can be parsed into a pandas DataFrame for easy manipulation.</p>

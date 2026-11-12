@@ -311,8 +311,6 @@ describe('TaskPage', () => {
         const { container } = await renderPage([task(1)]);
         assert.match(container.textContent, /Last updated:/);
 
-        // the message hangs off the "Last updated" line, so it only appears once there has been a
-        // successful fetch -- a connection failure on the very first load still shows nothing
         const working = global.fetch;
         global.fetch = (url) => (url.toString().includes('/queue/') && !url.toString().includes('queuepositions')
             ? Promise.reject(new Error('offline'))
@@ -1021,9 +1019,65 @@ describe('TaskPage', () => {
         }
     });
 
-    test('a queue positions response overtaken by a later one is discarded', async () => {
-        // Nothing serialises the two-second poll, so a request slower than the interval overlaps the
-        // next. Landing second, its obsolete snapshot used to be written over the newer one.
+    test('queue positions still move when every response is slower than the poll interval', async () => {
+        // Each request makes the older requests out of date. If the poll started a request on every
+        // tick, a server slower than the interval would have every answer dropped.
+        mock.timers.enable({ apis: ['setInterval'] });
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.hidden = true;
+        badge.innerHTML = '<span class="queuecount-number">0</span>';
+        window.document.body.appendChild(badge);
+
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2, 3: 3, 4: 4 });
+        const positionrequests = () => requested.filter((href) => href.includes('queuepositions')).length;
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(80);
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '4');
+
+            for (const remaining of [3, 2, 1]) {
+                control.positions = Object.fromEntries(
+                    Array.from({ length: remaining }, (_, index) => [index + 1, index + 1]));
+                let land;
+                control.hold = new Promise((resolve) => {
+                    land = resolve;
+                });
+
+                // the slow request goes out, and two more ticks pass before its answer arrives
+                mock.timers.tick(2000);
+                await flush(20);
+                const before = positionrequests();
+                mock.timers.tick(2000);
+                await flush(20);
+                mock.timers.tick(2000);
+                await flush(20);
+                assert.equal(positionrequests(), before, 'the poll started a request while one was in flight');
+
+                land();
+                await flush(80);
+                assert.equal(badge.querySelector('.queuecount-number').textContent, String(remaining),
+                    'a slow answer was dropped, so the queue did not move');
+            }
+
+            // with the answer in, the next tick asks again
+            const before = positionrequests();
+            mock.timers.tick(2000);
+            await flush(80);
+            assert.equal(positionrequests(), before + 1);
+        } finally {
+            mock.timers.reset();
+            badge.remove();
+        }
+    });
+
+    test('a queue positions response overtaken by an immediate request is discarded', async () => {
+        // A return to the tab asks at once, and that request replaces the one in flight. The older
+        // answer then arrives last, and it must not rewind the newer one.
         mock.timers.enable({ apis: ['setInterval'] });
         const badge = window.document.createElement('span');
         badge.className = 'badge rounded-pill queuecount';
@@ -1041,8 +1095,7 @@ describe('TaskPage', () => {
             await flush(80);
             assert.equal(badge.querySelector('.queuecount-number').textContent, '3');
 
-            // a slow request goes out carrying the queue as it stands, and is still in flight when
-            // the next one is due
+            // a slow poll request goes out with three tasks in the queue
             let land;
             control.hold = new Promise((resolve) => {
                 land = resolve;
@@ -1050,22 +1103,71 @@ describe('TaskPage', () => {
             mock.timers.tick(2000);
             await flush(20);
 
-            // two of the three finish, and the next poll -- issued second, answered first -- says so
+            // two finish, and the return to the tab asks again at once
             control.positions = { 1: 1 };
-            mock.timers.tick(2000);
+            window.document.dispatchEvent(new window.Event('visibilitychange', { bubbles: true }));
             await flush(80);
             assert.equal(badge.querySelector('.queuecount-number').textContent, '1');
 
-            // only now does the slow one land, still saying three
+            // the slow answer arrives last, and still says three
             land();
             await flush(80);
-
             assert.equal(badge.querySelector('.queuecount-number').textContent, '1',
                 'an overtaken response was applied over a newer one');
         } finally {
             mock.timers.reset();
             badge.remove();
         }
+    });
+
+    test('a task page address with a query string or a fragment still shows the task', async () => {
+        for (const suffix of ['', '?format=html', '#plot']) {
+            for (const root of mounted.splice(0)) {
+                root.unmount();
+            }
+            window.history.replaceState({}, '', `http://testserver/queue/1/${suffix}`);
+
+            const { container } = await renderPage([task(1)]);
+
+            assert.match(container.querySelector('h1').textContent, /Task 1/, suffix);
+            assert.ok(container.querySelector('#tasklist.singletaskdetail'), `no task detail layout (${suffix})`);
+            assert.equal(container.querySelector('#id_radeclist'), null,
+                `the new request form showed on a task page (${suffix})`);
+        }
+    });
+
+    /**
+     * Fail the first task list requests with `answer`, then check that the page reports `message`,
+     * and that a later successful fetch replaces it.
+     */
+    const checkFirstRequestFailure = async (answer, message) => {
+        stubFetch([task(1)]);
+        const working = global.fetch;
+        let failing = true;
+        global.fetch = (url, init) => (failing && url.toString().includes('/queue/')
+            && !url.toString().includes('queuepositions') ? answer() : working(url, init));
+
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(120);
+
+        assert.match(rendered.container.textContent, message);
+
+        failing = false;
+        [...rendered.container.querySelectorAll('button')].find((b) => b.textContent.includes('Running/Finished')).click();
+        await flush(250);
+        assert.match(rendered.container.textContent, /Last updated:/);
+        assert.doesNotMatch(rendered.container.textContent, message);
+    };
+
+    test('a server error on the first task list request is reported on the page', async () => {
+        await checkFirstRequestFailure(
+            () => Promise.resolve({ ok: false, status: 500, headers: { get: () => null }, json: () => Promise.resolve({}) }),
+            /Server error \(HTTP 500\)/);
+    });
+
+    test('a connection failure on the first task list request is reported on the page', async () => {
+        await checkFirstRequestFailure(() => Promise.reject(new Error('offline')), /Connection error/);
     });
 
     test('a queued row the positions endpoint never mentions does not start a request loop', async () => {

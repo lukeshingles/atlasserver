@@ -91,6 +91,7 @@ from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import count_in_window
+from atlasserver.forcephot.throttles import take_send_permit
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
 from atlasserver.forcephot.verification import send_verification_email
@@ -1444,7 +1445,7 @@ class SiteOriginPasswordResetView(PasswordResetView):
         cannot learn from the answer whether the address is registered.
         """
         emailkey = hashlib.sha256(form.cleaned_data["email"].lower().encode()).hexdigest()
-        may_send = caches["throttle"].add(f"passwordreset-{emailkey}", True, timeout=PASSWORD_RESET_INTERVAL_SECONDS)
+        may_send = take_send_permit(f"passwordreset-{emailkey}", PASSWORD_RESET_INTERVAL_SECONDS)
         if not may_send:
             return HttpResponseRedirect(self.get_success_url())
 
@@ -1671,9 +1672,7 @@ def resend_verification(request):
         # throttle cache is used because an unauthenticated caller can create one key per address
         # it posts -- "default" holds the queue signal and PDF locks behind a 300-entry cap.
         emailkey = hashlib.sha256(email.lower().encode()).hexdigest()
-        may_send = caches["throttle"].add(
-            f"resendverification-{emailkey}", True, timeout=RESEND_VERIFICATION_INTERVAL_SECONDS
-        )
+        may_send = take_send_permit(f"resendverification-{emailkey}", RESEND_VERIFICATION_INTERVAL_SECONDS)
 
         if may_send:
             user = unverified_account_for(email)
@@ -1719,7 +1718,7 @@ def change_email(request):
             # server mail an arbitrary address as fast as it will go. Keyed on the account rather
             # than the target, so changing the address each time does not buy another send.
             limitkey = f"emailchange-{request.user.pk}"
-            may_send = caches["throttle"].add(limitkey, True, timeout=EMAIL_CHANGE_INTERVAL_SECONDS)
+            may_send = take_send_permit(limitkey, EMAIL_CHANGE_INTERVAL_SECONDS)
 
             if may_send:
                 # guarded like register()'s send: an unreachable relay would otherwise leave a
@@ -1893,6 +1892,10 @@ _plotscript_cache: dict[Path, tuple[float, int, str]] = {}
 # and answered 500 (and mailed the admins) instead of drawing an empty plot.
 PLOTCOLUMNS = frozenset({"#MJD", "uJy", "duJy", "m", "dm", "mag5sig", "chi/N", "F"})
 
+# the flux window of the light curve axis, in microjanskys; see flux_axis_limits
+FLUX_AXIS_CLIP_MIN: t.Final = -200
+FLUX_AXIS_CLIP_MAX: t.Final = 40000
+
 
 # the arguments are named for the result file columns they carry, which is why they are not all
 # lowercase
@@ -1933,6 +1936,27 @@ def read_plotscript(path: Path) -> str:
     # (the "Flux / µJy" axis label) now that babel emits them literally instead of as \xNN escapes,
     # so a locale-dependent read is the difference between a working plot and a 500 on every one.
     return cached_by_file_stat(_plotscript_cache, path, lambda scriptpath: scriptpath.read_text(encoding="utf-8"))
+
+
+def flux_axis_limits(fluxmin: t.Any, fluxmax: t.Any) -> tuple[t.Any, t.Any]:
+    """Return the (lower, upper) flux axis limits for a light curve, in microjanskys.
+
+    The axis normally clips to [-200, 40000] uJy, so that one outlier does not compress the other
+    measurements. If that window contains none of the data, the axis shows the full data range.
+    The plot sets the range with autorange off, so the lower limit must be below the upper limit.
+    """
+    ymin = max(FLUX_AXIS_CLIP_MIN, fluxmin)
+    ymax = min(FLUX_AXIS_CLIP_MAX, fluxmax)
+
+    if ymin >= ymax:
+        ymin, ymax = fluxmin, fluxmax
+
+    if ymin == ymax:
+        # a constant flux. The padding gives the axis a non-zero range around it.
+        padding = max(abs(float(ymin)) / 20, 1.0)
+        ymin, ymax = float(ymin) - padding, float(ymax) + padding
+
+    return ymin, ymax
 
 
 def resultplotdatajs(request, taskid):
@@ -2059,8 +2083,7 @@ def resultplotdatajs(request, taskid):
             mjd_today = datetime_to_mjd(dt.datetime.now(dt.UTC))
             xmin = dfforcedphot["#MJD"].min()
             xmax = dfforcedphot["#MJD"].max()
-            ymin = max(-200, dfforcedphot.uJy.min())
-            ymax = min(40000, dfforcedphot.uJy.max())
+            ymin, ymax = flux_axis_limits(dfforcedphot.uJy.min(), dfforcedphot.uJy.max())
 
             jsout.extend(
                 (
