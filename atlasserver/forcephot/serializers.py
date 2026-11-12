@@ -355,11 +355,11 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         if submitted is None or stored is None:
             return submitted is stored
         if isinstance(stored, bool) or isinstance(submitted, bool):
-            return submitted == stored
+            return bool(submitted == stored)
         # numbers by value, because the stored epoch is a Decimal and JSON gives a float or a string
         if not isinstance(stored, str) and is_finite_float(submitted) and is_finite_float(stored):
             return float(submitted) == float(stored)
-        return submitted == stored
+        return bool(submitted == stored)
 
     def refuse_input_changes(self, attrs) -> None:
         """Raise a ValidationError if an update changes an execution input of the task."""

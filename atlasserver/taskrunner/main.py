@@ -270,7 +270,10 @@ def result_file_problem(localresultfile: Path) -> str | None:
     lines = [
         line for line in localresultfile.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()
     ]
-    if not lines:
+    # One line or fewer is the normal result for a target with no measurements: a header alone, or
+    # one message line from the remote script. The task finishes with this message and no retry.
+    datarows = lines[1:]
+    if not datarows:
         return "No data returned"
 
     # the header names the columns. The plot and the result page read MJD and uJy, so a header
@@ -278,10 +281,6 @@ def result_file_problem(localresultfile: Path) -> str | None:
     columns = lines[0].lstrip("#").split()
     if any(required not in columns for required in RESULT_REQUIRED_COLUMNS):
         return "Could not parse the result file"
-
-    datarows = lines[1:]
-    if not datarows:
-        return "No data returned"
 
     # a row with a different field count from the header, or with text where MJD or uJy must be,
     # is a diagnostic line mixed into the output

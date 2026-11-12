@@ -7683,6 +7683,35 @@ class FluxAxisLimitsTests(SimpleTestCase):
         assert ymin < 50000 < ymax, (ymin, ymax)
 
 
+class NoDataTaskTests(TestCase):
+    """A task with no measurements finishes with its message and is not run again."""
+
+    def test_a_result_with_no_data_finishes_the_task_without_a_retry(self) -> None:
+        user = User.objects.create_user(username="nodata", email="nodata@example.com", password=None)
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultfile = Path(tmpdir, "job00001.txt")
+            resultfile.write_text("###MJD m dm uJy duJy\n", encoding="utf-8")
+
+            def runtask(task: Task, logfunc: t.Any) -> tuple[Path, str | None]:
+                # the end of runtask() for a forced photometry task, after the copy from the remote host
+                return resultfile, taskrunner_main.result_file_problem(resultfile)
+
+            with (
+                mock.patch.object(taskrunner_main, "runtask", side_effect=runtask),
+                mock.patch.object(taskrunner_main, "log_general"),
+                mock.patch.object(taskrunner_main, "notify_finished"),
+                mock.patch.object(taskrunner_main.time, "sleep") as sleep,
+            ):
+                taskrunner_main.do_task(Task.objects.get(id=task.id), slotid=0)
+
+        task.refresh_from_db()
+        assert task.error_msg == "No data returned"
+        assert task.finishtimestamp is not None, "the task stays queued, so the runner will run it again"
+        assert not sleep.called, "the runner took the retry path"
+
+
 class ResultFileProblemTests(SimpleTestCase):
     """The runner accepts a result file only if it holds forced photometry rows."""
 
@@ -7709,6 +7738,9 @@ class ResultFileProblemTests(SimpleTestCase):
 
     def test_the_full_result_format_is_fine(self) -> None:
         assert self.check(RESULTFILE_HEADER + "\n" + RESULTFILE_DATAROW) is None
+
+    def test_one_message_line_has_no_data(self) -> None:
+        assert self.check("No data found for this target\n") == "No data returned"
 
     def test_diagnostic_text_alone_is_not_photometry(self) -> None:
         assert self.check("error\nfailed\n") == "Could not parse the result file"
