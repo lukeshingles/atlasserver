@@ -48,6 +48,9 @@ TASK_MAXTIME_SECONDS: int = 4 * 3600
 # remote command
 SSH_CONNECTION_FAILED: int = 255
 
+# the columns that a forced photometry result file must have, as the header names them
+RESULT_REQUIRED_COLUMNS: tuple[str, ...] = ("MJD", "uJy")
+
 # how often a running task asks the database whether it has been cancelled
 CANCEL_CHECK_SECONDS: float = 15.0
 
@@ -267,18 +270,30 @@ def result_file_problem(localresultfile: Path) -> str | None:
     lines = [
         line for line in localresultfile.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()
     ]
-    if not lines:
-        return "No data returned"
-
-    # the header names the columns; a row with more fields than the header is not a data row but
-    # a diagnostic line mixed into the output
-    columncount = len(lines[0].lstrip("#").split())
+    # One line or fewer is the normal result for a target with no measurements: a header alone, or
+    # one message line from the remote script. The task finishes with this message and no retry.
     datarows = lines[1:]
     if not datarows:
         return "No data returned"
 
-    if any(len(row.split()) > columncount for row in datarows):
+    # the header names the columns. The plot and the result page read MJD and uJy, so a header
+    # without them is diagnostic text from the remote host, not photometry.
+    columns = lines[0].lstrip("#").split()
+    if any(required not in columns for required in RESULT_REQUIRED_COLUMNS):
         return "Could not parse the result file"
+
+    # a row with a different field count from the header, or with text where MJD or uJy must be,
+    # is a diagnostic line mixed into the output
+    requiredindices = [columns.index(required) for required in RESULT_REQUIRED_COLUMNS]
+    for row in datarows:
+        fields = row.split()
+        if len(fields) != len(columns):
+            return "Could not parse the result file"
+        try:
+            for index in requiredindices:
+                float(fields[index])
+        except ValueError:
+            return "Could not parse the result file"
 
     return None
 

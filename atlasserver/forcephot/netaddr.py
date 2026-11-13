@@ -20,9 +20,11 @@ def address_is_public(address: str | ipaddress.IPv4Address | ipaddress.IPv6Addre
     the lookup carried a hand-written list of prefixes that missed 172.16/12 and every IPv6 form.
 
     is_global is False for loopback, link-local (including the cloud metadata range), private,
-    reserved, multicast and unspecified addresses.
+    reserved and unspecified addresses. It is True for some multicast ranges, e.g. 224.0.0.1 and
+    ff02::1, so a separate check refuses multicast.
     """
-    return ipaddress.ip_address(address).is_global
+    ip = ipaddress.ip_address(address)
+    return ip.is_global and not ip.is_multicast
 
 
 def _unbracket(hop: str) -> str:

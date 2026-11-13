@@ -329,8 +329,58 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
         return instance
 
+    # The fields that the runner reads to make the measurement. The result file of a task belongs
+    # to these values, so an update cannot change them. A task that the runner has claimed would
+    # otherwise describe a different target or date range from its result. The owner can submit a
+    # new task instead.
+    EXECUTION_INPUT_FIELDS = (
+        "mpc_name",
+        "ra",
+        "dec",
+        "mjd_min",
+        "mjd_max",
+        "radec_epoch_year",
+        "propermotion_ra",
+        "propermotion_dec",
+        "use_reduced",
+        "request_type",
+        "parent_task_id",
+    )
+
+    @staticmethod
+    def _same_input(submitted: t.Any, stored: t.Any) -> bool:
+        """Return whether a submitted input value is the value that the task already has."""
+        # an empty string and None both mean "not given", e.g. a stored blank mpc_name
+        if submitted == "":
+            submitted = None
+        if stored == "":
+            stored = None
+        if submitted is None or stored is None:
+            return submitted is stored
+        if isinstance(stored, bool) or isinstance(submitted, bool):
+            return bool(submitted == stored)
+        # numbers by value, because the stored epoch is a Decimal and JSON gives a float or a string
+        if not isinstance(stored, str) and is_finite_float(submitted) and is_finite_float(stored):
+            return float(submitted) == float(stored)
+        return bool(submitted == stored)
+
+    def refuse_input_changes(self, attrs) -> None:
+        """Raise a ValidationError if an update changes an execution input of the task."""
+        if self.instance is None:
+            return
+
+        changed = {
+            field: "This field cannot change after the task is submitted. Submit a new task instead."
+            for field in self.EXECUTION_INPUT_FIELDS
+            if field in attrs and not self._same_input(attrs[field], getattr(self.instance, field, None))
+        }
+        if changed:
+            raise serializers.ValidationError(changed)
+
     @override
     def validate(self, attrs):
+        self.refuse_input_changes(attrs)
+
         mpc_name = self.submitted(attrs, "mpc_name")
         request_type = self.submitted(attrs, "request_type")
 

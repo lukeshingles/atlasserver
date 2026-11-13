@@ -2,6 +2,7 @@ import base64
 import contextlib
 import datetime as dt
 import hashlib
+import io
 import ipaddress
 import itertools
 import json
@@ -29,6 +30,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core import mail as django_mail
 from django.core.cache import caches
+from django.core.cache.backends.filebased import FileBasedCache
 from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.db import IntegrityError
@@ -48,6 +50,7 @@ from rest_framework.serializers import ValidationError
 from atlasserver import atlastaskrunner
 from atlasserver.forcephot import locks
 from atlasserver.forcephot import misc
+from atlasserver.forcephot import netaddr
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import throttles
 from atlasserver.forcephot import verification
@@ -1071,6 +1074,63 @@ class TaskUpdateTests(TestCase):
         task.refresh_from_db()
         assert task.comment == "just a comment"
         assert task.ra == 1.0
+
+    def patch_task(self, task: Task, body: dict[str, t.Any]) -> t.Any:
+        self.client.force_login(self.owner)
+        return self.client.patch(
+            reverse("task-detail", args=[task.id]),
+            data=json.dumps(body),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_the_target_of_a_finished_task_cannot_change(self) -> None:
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, mjd_max=60000.0, finishtimestamp=timezone.now())
+
+        response = self.patch_task(task, {"ra": 10.0, "dec": 20.0, "mjd_max": 61000.0})
+
+        assert response.status_code == 400, response.content
+        assert set(response.json()) == {"ra", "dec", "mjd_max"}, response.json()
+        task.refresh_from_db()
+        assert (task.ra, task.dec, task.mjd_max) == (1.0, 2.0, 60000.0)
+
+    def test_the_input_of_a_queued_task_cannot_change(self) -> None:
+        # the runner can claim the task at any time, so a queued task has the same rule
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0)
+
+        for body in ({"use_reduced": True}, {"mjd_min": 1.0}, {"propermotion_ra": 5.0}, {"mpc_name": "Ceres"}):
+            response = self.patch_task(task, body)
+            assert response.status_code == 400, (body, response.content)
+
+        task.refresh_from_db()
+        assert task.use_reduced is False
+        assert task.mpc_name is None
+
+    def test_a_finished_task_keeps_its_editable_fields(self) -> None:
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        response = self.patch_task(task, {"comment": "new comment", "send_email": False})
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.comment == "new comment"
+
+    def test_unchanged_input_values_are_accepted(self) -> None:
+        # a PUT sends every field, including the input that stays the same
+        task = Task.objects.create(user=self.owner, ra=1.0, dec=2.0, mjd_min=None, finishtimestamp=timezone.now())
+
+        response = self.patch_task(task, {"ra": "1.0", "dec": 2, "mjd_min": None, "comment": "same target"})
+
+        assert response.status_code == 200, response.content
+        task.refresh_from_db()
+        assert task.comment == "same target"
+
+    def test_a_stored_blank_mpc_name_is_unchanged_by_a_blank_or_null_value(self) -> None:
+        task = Task.objects.create(user=self.owner, mpc_name="", ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+
+        for mpc_name in ("", None, " "):
+            response = self.patch_task(task, {"mpc_name": mpc_name, "ra": 1.0, "dec": 2.0, "comment": "kept"})
+            assert response.status_code == 200, (mpc_name, response.content)
 
     def test_a_patch_does_not_revert_a_concurrent_runner_write(self) -> None:
         """The row is loaded at the start of the request and saved at the end of it.
@@ -3056,6 +3116,25 @@ class ApiGuideTests(TestCase):
                 msg = f"API guide code block {index} does not parse: {exc}"
                 raise AssertionError(msg) from exc
 
+    def test_the_documented_download_keeps_the_task_until_the_result_is_saved(self) -> None:
+        # a delete after a failed download removes the only copy of the result
+        import html as htmlmodule
+        import re
+
+        page = Path(settings.BASE_DIR, "atlasserver/forcephot/templates/apiguide.html").read_text(encoding="utf-8")
+        blocks = [
+            htmlmodule.unescape(block)
+            for block in re.findall(r"<pre[^>]*><code>(.*?)</code></pre>", page, flags=re.DOTALL)
+        ]
+        downloads = [block for block in blocks if "s.delete(task_url" in block]
+        assert len(downloads) == 1, downloads
+
+        block = downloads[0]
+        assert "['error_msg']" in block, "the example does not stop for a task that failed"
+        deleteat = block.index("s.delete(task_url")
+        assert block.index("raise_for_status()") < deleteat, "the delete is not after the download check"
+        assert block.index("f.write(textdata)") < deleteat, "the delete is not after the result is saved"
+
 
 class ContentNegotiationTests(TestCase):
     def setUp(self) -> None:
@@ -3179,6 +3258,31 @@ class BrokenLinkEmailTests(TestCase):
 
         assert response.status_code == 404, response.status_code
         assert not django_mail.outbox, django_mail.outbox[0].subject
+
+
+class AddressIsPublicTests(SimpleTestCase):
+    """The callback sender and the GeoIP lookup share this definition of a public address."""
+
+    def test_public_unicast_addresses_are_public(self) -> None:
+        for address in ("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"):
+            assert netaddr.address_is_public(address), address
+
+    def test_other_addresses_are_not_public(self) -> None:
+        for address in (
+            "10.0.0.1",
+            "192.168.1.1",
+            "127.0.0.1",
+            "::1",
+            "169.254.169.254",
+            "fe80::1",
+            "0.0.0.0",  # noqa: S104 (an address under test, not one to bind)
+            "::",
+            "224.0.0.1",
+            "239.1.1.1",
+            "ff02::1",
+            "ff0e::1",
+        ):
+            assert not netaddr.address_is_public(address), address
 
 
 class CallbackUrlResolutionTests(TestCase):
@@ -4148,6 +4252,28 @@ class WebserverStartTests(SimpleTestCase):
         atlaswebserver.clear_page_cache()
 
         assert caches["usagestats"].get("page") is None
+
+    def test_a_failed_setup_does_not_start_apache(self) -> None:
+        atlaswebserver = import_atlaswebserver()
+
+        with (
+            mock.patch.object(atlaswebserver, "get_httpd_pid", return_value=None),
+            mock.patch.object(atlaswebserver, "APACHEPATH", Path(tempfile.mkdtemp())),
+            mock.patch.object(atlaswebserver, "run_command", return_value=1) as runcommand,
+            mock.patch.object(atlaswebserver, "clear_page_cache"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            try:
+                atlaswebserver.start()
+            except SystemExit as exc:
+                exitcode = exc.code
+            else:
+                exitcode = None
+
+        assert exitcode == 1, exitcode
+        commands = [call.args[0] for call in runcommand.call_args_list]
+        assert len(commands) == 1, commands
+        assert commands[0][:2] == ["mod_wsgi-express", "setup-server"], commands
 
 
 class WebserverStopTests(SimpleTestCase):
@@ -6312,6 +6438,42 @@ class FailedLoginBudgetTests(TestCase):
         assert "_auth_user_id" not in self.client.session
 
 
+class SendPermitTests(SimpleTestCase):
+    """One email permit per interval, with the file cache that production uses."""
+
+    def test_concurrent_callers_get_one_permit_from_the_file_cache(self) -> None:
+        threads = 8
+        barrier = threading.Barrier(threads)
+        granted: list[bool] = []
+        original_has_key = FileBasedCache.has_key
+
+        def slow_has_key(cache: FileBasedCache, *args: t.Any, **kwargs: t.Any) -> bool:
+            # widens the time between the check and the write in add(), so that a race is certain
+            found = original_has_key(cache, *args, **kwargs)
+            time.sleep(0.01)
+            return found
+
+        def request_permit() -> None:
+            barrier.wait()
+            granted.append(throttles.take_send_permit("passwordreset-test", 60))
+
+        filecaches = {
+            **settings.CACHES,
+            "throttle": {
+                "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+                "LOCATION": tempfile.mkdtemp(prefix="atlasserver-test-throttle-"),
+            },
+        }
+        with override_settings(CACHES=filecaches), mock.patch.object(FileBasedCache, "has_key", slow_has_key):
+            workers = [threading.Thread(target=request_permit) for _ in range(threads)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+
+        assert granted.count(True) == 1, granted
+
+
 class StatsPageTests(TestCase):
     def test_lastfinishtime_is_na_with_no_finished_task(self) -> None:
         user = User.objects.create_user(username="statsuser", password=None)
@@ -7504,8 +7666,61 @@ class UserDeletionReclaimsFilesTests(TestCase):
         assert not Task.objects.filter(id=task.id).exists()
 
 
+class FluxAxisLimitsTests(SimpleTestCase):
+    """The light curve axis range is ordered and contains the measurements."""
+
+    def test_data_inside_the_window_sets_the_range(self) -> None:
+        assert views.flux_axis_limits(100, 101) == (100, 101)
+
+    def test_outliers_are_clipped_to_the_window(self) -> None:
+        assert views.flux_axis_limits(-5000, 90000) == (-200, 40000)
+
+    def test_bright_data_above_the_window_is_shown(self) -> None:
+        assert views.flux_axis_limits(50000, 60000) == (50000, 60000)
+
+    def test_negative_data_below_the_window_is_shown(self) -> None:
+        assert views.flux_axis_limits(-900, -300) == (-900, -300)
+
+    def test_a_constant_flux_gets_a_non_zero_range(self) -> None:
+        ymin, ymax = views.flux_axis_limits(500, 500)
+        assert ymin < 500 < ymax, (ymin, ymax)
+
+    def test_a_constant_flux_above_the_window_gets_a_range_around_it(self) -> None:
+        ymin, ymax = views.flux_axis_limits(50000, 50000)
+        assert ymin < 50000 < ymax, (ymin, ymax)
+
+
+class NoDataTaskTests(TestCase):
+    """A task with no measurements finishes with its message and is not run again."""
+
+    def test_a_result_with_no_data_finishes_the_task_without_a_retry(self) -> None:
+        user = User.objects.create_user(username="nodata", email="nodata@example.com", password=None)
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultfile = Path(tmpdir, "job00001.txt")
+            resultfile.write_text("###MJD m dm uJy duJy\n", encoding="utf-8")
+
+            def runtask(task: Task, logfunc: t.Any) -> tuple[Path, str | None]:
+                # the end of runtask() for a forced photometry task, after the copy from the remote host
+                return resultfile, taskrunner_main.result_file_problem(resultfile)
+
+            with (
+                mock.patch.object(taskrunner_main, "runtask", side_effect=runtask),
+                mock.patch.object(taskrunner_main, "log_general"),
+                mock.patch.object(taskrunner_main, "notify_finished"),
+                mock.patch.object(taskrunner_main.time, "sleep") as sleep,
+            ):
+                taskrunner_main.do_task(Task.objects.get(id=task.id), slotid=0)
+
+        task.refresh_from_db()
+        assert task.error_msg == "No data returned"
+        assert task.finishtimestamp is not None, "the task stays queued, so the runner will run it again"
+        assert not sleep.called, "the runner took the retry path"
+
+
 class ResultFileProblemTests(SimpleTestCase):
-    """The plain read that replaced pandas in the runner keeps the same answers."""
+    """The runner accepts a result file only if it holds forced photometry rows."""
 
     def check(self, content: str) -> str | None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -7521,12 +7736,30 @@ class ResultFileProblemTests(SimpleTestCase):
 
     def test_a_ragged_row_cannot_be_parsed(self) -> None:
         assert (
-            self.check("###MJD m dm\n1 2 3\nwarning: something odd happened here\n")
+            self.check("###MJD m dm uJy\n1 2 3 4\nwarning: something odd happened here\n")
             == "Could not parse the result file"
         )
 
     def test_a_data_row_is_fine(self) -> None:
-        assert self.check("###MJD m dm\n59000.1 18.2 0.1\n") is None
+        assert self.check("###MJD m dm uJy\n59000.1 18.2 0.1 100\n") is None
+
+    def test_the_full_result_format_is_fine(self) -> None:
+        assert self.check(RESULTFILE_HEADER + "\n" + RESULTFILE_DATAROW) is None
+
+    def test_one_message_line_has_no_data(self) -> None:
+        assert self.check("No data found for this target\n") == "No data returned"
+
+    def test_diagnostic_text_alone_is_not_photometry(self) -> None:
+        assert self.check("error\nfailed\n") == "Could not parse the result file"
+
+    def test_a_header_without_the_flux_column_cannot_be_parsed(self) -> None:
+        assert self.check("###MJD m dm\n59000.1 18.2 0.1\n") == "Could not parse the result file"
+
+    def test_a_short_row_cannot_be_parsed(self) -> None:
+        assert self.check("###MJD m dm uJy\nwarning\n") == "Could not parse the result file"
+
+    def test_text_in_a_numeric_column_cannot_be_parsed(self) -> None:
+        assert self.check("###MJD m dm uJy\nERROR: no data found\n") == "Could not parse the result file"
 
 
 class CoordChartTests(TestCase):
