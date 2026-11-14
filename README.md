@@ -45,10 +45,20 @@ atlaswebserver start
 atlastaskrunner start
 ```
 
-For atlastaskrunner to process tasks, there must be an SSH host alias named 'atlas' that points to atlas-base-sc01.ifa.hawaii.edu with your username. The server-side scripts must also be installed in your sc01 home folder:
+For atlastaskrunner to process tasks, there must be an SSH host alias named 'atlas' that points to atlas-base-sc01.ifa.hawaii.edu with your username. The server-side scripts must also be installed in your sc01 home folder. The script `upload_scripts_to_atlas.sh` copies them with rsync. Run it from its directory, because it uses relative paths. Run it again after each change to a server-side script:
 ```sh
-scp atlasserver/taskrunner/atlas_*.py atlas:~/
+cd atlasserver/taskrunner && ./upload_scripts_to_atlas.sh
 ```
+
+The `python3` command of the account on sc01 runs these scripts. For the production account, this
+is Python 3.8.5. This command shows the version:
+```sh
+ssh atlas python3 --version
+```
+The scripts must use only the features of Python 3.8. The other code of atlasserver needs Python
+3.13 or later, and it does not have this limit. A script that fails on sc01 writes no result file,
+and the task runner then starts the task again without a limit. The slot logs in
+`atlasserver/taskrunner/logs/` show the error from sc01 in the lines with `atlas STDERR:`.
 
 To update the code to the latest commit on the main branch, pull from the GitHub remote, apply any
 database changes, and then restart the two processes.

@@ -260,6 +260,12 @@ line-length = 120
 fix = true
 show-fixes = true
 
+# The task runner starts these scripts on sc01, where the python3 command is Python 3.8. With this
+# target, ruff reports syntax that Python 3.8 cannot read, and it does not ask for a feature of a
+# later version, such as the strict argument of zip().
+[tool.ruff.per-file-target-version]
+"atlasserver/taskrunner/atlas_*.py" = "py38"
+
 [tool.ruff.lint]
 select = ["ALL"]
 # preview rules apply only when they are named here, not through "ALL"

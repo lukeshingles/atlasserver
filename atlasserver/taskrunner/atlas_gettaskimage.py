@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Input a job data file and produce the first (or brightest) image in JPEG. This script is to be run on sc01."""
+"""Input a job data file and produce the first (or brightest) image in JPEG. This script is to be run on sc01.
+
+The python3 command on sc01 is Python 3.8. Use only the features of Python 3.8 in this script.
+"""
 
 import subprocess
 import sys
