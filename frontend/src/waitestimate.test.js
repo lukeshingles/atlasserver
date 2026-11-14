@@ -137,6 +137,34 @@ describe('estimateWaitSeconds with the high priority group', () => {
         assert.equal(seconds, 900);
     });
 
+    test('more members than slots take turns before the other users start', () => {
+        // 32 members have one task each, and there are 16 slots: two passes of members
+        const seconds = estimate(32, behind(32), {
+            distinct_queued_users: 33,
+            priority_queued_depths: Array(32).fill(1),
+        });
+
+        assert.equal(seconds, 2 * 60);
+    });
+
+    test('the own tasks ahead start after the passes that the members fill', () => {
+        // 16 members have one IMGZIP task each. Ten FP tasks of the same user are ahead of this
+        // task: 15 minutes with no slot, and then ten minutes of own tasks.
+        const seconds = estimateWaitSeconds({
+            queuepos: 26,
+            ownqueued: ownqueue(11).map((own) => ({ ...own, position: own.position + 16 })),
+            runnerstatus: status({
+                distinct_queued_users: 17,
+                priority_queued_depths: Array(16).fill(1),
+                priority_queued_by_request_type: { IMGZIP: 16 },
+                queued_by_request_type: { IMGZIP: 16, FP: 11 },
+            }),
+            tier: behind(16),
+        });
+
+        assert.equal(seconds, 900 + 10 * 60);
+    });
+
     test('a task of a member waits only for the tasks of the other members', () => {
         // position 6 of 100 priority tasks, 3 members: two full passes of 3 are ahead
         const seconds = estimate(6, membertier, {

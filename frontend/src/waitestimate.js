@@ -88,21 +88,26 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier })
     const priorityusers = prioritydepths.length;
     const inprioritytier = tier?.priority === true;
 
-    // How many tasks of this tier can start in pass number `pass` (the first pass is 1).
+    // How many tasks of this tier can start in the next pass. Each call is one pass.
     //
     // A task of a member competes only with the tasks of the other members, one task for each
     // member in a pass.
     //
     // A task of another user gets the slots that the members do not use. A member uses one slot
-    // in a pass, but only while that member has tasks: a member with `depth` tasks is in the
-    // first `depth` passes. After that, the slot serves the other users. The floor of one is for
-    // the user counts, which can be older than the queue (see above).
+    // in a pass, but only while that member has tasks. After that, the slot serves the other
+    // users. If more members have tasks than there are slots, the members take turns: `waiting`
+    // is their queue, and the members who ran go to its end. The floor of one is for the user
+    // counts, which can be older than the queue (see above).
     const otherusers = Math.max(1, queuedusers - priorityusers);
-    const slotsInPass = inprioritytier
+    let waiting = prioritydepths.filter((depth) => depth > 0);
+    const slotsInNextPass = inprioritytier
         ? () => Math.min(numslots, Math.max(1, priorityusers))
-        : (pass) => Math.min(
-            otherusers,
-            numslots - Math.min(numslots, prioritydepths.filter((depth) => depth >= pass).length));
+        : () => {
+            const running = waiting.slice(0, numslots);
+            waiting = waiting.slice(numslots).concat(
+                running.map((depth) => depth - 1).filter((depth) => depth > 0));
+            return Math.min(otherusers, numslots - running.length);
+        };
 
     // Strictly ahead of this one. The endpoint reports the user's whole queued set, not the page on
     // screen, which is what makes this their queue rather than the rows that happen to be rendered.
@@ -153,11 +158,15 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier })
         }
         return pricecache.get(priority);
     };
+    // The time of the passes in which the members use all the slots is apart from the rest. No
+    // task of this user runs in such a pass, and thus this time comes before the own tasks ahead
+    // and before the tasks of the other users.
+    let blockedseconds = 0;
     let otherseconds = 0;
     let started = 0;
     for (let pass = 1; ; pass += 1) {
-        const slots = slotsInPass(pass);
-        if (started + slots > otherahead) {
+        const slots = slotsInNextPass();
+        if (slots > 0 && started + slots > otherahead) {
             // this task starts in this pass
             break;
         }
@@ -169,11 +178,16 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier })
             return null;
         }
         started += slots;
-        otherseconds += price;
+        if (slots == 0) {
+            blockedseconds += price;
+        } else {
+            otherseconds += price;
+        }
     }
 
-    // the two are worked through at the same time, so the wait is the longer of them
-    return Math.max(ownseconds, otherseconds);
+    // the own tasks and the tasks of the other users are worked through at the same time, so the
+    // wait is the longer of them
+    return blockedseconds + Math.max(ownseconds, otherseconds);
 }
 
 /**
