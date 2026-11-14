@@ -64,6 +64,9 @@ The task runner executes 16 tasks at one time, with a maximum of one task for ea
 tasks of the users in the Django group `High priority` start before the tasks of all other users.
 The limit of one task for each user also applies to a member of the group, and thus N members use
 a maximum of N slots. If 16 members have queued tasks at one time, the other users get no slot.
+The queue page shows the number of tasks that are ahead of a task. This number includes the tasks
+of the members, and thus a large batch of a member makes it large for the other users. The wait
+estimate of the other users stays short, because the batch uses only one slot.
 
 The `migrate` command makes the group. To add or remove a member, open the group in the admin site
 (`/admin/auth/group/`) and change the field "Members". The field has a search by username, name

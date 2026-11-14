@@ -304,6 +304,9 @@ class GroupMembersAdminTests(TestCase):
         staff.user_permissions.add(Permission.objects.get(codename="view_group"))
         self.client.force_login(staff)
 
+        # the page with the field renders for a user who can only view the group
+        assert self.client.get(self.url).status_code == 200
+
         response = self.client.post(self.url, {"name": self.group.name, "members": [staff.pk]})
 
         assert response.status_code == 403, response.status_code
