@@ -165,6 +165,13 @@ describe('estimateWaitSeconds with the high priority group', () => {
         assert.equal(seconds, 900 + 10 * 60);
     });
 
+    test('there is no estimate when the status does not know the tasks of the members', () => {
+        // 16 members submitted one task each after the last write of the status
+        const seconds = estimate(16, behind(16), { distinct_queued_users: 1 });
+
+        assert.equal(seconds, null);
+    });
+
     test('a task of a member waits only for the tasks of the other members', () => {
         // position 6 of 100 priority tasks, 3 members: two full passes of 3 are ahead
         const seconds = estimate(6, membertier, {

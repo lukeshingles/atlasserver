@@ -88,6 +88,14 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier })
     const priorityusers = prioritydepths.length;
     const inprioritytier = tier?.priority === true;
 
+    // The status is older than the positions. If the positions show more tasks of the members
+    // ahead than the status counts, the members submitted tasks after the status was written.
+    // The status then does not know the slots that those tasks use, and an estimate from it is
+    // too short. The next status has the tasks.
+    if (!inprioritytier && (tier?.start ?? 0) > prioritydepths.reduce((total, depth) => total + depth, 0)) {
+        return null;
+    }
+
     // How many tasks of this tier can start in the next pass. Each call is one pass.
     //
     // A task of a member competes only with the tasks of the other members, one task for each
