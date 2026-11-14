@@ -10,6 +10,7 @@ import statistics
 import time
 import typing as t
 
+from django.contrib.auth import get_user_model
 from django.core.cache import caches
 from django.db import models
 from django.db import transaction
@@ -24,6 +25,11 @@ if t.TYPE_CHECKING:
 # arrives between the read and the delete. Simultaneous bumps can collapse into one increment,
 # which does not matter: the question is whether the value changed, not by how much.
 RECALC_GENERATION_CACHEKEY: t.Final = "queue-positions-generation"
+
+# The name of the Django group whose members have priority in the queue: calculate_queue_positions
+# puts each task of a member before each task of the other users. Migration 0010 makes the group,
+# and an administrator changes its members on the page of the group in the Django admin.
+HIGH_PRIORITY_GROUP: t.Final = "High priority"
 
 # Renumber at least this often even when the flag says nothing changed. Covers the task runner's
 # own dispatches (which move the running task to the front) and any flag lost to a cache eviction
@@ -70,6 +76,17 @@ TYPICAL_RUNTIME_MEMO_SECONDS: t.Final = 15.0
 # The memo of this process: the time at which it becomes too old, and the medians. Tests that
 # clear the shared cache must also set this back to None; see clear_typical_runtime_memo.
 _typical_runtime_memo: tuple[float, dict[str, float]] | None = None
+
+
+def priority_userids() -> set[int]:
+    """Return the ids of the users who are members of the high priority group.
+
+    The result is an empty set when the group does not exist, and then no task has priority.
+
+    This is a query at each call and not a value that the process keeps. An administrator can
+    change the members while the task runner runs, and the next renumbering must see the change.
+    """
+    return set(get_user_model().objects.filter(groups__name=HIGH_PRIORITY_GROUP).values_list("pk", flat=True))
 
 
 def request_recalc() -> None:
@@ -193,74 +210,95 @@ def clear_typical_runtime_memo() -> None:
     _typical_runtime_memo = None
 
 
+def round_robin_order(tasks: list[Task]) -> list[int]:
+    """Return the ids of these tasks in the order in which the task runner starts them.
+
+    The tasks must be in the order (user id, submission time, id). The result is a sequence of
+    passes, and each pass has a maximum of one task for each user. Thus a user with one task does
+    not wait for all the tasks of a user with many.
+    """
+    # to get position in current pass, check if job currently running (the one started last).
+    # attrgetter rather than a lambda: the generator's None filter cannot narrow the
+    # attribute type inside a lambda, so a lambda key would not type check
+    runningtask = max(
+        (tsk for tsk in tasks if tsk.starttimestamp is not None),
+        key=operator.attrgetter("starttimestamp"),
+        default=None,
+    )
+    runningtask_userid = runningtask.user_id if runningtask is not None else None
+
+    # the currently running task is the first
+    order: list[int] = [] if runningtask is None else [runningtask.id]
+
+    # (task id, user id) pairs: one list, so that the two cannot drift apart
+    unassigned = [(tsk.id, tsk.user_id) for tsk in tasks if tsk is not runningtask]
+
+    # work through passes (max one task per user in each pass)
+    passnum: int = 0
+    while unassigned:
+        # the running task is the task of its user in the first pass
+        useridsassigned_currentpass: set[int] = set()
+        if passnum == 0 and runningtask_userid is not None:
+            useridsassigned_currentpass.add(runningtask_userid)
+
+        # collect the tasks not assigned in this pass rather than popping from
+        # the list during iteration (which would skip elements)
+        remaining: list[tuple[int, int]] = []
+        for taskid, task_userid in unassigned:
+            if task_userid not in useridsassigned_currentpass and (
+                passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
+            ):
+                order.append(taskid)
+                useridsassigned_currentpass.add(task_userid)
+            else:
+                remaining.append((taskid, task_userid))
+
+        unassigned = remaining
+
+        # bail out rather than spin forever if a pass somehow assigns nothing. Not an assert:
+        # those are stripped under python -O, which is exactly when a hung request would be
+        # hardest to explain
+        if passnum >= (2 * len(tasks) + 1):
+            msg = f"queue position assignment made no progress after {passnum} passes over {len(tasks)} tasks"
+            raise RuntimeError(msg)
+
+        passnum += 1
+
+    return order
+
+
 def calculate_queue_positions() -> None:
-    """Assign every queued task its position, which is the order the task runner executes them in."""
+    """Assign every queued task its position, which is the order the task runner executes them in.
+
+    The queue has two tiers. The tasks of the members of the high priority group have the first
+    positions, and the tasks of the other users follow them. Each tier is in round-robin order;
+    see round_robin_order.
+
+    The task runner starts the task with the lowest position whose user has no task in a slot.
+    Thus the position is the only place that knows the priority, and the position that the queue
+    page shows is the real start order.
+    """
+    # read before the rows are locked, so that the lock is not held for this query
+    priorityuserids = priority_userids()
+
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent
         # recalculations can each renumber from a snapshot that is missing the other's changes
         # and end up assigning duplicate queue positions.
         queuedtasks = list(Task.queued().select_for_update().order_by("user_id", "timestamp", "id"))
 
-        # to get position in current pass, check if job currently running (the one started last).
-        # attrgetter rather than a lambda: the generator's None filter cannot narrow the
-        # attribute type inside a lambda, so a lambda key would not type check
-        runningtask = max(
-            (tsk for tsk in queuedtasks if tsk.starttimestamp is not None),
-            key=operator.attrgetter("starttimestamp"),
-            default=None,
-        )
-        runningtaskid = runningtask.id if runningtask is not None else None
-        runningtask_userid = runningtask.user_id if runningtask is not None else None
+        # Each tier continues its passes from its own task that started last. A start of a task
+        # of a member thus does not move the turn of the other users.
+        prioritytasks = [tsk for tsk in queuedtasks if tsk.user_id in priorityuserids]
+        othertasks = [tsk for tsk in queuedtasks if tsk.user_id not in priorityuserids]
 
-        queuedtaskcount = len(queuedtasks)
-
-        # (task id, user id) pairs: one list, so that the two cannot drift apart
-        unassigned = [(t.id, t.user_id) for t in queuedtasks]
-
-        # work through passes (max one task per user in each pass) assigning queue positions from 0 (next) upwards
-        queuepos: int = 0
-        passnum: int = 0
         # collected and written in one statement at the end: issuing an UPDATE per task meant a
         # round trip per task while holding a lock on every queued row, so a deep queue made every
         # submission slow and serialised concurrent submitters behind it
-        queuepos_updates: dict[int, int] = {}
-        while unassigned:
-            useridsassigned_currentpass = set()
-
-            if passnum == 0 and runningtaskid is not None:
-                # currently running task will be assigned position 0
-                if any(taskid == runningtaskid for taskid, _userid in unassigned):
-                    unassigned = [(taskid, userid) for taskid, userid in unassigned if taskid != runningtaskid]
-                    useridsassigned_currentpass.add(runningtask_userid)
-                    queuepos_updates[runningtaskid] = 0
-                    queuepos = 1
-                else:
-                    # the task disappeared between the two queries?
-                    runningtaskid = None
-
-            # collect the tasks not assigned in this pass rather than popping from
-            # the list during iteration (which would skip elements)
-            remaining: list[tuple[int, int]] = []
-            for taskid, task_userid in unassigned:
-                if task_userid not in useridsassigned_currentpass and (
-                    passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
-                ):
-                    queuepos_updates[taskid] = queuepos
-                    useridsassigned_currentpass.add(task_userid)
-                    queuepos += 1
-                else:
-                    remaining.append((taskid, task_userid))
-
-            unassigned = remaining
-
-            # bail out rather than spin forever if a pass somehow assigns nothing. Not an assert:
-            # those are stripped under python -O, which is exactly when a hung request would be
-            # hardest to explain
-            if passnum >= (2 * queuedtaskcount + 1):
-                msg = f"queue position assignment made no progress after {passnum} passes over {queuedtaskcount} tasks"
-                raise RuntimeError(msg)
-
-            passnum += 1
+        queuepos_updates: dict[int, int] = {
+            taskid: queuepos
+            for queuepos, taskid in enumerate(round_robin_order(prioritytasks) + round_robin_order(othertasks))
+        }
 
         # Only the rows that move. The task runner calls this on a 30-second backstop, and a write
         # of an unchanged row changes its task_modified_datetime, which get_tasklist_etag()

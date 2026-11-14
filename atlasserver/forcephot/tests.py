@@ -3,6 +3,7 @@ import base64
 import contextlib
 import datetime as dt
 import hashlib
+import importlib
 import io
 import ipaddress
 import itertools
@@ -25,9 +26,12 @@ from unittest import mock
 from unittest import skipUnless
 
 import psutil
+from django.apps import apps as django_apps
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
+from django.contrib.auth.models import Group
+from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User
 from django.core import mail as django_mail
 from django.core.cache import caches
@@ -101,6 +105,209 @@ class TaskQueueTests(TestCase):
         userids = {user.pk for user in self.users}
         for passtasks in itertools.batched(queued, 3, strict=True):
             assert {task.user_id for task in passtasks} == userids
+
+
+class HighPriorityQueueTests(TestCase):
+    """The tasks of the members of the high priority group have the first queue positions."""
+
+    def setUp(self) -> None:
+        self.public_low, self.member, self.public_high = (
+            User.objects.create_user(username=name, email=f"{name}@example.com", password=None)
+            for name in ("publiclow", "member", "publichigh")
+        )
+        # get_or_create: the flush of a TransactionTestCase deletes the row that the migration made
+        self.group = Group.objects.get_or_create(name=taskqueue.HIGH_PRIORITY_GROUP)[0]
+        self.member.groups.add(self.group)
+
+    def queue_order(self) -> list[int]:
+        """Renumber the queue, and return the user ids of the tasks in queue order."""
+        calculate_queue_positions()
+        return [task.user_id for task in Task.queued().order_by("queuepos_relative")]
+
+    def test_the_tasks_of_a_member_are_before_the_tasks_of_the_other_users(self) -> None:
+        for user in (self.public_low, self.public_high, self.member):
+            for _ in range(2):
+                Task.objects.create(user=user, ra=10.0, dec=20.0)
+
+        order = self.queue_order()
+
+        public = [self.public_low.pk, self.public_high.pk]
+        assert order == [self.member.pk, self.member.pk, *public, *public], order
+        positions = list(Task.queued().order_by("queuepos_relative").values_list("queuepos_relative", flat=True))
+        assert positions == list(range(6)), positions
+
+    def test_two_members_take_turns(self) -> None:
+        member2 = User.objects.create_user(username="member2", email="member2@example.com", password=None)
+        member2.groups.add(self.group)
+        for user in (self.member, member2, self.public_low):
+            for _ in range(2):
+                Task.objects.create(user=user, ra=10.0, dec=20.0)
+
+        order = self.queue_order()
+
+        members = [self.member.pk, member2.pk]
+        assert order == [*members, *members, self.public_low.pk, self.public_low.pk], order
+
+    def test_a_started_task_of_a_member_does_not_move_the_turn_of_the_other_users(self) -> None:
+        for user in (self.public_low, self.member, self.public_high):
+            Task.objects.create(user=user, ra=10.0, dec=20.0)
+        Task.objects.filter(user=self.member).update(starttimestamp=timezone.now())
+
+        # with one tier, the pass continues above the user id of the member, and public_low goes
+        # to the end
+        order = self.queue_order()
+
+        assert order == [self.member.pk, self.public_low.pk, self.public_high.pk], order
+
+    def test_the_other_users_continue_from_their_own_last_start(self) -> None:
+        for user in (self.public_low, self.member, self.public_high):
+            for _ in range(2):
+                Task.objects.create(user=user, ra=10.0, dec=20.0)
+        now = timezone.now()
+        running = Task.objects.filter(user=self.public_high).order_by("id")[0]
+        Task.objects.filter(pk=running.pk).update(starttimestamp=now - dt.timedelta(minutes=5))
+        Task.objects.filter(pk=Task.objects.filter(user=self.member).order_by("id")[0].pk).update(starttimestamp=now)
+
+        order = self.queue_order()
+
+        # The running task of public_high is the first of its tier, and no user id is above it.
+        # The next pass thus starts at public_low. The later start of the member has no effect.
+        public = [self.public_high.pk, self.public_low.pk, self.public_high.pk, self.public_low.pk]
+        assert order == [self.member.pk, self.member.pk, *public], order
+
+    def test_a_user_who_leaves_the_group_has_no_priority(self) -> None:
+        for user in (self.public_low, self.member, self.public_high):
+            Task.objects.create(user=user, ra=10.0, dec=20.0)
+        assert self.queue_order()[0] == self.member.pk
+
+        self.member.groups.remove(self.group)
+
+        assert self.queue_order() == [self.public_low.pk, self.member.pk, self.public_high.pk]
+
+    def test_no_user_has_priority_when_the_group_does_not_exist(self) -> None:
+        for user in (self.public_low, self.member, self.public_high):
+            Task.objects.create(user=user, ra=10.0, dec=20.0)
+        self.group.delete()
+
+        assert taskqueue.priority_userids() == set()
+        assert self.queue_order() == [self.public_low.pk, self.member.pk, self.public_high.pk]
+
+    def test_the_task_runner_starts_the_task_of_a_member_first(self) -> None:
+        publictask = Task.objects.create(user=self.public_low, ra=10.0, dec=20.0, queuepos_relative=0)
+        membertask = Task.objects.create(user=self.member, ra=10.0, dec=20.0, queuepos_relative=1)
+        assert taskrunner_main.next_task([]) == publictask, "the position at submission is the end of the queue"
+
+        calculate_queue_positions()
+
+        assert taskrunner_main.next_task([]) == membertask
+
+    def test_a_member_with_a_task_in_a_slot_gets_no_second_task(self) -> None:
+        publictask = Task.objects.create(user=self.public_low, ra=10.0, dec=20.0)
+        for _ in range(2):
+            Task.objects.create(user=self.member, ra=10.0, dec=20.0)
+        calculate_queue_positions()
+
+        assert taskrunner_main.next_task([self.member.pk]) == publictask
+        assert taskrunner_main.next_task([self.member.pk, self.public_low.pk]) is None
+
+    def test_the_status_file_counts_the_tasks_and_the_users_of_the_group(self) -> None:
+        for _ in range(3):
+            Task.objects.create(user=self.member, ra=10.0, dec=20.0)
+        Task.objects.create(user=self.public_low, ra=10.0, dec=20.0)
+        # a finished task of a member is not in the queue
+        Task.objects.create(user=self.member, ra=10.0, dec=20.0, finishtimestamp=timezone.now())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(procs_taskids={}, numslots=runnerstatus.NUMSLOTS)
+                status = json.loads(statuspath.read_text(encoding="utf-8"))
+                assert (status["priority_queued_tasks"], status["priority_queued_users"]) == (3, 1), status
+                assert self.client.get(reverse("taskrunnerstatus")).json()["priority_queued_tasks"] == 3
+
+                self.member.groups.remove(self.group)
+                taskrunner_main.write_status(procs_taskids={}, numslots=runnerstatus.NUMSLOTS)
+                status = json.loads(statuspath.read_text(encoding="utf-8"))
+                assert (status["priority_queued_tasks"], status["priority_queued_users"]) == (0, 0), status
+
+
+class HighPriorityGroupMigrationTests(TestCase):
+    def test_the_migration_makes_the_group_one_time(self) -> None:
+        migration = importlib.import_module("atlasserver.forcephot.migrations.0010_high_priority_group")
+        assert migration.HIGH_PRIORITY_GROUP == taskqueue.HIGH_PRIORITY_GROUP
+        Group.objects.filter(name=taskqueue.HIGH_PRIORITY_GROUP).delete()
+
+        for _ in range(2):
+            migration.make_priority_group(django_apps, mock.Mock(connection=connection))
+
+        assert Group.objects.filter(name=taskqueue.HIGH_PRIORITY_GROUP).count() == 1
+
+
+class GroupMembersAdminTests(TestCase):
+    """The page of a group in the admin shows the members of the group and changes them."""
+
+    def setUp(self) -> None:
+        self.admin = User.objects.create_superuser(username="root", email="root@example.com", password=None)
+        self.member = User.objects.create_user(username="oldmember", email="old@example.com", password=None)
+        self.other = User.objects.create_user(username="newmember", email="findme@example.com", password=None)
+        self.group = Group.objects.get_or_create(name=taskqueue.HIGH_PRIORITY_GROUP)[0]
+        self.member.groups.add(self.group)
+        self.url = reverse("admin:auth_group_change", args=[self.group.pk])
+
+    def test_the_page_shows_the_members_and_not_the_other_users(self) -> None:
+        self.client.force_login(self.admin)
+
+        content = self.client.get(self.url).content.decode()
+
+        assert "oldmember" in content
+        assert "newmember" not in content, "the page must not hold the full table of users"
+
+    def test_a_post_adds_a_user_and_removes_a_user(self) -> None:
+        self.client.force_login(self.admin)
+
+        response = self.client.post(self.url, {"name": self.group.name, "members": [self.other.pk]})
+
+        assert response.status_code == 302, response.content.decode()[:2000]
+        assert taskqueue.priority_userids() == {self.other.pk}
+
+    def test_a_post_with_no_member_makes_the_group_empty(self) -> None:
+        self.client.force_login(self.admin)
+
+        response = self.client.post(self.url, {"name": self.group.name})
+
+        assert response.status_code == 302, response.status_code
+        assert taskqueue.priority_userids() == set()
+
+    def test_a_new_group_can_get_members(self) -> None:
+        self.client.force_login(self.admin)
+
+        response = self.client.post(reverse("admin:auth_group_add"), {"name": "testers", "members": [self.other.pk]})
+
+        assert response.status_code == 302, response.status_code
+        assert list(User.objects.filter(groups__name="testers")) == [self.other]
+
+    def test_the_search_of_the_field_finds_a_user_by_email(self) -> None:
+        self.client.force_login(self.admin)
+
+        response = self.client.get(
+            reverse("admin:autocomplete"),
+            {"app_label": "auth", "model_name": "user_groups", "field_name": "user", "term": "findme"},
+        )
+
+        assert response.status_code == 200, response.status_code
+        assert [row["text"] for row in response.json()["results"]] == ["newmember"]
+
+    def test_a_staff_user_who_cannot_change_groups_cannot_change_the_members(self) -> None:
+        # is_staff also marks the accounts that see the tasks of other users. Such an account
+        # must not be able to add itself to the group.
+        staff = User.objects.create_user(username="staffer", email="s@example.com", password=None, is_staff=True)
+        staff.user_permissions.add(Permission.objects.get(codename="view_group"))
+        self.client.force_login(staff)
+
+        response = self.client.post(self.url, {"name": self.group.name, "members": [staff.pk]})
+
+        assert response.status_code == 403, response.status_code
+        assert taskqueue.priority_userids() == {self.member.pk}
 
 
 class EmailChangeTests(TestCase):

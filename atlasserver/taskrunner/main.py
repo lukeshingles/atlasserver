@@ -631,6 +631,16 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
+def next_task(running_userids: t.Iterable[int]) -> Task | None:
+    """Return the task to start in a free slot, or None if no task can start.
+
+    This is the queued task with the lowest position whose user has no task in a slot. The
+    position holds the priority of the high priority group and the round-robin order of the users;
+    see forcephot.queue.calculate_queue_positions.
+    """
+    return Task.queued().exclude(user_id__in=list(running_userids)).order_by("queuepos_relative").first()
+
+
 def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool = False) -> None:
     """Write a snapshot of the runner's state for the status endpoint to read.
 
@@ -669,6 +679,19 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
     }
 
+    # The members of the high priority group have the first positions of the queue, and each of
+    # them uses a maximum of one slot. The queue page needs the two numbers to estimate a wait:
+    # the tasks of the members are ahead of a task of another user, but they do not all use the
+    # slots that the other users wait for.
+    priorityuserids = taskqueue.priority_userids()
+    prioritystats = (
+        Task.queued()
+        .filter(user_id__in=priorityuserids)
+        .aggregate(tasks=models.Count("id"), users=models.Count("user_id", distinct=True))
+        if priorityuserids
+        else {"tasks": 0, "users": 0}
+    )
+
     status = {
         "written": dt.datetime.now(dt.UTC).isoformat(),
         "pid": os.getpid(),
@@ -679,6 +702,8 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
         "queued_by_request_type": queued_by_request_type,
+        "priority_queued_tasks": prioritystats["tasks"],
+        "priority_queued_users": prioritystats["users"],
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -1065,7 +1090,7 @@ def main() -> None:
 
         # one query rather than a count() followed by a first(): the count was only used for a log
         # line, and is fetched below only when a task is actually dispatched
-        task = queuedtasks.exclude(user_id__in=list(procs_userids.values())).first()
+        task = next_task(procs_userids.values())
 
         if task is None:
             # nothing runnable. That is either an empty queue or a queue holding only tasks from

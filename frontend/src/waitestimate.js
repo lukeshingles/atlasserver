@@ -20,8 +20,15 @@
 // everyone else's, which drain in parallel at min(slots, users sharing the queue). The wait is
 // whichever of those two takes longer, since they are happening at the same time.
 //
+// The queue has two tiers (calculate_queue_positions in forcephot/queue.py). The tasks of the
+// members of the high priority group have the first positions, and the tasks of the other users
+// follow them. Each member uses a maximum of one slot. Thus a task of another user does not wait
+// for all the tasks of the members that are ahead of it: it waits only for the slots that the
+// members do not use. The status gives the two numbers that this needs, `priority_queued_tasks`
+// and `priority_queued_users`.
+//
 // If the dispatch policy in taskrunner/main.py ever changes -- a second concurrent task per user,
-// a priority tier -- this is the copy of it that has to change with it.
+// a third tier -- this is the copy of it that has to change with it.
 
 /**
  * Seconds a task at this queue position is likely to wait, or null if that cannot be said.
@@ -66,12 +73,31 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus }) {
     if (!(numslots > 0) || queuedusers == null) {
         return null;
     }
-    const concurrency = Math.max(1, Math.min(numslots, queuedusers));
+
+    // The tasks of the members of the high priority group have the positions below
+    // `prioritytasks`, because the positions start at the lowest position of the queue. An absent
+    // field has the value zero: a task runner that does not write the fields has no priority tier.
+    const prioritytasks = runnerstatus.priority_queued_tasks ?? 0;
+    const priorityusers = runnerstatus.priority_queued_users ?? 0;
+    const inprioritytier = queuepos < prioritytasks;
+
+    // A task of a member competes only with the tasks of the other members. A task of another user
+    // gets the slots that the members do not use, and shares them with the users who are not
+    // members. If the members use all the slots, no slot stays, and there is no rate to divide by.
+    const tierslots = inprioritytier ? numslots : numslots - priorityusers;
+    const tierusers = inprioritytier ? priorityusers : queuedusers - priorityusers;
+    if (!(tierslots > 0)) {
+        return null;
+    }
+    // The floor of one is for the user count only, which can be older than the queue (see above).
+    const concurrency = Math.min(tierslots, Math.max(1, tierusers));
 
     // Strictly ahead of this one. The endpoint reports the user's whole queued set, not the page on
     // screen, which is what makes this their queue rather than the rows that happen to be rendered.
     const ownahead = ownqueued.filter((task) => task.position < queuepos);
-    const otherahead = queuepos - ownahead.length;
+    // For a task of a user who is not a member, the tasks of the members are not in this count:
+    // the smaller number of slots above already holds their effect.
+    const otherahead = Math.max(0, queuepos - ownahead.length - (inprioritytier ? 0 : prioritytasks));
 
     // The user's own tasks ahead run one at a time, so their run times add up -- each priced by
     // what it actually is. A radeclist submission is one type throughout, but a user who asked for

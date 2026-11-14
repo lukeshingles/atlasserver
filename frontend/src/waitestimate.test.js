@@ -35,6 +35,70 @@ const soleTaskAt = (queuepos, statusoverrides = {}, requesttype = 'FP') => estim
     runnerstatus: status(statusoverrides),
 });
 
+describe('estimateWaitSeconds with the high priority group', () => {
+    test('a task of another user does not wait for all the tasks of one member', () => {
+        // One member has 500 tasks in the first positions and uses one slot. Ten other users'
+        // tasks are also ahead, and 15 slots stay for 20 other users: all ten start in the first
+        // pass. The formula without the tier gives floor(510 / 16) = 31 passes.
+        const seconds = soleTaskAt(510, {
+            distinct_queued_users: 21,
+            priority_queued_tasks: 500,
+            priority_queued_users: 1,
+        });
+
+        assert.equal(seconds, 0);
+    });
+
+    test('the members decrease the slots of the other users', () => {
+        // 4 members use 4 slots, and 12 slots stay. 30 tasks of other users are ahead: two full
+        // passes of 12, and this task is in the third pass.
+        const seconds = soleTaskAt(130, {
+            distinct_queued_users: 40,
+            priority_queued_tasks: 100,
+            priority_queued_users: 4,
+        });
+
+        assert.equal(seconds, 2 * 60);
+    });
+
+    test('a task of a member waits only for the tasks of the other members', () => {
+        // position 6 of 100 priority tasks, 3 members: two full passes of 3 are ahead
+        const seconds = soleTaskAt(6, {
+            distinct_queued_users: 40,
+            priority_queued_tasks: 100,
+            priority_queued_users: 3,
+        });
+
+        assert.equal(seconds, 2 * 60);
+    });
+
+    test('there is no estimate when the members use all the slots', () => {
+        const seconds = soleTaskAt(400, {
+            distinct_queued_users: 40,
+            priority_queued_tasks: 300,
+            priority_queued_users: 16,
+        });
+
+        assert.equal(seconds, null);
+    });
+
+    test('a status without the two fields gives the estimate of a queue with one tier', () => {
+        assert.equal(soleTaskAt(40, { distinct_queued_users: 20 }), 2 * 60);
+    });
+
+    test('a status that is older than the queue does not make the result negative', () => {
+        // the status counts more priority tasks than the position of this task allows
+        const seconds = estimateWaitSeconds({
+            queuepos: 12,
+            ownqueued: [{ position: 3, requesttype: 'FP' }, { position: 12, requesttype: 'FP' }],
+            runnerstatus: status({ distinct_queued_users: 1, priority_queued_tasks: 12, priority_queued_users: 1 }),
+        });
+
+        // one task of the same user is ahead, and it runs first
+        assert.equal(seconds, 60);
+    });
+});
+
 describe('estimateWaitSeconds', () => {
     test('a bulk submission is serialised, not divided by the free slots', () => {
         // 40 of the user's own tasks ahead, every slot free. They run one at a time, so the wait is
