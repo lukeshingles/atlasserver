@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
-import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from './waitestimate.js';
+import { estimateWaitSeconds, formatDuration, formatWaitEstimate, tasksAhead } from './waitestimate.js';
 
 const status = (overrides = {}) => ({
     stale: false,
@@ -33,6 +33,25 @@ const soleTaskAt = (queuepos, statusoverrides = {}, requesttype = 'FP') => estim
     queuepos,
     ownqueued: [{ position: queuepos, requesttype }],
     runnerstatus: status(statusoverrides),
+});
+
+describe('tasksAhead', () => {
+    const prioritystatus = status({ priority_queued_tasks: 500, priority_queued_users: 1 });
+
+    test('the tasks of the members are not ahead of a task of another user', () => {
+        assert.equal(tasksAhead({ queuepos: 503, runnerstatus: prioritystatus }), 3);
+        assert.equal(tasksAhead({ queuepos: 500, runnerstatus: prioritystatus }), 0);
+    });
+
+    test('a task of a member keeps its position', () => {
+        assert.equal(tasksAhead({ queuepos: 7, runnerstatus: prioritystatus }), 7);
+    });
+
+    test('the result is the position without the fields or without a fresh status', () => {
+        assert.equal(tasksAhead({ queuepos: 40, runnerstatus: status() }), 40);
+        assert.equal(tasksAhead({ queuepos: 503, runnerstatus: null }), 503);
+        assert.equal(tasksAhead({ queuepos: 503, runnerstatus: { ...prioritystatus, stale: true } }), 503);
+    });
 });
 
 describe('estimateWaitSeconds with the high priority group', () => {

@@ -1680,6 +1680,23 @@ describe('TaskPage', () => {
         assert.match(status.textContent, /~40 min/);
     });
 
+    test('a waiting row does not count the tasks of the high priority group as ahead', async () => {
+        const { container } = await renderWithStatus([task(1, { queuepos: 503 })], { 1: 503 }, {
+            queued_task_count: 504,
+            numslots: 16,
+            slots_busy: 5,
+            distinct_queued_users: 5,
+            priority_queued_tasks: 500,
+            priority_queued_users: 1,
+            typical_runtime_seconds: { FP: 600 },
+            queued_by_request_type: { FP: 504 },
+        });
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /^Waiting 3 ahead/);
+        assert.match(status.textContent, /under a minute/);
+    });
+
     test('a waiting row shows no estimate when the runner is not running', async () => {
         const { container } = await renderWithStatus([task(1, { queuepos: 4 })], { 1: 4 }, {
             stale: true,

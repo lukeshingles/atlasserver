@@ -6,7 +6,7 @@ import { pollingPaused, subscribe } from "runnerstatus";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
-import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from "waitestimate";
+import { estimateWaitSeconds, formatDuration, formatWaitEstimate, tasksAhead } from "waitestimate";
 
 function debug_log(...args) {
     // uncomment for debugging in development
@@ -388,6 +388,7 @@ function taskPropsEqual(prev, next) {
         prev.hidePlot === next.hidePlot
         // a string or null, so this stays the cheap check the rest of this function avoids
         && prev.waitestimate === next.waitestimate
+        && prev.ahead === next.ahead
         && prev.attempted === next.attempted
         && (prev.taskdata === next.taskdata
             || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
@@ -764,8 +765,11 @@ export const Task = React.memo(function Task(props) {
             </div>);
     } else if (task.queuepos != null) {
         // the position as a chip rather than inside the sentence, so it can be found down a column
-        // of rows. queuepos counts the tasks ahead, so zero is the one that runs next.
-        const ahead = task.queuepos == 0 ? 'next' : task.queuepos + ' ahead';
+        // of rows. The count is of the tasks ahead, so zero is the one that runs next. props.ahead
+        // does not count the tasks of the high priority group for a task of another user; see
+        // tasksAhead in waitestimate.js.
+        const aheadcount = props.ahead ?? task.queuepos;
+        const ahead = aheadcount == 0 ? 'next' : aheadcount + ' ahead';
         // Only when the server gave enough to compute one -- a stale runner, or a request type it
         // has too few recent samples of, produces null and nothing is shown. An absent estimate is
         // a smaller failure than an invented one, which is the number the user plans around.
@@ -1835,7 +1839,8 @@ export function TaskPage() {
             <ul key="ultasklist" className="tasks">
                 {state.results.map((task) => (
                     <Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView}
-                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} attempted={attempted(task)} />))}
+                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)}
+                        ahead={tasksAhead({ queuepos: task.queuepos, runnerstatus })} attempted={attempted(task)} />))}
             </ul>,
             <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
         ];

@@ -142,6 +142,22 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus }) {
 }
 
 /**
+ * The number of tasks ahead of a task that compete with it for a slot.
+ *
+ * For a task of a user who is not a member of the high priority group, the tasks of the members
+ * are not in this number. They have the first positions, but each member uses a maximum of one
+ * slot, and thus a batch of a member does not delay the task by its full length. With no fresh
+ * status the result is the position, which is the number of all tasks ahead.
+ */
+export function tasksAhead({ queuepos, runnerstatus }) {
+    if (queuepos == null || runnerstatus == null || runnerstatus.stale) {
+        return queuepos;
+    }
+    const prioritytasks = runnerstatus.priority_queued_tasks ?? 0;
+    return queuepos < prioritytasks ? queuepos : queuepos - prioritytasks;
+}
+
+/**
  * How long a dispatch pass takes on average, given what is queued, or null if that cannot be said.
  *
  * Weighted by the number of queued tasks of each type, since a pass is filled from the queue.
