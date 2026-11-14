@@ -4,6 +4,8 @@
 This code depends on a new monsta script, which is not in standard ATLAS pipeline
 (tvjpeg_ssostack.pro). This script, and the new monsta script must be copied into the
 atlas user's home directory.
+
+The python3 command on sc01 is Python 3.8. Use only the features of Python 3.8 in this script.
 """
 
 import contextlib

@@ -1,3 +1,4 @@
+import ast
 import base64
 import contextlib
 import datetime as dt
@@ -7842,3 +7843,36 @@ class PasswordResetLimitPageTests(TestCase):
 
         assert response.status_code == 429, response.status_code
         assert "Too many password reset requests" in response.content.decode()
+
+
+class RemoteScriptPythonVersionTests(SimpleTestCase):
+    """The scripts that the task runner starts on sc01 must run on Python 3.8.
+
+    The python3 command on sc01 is Python 3.8. A script that fails there writes no result file, and
+    the task runner then starts the task again without a limit.
+    """
+
+    scripts: t.ClassVar[list[Path]] = sorted(Path(atlastaskrunner.__file__).parent.glob("taskrunner/atlas_*.py"))
+
+    def test_the_scripts_are_found(self) -> None:
+        assert len(self.scripts) >= 3, self.scripts
+
+    def test_the_syntax_is_python_38(self) -> None:
+        for script in self.scripts:
+            with self.subTest(script=script.name):
+                ast.parse(script.read_text(encoding="utf-8"), filename=str(script), feature_version=(3, 8))
+
+    def test_zip_has_no_strict_argument(self) -> None:
+        # zip() accepts the strict argument from Python 3.10
+        for script in self.scripts:
+            tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+            strictcalls = [
+                node.lineno
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "zip"
+                and any(keyword.arg == "strict" for keyword in node.keywords)
+            ]
+            with self.subTest(script=script.name):
+                assert not strictcalls, strictcalls

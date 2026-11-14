@@ -50,6 +50,16 @@ For atlastaskrunner to process tasks, there must be an SSH host alias named 'atl
 scp atlasserver/taskrunner/atlas_*.py atlas:~/
 ```
 
+The `python3` command of the account on sc01 runs these scripts. For the production account, this
+is Python 3.8.5. This command shows the version:
+```sh
+ssh atlas python3 --version
+```
+The scripts must use only the features of Python 3.8. The other code of atlasserver needs Python
+3.13 or later, and it does not have this limit. A script that fails on sc01 writes no result file,
+and the task runner then starts the task again without a limit. The slot logs in
+`atlasserver/taskrunner/logs/` show the error from sc01 in the lines with `atlas STDERR:`.
+
 To update the code to the latest commit on the main branch, pull from the GitHub remote, apply any
 database changes, and then restart the two processes.
 ```sh
