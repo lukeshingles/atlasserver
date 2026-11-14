@@ -210,6 +210,46 @@ class HighPriorityQueueTests(TestCase):
         assert taskrunner_main.next_task([self.member.pk]) == publictask
         assert taskrunner_main.next_task([self.member.pk, self.public_low.pk]) is None
 
+    def queuepositions(self, user: User) -> dict[str, t.Any]:
+        self.client.force_login(user)
+        return self.client.get(reverse("queuepositions")).json()
+
+    def test_the_queue_positions_give_the_tier_of_the_caller(self) -> None:
+        for _ in range(5):
+            Task.objects.create(user=self.member, ra=10.0, dec=20.0)
+        Task.objects.create(user=self.public_low, ra=10.0, dec=20.0)
+        publictask = Task.objects.create(user=self.public_high, ra=10.0, dec=20.0)
+        calculate_queue_positions()
+
+        answer = self.queuepositions(self.public_high)
+
+        assert answer["queuepositions"] == {str(publictask.pk): 6}, answer
+        assert (answer["prioritytier"], answer["tierstart"]) == (False, 5), answer
+
+        answer = self.queuepositions(self.member)
+        assert (answer["prioritytier"], answer["tierstart"]) == (True, 0), answer
+
+    def test_the_tier_start_follows_the_positions_when_a_task_of_a_member_finishes(self) -> None:
+        membertasks = [Task.objects.create(user=self.member, ra=10.0, dec=20.0) for _ in range(5)]
+        Task.objects.create(user=self.public_high, ra=10.0, dec=20.0)
+        calculate_queue_positions()
+
+        # no renumbering after the finish: the positions and the start of the tier move together
+        Task.objects.filter(pk=membertasks[0].pk).update(finishtimestamp=timezone.now(), queuepos_relative=None)
+        answer = self.queuepositions(self.public_high)
+
+        assert list(answer["queuepositions"].values()) == [4], answer
+        assert answer["tierstart"] == 4, answer
+
+    def test_the_tier_start_is_zero_when_no_member_has_a_queued_task(self) -> None:
+        Task.objects.create(user=self.public_low, ra=10.0, dec=20.0)
+        Task.objects.create(user=self.public_high, ra=10.0, dec=20.0)
+        calculate_queue_positions()
+
+        answer = self.queuepositions(self.public_high)
+
+        assert (answer["prioritytier"], answer["tierstart"]) == (False, 0), answer
+
     def test_the_status_file_counts_the_tasks_and_the_users_of_the_group(self) -> None:
         for _ in range(3):
             Task.objects.create(user=self.member, ra=10.0, dec=20.0)
@@ -223,12 +263,14 @@ class HighPriorityQueueTests(TestCase):
                 taskrunner_main.write_status(procs_taskids={}, numslots=runnerstatus.NUMSLOTS)
                 status = json.loads(statuspath.read_text(encoding="utf-8"))
                 assert (status["priority_queued_tasks"], status["priority_queued_users"]) == (3, 1), status
+                assert status["priority_queued_by_request_type"] == {"FP": 3}, status
                 assert self.client.get(reverse("taskrunnerstatus")).json()["priority_queued_tasks"] == 3
 
                 self.member.groups.remove(self.group)
                 taskrunner_main.write_status(procs_taskids={}, numslots=runnerstatus.NUMSLOTS)
                 status = json.loads(statuspath.read_text(encoding="utf-8"))
                 assert (status["priority_queued_tasks"], status["priority_queued_users"]) == (0, 0), status
+                assert status["priority_queued_by_request_type"] == {}, status
 
 
 class HighPriorityGroupMigrationTests(TestCase):
@@ -297,20 +339,49 @@ class GroupMembersAdminTests(TestCase):
         assert response.status_code == 200, response.status_code
         assert [row["text"] for row in response.json()["results"]] == ["newmember"]
 
+    def staff_with(self, *codenames: str) -> User:
+        staff = User.objects.create_user(username="staffer", email="s@example.com", password=None, is_staff=True)
+        staff.user_permissions.add(*Permission.objects.filter(codename__in=codenames))
+        self.client.force_login(staff)
+        return staff
+
     def test_a_staff_user_who_cannot_change_groups_cannot_change_the_members(self) -> None:
         # is_staff also marks the accounts that see the tasks of other users. Such an account
         # must not be able to add itself to the group.
-        staff = User.objects.create_user(username="staffer", email="s@example.com", password=None, is_staff=True)
-        staff.user_permissions.add(Permission.objects.get(codename="view_group"))
-        self.client.force_login(staff)
+        staff = self.staff_with("view_group")
 
-        # the page with the field renders for a user who can only view the group
-        assert self.client.get(self.url).status_code == 200
+        # the page has no field for the members, and thus it does not show an incorrect "None"
+        response = self.client.get(self.url)
+        assert response.status_code == 200
+        assert "Members" not in response.content.decode()
 
         response = self.client.post(self.url, {"name": self.group.name, "members": [staff.pk]})
 
         assert response.status_code == 403, response.status_code
         assert taskqueue.priority_userids() == {self.member.pk}
+
+    def test_a_staff_user_who_cannot_change_users_cannot_change_the_members(self) -> None:
+        # A group gives its permissions to its members. A user who can change only groups must
+        # not be able to join a group.
+        staff = self.staff_with("change_group", "view_group")
+
+        assert "Members" not in self.client.get(self.url).content.decode()
+
+        response = self.client.post(self.url, {"name": self.group.name, "members": [staff.pk]})
+
+        # the change of the group itself is permitted, and the members stay as they were
+        assert response.status_code == 302, response.status_code
+        assert taskqueue.priority_userids() == {self.member.pk}
+
+    def test_a_staff_user_who_can_change_groups_and_users_can_change_the_members(self) -> None:
+        self.staff_with("change_group", "view_group", "change_user", "view_user")
+
+        assert "Members" in self.client.get(self.url).content.decode()
+
+        response = self.client.post(self.url, {"name": self.group.name, "members": [self.other.pk]})
+
+        assert response.status_code == 302, response.status_code
+        assert taskqueue.priority_userids() == {self.other.pk}
 
 
 class EmailChangeTests(TestCase):

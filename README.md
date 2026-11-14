@@ -62,16 +62,17 @@ and the task runner then starts the task again without a limit. The slot logs in
 
 The task runner executes 16 tasks at one time, with a maximum of one task for each user. The
 tasks of the users in the Django group `High priority` start before the tasks of all other users.
-The limit of one task for each user also applies to a member of the group, and thus N members use
-a maximum of N slots. If 16 members have queued tasks at one time, the other users get no slot.
+The limit of one task for each user also applies to a member of the group. Thus N members use a
+maximum of N slots. If 16 members have queued tasks at one time, the other users get no slot.
+
 For a task of another user, the queue page does not count the tasks of the members in the number
 of tasks ahead. A batch of a member uses only one slot, and thus it does not delay the other users
 by its full length. The `queuepos` field of the API is the position in the full queue, and it
 includes the tasks of the members.
 
 The `migrate` command makes the group. To add or remove a member, open the group in the admin site
-(`/admin/auth/group/`) and change the field "Members". The field has a search by username, name
-and email address. Only an administrator who can change groups can do this. A change has an effect
+(`/admin/auth/group/`). Then change the field "Members". The field has a search by username, name
+and email address. Only an administrator who can change groups and users can do this. A change has an effect
 on the queue in a maximum of 30 seconds, and a restart of the task runner is not necessary.
 
 To update the code to the latest commit on the main branch, pull from the GitHub remote, apply any

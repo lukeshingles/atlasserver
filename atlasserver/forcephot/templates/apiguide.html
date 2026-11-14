@@ -124,7 +124,7 @@ print(dfresult)
 
 <h3>Queue positions and machine-readable schema</h3>
 
-<p>To check where your queued tasks sit without fetching the whole task list, GET <code>{BASEURL}/queuepositions.json</code> with the same <code>Authorization</code> header. The JSON answer holds <code>queuepositions</code>, a mapping of task id to queue position (0 is next to run), <code>queuedtypes</code>, a mapping of task id to request type, and <code>queueoffset</code>.</p>
+<p>To check where your queued tasks sit without fetching the whole task list, GET <code>{BASEURL}/queuepositions.json</code> with the same <code>Authorization</code> header. The JSON answer holds <code>queuepositions</code>, a mapping of task id to queue position (0 is next to run), <code>queuedtypes</code>, a mapping of task id to request type, and <code>queueoffset</code>. The tasks of a small group of users with high priority have the first positions. Each of these users runs one task at a time. Thus a task can start before all the tasks at lower positions start. For a user who is not in that group, <code>tierstart</code> is the position of the first task that is not a task of the group. The position minus <code>tierstart</code> is the number of tasks that compete with the task for a slot.</p>
 
 <p>An OpenAPI 3 schema for this API is generated from the server code and served at <a href="{% url 'schema' %}">/api/schema/</a>, with a browsable version at <a href="{% url 'swagger-ui' %}">/api/docs/</a>.</p>
 

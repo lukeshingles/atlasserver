@@ -458,6 +458,8 @@ describe('TaskPage', () => {
                     status: 200,
                     json: () => Promise.resolve({
                         queuepositions: body,
+                        // the tier of the caller, when a test sets it
+                        ...control.tier,
                         // the endpoint sends a type per queued task; FP unless a test says otherwise
                         queuedtypes: { ...Object.fromEntries(Object.keys(body).map((id) => [id, 'FP'])),
                             ...control.queuedtypes },
@@ -1681,16 +1683,22 @@ describe('TaskPage', () => {
     });
 
     test('a waiting row does not count the tasks of the high priority group as ahead', async () => {
-        const { container } = await renderWithStatus([task(1, { queuepos: 503 })], { 1: 503 }, {
+        stubFetchWithPositions([task(1, { queuepos: 503 })], { 1: 503 }, {
             queued_task_count: 504,
             numslots: 16,
             slots_busy: 5,
             distinct_queued_users: 5,
-            priority_queued_tasks: 500,
+            // The status is older than the positions and counts more member tasks than the answer
+            // of the positions. The tier comes from that answer, and the row stays correct.
+            priority_queued_tasks: 510,
             priority_queued_users: 1,
+            priority_queued_by_request_type: { FP: 510 },
             typical_runtime_seconds: { FP: 600 },
-            queued_by_request_type: { FP: 504 },
-        });
+            queued_by_request_type: { FP: 514 },
+        }).tier = { prioritytier: false, tierstart: 500 };
+        const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(root);
+        await flush(120);
 
         const status = container.querySelector('.taskstatus.waiting');
         assert.match(status.textContent, /^Waiting 3 ahead/);

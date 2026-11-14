@@ -35,31 +35,43 @@ const soleTaskAt = (queuepos, statusoverrides = {}, requesttype = 'FP') => estim
     runnerstatus: status(statusoverrides),
 });
 
-describe('tasksAhead', () => {
-    const prioritystatus = status({ priority_queued_tasks: 500, priority_queued_users: 1 });
+/** The tier of a user who is not a member, behind `start` tasks of the members. */
+const behind = (start) => ({ priority: false, start });
+const membertier = { priority: true, start: 0 };
 
+describe('tasksAhead', () => {
     test('the tasks of the members are not ahead of a task of another user', () => {
-        assert.equal(tasksAhead({ queuepos: 503, runnerstatus: prioritystatus }), 3);
-        assert.equal(tasksAhead({ queuepos: 500, runnerstatus: prioritystatus }), 0);
+        assert.equal(tasksAhead({ queuepos: 503, tier: behind(500) }), 3);
+        assert.equal(tasksAhead({ queuepos: 500, tier: behind(500) }), 0);
     });
 
     test('a task of a member keeps its position', () => {
-        assert.equal(tasksAhead({ queuepos: 7, runnerstatus: prioritystatus }), 7);
+        assert.equal(tasksAhead({ queuepos: 7, tier: membertier }), 7);
     });
 
-    test('the result is the position without the fields or without a fresh status', () => {
-        assert.equal(tasksAhead({ queuepos: 40, runnerstatus: status() }), 40);
-        assert.equal(tasksAhead({ queuepos: 503, runnerstatus: null }), 503);
-        assert.equal(tasksAhead({ queuepos: 503, runnerstatus: { ...prioritystatus, stale: true } }), 503);
+    test('the result is the position when the tier is not known', () => {
+        assert.equal(tasksAhead({ queuepos: 40, tier: null }), 40);
+        assert.equal(tasksAhead({ queuepos: 40 }), 40);
+    });
+
+    test('a position before the start of the tier gives zero', () => {
+        assert.equal(tasksAhead({ queuepos: 498, tier: behind(500) }), 0);
     });
 });
 
 describe('estimateWaitSeconds with the high priority group', () => {
+    const estimate = (queuepos, tier, statusoverrides) => estimateWaitSeconds({
+        queuepos,
+        ownqueued: [{ position: queuepos, requesttype: 'FP' }],
+        runnerstatus: status(statusoverrides),
+        tier,
+    });
+
     test('a task of another user does not wait for all the tasks of one member', () => {
         // One member has 500 tasks in the first positions and uses one slot. Ten other users'
         // tasks are also ahead, and 15 slots stay for 20 other users: all ten start in the first
         // pass. The formula without the tier gives floor(510 / 16) = 31 passes.
-        const seconds = soleTaskAt(510, {
+        const seconds = estimate(510, behind(500), {
             distinct_queued_users: 21,
             priority_queued_tasks: 500,
             priority_queued_users: 1,
@@ -71,7 +83,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
     test('the members decrease the slots of the other users', () => {
         // 4 members use 4 slots, and 12 slots stay. 30 tasks of other users are ahead: two full
         // passes of 12, and this task is in the third pass.
-        const seconds = soleTaskAt(130, {
+        const seconds = estimate(130, behind(100), {
             distinct_queued_users: 40,
             priority_queued_tasks: 100,
             priority_queued_users: 4,
@@ -80,9 +92,33 @@ describe('estimateWaitSeconds with the high priority group', () => {
         assert.equal(seconds, 2 * 60);
     });
 
+    test('the members free their slots when their tasks are done', () => {
+        // 15 members have one task each. The first pass has one slot for the other users, and the
+        // later passes have 16. 100 tasks are ahead: 1 + 6 * 16 = 97 start in 7 passes.
+        const seconds = estimate(115, behind(15), {
+            distinct_queued_users: 60,
+            priority_queued_tasks: 15,
+            priority_queued_users: 15,
+        });
+
+        assert.equal(seconds, 7 * 60);
+    });
+
+    test('the other users wait when the members use all the slots', () => {
+        // 16 members with 32 tasks use all the slots for two passes. Then 20 tasks ahead need
+        // one more full pass of 16.
+        const seconds = estimate(52, behind(32), {
+            distinct_queued_users: 60,
+            priority_queued_tasks: 32,
+            priority_queued_users: 16,
+        });
+
+        assert.equal(seconds, 3 * 60);
+    });
+
     test('a task of a member waits only for the tasks of the other members', () => {
         // position 6 of 100 priority tasks, 3 members: two full passes of 3 are ahead
-        const seconds = soleTaskAt(6, {
+        const seconds = estimate(6, membertier, {
             distinct_queued_users: 40,
             priority_queued_tasks: 100,
             priority_queued_users: 3,
@@ -91,30 +127,46 @@ describe('estimateWaitSeconds with the high priority group', () => {
         assert.equal(seconds, 2 * 60);
     });
 
-    test('there is no estimate when the members use all the slots', () => {
-        const seconds = soleTaskAt(400, {
+    test('the tier does not come from the status', () => {
+        // The status counts 500 tasks of the members, and two of them are done: the position is
+        // 499. The answer of the positions says that the tier starts at 498, with one task ahead.
+        const seconds = estimate(499, behind(498), {
+            distinct_queued_users: 21,
+            priority_queued_tasks: 500,
+            priority_queued_users: 1,
+        });
+
+        assert.equal(seconds, 0);
+    });
+
+    test('the passes of the other users have the price of the tasks of the other users', () => {
+        // One member has 500 IMGZIP tasks. 30 FP tasks of other users are ahead with 15 slots:
+        // two passes of FP tasks.
+        const seconds = estimate(530, behind(500), {
+            distinct_queued_users: 21,
+            priority_queued_tasks: 500,
+            priority_queued_users: 1,
+            priority_queued_by_request_type: { IMGZIP: 500 },
+            queued_by_request_type: { IMGZIP: 500, FP: 40 },
+        });
+
+        assert.equal(seconds, 2 * 60);
+    });
+
+    test('the passes of the members have the price of the tasks of the members', () => {
+        const seconds = estimate(6, membertier, {
             distinct_queued_users: 40,
-            priority_queued_tasks: 300,
-            priority_queued_users: 16,
+            priority_queued_tasks: 100,
+            priority_queued_users: 3,
+            priority_queued_by_request_type: { IMGZIP: 100 },
+            queued_by_request_type: { IMGZIP: 100, FP: 400 },
         });
 
-        assert.equal(seconds, null);
+        assert.equal(seconds, 2 * 900);
     });
 
-    test('a status without the two fields gives the estimate of a queue with one tier', () => {
+    test('a status without the fields gives the estimate of a queue with one tier', () => {
         assert.equal(soleTaskAt(40, { distinct_queued_users: 20 }), 2 * 60);
-    });
-
-    test('a status that is older than the queue does not make the result negative', () => {
-        // the status counts more priority tasks than the position of this task allows
-        const seconds = estimateWaitSeconds({
-            queuepos: 12,
-            ownqueued: [{ position: 3, requesttype: 'FP' }, { position: 12, requesttype: 'FP' }],
-            runnerstatus: status({ distinct_queued_users: 1, priority_queued_tasks: 12, priority_queued_users: 1 }),
-        });
-
-        // one task of the same user is ahead, and it runs first
-        assert.equal(seconds, 60);
     });
 });
 

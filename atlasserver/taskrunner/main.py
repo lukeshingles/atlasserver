@@ -680,16 +680,26 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     }
 
     # The members of the high priority group have the first positions of the queue, and each of
-    # them uses a maximum of one slot. The queue page needs the two numbers to estimate a wait:
-    # the tasks of the members are ahead of a task of another user, but they do not all use the
-    # slots that the other users wait for.
+    # them uses a maximum of one slot. The queue page needs the two numbers to estimate a wait.
+    # The tasks of the members are ahead of a task of another user, but they do not use all the
+    # slots.
     priorityuserids = taskqueue.priority_userids()
+    prioritytasks = Task.queued().filter(user_id__in=priorityuserids)
     prioritystats = (
-        Task.queued()
-        .filter(user_id__in=priorityuserids)
-        .aggregate(tasks=models.Count("id"), users=models.Count("user_id", distinct=True))
+        prioritytasks.aggregate(tasks=models.Count("id"), users=models.Count("user_id", distinct=True))
         if priorityuserids
         else {"tasks": 0, "users": 0}
+    )
+    # The request types of the tasks of the members. The queue page prices the passes of one tier
+    # from the tasks of that tier: a batch of IMGZIP tasks of a member does not make the passes of
+    # the other users longer.
+    priority_queued_by_request_type = (
+        {
+            row["request_type"]: row["count"]
+            for row in prioritytasks.values("request_type").annotate(count=models.Count("id"))
+        }
+        if prioritystats["tasks"]
+        else {}
     )
 
     status = {
@@ -704,6 +714,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "queued_by_request_type": queued_by_request_type,
         "priority_queued_tasks": prioritystats["tasks"],
         "priority_queued_users": prioritystats["users"],
+        "priority_queued_by_request_type": priority_queued_by_request_type,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -1077,7 +1088,7 @@ def main() -> None:
                 numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
-        queuedtasks = Task.queued().order_by("queuepos_relative")
+        queuedtasks = Task.queued()
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()

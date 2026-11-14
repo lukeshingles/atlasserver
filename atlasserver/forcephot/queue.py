@@ -26,9 +26,10 @@ if t.TYPE_CHECKING:
 # which does not matter: the question is whether the value changed, not by how much.
 RECALC_GENERATION_CACHEKEY: t.Final = "queue-positions-generation"
 
-# The name of the Django group whose members have priority in the queue: calculate_queue_positions
-# puts each task of a member before each task of the other users. Migration 0010 makes the group,
-# and an administrator changes its members on the page of the group in the Django admin.
+# The name of the Django group whose members have priority in the queue. The function
+# calculate_queue_positions puts each task of a member before each task of the other users.
+# Migration 0010 makes the group, and an administrator changes its members on the page of the
+# group in the Django admin.
 HIGH_PRIORITY_GROUP: t.Final = "High priority"
 
 # Renumber at least this often even when the flag says nothing changed. Covers the task runner's
@@ -275,10 +276,12 @@ def calculate_queue_positions() -> None:
     see round_robin_order.
 
     The task runner starts the task with the lowest position whose user has no task in a slot.
-    Thus the position is the only place that knows the priority, and the position that the queue
-    page shows is the real start order.
+    Thus the positions give the real start order, and the task runner has no second rule for the
+    priority. For a task of another user, the queue page shows a count without the tasks of the
+    members; see tasksAhead in frontend/src/waitestimate.js.
     """
-    # read before the rows are locked, so that the lock is not held for this query
+    # This query runs before the transaction locks the rows. Thus the lock does not include the
+    # time of this query.
     priorityuserids = priority_userids()
 
     with transaction.atomic():
