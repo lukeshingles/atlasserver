@@ -1690,8 +1690,7 @@ describe('TaskPage', () => {
             distinct_queued_users: 5,
             // The status is older than the positions and counts more member tasks than the answer
             // of the positions. The tier comes from that answer, and the row stays correct.
-            priority_queued_tasks: 510,
-            priority_queued_users: 1,
+            priority_queued_depths: [510],
             priority_queued_by_request_type: { FP: 510 },
             typical_runtime_seconds: { FP: 600 },
             queued_by_request_type: { FP: 514 },

@@ -73,8 +73,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
         // pass. The formula without the tier gives floor(510 / 16) = 31 passes.
         const seconds = estimate(510, behind(500), {
             distinct_queued_users: 21,
-            priority_queued_tasks: 500,
-            priority_queued_users: 1,
+            priority_queued_depths: [500],
         });
 
         assert.equal(seconds, 0);
@@ -85,8 +84,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
         // passes of 12, and this task is in the third pass.
         const seconds = estimate(130, behind(100), {
             distinct_queued_users: 40,
-            priority_queued_tasks: 100,
-            priority_queued_users: 4,
+            priority_queued_depths: [25, 25, 25, 25],
         });
 
         assert.equal(seconds, 2 * 60);
@@ -97,8 +95,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
         // later passes have 16. 100 tasks are ahead: 1 + 6 * 16 = 97 start in 7 passes.
         const seconds = estimate(115, behind(15), {
             distinct_queued_users: 60,
-            priority_queued_tasks: 15,
-            priority_queued_users: 15,
+            priority_queued_depths: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         });
 
         assert.equal(seconds, 7 * 60);
@@ -109,19 +106,42 @@ describe('estimateWaitSeconds with the high priority group', () => {
         // one more full pass of 16.
         const seconds = estimate(52, behind(32), {
             distinct_queued_users: 60,
-            priority_queued_tasks: 32,
-            priority_queued_users: 16,
+            priority_queued_depths: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
         });
 
         assert.equal(seconds, 3 * 60);
+    });
+
+    test('a member with a large batch does not keep the slots of the other members', () => {
+        // One member has 500 tasks, and 14 members have one task each. The first pass has one
+        // slot for the other users, and the later passes have 15. 100 tasks are ahead:
+        // 1 + 6 * 15 = 91 start in 7 passes, and 106 is more than 100.
+        const seconds = estimate(614, behind(514), {
+            distinct_queued_users: 75,
+            priority_queued_depths: [500, ...Array(14).fill(1)],
+        });
+
+        assert.equal(seconds, 7 * 60);
+    });
+
+    test('a pass in which the members use all the slots has the price of their tasks', () => {
+        // 16 members have one IMGZIP task each, and the first FP task of another user is behind
+        // them. No slot is free until the IMGZIP tasks are done.
+        const seconds = estimate(16, behind(16), {
+            distinct_queued_users: 17,
+            priority_queued_depths: Array(16).fill(1),
+            priority_queued_by_request_type: { IMGZIP: 16 },
+            queued_by_request_type: { IMGZIP: 16, FP: 1 },
+        });
+
+        assert.equal(seconds, 900);
     });
 
     test('a task of a member waits only for the tasks of the other members', () => {
         // position 6 of 100 priority tasks, 3 members: two full passes of 3 are ahead
         const seconds = estimate(6, membertier, {
             distinct_queued_users: 40,
-            priority_queued_tasks: 100,
-            priority_queued_users: 3,
+            priority_queued_depths: [34, 33, 33],
         });
 
         assert.equal(seconds, 2 * 60);
@@ -132,8 +152,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
         // 499. The answer of the positions says that the tier starts at 498, with one task ahead.
         const seconds = estimate(499, behind(498), {
             distinct_queued_users: 21,
-            priority_queued_tasks: 500,
-            priority_queued_users: 1,
+            priority_queued_depths: [500],
         });
 
         assert.equal(seconds, 0);
@@ -144,8 +163,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
         // two passes of FP tasks.
         const seconds = estimate(530, behind(500), {
             distinct_queued_users: 21,
-            priority_queued_tasks: 500,
-            priority_queued_users: 1,
+            priority_queued_depths: [500],
             priority_queued_by_request_type: { IMGZIP: 500 },
             queued_by_request_type: { IMGZIP: 500, FP: 40 },
         });
@@ -156,8 +174,7 @@ describe('estimateWaitSeconds with the high priority group', () => {
     test('the passes of the members have the price of the tasks of the members', () => {
         const seconds = estimate(6, membertier, {
             distinct_queued_users: 40,
-            priority_queued_tasks: 100,
-            priority_queued_users: 3,
+            priority_queued_depths: [34, 33, 33],
             priority_queued_by_request_type: { IMGZIP: 100 },
             queued_by_request_type: { IMGZIP: 100, FP: 400 },
         });

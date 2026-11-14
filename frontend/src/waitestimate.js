@@ -28,7 +28,7 @@
 //
 // The tier of a task comes from the queue positions endpoint, in the same answer as the position
 // (`prioritytier` and `tierstart`). The status of the task runner gives the size of the priority
-// tier (`priority_queued_tasks`, `priority_queued_users`, `priority_queued_by_request_type`). The
+// tier (`priority_queued_depths` and `priority_queued_by_request_type`). The
 // status is older than the positions, and thus it does not decide the tier of a task.
 //
 // If the dispatch policy in taskrunner/main.py ever changes -- a second concurrent task per user,
@@ -82,34 +82,33 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier })
         return null;
     }
 
-    // The size of the priority tier. An absent field has the value zero: a task runner that does
-    // not write the fields has no priority tier.
-    const prioritytasks = runnerstatus.priority_queued_tasks ?? 0;
-    const priorityusers = runnerstatus.priority_queued_users ?? 0;
+    // The number of queued tasks of each member of the high priority group, largest first. An
+    // absent field is an empty list: a task runner that does not write it has no priority tier.
+    const prioritydepths = runnerstatus.priority_queued_depths ?? [];
+    const priorityusers = prioritydepths.length;
     const inprioritytier = tier?.priority === true;
 
-    // How many tasks of this tier can start in the first `passes` passes.
+    // How many tasks of this tier can start in pass number `pass` (the first pass is 1).
     //
     // A task of a member competes only with the tasks of the other members, one task for each
     // member in a pass.
     //
-    // A task of another user gets the slots that the members do not use. The members use one slot
-    // each in a pass, but only until their tasks are done: `prioritytasks` is the total of the
-    // slots that they take. After that, all the slots serve the other users. The floor of one is
-    // for the user counts, which can be older than the queue (see above).
-    const memberslots = Math.min(numslots, priorityusers);
+    // A task of another user gets the slots that the members do not use. A member uses one slot
+    // in a pass, but only while that member has tasks: a member with `depth` tasks is in the
+    // first `depth` passes. After that, the slot serves the other users. The floor of one is for
+    // the user counts, which can be older than the queue (see above).
     const otherusers = Math.max(1, queuedusers - priorityusers);
-    const capacity = inprioritytier
-        ? (passes) => Math.min(numslots, Math.max(1, priorityusers)) * passes
-        : (passes) => Math.min(
-            otherusers * passes,
-            numslots * passes - Math.min(prioritytasks, memberslots * passes));
+    const slotsInPass = inprioritytier
+        ? () => Math.min(numslots, Math.max(1, priorityusers))
+        : (pass) => Math.min(
+            otherusers,
+            numslots - Math.min(numslots, prioritydepths.filter((depth) => depth >= pass).length));
 
     // Strictly ahead of this one. The endpoint reports the user's whole queued set, not the page on
     // screen, which is what makes this their queue rather than the rows that happen to be rendered.
     const ownahead = ownqueued.filter((task) => task.position < queuepos);
-    // tasksAhead does not count the tasks of the members for a task of another user. The capacity
-    // above already holds their effect.
+    // tasksAhead does not count the tasks of the members for a task of another user. The slots of
+    // each pass above already hold their effect.
     const otherahead = Math.max(0, tasksAhead({ queuepos, tier }) - ownahead.length);
 
     // The user's own tasks ahead run one at a time, so their run times add up -- each priced by
@@ -137,29 +136,40 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier })
     // slots_busy moves on its own and the figure would appear and vanish from one poll to the next
     // across the last `concurrency` positions -- the stretch a waiting user watches hardest.
     //
-    // The number of passes is the number of full passes whose tasks all start before this one.
-    let otherpasses = 0;
-    while (capacity(otherpasses + 1) <= otherahead) {
-        otherpasses += 1;
-        if (otherpasses > MAX_PASSES) {
-            // the members use all the slots for longer than an estimate can be useful
-            return null;
+    // The full passes are the passes whose tasks all start before this one.
+    //
+    // Priced by what the queue is made of, not by this task's own type. Dispatch orders one
+    // global queue across every request type, so the work ahead is whatever was submitted --
+    // and an FP task behind a run of IMGZIP tasks waits on their run times, which are longer
+    // by orders of magnitude.
+    //
+    // A pass has the price of the tasks of the tier of this task. A batch of IMGZIP tasks of a
+    // member does not fill the passes of the other users. The exception is a pass in which the
+    // members use all the slots: only their tasks run, and the pass has their price.
+    const pricecache = new Map();
+    const priceOf = (priority) => {
+        if (!pricecache.has(priority)) {
+            pricecache.set(priority, meanQueuedRuntimeSeconds(tierRequestTypes(runnerstatus, priority), runtimes));
         }
-    }
+        return pricecache.get(priority);
+    };
     let otherseconds = 0;
-    if (otherpasses > 0) {
-        // Priced by what the queue is made of, not by this task's own type. Dispatch orders one
-        // global queue across every request type, so the work ahead is whatever was submitted --
-        // and an FP task behind a run of IMGZIP tasks waits on their run times, which are longer
-        // by orders of magnitude.
-        //
-        // The tasks of the tier of this task only. A batch of IMGZIP tasks of a member does not
-        // fill the passes of the other users.
-        const meanpass = meanQueuedRuntimeSeconds(tierRequestTypes(runnerstatus, inprioritytier), runtimes);
-        if (meanpass == null) {
+    let started = 0;
+    for (let pass = 1; ; pass += 1) {
+        const slots = slotsInPass(pass);
+        if (started + slots > otherahead) {
+            // this task starts in this pass
+            break;
+        }
+        if (pass > MAX_PASSES) {
             return null;
         }
-        otherseconds = otherpasses * meanpass;
+        const price = priceOf(inprioritytier || slots == 0);
+        if (price == null) {
+            return null;
+        }
+        started += slots;
+        otherseconds += price;
     }
 
     // the two are worked through at the same time, so the wait is the longer of them

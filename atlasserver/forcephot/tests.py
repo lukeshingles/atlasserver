@@ -250,9 +250,12 @@ class HighPriorityQueueTests(TestCase):
 
         assert (answer["prioritytier"], answer["tierstart"]) == (False, 0), answer
 
-    def test_the_status_file_counts_the_tasks_and_the_users_of_the_group(self) -> None:
+    def test_the_status_file_counts_the_tasks_of_each_member_of_the_group(self) -> None:
+        member2 = User.objects.create_user(username="member2", email="member2@example.com", password=None)
+        member2.groups.add(self.group)
         for _ in range(3):
             Task.objects.create(user=self.member, ra=10.0, dec=20.0)
+        Task.objects.create(user=member2, ra=10.0, dec=20.0)
         Task.objects.create(user=self.public_low, ra=10.0, dec=20.0)
         # a finished task of a member is not in the queue
         Task.objects.create(user=self.member, ra=10.0, dec=20.0, finishtimestamp=timezone.now())
@@ -262,14 +265,15 @@ class HighPriorityQueueTests(TestCase):
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
                 taskrunner_main.write_status(procs_taskids={}, numslots=runnerstatus.NUMSLOTS)
                 status = json.loads(statuspath.read_text(encoding="utf-8"))
-                assert (status["priority_queued_tasks"], status["priority_queued_users"]) == (3, 1), status
-                assert status["priority_queued_by_request_type"] == {"FP": 3}, status
-                assert self.client.get(reverse("taskrunnerstatus")).json()["priority_queued_tasks"] == 3
+                assert status["priority_queued_depths"] == [3, 1], status
+                assert status["priority_queued_by_request_type"] == {"FP": 4}, status
+                assert self.client.get(reverse("taskrunnerstatus")).json()["priority_queued_depths"] == [3, 1]
 
-                self.member.groups.remove(self.group)
+                for user in (self.member, member2):
+                    user.groups.remove(self.group)
                 taskrunner_main.write_status(procs_taskids={}, numslots=runnerstatus.NUMSLOTS)
                 status = json.loads(statuspath.read_text(encoding="utf-8"))
-                assert (status["priority_queued_tasks"], status["priority_queued_users"]) == (0, 0), status
+                assert status["priority_queued_depths"] == [], status
                 assert status["priority_queued_by_request_type"] == {}, status
 
 

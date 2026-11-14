@@ -680,15 +680,21 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     }
 
     # The members of the high priority group have the first positions of the queue, and each of
-    # them uses a maximum of one slot. The queue page needs the two numbers to estimate a wait.
+    # them uses a maximum of one slot. The queue page needs the fields below to estimate a wait.
     # The tasks of the members are ahead of a task of another user, but they do not use all the
     # slots.
     priorityuserids = taskqueue.priority_userids()
     prioritytasks = Task.queued().filter(user_id__in=priorityuserids)
-    prioritystats = (
-        prioritytasks.aggregate(tasks=models.Count("id"), users=models.Count("user_id", distinct=True))
+    # The number of queued tasks of each member who has one, largest first. A member uses a slot
+    # only while that member has tasks. A total for the group does not show when each slot becomes
+    # free: one member with 500 tasks and 14 members with one task use 15 slots for one pass only.
+    priority_queued_depths = (
+        sorted(
+            (row["count"] for row in prioritytasks.values("user_id").annotate(count=models.Count("id"))),
+            reverse=True,
+        )
         if priorityuserids
-        else {"tasks": 0, "users": 0}
+        else []
     )
     # The request types of the tasks of the members. The queue page prices the passes of one tier
     # from the tasks of that tier: a batch of IMGZIP tasks of a member does not make the passes of
@@ -698,7 +704,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
             row["request_type"]: row["count"]
             for row in prioritytasks.values("request_type").annotate(count=models.Count("id"))
         }
-        if prioritystats["tasks"]
+        if priority_queued_depths
         else {}
     )
 
@@ -712,8 +718,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
         "queued_by_request_type": queued_by_request_type,
-        "priority_queued_tasks": prioritystats["tasks"],
-        "priority_queued_users": prioritystats["users"],
+        "priority_queued_depths": priority_queued_depths,
         "priority_queued_by_request_type": priority_queued_by_request_type,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
