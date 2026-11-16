@@ -545,13 +545,15 @@ export const Task = React.memo(function Task(props) {
         buttontext = 'Delete';
         statuslabel = task.error_msg != null ? 'Error' : 'Finished';
         statusbadge = task.error_msg != null ? 'taskbadge-error' : 'taskbadge-finished';
-    } else if (task.starttimestamp != null && props.attempted) {
-        // started once and given back: the runner will try it again, and until then nothing runs
+    } else if (task.queuepos == null && task.starttimestamp != null && props.attempted) {
+        // started once and given back: the runner will try it again, and until then nothing runs.
+        // The task has no queue position while it waits for the time of its next attempt. After
+        // that time it has a position again, and it is a queued task as each other one.
         statusclass = "queued started";
         buttontext = 'Cancel';
         statuslabel = 'Attempted';
         statusbadge = 'taskbadge-queued';
-    } else if (task.starttimestamp != null) {
+    } else if (task.queuepos == null && task.starttimestamp != null) {
         statusclass = "queued started";
         buttontext = 'Cancel';
         statuslabel = 'Running';
@@ -748,9 +750,11 @@ export const Task = React.memo(function Task(props) {
                 taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
             }
         }
-    } else if (task.starttimestamp != null && props.attempted) {
+    } else if (task.queuepos == null && task.starttimestamp != null && props.attempted) {
         // The runner started this task and released it without a result, so the attempt will be
-        // made again; the bar is still because nothing is running for it now.
+        // made again; the bar is still because nothing is running for it now. A task with a
+        // queue position is not in this state: it is past its wait for a new attempt, and the
+        // position below is what the reader needs.
         taskbox.push(
             <div key="status" className="taskstatus running">
                 Attempted (started {timeelapsed} seconds ago); the task runner will try again
@@ -760,7 +764,7 @@ export const Task = React.memo(function Task(props) {
                 </div>
             </div>
         );
-    } else if (task.starttimestamp != null) {
+    } else if (task.queuepos == null && task.starttimestamp != null) {
         // An indeterminate bar, striped and moving: the server reports that a task has started and
         // how long ago, and nothing about how far through it is, so there is no fraction to draw.
         // Bootstrap reads a role="progressbar" with no aria-valuenow as exactly that, and the label

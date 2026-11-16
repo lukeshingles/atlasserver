@@ -348,71 +348,72 @@ class FairShareQueueTests(TestCase):
 
         assert not UsageDay.objects.filter(user_id=missing).exists()
 
-    def run_attempt(self, task: Task, result: t.Callable[[], tuple[Path | None, str | None]]) -> None:
-        """Run do_task for the task, with `result` in the place of the work on the remote host."""
-        with (
-            mock.patch.object(taskrunner_main, "runtask", side_effect=lambda **_kwargs: result()),
-            mock.patch.object(taskrunner_main, "log_general"),
-            mock.patch.object(taskrunner_main, "notify_finished"),
-            mock.patch.object(taskrunner_main, "remove_task_resultfiles"),
-            mock.patch.object(taskrunner_main.time, "sleep"),
-        ):
-            taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=0)
-
-    def test_each_end_of_an_attempt_is_in_the_usage_records(self) -> None:
+    def test_the_end_of_each_attempt_is_in_the_usage_records(self) -> None:
         finished, failed, cancelled = self.add_queued(self.light, 3)
+        with mock.patch.object(taskrunner_main, "log_general"):
+            for task in (finished, failed, cancelled):
+                taskrunner_main.mark_started(task)
+            taskrunner_main.mark_finished(finished, error_msg="No data returned")
+        # the user deletes the third task while it runs
+        Task.objects.filter(pk=cancelled.pk).delete()
 
-        self.run_attempt(finished, lambda: (None, "No data returned"))
-        assert UsageDay.objects.get(user=self.light).tasks == 1
+        # the main loop records the end of each attempt when the process of its slot ends
+        for task, seconds in ((finished, 100.0), (failed, 20.0), (cancelled, 3.0)):
+            taskrunner_main.record_attempt_end(task.pk, self.light.pk, seconds)
 
-        # an attempt with no result and no error: the task stays in the queue, and it waits
-        # before its next attempt
-        self.run_attempt(failed, lambda: (None, None))
-        failed.refresh_from_db()
-        assert failed.finishtimestamp is None
-        assert failed.retry_after is not None
-        assert failed.retry_after > timezone.now()
-        assert UsageDay.objects.get(user=self.light).tasks == 2
-
-        # the user deletes the task while it runs
-        def cancel() -> tuple[None, None]:
-            Task.objects.filter(pk=cancelled.pk).delete()
-            return None, None
-
-        self.run_attempt(cancelled, cancel)
-        assert not Task.objects.filter(pk=cancelled.pk).exists()
-        assert UsageDay.objects.get(user=self.light).tasks == 3
+        usage = UsageDay.objects.get(user=self.light)
+        assert (usage.seconds, usage.tasks) == (123.0, 3)
+        # only the task that is not finished waits for a new attempt
+        assert Task.objects.get(pk=finished.pk).retry_after is None
+        retry_after = Task.objects.get(pk=failed.pk).retry_after
+        assert retry_after is not None
+        assert retry_after > timezone.now()
 
         # the usage stays when the rows of the tasks go
         Task.objects.filter(user=self.light).delete()
         assert taskqueue.usage_by_user()[self.light.pk].tasks == 3
 
-    def test_an_attempt_that_stops_with_an_exception_is_in_the_usage_records(self) -> None:
+    def test_a_slot_process_does_not_write_the_usage(self) -> None:
+        # one writer for the usage: a slot process that also writes it gives an attempt two records
         task = self.add_queued(self.light, 1)[0]
 
-        def stop() -> tuple[None, None]:
-            msg = "the disk of the results is full"
-            raise OSError(msg)
+        with (
+            mock.patch.object(taskrunner_main, "runtask", return_value=(None, "No data returned")),
+            mock.patch.object(taskrunner_main, "log_general"),
+            mock.patch.object(taskrunner_main, "notify_finished"),
+        ):
+            taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=0)
 
-        raised = False
-        try:
-            self.run_attempt(task, stop)
-        except OSError:
-            raised = True
+        assert Task.objects.get(pk=task.pk).finishtimestamp is not None
+        assert not UsageDay.objects.exists()
 
-        assert raised, "the exception must stop the process of the slot"
+    def test_a_record_that_fails_stays_for_a_new_try_and_is_made_one_time(self) -> None:
+        failed = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(failed)
+        ended = [taskrunner_main.EndedAttempt(taskid=failed.pk, userid=self.light.pk, seconds=100.0)]
+        messages: list[str] = []
 
-        assert UsageDay.objects.get(user=self.light).tasks == 1
-        assert Task.objects.get(pk=task.pk).finishtimestamp is None
+        # the write of the time for the next attempt fails after the write of the usage
+        with mock.patch.object(taskqueue, "retry_wait_seconds", side_effect=RuntimeError("the database is away")):
+            pending = taskrunner_main.record_ended_attempts(ended, logfunc=messages.append)
 
-    def test_an_error_of_the_usage_records_does_not_stop_the_finish_of_a_task(self) -> None:
-        task = self.add_queued(self.light, 1)[0]
+        assert pending == ended
+        assert messages == ["ERROR: could not record the end of 1 attempts: the database is away"]
+        assert not UsageDay.objects.exists(), "the usage has the run time, and the task has no time for its attempt"
+        assert Task.objects.get(pk=failed.pk).retry_after is None
 
-        with mock.patch.object(taskqueue, "charge_usage", side_effect=RuntimeError("the database is away")):
-            self.run_attempt(task, lambda: (None, "No data returned"))
+        # The main loop gives the task no position while the record is not there.
+        calculate_queue_positions(running_taskids={failed.pk})
+        assert self.waiting() == []
 
-        task.refresh_from_db()
-        assert (task.error_msg, task.finishtimestamp is not None) == ("No data returned", True)
+        # the database is back: the record is made, and a second call has no attempt to record
+        pending = taskrunner_main.record_ended_attempts(pending, logfunc=messages.append)
+        assert pending == []
+        assert taskrunner_main.record_ended_attempts(pending, logfunc=messages.append) == []
+        usage = UsageDay.objects.get(user=self.light)
+        assert (usage.seconds, usage.tasks) == (100.0, 1)
+        assert Task.objects.get(pk=failed.pk).retry_after is not None
 
     def test_the_expected_run_time_of_a_task_is_the_mean_of_the_user_or_of_all_users(self) -> None:
         usage = {1: taskqueue.Usage(5000.0, 5), 2: taskqueue.Usage(100.0, 1)}
@@ -503,7 +504,7 @@ class FairShareQueueTests(TestCase):
         for _ in range(2):
             with mock.patch.object(taskrunner_main, "log_general"):
                 taskrunner_main.mark_started(failing)
-                taskrunner_main.record_attempt_end(failing, 5.0)
+                taskrunner_main.record_attempt_end(failing.pk, failing.user_id, 5.0)
         assert taskrunner_main.next_task([], []) == other[0], "a task with no position cannot start"
 
         # the wait after the second failed attempt is 60 seconds, and the task has no position in it
@@ -529,7 +530,7 @@ class FairShareQueueTests(TestCase):
             taskrunner_main.mark_started(task)
             Task.objects.filter(pk=task.pk).update(starttimestamp=timezone.now() - dt.timedelta(hours=4))
             before = timezone.now()
-            taskrunner_main.record_attempt_end(task, 4 * 3600.0)
+            taskrunner_main.record_attempt_end(task.pk, task.user_id, 4 * 3600.0)
 
         task.refresh_from_db()
         assert task.retry_after is not None
@@ -538,74 +539,15 @@ class FairShareQueueTests(TestCase):
         calculate_queue_positions(running_taskids=set())
         assert self.waiting() == []
 
-    def test_a_finished_task_gets_no_time_for_a_new_attempt(self) -> None:
-        task = self.add_queued(self.light, 1)[0]
-        with mock.patch.object(taskrunner_main, "log_general"):
-            taskrunner_main.mark_started(task)
-            # the order of do_task: the end of the attempt, and then the finish
-            taskrunner_main.record_attempt_end(task, 100.0)
-            taskrunner_main.mark_finished(task, error_msg=None)
-
-        assert task.retry_after is None
-        task.refresh_from_db()
-        assert task.retry_after is None
-        assert UsageDay.objects.get(user=self.light).seconds == 100.0
-
-    def test_the_end_of_an_attempt_is_one_record_or_no_record(self) -> None:
-        task = self.add_queued(self.light, 1)[0]
-        messages: list[str] = []
-        with mock.patch.object(taskrunner_main, "log_general"):
-            taskrunner_main.mark_started(task)
-
-        # the write of the time for the next attempt fails after the write of the usage
-        with mock.patch.object(taskqueue, "retry_wait_seconds", side_effect=RuntimeError("the database is away")):
-            taskrunner_main.record_attempt_end(task, 100.0, logfunc=messages.append)
-
-        assert messages == ["ERROR: could not record the end of the attempt: the database is away"]
-        assert not UsageDay.objects.filter(user=self.light).exists(), "the usage has the run time with no mark"
-        assert Task.objects.get(pk=task.pk).retry_after is None
-
-        # The process of the slot ends normally after this failure. The main loop examines each
-        # slot that becomes free, and it then records the attempt one time.
-        taskrunner_main.record_missing_attempt_end(task.pk, 100.0, logfunc=messages.append)
-        taskrunner_main.record_missing_attempt_end(task.pk, 100.0, logfunc=messages.append)
-
-        usage = UsageDay.objects.get(user=self.light)
-        assert (usage.seconds, usage.tasks) == (100.0, 1)
-
     def test_a_start_removes_the_time_for_a_new_attempt(self) -> None:
         task = self.add_queued(self.light, 1)[0]
         with mock.patch.object(taskrunner_main, "log_general"):
             taskrunner_main.mark_started(task)
-            taskrunner_main.record_attempt_end(task, 5.0)
+            taskrunner_main.record_attempt_end(task.pk, task.user_id, 5.0)
             assert Task.objects.get(pk=task.pk).retry_after is not None
             taskrunner_main.mark_started(task)
 
         assert Task.objects.get(pk=task.pk).retry_after is None
-
-    def test_a_slot_process_that_stops_with_no_record_gets_its_record_from_the_main_loop(self) -> None:
-        killed, recorded, done = self.add_queued(self.light, 3)
-        messages: list[str] = []
-        with mock.patch.object(taskrunner_main, "log_general"):
-            for task in (killed, recorded, done):
-                taskrunner_main.mark_started(task)
-            # the process of this task recorded the end of its attempt, and then it stopped with an error
-            taskrunner_main.record_attempt_end(recorded, 7.0)
-            taskrunner_main.record_attempt_end(done, 9.0)
-            taskrunner_main.mark_finished(done, error_msg=None)
-
-            # the system stopped the process of the first task after 120 seconds
-            for task in (killed, recorded, done):
-                taskrunner_main.record_missing_attempt_end(task.pk, 120.0, logfunc=messages.append)
-            # a task that its user deleted
-            taskrunner_main.record_missing_attempt_end(987654321, 120.0, logfunc=messages.append)
-
-        assert messages == [f"The slot process of task {killed.pk} stopped with no record of the end of its attempt"]
-        usage = UsageDay.objects.get(user=self.light)
-        assert (usage.seconds, usage.tasks) == (7.0 + 9.0 + 120.0, 3)
-        retry_after = Task.objects.get(pk=killed.pk).retry_after
-        assert retry_after is not None
-        assert retry_after > timezone.now(), "the task waits before its next attempt"
 
     def test_the_wait_before_a_new_attempt_is_two_times_longer_after_each_failure(self) -> None:
         waits = [taskqueue.retry_wait_seconds(attempts) for attempts in (1, 2, 3, 4, 5, 6, 500)]
@@ -645,6 +587,35 @@ class FairShareQueueTests(TestCase):
             taskrunner_main.do_task(seen["kwargs"]["task"], slotid=3, started=True)
         task.refresh_from_db()
         assert (task.attempt_count, task.error_msg) == (1, "no data")
+
+    def test_a_slot_process_that_does_not_start_leaves_no_record_of_a_start(self) -> None:
+        task = self.add_queued(self.light, 2)[0]
+        calculate_queue_positions()
+        task.refresh_from_db()
+        position = task.queuepos_relative
+
+        class NoProcess:
+            def __init__(self, target: t.Any, kwargs: dict[str, t.Any]) -> None:
+                pass
+
+            @staticmethod
+            def start() -> None:
+                msg = "the system cannot make a process"
+                raise OSError(msg)
+
+        raised = False
+        try:
+            with mock.patch.object(taskrunner_main.mp, "Process", NoProcess):
+                taskrunner_main.start_in_slot(task, slotid=3)
+        except OSError:
+            raised = True
+
+        assert raised, "the main loop must get the error"
+        # no attempt ran: the task has its position, and it can start at the next pass
+        row = Task.objects.values("attempt_count", "queuepos_relative", "starttimestamp").get(pk=task.pk)
+        assert row == {"attempt_count": 0, "queuepos_relative": position, "starttimestamp": None}, row
+        assert (task.attempt_count, task.queuepos_relative, task.starttimestamp) == (0, position, None)
+        assert taskrunner_main.next_task([], []) == task
 
     def test_a_second_start_in_the_same_second_changes_the_etag_of_the_task_list(self) -> None:
         first, second = self.add_queued(self.light, 2)
@@ -807,7 +778,7 @@ class FairShareQueueTests(TestCase):
         # a task whose attempt failed has started and has no position while it waits for a new attempt
         with mock.patch.object(taskrunner_main, "log_general"):
             taskrunner_main.mark_started(tasks[1])
-            taskrunner_main.record_attempt_end(tasks[1], 5.0)
+            taskrunner_main.record_attempt_end(tasks[1].pk, tasks[1].user_id, 5.0)
         calculate_queue_positions(running_taskids={tasks[0].pk})
         answer = self.queuepositions(self.light)
         assert sorted(answer["startedids"]) == [tasks[0].pk, tasks[1].pk], answer
@@ -5197,7 +5168,7 @@ class TaskRunnerStatusTests(TestCase):
             taskrunner_main.mark_started(running)
             # the only task of this user waits for a new attempt, and thus the user fills no slot
             taskrunner_main.mark_started(failed)
-            taskrunner_main.record_attempt_end(failed, 5.0)
+            taskrunner_main.record_attempt_end(failed.pk, failed.user_id, 5.0)
         calculate_queue_positions(running_taskids={running.pk})
 
         body = self.status_response(procs_taskids={0: running.pk}).json()
@@ -5223,7 +5194,7 @@ class TaskRunnerStatusTests(TestCase):
             taskrunner_main.mark_started(running)
             for task in failed:
                 taskrunner_main.mark_started(task)
-                taskrunner_main.record_attempt_end(task, 5.0)
+                taskrunner_main.record_attempt_end(task.pk, task.user_id, 5.0)
         calculate_queue_positions(running_taskids={running.pk})
 
         body = self.status_response(procs_taskids={0: running.pk}).json()

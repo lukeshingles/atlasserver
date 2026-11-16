@@ -441,7 +441,7 @@ def calculate_queue_positions(
     the two waits increase together.
 
     A task in a slot has no position. A task that has started and is not in a slot waits for a
-    new attempt (see taskrunner.main.do_task). It has no position before the time in its field
+    new attempt (see taskrunner.main.record_attempt_end). It has no position before the time in its field
     retry_after, which is the end of its failed attempt plus retry_wait_seconds. After that time
     it gets a position as the other tasks do. Thus a task that always fails does not keep a slot.
     The renumbering at an interval of RECALC_MAX_INTERVAL_SECONDS gives the position, and the

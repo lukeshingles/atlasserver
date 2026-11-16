@@ -41,7 +41,9 @@ function task(id, overrides = {}) {
         imagerequest_task_id: null,
         parent_task_id: null,
         parent_task_url: null,
-        queuepos: 0,
+        // The server gives a queue position only to a task that waits for its start. A task in a
+        // slot has none, and a task that waits for the time of its next attempt has none.
+        queuepos: overrides.starttimestamp != null ? null : 0,
         attempt_count: 1,
         ...overrides,
     };
@@ -659,7 +661,7 @@ describe('TaskPage', () => {
             if (running_taskids != null) {
                 runnerstatus.running_taskids = running_taskids;
             }
-            stubScriptedList([() => answer({ ...listpage(), results: [started] })], { runnerstatus, positions: { 7: 0 } });
+            stubScriptedList([() => answer({ ...listpage(), results: [started] })], { runnerstatus });
 
             const rendered = await mountPage();
 
@@ -679,7 +681,6 @@ describe('TaskPage', () => {
         const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
         const handle = stubScriptedList([() => answer({ ...listpage(), results: [started] })], {
             runnerstatus: { queued_task_count: 1, running_taskids: [], written: '2026-09-01T00:00:05Z' },
-            positions: { 7: 0 },
         });
 
         try {
@@ -1726,6 +1727,20 @@ describe('TaskPage', () => {
         const status = container.querySelector('.taskstatus.waiting');
         assert.match(status.textContent, /^Waiting next/);
         assert.match(status.textContent, /~10 min/);
+    });
+
+    test('a task that is past its wait for a new attempt shows its queue position', async () => {
+        // the attempt of this task failed: it has a start time, and it has a queue position again
+        stubFetchWithPositions(
+            [task(1, { queuepos: 4, starttimestamp: '2026-01-01T00:00:00Z' })], { 1: 4 });
+        const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(root);
+        await flush(120);
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.ok(status, 'the row shows the task as a task that runs');
+        assert.match(status.textContent, /^Waiting 4 ahead/);
+        assert.equal(container.querySelector('.taskstatus.running'), null);
     });
 
     test('the queue badge counts the tasks in the slots with the tasks that wait', async () => {

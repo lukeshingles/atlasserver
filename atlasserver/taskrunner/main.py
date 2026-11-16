@@ -520,8 +520,8 @@ def mark_started(task) -> None:
     # second start does not change the ETag, and the queue page gets a 304 for a list in which
     # the task still waits.
     #
-    # retry_after has no value during an attempt. record_attempt_end writes it at the end, and
-    # thus a value shows that the end of this attempt is recorded; see record_missing_attempt_end.
+    # retry_after has no value during an attempt: the main loop writes it at the end of the
+    # attempt (record_attempt_end).
     Task.objects.filter(pk=task.id).update(
         starttimestamp=starttimestamp,
         attempt_count=models.F("attempt_count") + 1,
@@ -799,72 +799,97 @@ def handler(signal_received, frame):
     sys.exit(0)
 
 
-def record_attempt_end(task, seconds: float, logfunc=log_general) -> None:
-    """Record the end of one attempt at the task, which ran for this number of seconds.
+class EndedAttempt(t.NamedTuple):
+    """An attempt whose slot process ended: the task, its user, and the seconds that it had the slot."""
 
-    The run time goes into the usage of the user of the task; see forcephot.queue.charge_usage.
-    This is the real time for which the attempt had a slot, also for an attempt that failed.
+    taskid: int
+    userid: int
+    seconds: float
+
+
+def record_attempt_end(taskid: int, userid: int, seconds: float) -> None:
+    """Record the end of one attempt at a task, whose process had a slot for this number of seconds.
+
+    The time goes into the usage of the user; see forcephot.queue.charge_usage. This is the real
+    time for which the attempt had a slot, also for an attempt that failed and for a task that
+    its user deleted while it ran.
 
     A task that is not finished gets the time of its next possible attempt (Task.retry_after).
     The wait is from the end of the attempt and not from its start: an attempt can run for hours
     before it fails, and a wait from its start is then over at its end.
 
-    The two records are one transaction. The time of the next attempt is also the mark that
-    the end of this attempt is recorded (record_missing_attempt_end). With the run time in the usage
-    and no mark, the main loop adds the run time a second time.
-
-    An exception does not go out of this function: an error of these records must not stop the
-    finish of a task, whose result is there.
+    The two records are one transaction: an attempt has the two or none of them. An error of the
+    database goes to the caller.
     """
-    try:
-        with transaction.atomic():
-            taskqueue.charge_usage(task.user_id, seconds)
-            wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(task.attempt_count))
-            Task.objects.filter(pk=task.id, finishtimestamp__isnull=True).update(
+    with transaction.atomic():
+        taskqueue.charge_usage(userid, seconds)
+        attempts = (
+            Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).values_list("attempt_count", flat=True).first()
+        )
+        if attempts is not None:
+            wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(attempts))
+            Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).update(
                 retry_after=dt.datetime.now(dt.UTC) + wait
             )
-    except Exception as ex:  # noqa: BLE001 (the result of the task does not depend on these records)
-        logfunc(f"ERROR: could not record the end of the attempt: {ex}")
 
 
-def record_missing_attempt_end(taskid: int, seconds: float, logfunc=log_general) -> None:
-    """Record the end of an attempt if the slot process of the task did not record it.
+def record_ended_attempts(attempts: list[EndedAttempt], logfunc=log_general) -> list[EndedAttempt]:
+    """Record the end of each of these attempts, and return the attempts whose record failed.
 
-    do_task records the end of its attempt, also when the attempt raises an exception. Two
-    conditions leave no record. The system can stop the process (for example when the memory is
-    full). And the write of the record can fail, which do_task does not let stop the task. The
-    task then has no time for its next attempt, and its run time is in no usage record: it
-    starts again at once, with no cost. The main loop calls this for each slot that becomes
-    free, and `seconds` is the time for which the process had the slot.
+    The main loop is the only writer of these records. It calls this for each slot process that
+    ends, with each exit code: a process that finished its task, a process whose attempt failed,
+    and a process that the system stopped. A slot process thus cannot leave an attempt with no
+    record, and no attempt has two records.
 
-    A task that is not finished has a record of its attempt if it has a time for its next
-    attempt: mark_started removes that time at the start of an attempt. A finished task has no
-    such mark, and this function does not examine it.
+    The main loop keeps the result and gives it here again. An error of the database for a
+    moment thus does not lose a record. Until the record of an attempt is there, the main loop
+    gives the task no queue position: without its time for the next attempt, the task starts
+    again at once.
+
+    The records of the attempts in the slots are lost if the main loop itself stops.
     """
-    try:
-        task = Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).first()
-        if task is None or task.retry_after is not None:
-            return
-    except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
-        logfunc(f"ERROR: could not read the task of a slot that became free: {ex}")
-        return
+    failed: list[EndedAttempt] = []
+    lasterror: Exception | None = None
+    for attempt in attempts:
+        try:
+            record_attempt_end(attempt.taskid, attempt.userid, attempt.seconds)
+        except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
+            failed.append(attempt)
+            lasterror = ex
 
-    logfunc(f"The slot process of task {taskid} stopped with no record of the end of its attempt")
-    record_attempt_end(task, seconds, logfunc=logfunc)
+    if failed:
+        logfunc(f"ERROR: could not record the end of {len(failed)} attempts: {lasterror}")
+    return failed
 
 
 def start_in_slot(task: Task, slotid: int) -> mp.Process:
     """Start the task in a slot, and return the process of the slot.
 
     This function records the start before it makes the process. The queue order charges a user
-    for each attempt (forcephot.queue.calculate_queue_positions), and the main loop can renumber
-    the queue before the new process runs its first statement. If the process recorded the start,
-    that renumbering has the task in a slot with no attempt: each task of the user that waits is
-    then one task too far forward, and the user gets the next free slot also.
+    for each task in a slot (forcephot.queue.calculate_queue_positions), and the main loop can
+    renumber the queue before the new process runs its first statement. If the process recorded
+    the start, that renumbering has the task in a slot with no start: each task of the user that
+    waits is then one task too far forward, and the user gets the next free slot also.
+
+    If the process does not start, this function removes the record of the start, and the
+    exception goes to the caller. No attempt ran: the task keeps its queue position, and its
+    number of attempts does not increase.
     """
+    before = (task.starttimestamp, task.queuepos_relative, task.retry_after, task.attempt_count)
     mark_started(task)
-    proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid, "started": True})
-    proc.start()
+    try:
+        proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid, "started": True})
+        proc.start()
+    except Exception:
+        task.starttimestamp, task.queuepos_relative, task.retry_after, task.attempt_count = before
+        Task.objects.filter(pk=task.id).update(
+            starttimestamp=task.starttimestamp,
+            queuepos_relative=task.queuepos_relative,
+            retry_after=task.retry_after,
+            attempt_count=task.attempt_count,
+            task_modified_datetime=dt.datetime.now(dt.UTC),
+        )
+        raise
     return proc
 
 
@@ -892,16 +917,11 @@ def do_task(task, slotid: int, started: bool = False) -> None:
 
     runtask_starttime = time.perf_counter()
 
-    try:
-        localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
-    finally:
-        runtask_duration = time.perf_counter() - runtask_starttime
+    # The usage of this attempt is not recorded here. The main loop records it when this
+    # process ends; see record_ended_attempts.
+    localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
 
-        # Each attempt used a slot for this time: an attempt that gave a result, an attempt that
-        # failed, an attempt at a task that its user cancelled, and an attempt that stopped with
-        # an exception. One call for all the cases, and thus no case is without its usage. An
-        # exception continues after the call, and it stops the process of the slot.
-        record_attempt_end(task, runtask_duration, logfunc=logfunc)
+    runtask_duration = time.perf_counter() - runtask_starttime
 
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
@@ -1164,6 +1184,9 @@ def main() -> None:
     # position: an attempt that failed, or a process that stopped. That task waits for a position
     # before it can start again; see next_task.
     slot_became_free = False
+    # The attempts that ended and whose record is not in the database yet; see
+    # record_ended_attempts.
+    unrecorded: list[EndedAttempt] = []
     # No task starts between the end of an attempt and the next renumbering that succeeds. The
     # value is the time at which the wait started, or None.
     dispatch_waits_since: float | None = None
@@ -1208,16 +1231,20 @@ def main() -> None:
 
         # The slots are examined before the renumbering. A slot that became free asks for a
         # renumbering, and the renumbering must not have the task of that slot as a task in a slot.
+        attempt_ended = False
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
                 proc.join()
                 proc.close()
                 procs[slotid] = None
-                procs_userids.pop(slotid)
-                taskid = procs_taskids.pop(slotid)
-                slotseconds = time.perf_counter() - procs_starttimes.pop(slotid)
-                # for each exit code: a process that could not write its record ends normally
-                record_missing_attempt_end(taskid, slotseconds, logfunc=logfunc)
+                unrecorded.append(
+                    EndedAttempt(
+                        taskid=procs_taskids.pop(slotid),
+                        userid=procs_userids.pop(slotid),
+                        seconds=time.perf_counter() - procs_starttimes.pop(slotid),
+                    )
+                )
+                attempt_ended = True
                 slot_became_free = True
                 if dispatch_waits_since is None:
                     dispatch_waits_since = time.perf_counter()
@@ -1237,6 +1264,13 @@ def main() -> None:
             # is away, each attempt fails after some seconds, and a slot becomes free on almost
             # each pass. A renumbering locks each queued row.
             recalc_requested = seen_generation != last_recalc_generation or slot_became_free
+            # the records that failed get a new try at this interval also
+            attempt_ended = attempt_ended or bool(unrecorded)
+
+        # Before the renumbering: the record of a failed attempt holds the time before which the
+        # task gets no position.
+        if attempt_ended:
+            unrecorded = record_ended_attempts(unrecorded, logfunc=logfunc)
 
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
             # caught, because this loop is what dispatches every task: unguarded, a lock timeout or
@@ -1249,7 +1283,9 @@ def main() -> None:
             usage = current_usage(usage, logfunc=logfunc)
 
             try:
-                taskqueue.calculate_queue_positions(usage=usage, running_taskids=set(procs_taskids.values()))
+                # a task whose attempt has no record yet gets no position, as a task in a slot
+                noposition = set(procs_taskids.values()) | {attempt.taskid for attempt in unrecorded}
+                taskqueue.calculate_queue_positions(usage=usage, running_taskids=noposition)
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task; stale
                 # queue positions only change the display)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
