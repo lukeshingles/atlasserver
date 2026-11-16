@@ -6,7 +6,7 @@ import { pollingPaused, subscribe } from "runnerstatus";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
-import { estimateWaitSeconds, formatDuration, formatWaitEstimate, tasksAhead } from "waitestimate";
+import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from "waitestimate";
 
 function debug_log(...args) {
     // uncomment for debugging in development
@@ -75,6 +75,17 @@ const ATTEMPTED_AFTER_MS = 15000;
 function startRequest(counterRef) {
     const requestnumber = ++counterRef.current;
     return () => requestnumber == counterRef.current;
+}
+
+/**
+ * The ids of the user's unfinished tasks in a queuepositions response, as strings.
+ *
+ * A task that waits has a position. A task in a slot has no position, and the response lists it
+ * in `startedids`. The count of the tasks that finished while the tab was hidden uses the two
+ * sets: a task that left the positions because it started has not finished.
+ */
+function unfinishedIds(data) {
+    return Object.keys(data.queuepositions).concat((data.startedids ?? []).map(String));
 }
 
 /**
@@ -388,7 +399,6 @@ function taskPropsEqual(prev, next) {
         prev.hidePlot === next.hidePlot
         // a string or null, so this stays the cheap check the rest of this function avoids
         && prev.waitestimate === next.waitestimate
-        && prev.ahead === next.ahead
         && prev.attempted === next.attempted
         && (prev.taskdata === next.taskdata
             || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
@@ -765,11 +775,9 @@ export const Task = React.memo(function Task(props) {
             </div>);
     } else if (task.queuepos != null) {
         // the position as a chip rather than inside the sentence, so it can be found down a column
-        // of rows. The count is of the tasks ahead, so zero is the one that runs next. props.ahead
-        // does not count the tasks of the high priority group for a task of another user; see
-        // tasksAhead in waitestimate.js.
-        const aheadcount = props.ahead ?? task.queuepos;
-        const ahead = aheadcount == 0 ? 'next' : aheadcount + ' ahead';
+        // of rows. The position is the number of tasks that start before this one, so zero is the
+        // one that runs next. A task in a slot has no position.
+        const ahead = task.queuepos == 0 ? 'next' : task.queuepos + ' ahead';
         // Only when the server gave enough to compute one -- a stale runner, or a request type it
         // has too few recent samples of, produces null and nothing is shown. An absent estimate is
         // a smaller failure than an invented one, which is the number the user plans around.
@@ -899,12 +907,6 @@ export function TaskPage() {
          * task is waiting behind.
          */
         ownqueued: null,
-        /**
-         * The tier of the user in the queue, as the queuepositions endpoint last reported it:
-         * `priority` and `start`. Null until the first answer. It arrives with the positions, and
-         * thus the two describe the same queue. See tasksAhead in waitestimate.js.
-         */
-        tier: null,
     });
 
     // The wait estimates read this status, and the site notice box reads it from the same store.
@@ -1114,7 +1116,7 @@ export function TaskPage() {
                 // The user's whole queued set, which is what this endpoint answers with -- not the
                 // page of rows on screen. Recorded for countFinishedWhileAway to measure against and
                 // used for the navbar badge, both of which want the total rather than the page.
-                const queuedids = Object.keys(data.queuepositions);
+                const queuedids = unfinishedIds(data);
 
                 /*
                  * Not while hidden, once there is a baseline to protect. This request can have been in
@@ -1205,12 +1207,7 @@ export function TaskPage() {
                         || ownqueued.some((task, index) => task.position !== previousqueued[index].position
                             || task.requesttype !== previousqueued[index].requesttype));
 
-                    const tier = { priority: data.prioritytier === true, start: data.tierstart ?? 0 };
-                    const tierchanged = (
-                        prevstate.tier == null
-                        || prevstate.tier.priority !== tier.priority || prevstate.tier.start !== tier.start);
-
-                    if (!changed && !positionschanged && !tierchanged) {
+                    if (!changed && !positionschanged) {
                         return null;
                     }
 
@@ -1219,7 +1216,6 @@ export function TaskPage() {
                     return {
                         results: changed ? newresults : prevstate.results,
                         ownqueued: positionschanged ? ownqueued : prevstate.ownqueued,
-                        tier: tierchanged ? tier : prevstate.tier,
                     };
                 });
 
@@ -1298,7 +1294,8 @@ export function TaskPage() {
                     return;
                 }
 
-                const finished = waiting.filter(taskid => !(taskid in data.queuepositions)).length;
+                const unfinished = unfinishedIds(data);
+                const finished = waiting.filter(taskid => !unfinished.includes(taskid)).length;
                 if (finished != stateRef.current.finishedwhileaway) {
                     setState({ finishedwhileaway: finished });
                 }
@@ -1831,14 +1828,7 @@ export function TaskPage() {
             queuepos: task.queuepos,
             ownqueued: state.ownqueued,
             runnerstatus,
-            tier: state.tier,
         })));
-
-        // The tier is the tier of the viewer, and thus it applies only to the tasks of the viewer.
-        const aheadFor = (task) => tasksAhead({
-            queuepos: task.queuepos,
-            tier: tracksQueuePosition(task) ? state.tier : null,
-        });
 
         // A task with a start time that the runner does not list as running was started once and
         // given back, for example when the remote machine was unreachable. Known only from a fresh
@@ -1859,7 +1849,7 @@ export function TaskPage() {
                 {state.results.map((task) => (
                     <Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView}
                         hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)}
-                        ahead={aheadFor(task)} attempted={attempted(task)} />))}
+                        attempted={attempted(task)} />))}
             </ul>,
             <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
         ];

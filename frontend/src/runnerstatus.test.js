@@ -216,6 +216,39 @@ describe('runnerMessage', () => {
         assert.equal(runnerMessage(healthy({ queued_task_count: 0 })), null);
     });
 
+    test('a signed-in reader gets the usage after the queue counts', () => {
+        const message = runnerMessage(healthy({
+            queued_task_count: 9,
+            user_usage_hours: 12.5,
+            usage_half_life_days: 7,
+        }));
+        assert.match(message, /9 unfinished tasks from all users in the queue\. Your usage is 12\.5 hours of run time /);
+        assert.match(message, /\(run time counts half after 7 days\), and the tasks of the users with less usage start first\.$/);
+    });
+
+    test('one hour of run time is an hour, not hours', () => {
+        const message = runnerMessage(healthy({ user_usage_hours: 1, usage_half_life_days: 7 }));
+        assert.match(message, /Your usage is 1 hour of run time/);
+    });
+
+    test('a reader with no run time gets the usage also', () => {
+        const message = runnerMessage(healthy({ user_usage_hours: 0, usage_half_life_days: 7 }));
+        assert.match(message, /Your usage is 0 hours of run time/);
+    });
+
+    test('a reader who is not signed in gets no usage', () => {
+        // the response has null for the usage of a reader who is not signed in
+        const message = runnerMessage(healthy({ user_usage_hours: null, usage_half_life_days: 7 }));
+        assert.doesNotMatch(message, /Your usage/);
+        assert.match(message, /from all users in the queue\.$/);
+    });
+
+    test('the usage is withheld with the queue counts', () => {
+        const status = healthy({ user_usage_hours: 12.5, usage_half_life_days: 7 });
+        assert.equal(runnerMessage(status, { showQueue: false }), null);
+        assert.equal(runnerMessage({ ...status, queued_task_count: 0 }), null);
+    });
+
     test('the queue counts are withheld from a reader who is not waiting on the queue', () => {
         // "12 unfinished tasks from all users" answers "when does my task start". A reader of the
         // FAQ with nothing queued has not asked that question.

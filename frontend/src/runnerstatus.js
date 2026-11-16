@@ -138,7 +138,26 @@ export function runnerMessage(status, { showQueue = true } = {}) {
         : status.slots_busy + ' of ' + status.numslots + ' slots busy,';
 
     return 'Task runner: ' + activity + ' ' + status.queued_task_count + ' unfinished '
-        + (status.queued_task_count == 1 ? 'task' : 'tasks') + ' from all users in the queue.';
+        + (status.queued_task_count == 1 ? 'task' : 'tasks') + ' from all users in the queue.'
+        + usageMessage(status);
+}
+
+/**
+ * The sentence that gives a reader the usage of that reader, or an empty string.
+ *
+ * The queue order is a fair share of the run time: a free slot goes to the user with the least
+ * usage, and older run time counts less (calculate_queue_positions in forcephot/queue.py). The
+ * sentence follows the queue counts, because it answers the same question: "when does my task
+ * start". The response has no usage for a reader who is not signed in, and an older server sends
+ * no usage.
+ */
+function usageMessage(status) {
+    if (status.user_usage_hours == null || status.usage_half_life_days == null) {
+        return '';
+    }
+    return ' Your usage is ' + status.user_usage_hours + (status.user_usage_hours == 1 ? ' hour' : ' hours')
+        + ' of run time (run time counts half after ' + status.usage_half_life_days + ' days), and the tasks of the'
+        + ' users with less usage start first.';
 }
 
 /**

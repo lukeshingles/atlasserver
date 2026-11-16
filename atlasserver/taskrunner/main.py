@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Task runner: it runs the forced photometry tasks on ATLAS sc01 over ssh."""
 
+import collections
 import contextlib
 import datetime as dt
 import json
@@ -506,12 +507,29 @@ def mark_started(task) -> None:
     the reasons given in mark_finished below -- `task` is a copy read when the queue was scanned,
     and do_task logs model_to_dict(task) immediately after calling this.
     """
-    starttimestamp = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    now = dt.datetime.now(dt.UTC)
+    starttimestamp = now.replace(microsecond=0)
 
-    Task.objects.filter(pk=task.id).update(starttimestamp=starttimestamp, attempt_count=models.F("attempt_count") + 1)
+    # A task in a slot has no queue position. The positions of the tasks that wait are relative
+    # to the lowest one (Task.min_queuepos_relative), and thus they are correct after this write
+    # with no renumbering.
+    #
+    # task_modified_datetime is written by name, because a queryset update does not apply
+    # auto_now. The ETag of the task list uses it (views.get_tasklist_etag). The start time is a
+    # whole second, and two tasks of one user can start in one second: without this field, the
+    # second start does not change the ETag, and the queue page gets a 304 for a list in which
+    # the task still waits.
+    Task.objects.filter(pk=task.id).update(
+        starttimestamp=starttimestamp,
+        attempt_count=models.F("attempt_count") + 1,
+        queuepos_relative=None,
+        task_modified_datetime=now,
+    )
 
     task.starttimestamp = starttimestamp
     task.attempt_count += 1
+    task.queuepos_relative = None
+    task.task_modified_datetime = now
 
 
 def mark_finished(task, error_msg: str | None) -> None:
@@ -524,12 +542,18 @@ def mark_finished(task, error_msg: str | None) -> None:
     this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
     had actually happened, because the instance still held the values it was loaded with.
     """
-    finishtimestamp = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    now = dt.datetime.now(dt.UTC)
+    finishtimestamp = now.replace(microsecond=0)
 
-    Task.objects.filter(pk=task.id).update(finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg)
+    # task_modified_datetime is written for the reason in mark_started: two tasks of one user can
+    # finish in one second.
+    Task.objects.filter(pk=task.id).update(
+        finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg, task_modified_datetime=now
+    )
 
     task.finishtimestamp = finishtimestamp
     task.queuepos_relative = None
+    task.task_modified_datetime = now
     task.error_msg = error_msg
 
 
@@ -631,14 +655,38 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
-def next_task(running_userids: t.Iterable[int]) -> Task | None:
+def next_task(running_taskids: t.Iterable[int], running_userids: t.Iterable[int]) -> Task | None:
     """Return the task to start in a free slot, or None if no task can start.
 
-    This is the queued task with the lowest position whose user has no task in a slot. The
-    position holds the priority of the high priority group and the round-robin order of the users;
-    see forcephot.queue.calculate_queue_positions.
+    This is the task with the lowest queue position whose user has fewer tasks in the slots than
+    the maximum (status.MAX_USER_SLOTS). The position holds the priority of the high priority
+    group and the fair share of the run time; see forcephot.queue.calculate_queue_positions.
+
+    If each task that waits is a task of a user at the maximum, the result is the task with the
+    lowest position: a slot does not stay idle while a task waits. The maximum thus divides the
+    slots between the users who want them, and it does not decrease the work of the task runner.
+    A user who arrives later waits only for the next task that finishes.
+
+    `running_taskids` is the ids of the tasks in the slots. `running_userids` is the user of each
+    of those tasks, and thus a user with three tasks in the slots is in it three times.
+
+    A task with no position cannot start. A task loses its position at a start. If its attempt
+    fails, or if its slot stops, it gets a position again at the next renumbering. Without this
+    rule, such a task sorts before all the tasks that wait, and a task that always fails keeps a
+    slot.
     """
-    return Task.queued().exclude(user_id__in=list(running_userids)).order_by("queuepos_relative").first()
+    slotsofuser = collections.Counter(running_userids)
+    users_at_maximum = [userid for userid, count in slotsofuser.items() if count >= runnerstatus.MAX_USER_SLOTS]
+    waiting = (
+        Task.queued()
+        .filter(queuepos_relative__isnull=False)
+        .exclude(id__in=list(running_taskids))
+        .order_by("queuepos_relative")
+    )
+    task = waiting.exclude(user_id__in=users_at_maximum).first()
+    if task is None and users_at_maximum:
+        task = waiting.first()
+    return task
 
 
 def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool = False) -> None:
@@ -657,9 +705,9 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     # STATUS_WRITE_SECONDS for as long as the runner is up, and the scan grows with the queue.
     #
     # distinct users is here because it is what bounds the rate the queue drains at: dispatch below
-    # takes at most one task per user at a time, so the effective concurrency is min(numslots,
-    # this). A fact about the queue, counted on the runner's own timescale instead of once per
-    # request from every open queue page.
+    # gives one user a maximum of MAX_USER_SLOTS slots, so the effective concurrency is
+    # min(numslots, this times that maximum). A fact about the queue, counted on the runner's own
+    # timescale instead of once per request from every open queue page.
     queuestats = Task.queued().aggregate(
         queued_task_count=models.Count("id"),
         distinct_queued_users=models.Count("user_id", distinct=True),
@@ -679,35 +727,6 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
     }
 
-    # The members of the high priority group have the first positions of the queue, and each of
-    # them uses a maximum of one slot. The queue page needs the fields below to estimate a wait.
-    # The tasks of the members are ahead of a task of another user, but they do not use all the
-    # slots.
-    priorityuserids = taskqueue.priority_userids()
-    prioritytasks = Task.queued().filter(user_id__in=priorityuserids)
-    # The number of queued tasks of each member who has one, largest first. A member uses a slot
-    # only while that member has tasks. A total for the group does not show when each slot becomes
-    # free: one member with 500 tasks and 14 members with one task use 15 slots for one pass only.
-    priority_queued_depths = (
-        sorted(
-            (row["count"] for row in prioritytasks.values("user_id").annotate(count=models.Count("id"))),
-            reverse=True,
-        )
-        if priorityuserids
-        else []
-    )
-    # The request types of the tasks of the members. The queue page prices the passes of one tier
-    # from the tasks of that tier: a batch of IMGZIP tasks of a member does not make the passes of
-    # the other users longer.
-    priority_queued_by_request_type = (
-        {
-            row["request_type"]: row["count"]
-            for row in prioritytasks.values("request_type").annotate(count=models.Count("id"))
-        }
-        if priority_queued_depths
-        else {}
-    )
-
     status = {
         "written": dt.datetime.now(dt.UTC).isoformat(),
         "pid": os.getpid(),
@@ -718,8 +737,9 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
         "queued_by_request_type": queued_by_request_type,
-        "priority_queued_depths": priority_queued_depths,
-        "priority_queued_by_request_type": priority_queued_by_request_type,
+        # the maximum number of slots for the tasks of one user; the wait estimate of the queue
+        # page uses it for the tasks of the reader that are ahead of a task
+        "max_user_slots": runnerstatus.MAX_USER_SLOTS,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -734,14 +754,59 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         log_general(f"WARNING: could not write status file: {ex}")
 
 
+def current_usage(lastusage: dict[int, taskqueue.Usage], logfunc=log_general) -> dict[int, taskqueue.Usage]:
+    """Return the usage of each user, or `lastusage` if the query fails.
+
+    The main loop calls this before each renumbering, and that loop starts every task. Thus an
+    exception must not go out of this function: the renumbering then uses the usage of the last
+    call, and the next renumbering asks again.
+    """
+    try:
+        return taskqueue.usage_by_user()
+    except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
+        logfunc(f"ERROR: could not update the usage of the users: {ex}")
+        return lastusage
+
+
 def handler(signal_received, frame):
     """Handle any cleanup here."""
     log_general("SIGINT or CTRL-C detected. Exiting")
     sys.exit(0)
 
 
-def do_task(task, slotid: int) -> None:
-    """Run a task in a particular slot and send a result email if requested."""
+def charge_attempt(task, seconds: float, logfunc=log_general) -> None:
+    """Add the run time of one attempt to the usage of the user of the task.
+
+    The queue order reads the usage; see forcephot.queue.charge_usage. An exception does not go
+    out of this function: an error of the usage records must not stop the finish of a task, whose
+    result is there.
+    """
+    try:
+        taskqueue.charge_usage(task.user_id, seconds)
+    except Exception as ex:  # noqa: BLE001 (the result of the task does not depend on the usage records)
+        logfunc(f"ERROR: could not record the usage of the task: {ex}")
+
+
+def start_in_slot(task: Task, slotid: int) -> mp.Process:
+    """Start the task in a slot, and return the process of the slot.
+
+    This function records the start before it makes the process. The queue order charges a user
+    for each attempt (forcephot.queue.calculate_queue_positions), and the main loop can renumber
+    the queue before the new process runs its first statement. If the process recorded the start,
+    that renumbering has the task in a slot with no attempt: each task of the user that waits is
+    then one task too far forward, and the user gets the next free slot also.
+    """
+    mark_started(task)
+    proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid, "started": True})
+    proc.start()
+    return proc
+
+
+def do_task(task, slotid: int, started: bool = False) -> None:
+    """Run a task in a particular slot and send a result email if requested.
+
+    `started` is true when the caller has recorded the start of this attempt; see start_in_slot.
+    """
 
     def logfunc_slotonly(x) -> None:
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
@@ -752,7 +817,8 @@ def do_task(task, slotid: int) -> None:
         # also log to the main process
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
 
-    mark_started(task)
+    if not started:
+        mark_started(task)
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
@@ -762,14 +828,19 @@ def do_task(task, slotid: int) -> None:
 
     localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
 
+    runtask_duration = time.perf_counter() - runtask_starttime
+
+    # Each attempt used a slot for this time: an attempt that gave a result, an attempt that
+    # failed, and an attempt at a task that its user cancelled. One call before the three cases,
+    # and thus no case is without its usage.
+    charge_attempt(task, runtask_duration, logfunc=logfunc)
+
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
 
         # in case a result file was created, delete it
         remove_task_resultfiles(taskid=task.id, logfunc=logfunc)
     else:
-        runtask_duration = time.perf_counter() - runtask_starttime
-
         logfunc(f"Task ran for {runtask_duration:.1f} seconds")
 
         # the task is marked finished before the email is sent, so that a mail failure can never
@@ -960,7 +1031,7 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
     and blocks it, and a long sweep would otherwise leave the status file untouched for minutes,
     which from outside is indistinguishable from a dead runner: the queue page would tell every
-    user that their tasks are not being processed while all sixteen slots were in fact busy.
+    user that their tasks are not being processed while all the slots were in fact busy.
     """
     # no maxtime parameter: one used to be accepted and silently ignored (its only reference was a
     # commented-out call), which read as a five-minute bound on the sweep that did not exist
@@ -987,6 +1058,9 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
 
     remove_unverified_accounts(logfunc=logfunc)
 
+    removed = taskqueue.remove_old_usage_records()
+    logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")
+
 
 def main() -> None:
     """Run queued tasks and clean up on old tasks."""
@@ -1012,6 +1086,12 @@ def main() -> None:
     # forcephot.queue.recalc_generation. Starts below any real value so the first pass renumbers.
     last_recalc_generation: int = -1
     seen_generation: int = -1
+    # the usage of each user, for the queue order; see forcephot.queue.usage_by_user
+    usage: dict[int, taskqueue.Usage] = {}
+    # A slot that became free asks for a renumbering. The task of the slot can be without a
+    # position: an attempt that failed, or a process that stopped. That task waits for a position
+    # before it can start again; see next_task.
+    slot_became_free = False
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -1059,15 +1139,24 @@ def main() -> None:
         if (time.perf_counter() - last_queueflagchecktime) > taskqueue.RECALC_CHECK_INTERVAL_SECONDS:
             last_queueflagchecktime = time.perf_counter()
             seen_generation = taskqueue.recalc_generation()
-            recalc_requested = seen_generation != last_recalc_generation
+            # A free slot asks at this interval also, and not at each pass. While the remote host
+            # is away, each attempt fails after some seconds, and a slot becomes free on almost
+            # each pass. A renumbering locks each queued row.
+            recalc_requested = seen_generation != last_recalc_generation or slot_became_free
 
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
             # caught, because this loop is what dispatches every task: unguarded, a lock timeout or
             # a bad queue state would take the exception out of main() and stop the runner, and the
             # supervisor would restart it into the same state. Stale queue positions only change
             # the display. An exception that stops this loop stops every dispatch.
+            #
+            # The usage has its own guard: if its query fails, the renumbering uses the usage of
+            # the last pass.
+            usage = current_usage(usage, logfunc=logfunc)
+            slot_became_free = False
+
             try:
-                taskqueue.calculate_queue_positions()
+                taskqueue.calculate_queue_positions(usage=usage, running_taskids=set(procs_taskids.values()))
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task; stale
                 # queue positions only change the display)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
@@ -1089,6 +1178,7 @@ def main() -> None:
                 procs[slotid] = None
                 procs_userids.pop(slotid)
                 procs_taskids.pop(slotid)
+                slot_became_free = True
 
                 numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
@@ -1106,11 +1196,11 @@ def main() -> None:
 
         # one query rather than a count() followed by a first(): the count was only used for a log
         # line, and is fetched below only when a task is actually dispatched
-        task = next_task(procs_userids.values())
+        task = next_task(procs_taskids.values(), procs_userids.values())
 
         if task is None:
-            # nothing runnable. That is either an empty queue or a queue holding only tasks from
-            # users who already have a task running, and only the former should slow the polling
+            # nothing runnable. That is either an empty queue or a queue holding only tasks that
+            # are in the slots or have no position yet, and only the former should slow the polling
             if not printedwaiting and not queuedtasks.exists():
                 logfunc("Waiting for tasks...")
                 printedwaiting = True
@@ -1122,9 +1212,7 @@ def main() -> None:
         procs_userids[slotid] = task.user_id
         procs_taskids[slotid] = task.id
 
-        proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid})
-        proc.start()
-        procs[slotid] = proc
+        procs[slotid] = start_in_slot(task, slotid)
 
 
 if __name__ == "__main__":

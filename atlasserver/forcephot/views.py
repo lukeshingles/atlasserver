@@ -34,7 +34,6 @@ from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
-from django.db.models import Min
 from django.db.models.functions import Trunc
 from django.http import FileResponse
 from django.http import HttpResponse
@@ -86,10 +85,12 @@ from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
+from atlasserver.forcephot.queue import HIGH_PRIORITY_GROUP
 from atlasserver.forcephot.queue import next_queuepos_relative
-from atlasserver.forcephot.queue import priority_userids
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
+from atlasserver.forcephot.queue import USAGE_HALF_LIFE_DAYS
+from atlasserver.forcephot.queue import user_usage_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import count_in_window
@@ -480,10 +481,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         extra_fields["from_api"] = request_is_from_api(self.request)
 
         # One transaction for the inserts and the positions. Each insert is otherwise committed on
-        # its own with queuepos_relative NULL, and the runner polls twice a second with
-        # order_by("queuepos_relative"), where NULL sorts first: a task submitted a moment ago was
-        # dispatched ahead of everything already waiting, which is the window
-        # next_queuepos_relative() exists to close.
+        # its own with queuepos_relative NULL, and a reader between the two writes gets a task
+        # that has no place in the queue; see next_queuepos_relative().
         with transaction.atomic():
             serializer.save(**extra_fields)
 
@@ -494,8 +493,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             created = serializer.instance
             newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
 
-            # Provisional positions at the back of the queue. The real ordering is round-robin
-            # across users and is assigned by the task runner; this only stops a task submitted
+            # Provisional positions at the back of the queue. The real ordering is a fair share
+            # between the users and is assigned by the task runner; this only stops a task submitted
             # between two renumberings from showing no position at all, and costs one aggregate
             # for the whole batch.
             nextqueuepos = next_queuepos_relative()
@@ -1211,51 +1210,46 @@ class QueuePositions(APIView):
         summary="The queue positions of the caller's unfinished tasks",
     )
     def get(self, request):
-        # One transaction for the three reads. The task runner can renumber the queue between two
-        # of them, and a new batch of a member then moves each position by the size of the batch.
-        # MariaDB reads all the queries of a transaction from one snapshot, and thus the offset,
-        # the positions and the start of the tier describe the same queue. The block only reads,
-        # and thus it needs no savepoint in a transaction that is already open.
+        # One transaction for the two reads. The task runner can renumber the queue between them.
+        # MariaDB reads all the queries of a transaction from one snapshot, and thus the offset
+        # and the positions describe the same queue. The block only reads, and thus it needs no
+        # savepoint in a transaction that is already open.
         with transaction.atomic(savepoint=False):
             queueoffset = Task.min_queuepos_relative()
             # the same set the offset was measured against, so the subtraction below cannot drift
-            positions = list(
-                Task.queued()
-                .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
-                .values_list("id", "queuepos_relative", "request_type")
+            owntasks = list(
+                Task.queued().filter(user_id=request.user.pk).values_list("id", "queuepos_relative", "request_type")
             )
 
-            # The tier of the caller, from the same request as the positions. The queue page
-            # subtracts tierstart from a position to get the number of tasks that compete with the
-            # task for a slot. A count from the status file of the task runner is older than the
-            # positions, and a comparison of the two puts a task in the incorrect tier each time a
-            # task finishes.
-            priorityuserids = priority_userids()
-            prioritytier = request.user.pk in priorityuserids
-            tierstart = 0
-            if priorityuserids and not prioritytier:
-                # the tasks of the members have the first positions, and the tier of the caller
-                # starts at the first task of a user who is not a member
-                firstposition = (
-                    Task.queued()
-                    .exclude(user_id__in=priorityuserids)
-                    .aggregate(Min("queuepos_relative"))["queuepos_relative__min"]
-                )
-                if firstposition is not None:
-                    tierstart = max(0, firstposition - queueoffset)
+        # A task in a slot has no position; see forcephot.queue.calculate_queue_positions. The
+        # positions are thus only of the tasks that wait, and a position is the number of tasks
+        # that start before the task.
+        positions = [
+            (taskid, queuepos, requesttype) for taskid, queuepos, requesttype in owntasks if queuepos is not None
+        ]
 
         return Response(
             {
                 "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
-                "prioritytier": prioritytier,
-                "tierstart": tierstart,
-                # What each of those tasks is. Dispatch runs one task per user at a time, so a
-                # user's own tasks ahead of this one are waited through in series -- and an IMGZIP
-                # among them is a quarter of an hour of that wait where an FP task is a minute.
-                # Another column on a query already being made, and only ever this user's own
-                # tasks.
+                # What each of those tasks is. The tasks of one user that are ahead of a task
+                # use a limited number of slots, and an IMGZIP among them is a quarter of an hour
+                # of the wait where an FP task is a minute. Another column on a query already
+                # being made, and only ever this user's own tasks.
                 "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
                 "queueoffset": queueoffset,
+                # All the unfinished tasks of the caller: the tasks that wait and the tasks in
+                # the slots. The Queue badge of the navigation bar shows this number.
+                "queuedcount": len(owntasks),
+                # The unfinished tasks of the caller that have no position: the tasks in the
+                # slots. The queue page counts the tasks that finished while its tab was hidden,
+                # and without this list a task that started is equal to a task that finished.
+                "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
+                # True for a member of the high priority group, whose tasks have the first
+                # positions.
+                "prioritytier": request.user.groups.filter(name=HIGH_PRIORITY_GROUP).exists(),
+                # Always 0. A caller that subtracts it from a position, as the API guide said
+                # before the fair share order, gets the position.
+                "tierstart": 0,
             }
         )
 
@@ -1307,6 +1301,7 @@ def taskrunnerstatus(request):
                 "stale": True,
                 "typical_runtime_seconds": {},
                 "user_queued_task_count": 0,
+                "user_usage_hours": None,
                 "detail": f"no usable status file ({type(ex).__name__})",
             },
         )
@@ -1317,7 +1312,13 @@ def taskrunnerstatus(request):
     # The medians and the count below can change while `written` does not. But the task runner
     # writes the file every STATUS_WRITE_SECONDS, and thus this version holds for that interval
     # at most. The poll asks each minute.
-    etag = entity_tag(status["written"])
+    #
+    # The session of the reader is in the version, because the response has fields about the
+    # reader: the count of queued tasks and the usage. Without it, a browser that changes
+    # to a different account gets a 304 for the body of the first account. A sign-in makes a new
+    # session key. The key comes from the cookie and not from request.user, because a read of the
+    # user is a query, and a 304 must cost no query.
+    etag = entity_tag(status["written"], request.COOKIES.get(settings.SESSION_COOKIE_NAME))
 
     # A browser that holds the current version asks with If-None-Match, and the answer is 304 with
     # no body. This comes before the medians and the count, because a 304 makes both unnecessary.
@@ -1338,6 +1339,18 @@ def taskrunnerstatus(request):
         Task.queued().filter(user_id=request.user.pk).count() if request.user.is_authenticated else 0
     )
 
+    # The usage of this reader, in hours: the run time of the tasks of the reader, where older
+    # run time counts less. The queue order starts the tasks of the user with the least usage
+    # first; see forcephot.queue.calculate_queue_positions. The status sentence of each page gives
+    # the usage to a reader who waits on the queue. Only when the task runner runs, as for the
+    # medians: no sentence about the queue shows when the status is stale.
+    #
+    # One decimal place. runnerstatus.js compares each field of two answers, and a value in
+    # seconds would make a difference each time a task finishes.
+    user_usage_hours: float | None = None
+    if request.user.is_authenticated and not stale:
+        user_usage_hours = round(user_usage_seconds(request.user.pk) / 3600, 1)
+
     response = JsonResponse(
         {
             **status,
@@ -1346,6 +1359,8 @@ def taskrunnerstatus(request):
             "status_age_seconds": round(age_seconds, 1),
             "typical_runtime_seconds": typical_runtimes,
             "user_queued_task_count": user_queued_task_count,
+            "user_usage_hours": user_usage_hours,
+            "usage_half_life_days": USAGE_HALF_LIFE_DAYS,
         },
     )
     # Still no ETag on an outage. The tag is the write time of the file, and while the runner is

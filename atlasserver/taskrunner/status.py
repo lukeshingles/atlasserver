@@ -33,7 +33,14 @@ STALE_AFTER_SECONDS: float = STATUS_WRITE_SECONDS * 4
 # How many tasks the runner executes at once. The runner sizes its process pool from this and
 # reports it in the status file; the web app needs the same number to say how fast the queue drains
 # (the load factor on the stats page, and the wait estimate on the queue page).
-NUMSLOTS: int = 16
+NUMSLOTS: int = 24
+
+# The maximum number of slots that the tasks of one user can have at one time. The queue order
+# gives the next slot to the user with the least usage, and the usage of a user increases only
+# when a task finishes. Without a maximum, a user with no usage and a large batch gets all the
+# slots at one time, and so does a new account. The maximum also applies to a member of the high
+# priority group.
+MAX_USER_SLOTS: int = 8
 
 
 def read_status() -> tuple[dict[str, t.Any], float]:

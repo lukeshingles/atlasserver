@@ -27,6 +27,19 @@ mpc CK21Y010</pre>
 
     <p>Comet orbits will be hit-or-miss due to possible non-gravitational forces acting on comets. The suitability of a particular comet for the forced photometry server must be determined by the submitter. Note that recent comets may appear in the MPC's database search but not the web service that provides the orbit to the ATLAS forced photometry tool due to different publication between these two MPC services.</p>
 
+    <h2 id="queue">Q: In what order do the tasks in the queue start?</h2>
+    <p>The server runs {{ numslots }} tasks at one time. When the tasks of other users wait, the tasks of one user use a maximum of {{ max_user_slots }} of these slots. When no other task waits, one user can use more slots.</p>
+
+    <p>The queue gives each user a fair share of the run time, as the schedulers of computer clusters do. Your usage is the total run time of your tasks. The run time of a task is the time from its start to its finish, and the time that a task waits in the queue does not count. Older run time counts less: the run time of {{ usage_half_life_days }} days ago counts half.</p>
+
+    <p>When a slot becomes free, it goes to the next task of the user with the least usage. A user with little usage thus gets slots first, until the usage of that user is equal to the usage of the other users. Users with equal usage take turns. The usage is not a limit: the server does not refuse or stop a task because of it. The usage only sets the position of your tasks in the queue. The tasks of a small group of users with high priority start before all other tasks.</p>
+
+    <p>The wait of a task also counts. Each hour that a task waits has the same effect as {{ wait_credit_minutes }} minutes less usage. A user with much usage gets a slot when the users with less usage do not need it, but no task waits without a limit: after a sufficient wait, a task is before the tasks that other users submit later.</p>
+
+    <p>An account that is less than {{ new_account_days }} days old does not start with zero usage. Its usage in the queue is not less than the median usage of all users.</p>
+
+    <p>If you are signed in and you have tasks in the queue, the status line at the top of each page shows your usage. The queue page shows the number of tasks that are ahead of each of your tasks, and an estimate of the wait. A user with less usage than you can submit a task after you, and that task can go before your tasks. The number of tasks ahead can thus increase.</p>
+
     <h2>Q: How do I report issues with the data or the website?</h2>
     <p>Please file an issue on the <a href="https://github.com/lukeshingles/atlasserver/issues">GitHub atlasserver repository</a>.</p>
 

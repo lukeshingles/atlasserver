@@ -60,15 +60,51 @@ The scripts must use only the features of Python 3.8. The other code of atlasser
 and the task runner then starts the task again without a limit. The slot logs in
 `atlasserver/taskrunner/logs/` show the error from sc01 in the lines with `atlas STDERR:`.
 
-The task runner executes 16 tasks at one time, with a maximum of one task for each user. The
-tasks of the users in the Django group `High priority` start before the tasks of all other users.
-The limit of one task for each user also applies to a member of the group. Thus N members use a
-maximum of N slots. If 16 members have queued tasks at one time, the other users get no slot.
+The task runner executes 24 tasks at one time (`NUMSLOTS` in `atlasserver/taskrunner/status.py`).
+When the tasks of other users wait, the tasks of one user use a maximum of 8 of these slots
+(`MAX_USER_SLOTS` in the same file). When no other task can start, a user gets more slots: a slot
+does not stay idle while a task waits.
 
-For a task of another user, the queue page does not count the tasks of the members in the number
-of tasks ahead. A batch of a member uses only one slot, and thus it does not delay the other users
-by its full length. The `queuepos` field of the API is the position in the full queue, and it
-includes the tasks of the members.
+The queue order gives each user a fair share of the run time, as the multifactor priority of Slurm
+does. The constants are in `atlasserver/forcephot/queue.py`, and the docstring of
+`calculate_queue_positions` in that file gives the rule for the order. In short:
+
+- The usage of a user is the run time of the attempts of that user. The task runner writes it to
+  the table `UsageDay` at the end of each attempt: a finish, an attempt that failed, and a task
+  that its user cancelled while it ran.
+- Older run time counts less. The run time of 7 days ago counts half (`USAGE_HALF_LIFE_DAYS`), and
+  the maintenance deletes the records after 35 days (`USAGE_RETENTION_DAYS`).
+- A free slot goes to the next task of the user with the least usage. Users with equal usage take
+  turns.
+- The wait of a task counts also. Each hour of wait has the same effect as 15 minutes less usage
+  (`WAIT_CREDIT`). Thus no task waits without a limit.
+- An account that is less than 7 days old does not start with zero usage. Its usage in the queue
+  is not less than the median usage of all users (`NEW_ACCOUNT_DAYS`).
+
+The usage is not a quota: the task runner does not refuse or stop a task.
+
+The tasks of the users in the Django group `High priority` start before the tasks of all other
+users, and the fair share applies between the members. The maximum of 8 slots also applies to a
+member. Thus 3 members with large batches use all 24 slots, and the other users then get no slot.
+
+A task that fails with no result starts again without a limit. While the task is not finished,
+each attempt that failed adds a retry time of 7 minutes or more to the usage of its user in the
+queue order. Thus a task that always fails does not keep a slot.
+
+The list of users in the admin site (`/admin/auth/user/`) has two columns for the usage. "Run
+time (7 days)" is the run time with no decay, and a click on its header sorts the list. "Usage in
+the queue" is the usage that the queue order uses. A user who is signed in and has queued tasks
+reads the usage in the status line at the top of each page. The FAQ page (`/faq/#queue`) tells the
+users how the queue works. That page gets its numbers from the constants in `queue.py` and
+`status.py`.
+
+The queue page shows, for each task that waits, the number of tasks that start before it. A task
+of a different user that arrives later can go before the task, and thus the number can increase.
+A task in a slot has no queue position, and its `queuepos` field in the API is null.
+
+The `migrate` command makes the table of the usage records and fills it from the finished tasks
+of the last 35 days. These first records are approximate: the database does not have the tasks
+that a user deleted and the attempts that failed.
 
 The `migrate` command makes the group. To add or remove a member, open the group in the admin site
 (`/admin/auth/group/`). Then change the field "Members". The field has a search by username, name
