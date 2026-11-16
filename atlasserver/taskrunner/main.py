@@ -521,7 +521,7 @@ def mark_started(task) -> None:
     # the task still waits.
     #
     # retry_after has no value during an attempt. record_attempt_end writes it at the end, and
-    # thus a value shows that the end of this attempt is recorded; see record_abnormal_exit.
+    # thus a value shows that the end of this attempt is recorded; see record_missing_attempt_end.
     Task.objects.filter(pk=task.id).update(
         starttimestamp=starttimestamp,
         attempt_count=models.F("attempt_count") + 1,
@@ -810,7 +810,7 @@ def record_attempt_end(task, seconds: float, logfunc=log_general) -> None:
     before it fails, and a wait from its start is then over at its end.
 
     The two records are one transaction. The time of the next attempt is also the mark that
-    the end of this attempt is recorded (record_abnormal_exit). With the run time in the usage
+    the end of this attempt is recorded (record_missing_attempt_end). With the run time in the usage
     and no mark, the main loop adds the run time a second time.
 
     An exception does not go out of this function: an error of these records must not stop the
@@ -827,24 +827,26 @@ def record_attempt_end(task, seconds: float, logfunc=log_general) -> None:
         logfunc(f"ERROR: could not record the end of the attempt: {ex}")
 
 
-def record_abnormal_exit(taskid: int, seconds: float, logfunc=log_general) -> None:
-    """Record the end of an attempt whose slot process stopped with no record of that end.
+def record_missing_attempt_end(taskid: int, seconds: float, logfunc=log_general) -> None:
+    """Record the end of an attempt if the slot process of the task did not record it.
 
-    do_task records the end of its attempt also when the attempt raises an exception. A process
-    that the system stops (for example when the memory is full) records nothing. The task then
-    has no time for its next attempt, and its run time is in no usage record: it starts again at
-    once, with no cost. The main loop calls this for a slot process with an exit code that is
-    not zero, and `seconds` is the time for which the process had the slot.
+    do_task records the end of its attempt, also when the attempt raises an exception. Two
+    conditions leave no record. The system can stop the process (for example when the memory is
+    full). And the write of the record can fail, which do_task does not let stop the task. The
+    task then has no time for its next attempt, and its run time is in no usage record: it
+    starts again at once, with no cost. The main loop calls this for each slot that becomes
+    free, and `seconds` is the time for which the process had the slot.
 
-    The task has a record of this attempt if it has a time for its next attempt: mark_started
-    removes that time at the start of an attempt.
+    A task that is not finished has a record of its attempt if it has a time for its next
+    attempt: mark_started removes that time at the start of an attempt. A finished task has no
+    such mark, and this function does not examine it.
     """
     try:
         task = Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).first()
         if task is None or task.retry_after is not None:
             return
     except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
-        logfunc(f"ERROR: could not read the task of a slot that stopped: {ex}")
+        logfunc(f"ERROR: could not read the task of a slot that became free: {ex}")
         return
 
     logfunc(f"The slot process of task {taskid} stopped with no record of the end of its attempt")
@@ -1208,15 +1210,14 @@ def main() -> None:
         # renumbering, and the renumbering must not have the task of that slot as a task in a slot.
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
-                exitcode = proc.exitcode
                 proc.join()
                 proc.close()
                 procs[slotid] = None
                 procs_userids.pop(slotid)
                 taskid = procs_taskids.pop(slotid)
                 slotseconds = time.perf_counter() - procs_starttimes.pop(slotid)
-                if exitcode != 0:
-                    record_abnormal_exit(taskid, slotseconds, logfunc=logfunc)
+                # for each exit code: a process that could not write its record ends normally
+                record_missing_attempt_end(taskid, slotseconds, logfunc=logfunc)
                 slot_became_free = True
                 if dispatch_waits_since is None:
                     dispatch_waits_since = time.perf_counter()

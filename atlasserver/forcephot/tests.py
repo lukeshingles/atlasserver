@@ -565,9 +565,10 @@ class FairShareQueueTests(TestCase):
         assert not UsageDay.objects.filter(user=self.light).exists(), "the usage has the run time with no mark"
         assert Task.objects.get(pk=task.pk).retry_after is None
 
-        # the main loop then records the attempt one time
-        taskrunner_main.record_abnormal_exit(task.pk, 100.0, logfunc=messages.append)
-        taskrunner_main.record_abnormal_exit(task.pk, 100.0, logfunc=messages.append)
+        # The process of the slot ends normally after this failure. The main loop examines each
+        # slot that becomes free, and it then records the attempt one time.
+        taskrunner_main.record_missing_attempt_end(task.pk, 100.0, logfunc=messages.append)
+        taskrunner_main.record_missing_attempt_end(task.pk, 100.0, logfunc=messages.append)
 
         usage = UsageDay.objects.get(user=self.light)
         assert (usage.seconds, usage.tasks) == (100.0, 1)
@@ -595,9 +596,9 @@ class FairShareQueueTests(TestCase):
 
             # the system stopped the process of the first task after 120 seconds
             for task in (killed, recorded, done):
-                taskrunner_main.record_abnormal_exit(task.pk, 120.0, logfunc=messages.append)
+                taskrunner_main.record_missing_attempt_end(task.pk, 120.0, logfunc=messages.append)
             # a task that its user deleted
-            taskrunner_main.record_abnormal_exit(987654321, 120.0, logfunc=messages.append)
+            taskrunner_main.record_missing_attempt_end(987654321, 120.0, logfunc=messages.append)
 
         assert messages == [f"The slot process of task {killed.pk} stopped with no record of the end of its attempt"]
         usage = UsageDay.objects.get(user=self.light)
