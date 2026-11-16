@@ -1153,7 +1153,6 @@ def main() -> None:
             # The usage has its own guard: if its query fails, the renumbering uses the usage of
             # the last pass.
             usage = current_usage(usage, logfunc=logfunc)
-            slot_became_free = False
 
             try:
                 taskqueue.calculate_queue_positions(usage=usage, running_taskids=set(procs_taskids.values()))
@@ -1166,6 +1165,9 @@ def main() -> None:
                 # outstanding so the next check retries it. Recording it either way would drop the
                 # request and leave dispatch ordering by stale positions until the backstop.
                 last_recalc_generation = seen_generation
+                # also only on success: the task of the free slot has no position until a
+                # renumbering gives it one
+                slot_became_free = False
 
             # stamped even on failure, so a persistent one is retried on an interval rather than on
             # every pass of the loop

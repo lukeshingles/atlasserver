@@ -472,9 +472,9 @@ class FairShareQueueTests(TestCase):
             assert [task.pk for task in self.waiting()] == before
             assert dict(Task.queued().values_list("pk", "task_modified_datetime")) == modified
 
-    def test_a_task_that_waits_for_a_new_attempt_has_a_position_and_its_attempts_are_usage(self) -> None:
+    def test_a_task_waits_before_a_new_attempt_and_the_failed_attempts_are_not_usage(self) -> None:
         failing = self.add_queued(self.heavy, 1)[0]
-        other = self.add_queued(self.light, 3)
+        other = self.add_queued(self.light, 2)
         calculate_queue_positions()
         assert self.waiting()[0] == failing, "the first submission is first when the usage is equal"
 
@@ -484,10 +484,21 @@ class FairShareQueueTests(TestCase):
                 taskrunner_main.mark_started(failing)
         assert taskrunner_main.next_task([], []) == other[0], "a task with no position cannot start"
 
+        # the wait after the second failed attempt is 60 seconds, and the task has no position in it
         calculate_queue_positions(running_taskids=set())
+        assert [task.pk for task in self.waiting()] == [other[0].pk, other[1].pk]
 
-        # each attempt is one expected run time: the key of the task is 2, and light has 0, 1, 2
-        assert [task.pk for task in self.waiting()] == [other[0].pk, other[1].pk, failing.pk, other[2].pk]
+        later = timezone.now() + dt.timedelta(seconds=61)
+        with mock.patch.object(taskqueue, "utcnow", return_value=later):
+            calculate_queue_positions(running_taskids=set())
+
+        # the failed attempts are no cost: the task has the place of its submission time again
+        assert [task.pk for task in self.waiting()] == [failing.pk, other[0].pk, other[1].pk]
+
+    def test_the_wait_before_a_new_attempt_is_two_times_longer_after_each_failure(self) -> None:
+        waits = [taskqueue.retry_wait_seconds(attempts) for attempts in (1, 2, 3, 4, 5, 6, 500)]
+
+        assert waits == [30.0, 60.0, 120.0, 240.0, 480.0, 600.0, 600.0], waits
 
     def test_the_start_is_recorded_before_the_process_of_the_slot_starts(self) -> None:
         task = self.add_queued(self.light, 2)[0]
@@ -547,6 +558,10 @@ class FairShareQueueTests(TestCase):
         with mock.patch.object(taskrunner_main, "log_general"):
             for task in tasks[:2]:
                 taskrunner_main.mark_started(task)
+        # the two tasks started an hour before the restart
+        Task.objects.filter(pk__in=[task.pk for task in tasks[:2]]).update(
+            starttimestamp=timezone.now() - dt.timedelta(hours=1)
+        )
         assert taskrunner_main.next_task([], []) == tasks[2]
 
         # the new task runner has no task in a slot
@@ -664,16 +679,18 @@ class FairShareQueueTests(TestCase):
         return self.client.get(reverse("queuepositions")).json()
 
     def test_the_queue_positions_count_only_the_tasks_that_wait(self) -> None:
+        self.add_usage(self.light, hours=2.5)
         tasks = self.add_queued(self.light, 3)
         othertask = self.add_queued(self.light2, 1)[0]
-        calculate_queue_positions()
         with mock.patch.object(taskrunner_main, "log_general"):
             taskrunner_main.mark_started(tasks[0])
+        calculate_queue_positions()
 
         answer = self.queuepositions(self.light)
 
-        # no renumbering after the start: the task of light2 is now the first task that waits
+        # light2 has less usage than light, and thus its task is the first task that waits
         assert answer["queuepositions"] == {str(tasks[1].pk): 1, str(tasks[2].pk): 2}, answer
+        assert answer["usagehours"] == 2.5, "a script with a token reads its usage here"
         assert set(answer["queuedtypes"]) == set(answer["queuepositions"])
         assert answer["queuedcount"] == 3, "the count has the task in the slot"
         assert answer["startedids"] == [tasks[0].pk], answer
@@ -685,10 +702,11 @@ class FairShareDispatchTests(TestCase):
 
     def setUp(self) -> None:
         self.users = [FairShareQueueTests.old_user(name) for name in ("anna", "ben", "cara", "dev")]
-        # The simulation starts at the start of the day before today, and it is shorter than a
-        # day. Each of its usage records is thus the record of one day, with one weight.
-        today = timezone.now().astimezone(dt.UTC).date()
-        self.clock = dt.datetime.combine(today - dt.timedelta(days=1), dt.time(0), tzinfo=dt.UTC)
+        # The simulation starts at the start of today, and it is shorter than a day. Each of its
+        # usage records is thus the record of one day, with one weight.
+        self.clock = dt.datetime.combine(timezone.now().astimezone(dt.UTC).date(), dt.time(0), tzinfo=dt.UTC)
+        # the time of the simulation, in seconds after the clock
+        self.seconds = 0.0
         # (start time in seconds, user id) for each start
         self.starts: list[tuple[float, int]] = []
         # the fraction of the queued rows that each renumbering wrote: after a finish, and after
@@ -726,10 +744,12 @@ class FairShareDispatchTests(TestCase):
         """
         # the id of each task in a slot, with its finish time in seconds and the task
         slots: dict[int, tuple[float, Task]] = {}
-        seconds = 0.0
+        idlepasses = 0
         with (
             mock.patch.object(runnerstatus, "MAX_USER_SLOTS", maxuserslots),
             mock.patch.object(taskrunner_main, "log_general"),
+            # the queue order reads the time for the usage of a day and for the wait before a new attempt
+            mock.patch.object(taskqueue, "utcnow", side_effect=lambda: self.clock + dt.timedelta(seconds=self.seconds)),
         ):
             firstpass = True
             while len(self.starts) < maxstarts:
@@ -743,9 +763,11 @@ class FairShareDispatchTests(TestCase):
                     if task is None:
                         break
                     taskrunner_main.mark_started(task)
-                    Task.objects.filter(pk=task.pk).update(starttimestamp=self.clock + dt.timedelta(seconds=seconds))
-                    slots[task.pk] = (seconds + runtime(task), task)
-                    self.starts.append((seconds, task.user_id))
+                    Task.objects.filter(pk=task.pk).update(
+                        starttimestamp=self.clock + dt.timedelta(seconds=self.seconds)
+                    )
+                    slots[task.pk] = (self.seconds + runtime(task), task)
+                    self.starts.append((self.seconds, task.user_id))
 
                     # A start does not change the order of the tasks that wait, with a renumbering
                     # and with no renumbering. The renumbering writes rows only if the task was
@@ -756,14 +778,21 @@ class FairShareDispatchTests(TestCase):
                     assert self.waiting_ids() == waiting, "a renumbering after a start changed the order"
 
                 if not slots:
-                    return
+                    if not Task.queued().exists():
+                        return
+                    # Each task that is not finished waits for a new attempt. The task runner
+                    # renumbers the queue again after its longest interval.
+                    idlepasses += 1
+                    assert idlepasses < 1000, "no task of the queue can start"
+                    self.seconds += taskqueue.RECALC_MAX_INTERVAL_SECONDS
+                    continue
 
                 taskid = min(slots, key=lambda key: slots[key][0])
                 started = Task.objects.get(pk=taskid).starttimestamp
                 assert started is not None
-                seconds, task = slots.pop(taskid)
+                self.seconds, task = slots.pop(taskid)
                 # the end of the attempt, as do_task records it
-                ended = self.clock + dt.timedelta(seconds=seconds)
+                ended = self.clock + dt.timedelta(seconds=self.seconds)
                 taskqueue.charge_usage(task.user_id, (ended - started).total_seconds(), when=ended)
                 if task.user_id not in self.always_fail:
                     Task.objects.filter(pk=taskid).update(finishtimestamp=ended)
@@ -836,14 +865,18 @@ class FairShareDispatchTests(TestCase):
             numslots=2,
             maxuserslots=2,
             runtime=lambda task: 5.0 if task.user_id == anna.pk else 600.0,
-            maxstarts=60,
+            maxstarts=100,
         )
 
-        assert self.started_by(ben) == 10, "all the tasks of ben started"
-        # each attempt of anna adds one expected run time to the usage of anna, and thus the
-        # attempts of anna become rare: ben does not wait for a slot
-        lastofben = max(index for index, (_, userid) in enumerate(self.starts) if userid == ben.pk)
-        assert self.started_by(anna, first=lastofben) <= 25, self.starts
+        benstarts = [seconds for seconds, userid in self.starts if userid == ben.pk]
+        assert len(benstarts) == 10, "all the tasks of ben started"
+        # With two slots and no other user, the last two tasks of ben start after 2400 seconds.
+        # The four tasks of anna fail again and again, and they delay ben by some attempts of 5
+        # seconds: each task of anna waits longer before each new attempt.
+        assert benstarts[-1] < 2400 + 300, self.starts
+        # The failed attempts are not usage that puts anna behind ben: anna has the usage of
+        # the real run time of the attempts only.
+        assert taskqueue.usage_by_user()[anna.pk].seconds < 600, self.starts
 
     def test_the_usage_of_the_users_becomes_equal_and_a_finish_does_not_write_all_rows(self) -> None:
         # Unequal usage at the start, and run times from 100 to 880 seconds. The users have
@@ -923,7 +956,11 @@ class UsageAdminTests(TestCase):
         assert "Usage in the queue" in content
         rows = {user.username: user for user in response.context["cl"].result_list}
         modeladmin = response.context["cl"].model_admin
-        shown = {name: (modeladmin.usage_runtime(rows[name]), modeladmin.usage_decayed(rows[name])) for name in users}
+        # the usage column is the last column of the list, and it read the usage for the page
+        usage_decayed = response.context["cl"].list_display[-1]
+        with CaptureQueriesContext(connection) as queries:
+            shown = {name: (modeladmin.usage_runtime(rows[name]), usage_decayed(rows[name])) for name in users}
+        assert len(queries) == 0, "the column made a query for a row"
         assert shown == {
             "aa-heavy": ("100.0 h", "100.0 h"),
             "mm-middle": ("2.5 h", "2.5 h"),
@@ -942,7 +979,6 @@ class UsageAdminTests(TestCase):
 class UsageRecordsMigrationTests(TestCase):
     def test_the_migration_fills_the_usage_records_from_the_finished_tasks(self) -> None:
         migration = importlib.import_module("atlasserver.forcephot.migrations.0011_usage_day")
-        assert migration.USAGE_RETENTION_DAYS == taskqueue.USAGE_RETENTION_DAYS
         user = User.objects.create_user(username="filled", email="filled@example.com", password=None)
         today = dt.datetime.combine(timezone.now().astimezone(dt.UTC).date(), dt.time(12), tzinfo=dt.UTC)
 
@@ -954,7 +990,8 @@ class UsageRecordsMigrationTests(TestCase):
         finished(1, 100)
         finished(1, 200, is_archived=True)
         finished(3, 50)
-        finished(taskqueue.USAGE_RETENTION_DAYS + 2, 999)
+        # the migration has its own number of days, which does not follow the constant of the queue
+        finished(migration.USAGE_RETENTION_DAYS + 2, 999)
         # a task in the queue and a task in a slot have no run time
         Task.objects.create(user=user, ra=1.0, dec=2.0)
         Task.objects.create(user=user, ra=1.0, dec=2.0, starttimestamp=today)

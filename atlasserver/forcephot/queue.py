@@ -81,6 +81,17 @@ EXPECTED_RUNTIME_MIN_TASKS: t.Final = 5
 # mean. The value is the mean run time of a task on the production server in November 2026.
 DEFAULT_TASK_SECONDS: t.Final = 420.0
 
+# A task whose attempt failed gets no queue position for this number of seconds after the start of
+# that attempt, and thus it cannot start. The time is two times longer after each next failed
+# attempt, to the maximum. A task that always fails thus has a slot for some seconds in each 10
+# minutes, and it does not keep the slot.
+#
+# The failed attempts are not a cost in the usage of the user. While the remote host is away,
+# each attempt of each user fails, and a cost for each attempt then removes the differences in
+# usage between the users.
+RETRY_WAIT_SECONDS: t.Final = 30.0
+RETRY_WAIT_MAX_SECONDS: t.Final = 600.0
+
 # Renumber at least this often even when the flag says nothing changed. Covers a task that lost
 # its position at a start and did not finish (a task with no position cannot start), and any flag
 # lost to a cache eviction or a wiped cache directory, so a stale ordering can never persist.
@@ -244,8 +255,8 @@ def new_account_usage(usage: "Mapping[int, Usage]") -> float:
 
     This is the median usage of the users who have a usage record. A new account is thus before
     each user with more usage than the median, and it is not before the half of the users with
-    the least usage. The scheduler of Linux has the same rule for a new process, which starts with
-    the lowest usage of the current processes and not with zero.
+    the least usage. The scheduler of Linux has a rule of the same type for a new process. That
+    process starts with the lowest usage of the current processes, and not with zero.
     """
     return statistics.median(own.seconds for own in usage.values()) if usage else 0.0
 
@@ -253,8 +264,8 @@ def new_account_usage(usage: "Mapping[int, Usage]") -> float:
 def expected_task_seconds(usage: "Mapping[int, Usage]") -> "Callable[[int], float]":
     """Return the function that gives the expected run time of one task of a user, in seconds.
 
-    The queue order charges a user this time for each attempt at a task that has not finished,
-    and it puts this time between two tasks of the user that wait. The mean run time of the
+    The queue order charges a user this time for each task of the user in a slot, and it puts
+    this time between two tasks of the user that wait. The mean run time of the
     attempts of the user is the best value: the tasks of one user are frequently of one type, and
     a user with long tasks then gets fewer tasks for the same run time. A user with few attempts
     gets the mean of all users.
@@ -271,6 +282,12 @@ def expected_task_seconds(usage: "Mapping[int, Usage]") -> "Callable[[int], floa
         return max(1.0, seconds)
 
     return expected
+
+
+def retry_wait_seconds(attempts: int) -> float:
+    """Return how long a task waits for a new attempt after the start of its failed attempt number `attempts`."""
+    # the limit of the exponent keeps the power in the range of a float for a task with many attempts
+    return min(RETRY_WAIT_MAX_SECONDS, RETRY_WAIT_SECONDS * 2 ** min(attempts - 1, 10))
 
 
 def request_recalc() -> None:
@@ -406,7 +423,6 @@ def calculate_queue_positions(
         the usage of its user (the run time in the usage records, with the decay)
         + the expected run time of a task, for each task of the user in a slot
         + the expected run time of a task, for each task of the user that waits before it
-        + a retry time, for each attempt that failed at an unfinished task of the user
         - WAIT_CREDIT, for each second that the task waits
 
     The first three terms are the usage that the user will have at the start of the task. Users
@@ -425,10 +441,11 @@ def calculate_queue_positions(
     the two waits increase together.
 
     A task in a slot has no position. A task that has started and is not in a slot waits for a
-    new attempt (see taskrunner.main.do_task). It gets a position as the other tasks do, and each
-    of its failed attempts adds the retry time to the keys of its user while it is not finished.
-    The retry time is not less than DEFAULT_TASK_SECONDS. Thus a task that always fails does not
-    keep a slot.
+    new attempt (see taskrunner.main.do_task). It has no position for a time after the start of
+    its failed attempt (retry_wait_seconds), and after that it gets a position as the other tasks
+    do. Thus a task that always fails does not keep a slot. The renumbering at an interval of
+    RECALC_MAX_INTERVAL_SECONDS gives the position, and the wait is thus longer by that interval
+    at most.
 
     The task runner starts the task with the lowest position whose user is below the maximum
     number of slots (taskrunner.main.next_task). The positions give the real start order, and
@@ -449,8 +466,15 @@ def calculate_queue_positions(
     newaccounts = new_account_userids()
     newaccountseconds = new_account_usage(usage)
 
+    now = utcnow()
+
     def in_slot(task: Task) -> bool:
         return task.starttimestamp is not None if running_taskids is None else task.id in running_taskids
+
+    def waits_for_retry(task: Task) -> bool:
+        if task.attempt_count < 1 or task.starttimestamp is None:
+            return False
+        return now < task.starttimestamp + dt.timedelta(seconds=retry_wait_seconds(task.attempt_count))
 
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent
@@ -468,15 +492,8 @@ def calculate_queue_positions(
             if userid in newaccounts:
                 usageseconds = max(usageseconds, newaccountseconds)
             tier = 0 if userid in priorityuserids else 1
-            waiting = [task for task in usertasks if not in_slot(task)]
-            inslots = len(usertasks) - len(waiting)
-            # The attempts that failed at the unfinished tasks of the user. The attempt of a task
-            # in a slot has not failed.
-            failedattempts = max(0, sum(task.attempt_count for task in usertasks) - inslots)
-            # A failed attempt is short, and the usage records have it. The mean run time of a
-            # user whose task always fails is thus some seconds. A cost from that mean lets the
-            # task start again at once, and it then keeps a slot.
-            retryseconds = max(taskseconds, DEFAULT_TASK_SECONDS)
+            inslots = sum(1 for task in usertasks if in_slot(task))
+            waiting = [task for task in usertasks if not in_slot(task) and not waits_for_retry(task)]
             # One multiplication for the tasks in the slots and the tasks before. A start moves
             # one unit from the tasks before to the tasks in the slots, and the product is then
             # the same number. A sum of two products can differ in its last bit, and that
@@ -485,7 +502,6 @@ def calculate_queue_positions(
                 (
                     tier,
                     usageseconds
-                    + failedattempts * retryseconds
                     + (inslots + index) * taskseconds
                     + WAIT_CREDIT * (task.timestamp - WAIT_EPOCH).total_seconds(),
                     task.timestamp,

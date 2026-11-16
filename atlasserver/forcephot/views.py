@@ -1244,11 +1244,15 @@ class QueuePositions(APIView):
                 # slots. The queue page counts the tasks that finished while its tab was hidden,
                 # and without this list a task that started is equal to a task that finished.
                 "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
+                # The usage of the caller in hours, as the queue order uses it; see
+                # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint
+                # gives the usage only to a browser session.
+                "usagehours": round(user_usage_seconds(request.user.pk) / 3600, 1),
                 # True for a member of the high priority group, whose tasks have the first
                 # positions.
                 "prioritytier": request.user.groups.filter(name=HIGH_PRIORITY_GROUP).exists(),
-                # Always 0. A caller that subtracts it from a position, as the API guide said
-                # before the fair share order, gets the position.
+                # Always 0. The positions have no part that a caller must subtract, and a script
+                # that subtracts this value from a position gets the position.
                 "tierstart": 0,
             }
         )

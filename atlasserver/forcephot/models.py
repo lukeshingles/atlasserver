@@ -649,7 +649,7 @@ class UsageDay(models.Model):
     A table of its own, and not a sum of the rows of Task, for two reasons. A row of Task goes
     away: a user can delete a task that waits or runs, and the maintenance of the task runner
     deletes old rows, the rows of archived API tasks first. And a row of Task holds only the last
-    attempt. The usage of the users with the most tasks was thus too low.
+    attempt. A sum of the rows of Task is thus too low for the users with the most tasks.
 
     One row for each day, and not one row for each attempt: the queue order reads all the rows at
     each renumbering.

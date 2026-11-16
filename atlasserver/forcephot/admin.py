@@ -28,8 +28,9 @@ import atlasserver.forcephot.models
 from atlasserver.forcephot.models import UsageDay
 from atlasserver.forcephot.queue import HIGH_PRIORITY_GROUP
 from atlasserver.forcephot.queue import RECALC_MAX_INTERVAL_SECONDS
+from atlasserver.forcephot.queue import Usage
+from atlasserver.forcephot.queue import usage_by_user
 from atlasserver.forcephot.queue import USAGE_HALF_LIFE_DAYS
-from atlasserver.forcephot.queue import user_usage_seconds
 from atlasserver.forcephot.queue import utcnow
 
 # Register your models here.
@@ -159,7 +160,21 @@ class GroupUserAdmin(UserAdmin):
     # sorts the list by the run time.
     @override
     def get_list_display(self, request: HttpRequest) -> t.Any:
-        return (*super().get_list_display(request), "usage_runtime", "usage_decayed")
+        # The usage that the queue order uses: older run time counts less. The column is a
+        # function of this request, and it reads the usage of all users one time for the page.
+        # A method of this class is the same object for each request, and it has no place for
+        # the usage of one request: it then makes one query for each row.
+        usage: dict[int, Usage] | None = None
+
+        @admin.display(description="Usage in the queue")
+        def usage_decayed(user: t.Any) -> str:
+            nonlocal usage
+            if usage is None:
+                usage = usage_by_user()
+            own = usage.get(user.pk)
+            return f"{0.0 if own is None else own.seconds / 3600:.1f} h"
+
+        return (*super().get_list_display(request), "usage_runtime", usage_decayed)
 
     @override
     def get_queryset(self, request: HttpRequest) -> t.Any:
@@ -178,13 +193,6 @@ class GroupUserAdmin(UserAdmin):
     @admin.display(description=f"Run time ({USAGE_HALF_LIFE_DAYS} days)", ordering="usage_runtime_sum")
     def usage_runtime(self, user: t.Any) -> str:
         return f"{(user.usage_runtime_sum or 0.0) / 3600:.1f} h"
-
-    # The usage that the queue order uses: older run time counts less. One query for each row of
-    # the page, because the weight of a record comes from its age, and the database does not
-    # calculate that in the same way on SQLite and MariaDB.
-    @admin.display(description="Usage in the queue")
-    def usage_decayed(self, user: t.Any) -> str:
-        return f"{user_usage_seconds(user.pk) / 3600:.1f} h"
 
     # A group gives its permissions to its members, so the action needs the permission to change
     # users. A staff member who can only view the users does not get the action.
