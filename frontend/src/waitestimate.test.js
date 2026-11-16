@@ -99,11 +99,11 @@ describe('estimateWaitSeconds with several slots for one user', () => {
 
     test('the tasks of the user that have started use slots of the user', () => {
         // 8 tasks of the user are in the 8 slots of one user, and the tasks of other users wait.
-        // The task at the front waits for one of the 8 to finish: one pass at the price of the queue.
+        // The task at the front waits for one of the 8 to finish: one pass at their price.
         const waiting = { queuepos: 0, ownqueued: ownqueue(1), runnerstatus: sharing({ distinct_queued_users: 5 }) };
 
-        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: 8 }), 60);
-        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: 7 }), 0);
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: Array(8).fill('FP') }), 60);
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: Array(7).fill('FP') }), 0);
         assert.equal(estimateWaitSeconds(waiting), 0);
     });
 
@@ -112,22 +112,33 @@ describe('estimateWaitSeconds with several slots for one user', () => {
         const seconds = estimateWaitSeconds({
             queuepos: 11,
             ownqueued: ownqueue(12),
-            ownstarted: 5,
+            ownstarted: Array(5).fill('FP'),
             runnerstatus: sharing(),
         });
 
         assert.equal(seconds, 2 * 60);
     });
 
-    test('there is no estimate when a pass of started tasks has no price', () => {
+    test('a pass has the price of the started tasks also', () => {
+        // 8 image requests are in the slots, and one light curve is ahead: the task waits for
+        // image requests. The mean of the 9 tasks is (8 * 900 + 60) / 9 seconds.
         const seconds = estimateWaitSeconds({
-            queuepos: 0,
-            ownqueued: ownqueue(1),
-            ownstarted: 8,
-            runnerstatus: sharing({ queued_by_request_type: undefined }),
+            queuepos: 1,
+            ownqueued: ownqueue(2),
+            ownstarted: Array(8).fill('IMGZIP'),
+            runnerstatus: sharing(),
         });
 
-        assert.equal(seconds, null);
+        assert.equal(seconds, (8 * 900 + 60) / 9);
+    });
+
+    test('there is no estimate when a started task in a full pass has no price', () => {
+        const waiting = { queuepos: 0, ownqueued: ownqueue(1), runnerstatus: sharing() };
+
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: Array(8).fill('SSOSTACK') }), null);
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: Array(8).fill(undefined) }), null);
+        // fewer started tasks than the slots of one user are no pass, and they need no price
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: Array(7).fill('SSOSTACK') }), 0);
     });
 
     test('a status with no maximum gives one slot to each user', () => {

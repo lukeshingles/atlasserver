@@ -1272,6 +1272,12 @@ class QueuePositions(APIView):
                 # counts the tasks that finished while its tab was hidden, and without this list
                 # a task that started is equal to a task that finished.
                 "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
+                # The request type of each of those tasks. A task of the caller that waits behind
+                # them waits for their run times, and the wait estimate of the queue page needs
+                # the types for that.
+                "startedtypes": {
+                    str(taskid): requesttype for taskid, queuepos, requesttype in owntasks if queuepos is None
+                },
                 # The usage of the caller in hours, as the queue order uses it; see
                 # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint
                 # gives the usage only to a browser session.

@@ -909,10 +909,11 @@ export function TaskPage() {
          */
         ownqueued: null,
         /**
-         * The number of the user's tasks that have started and have no queue position, from the
-         * same answer as ownqueued. The wait estimate counts them: they use slots of the user.
+         * The request type of each of the user's tasks that have started and have no queue
+         * position, from the same answer as ownqueued. The wait estimate counts them: they use
+         * slots of the user.
          */
-        ownstarted: 0,
+        ownstarted: [],
     });
 
     // The wait estimates read this status, and the site notice box reads it from the same store.
@@ -1183,7 +1184,9 @@ export function TaskPage() {
                 // itself counts positions below a given one and does not care about the order
                 // sorted so that the elementwise comparison below is meaningful; the estimate
                 // itself filters on position and does not care about the order
-                const ownstarted = (data.startedids ?? []).length;
+                // undefined for a task whose type the answer does not give: the estimate then
+                // has no price for the task, and it gives no value
+                const ownstarted = (data.startedids ?? []).map(taskid => data.startedtypes?.[String(taskid)]);
                 const ownqueued = Object.entries(data.queuepositions)
                     .map(([taskid, position]) => ({ position, requesttype: data.queuedtypes?.[taskid] }))
                     .sort((a, b) => a.position - b.position);
@@ -1214,7 +1217,9 @@ export function TaskPage() {
                         || ownqueued.some((task, index) => task.position !== previousqueued[index].position
                             || task.requesttype !== previousqueued[index].requesttype));
 
-                    if (!changed && !positionschanged && prevstate.ownstarted === ownstarted) {
+                    const startedchanged = prevstate.ownstarted.join() !== ownstarted.join();
+
+                    if (!changed && !positionschanged && !startedchanged) {
                         return null;
                     }
 
@@ -1223,7 +1228,7 @@ export function TaskPage() {
                     return {
                         results: changed ? newresults : prevstate.results,
                         ownqueued: positionschanged ? ownqueued : prevstate.ownqueued,
-                        ownstarted,
+                        ownstarted: startedchanged ? ownstarted : prevstate.ownstarted,
                     };
                 });
 

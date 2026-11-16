@@ -1715,7 +1715,10 @@ describe('TaskPage', () => {
             distinct_queued_users: 5,
             typical_runtime_seconds: { FP: 600 },
             queued_by_request_type: { FP: 20 },
-        }).answerfields = { startedids: [1, 2, 3, 4, 5, 6, 7, 8] };
+        }).answerfields = {
+            startedids: [1, 2, 3, 4, 5, 6, 7, 8],
+            startedtypes: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map((id) => [id, 'FP'])),
+        };
         const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
         mounted.push(root);
         await flush(120);

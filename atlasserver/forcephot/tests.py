@@ -542,12 +542,48 @@ class FairShareQueueTests(TestCase):
         task = self.add_queued(self.light, 1)[0]
         with mock.patch.object(taskrunner_main, "log_general"):
             taskrunner_main.mark_started(task)
-            taskrunner_main.mark_finished(task, error_msg=None)
+            # the order of do_task: the end of the attempt, and then the finish
             taskrunner_main.record_attempt_end(task, 100.0)
+            taskrunner_main.mark_finished(task, error_msg=None)
 
+        assert task.retry_after is None
         task.refresh_from_db()
         assert task.retry_after is None
         assert UsageDay.objects.get(user=self.light).seconds == 100.0
+
+    def test_a_start_removes_the_time_for_a_new_attempt(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(task)
+            taskrunner_main.record_attempt_end(task, 5.0)
+            assert Task.objects.get(pk=task.pk).retry_after is not None
+            taskrunner_main.mark_started(task)
+
+        assert Task.objects.get(pk=task.pk).retry_after is None
+
+    def test_a_slot_process_that_stops_with_no_record_gets_its_record_from_the_main_loop(self) -> None:
+        killed, recorded, done = self.add_queued(self.light, 3)
+        messages: list[str] = []
+        with mock.patch.object(taskrunner_main, "log_general"):
+            for task in (killed, recorded, done):
+                taskrunner_main.mark_started(task)
+            # the process of this task recorded the end of its attempt, and then it stopped with an error
+            taskrunner_main.record_attempt_end(recorded, 7.0)
+            taskrunner_main.record_attempt_end(done, 9.0)
+            taskrunner_main.mark_finished(done, error_msg=None)
+
+            # the system stopped the process of the first task after 120 seconds
+            for task in (killed, recorded, done):
+                taskrunner_main.record_abnormal_exit(task.pk, 120.0, logfunc=messages.append)
+            # a task that its user deleted
+            taskrunner_main.record_abnormal_exit(987654321, 120.0, logfunc=messages.append)
+
+        assert messages == [f"The slot process of task {killed.pk} stopped with no record of the end of its attempt"]
+        usage = UsageDay.objects.get(user=self.light)
+        assert (usage.seconds, usage.tasks) == (7.0 + 9.0 + 120.0, 3)
+        retry_after = Task.objects.get(pk=killed.pk).retry_after
+        assert retry_after is not None
+        assert retry_after > timezone.now(), "the task waits before its next attempt"
 
     def test_the_wait_before_a_new_attempt_is_two_times_longer_after_each_failure(self) -> None:
         waits = [taskqueue.retry_wait_seconds(attempts) for attempts in (1, 2, 3, 4, 5, 6, 500)]
@@ -753,6 +789,7 @@ class FairShareQueueTests(TestCase):
         calculate_queue_positions(running_taskids={tasks[0].pk})
         answer = self.queuepositions(self.light)
         assert sorted(answer["startedids"]) == [tasks[0].pk, tasks[1].pk], answer
+        assert answer["startedtypes"] == {str(tasks[0].pk): "FP", str(tasks[1].pk): "FP"}, answer
         assert list(answer["queuepositions"]) == [str(tasks[2].pk)], answer
         assert self.queuepositions(self.light2)["queuepositions"] == {str(othertask.pk): 0}
 
@@ -4247,6 +4284,20 @@ class TaskRunnerEmailTests(TestCase):
         taskrunner_main.send_email_if_needed(task=finishing, logfunc=lambda _msg: None)
 
         assert not django_mail.outbox
+
+    def test_two_slots_that_finish_a_batch_at_the_same_time_send_one_email(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        # the two last tasks of the batch are finished before one of the two slots reads the batch
+        first = self.make_batch_task(finished=True)
+        second = self.make_batch_task(finished=True)
+        logged: list[str] = []
+
+        taskrunner_main.send_email_if_needed(task=first, logfunc=logged.append)
+        taskrunner_main.send_email_if_needed(task=second, logfunc=logged.append)
+
+        assert len(django_mail.outbox) == 1, [message.subject for message in django_mail.outbox]
+        assert logged[-1] == "A different slot sends the email for this batch", logged
 
     def test_email_sent_once_the_batch_is_complete(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
@@ -8999,7 +9050,8 @@ class NoDataTaskTests(TestCase):
         task.refresh_from_db()
         assert task.error_msg == "No data returned"
         assert task.finishtimestamp is not None, "the task stays queued, so the runner will run it again"
-        assert not sleep.called, "the runner took the retry path"
+        assert not sleep.called
+        assert task.retry_after is None, "the runner took the retry path"
 
 
 class ResultFileProblemTests(SimpleTestCase):

@@ -99,6 +99,10 @@ class Task(models.Model):
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name="MJD max")
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
+    # True after a slot of the task runner took the email of the batch of this task for itself;
+    # see taskrunner.main.send_email_if_needed. Two tasks of one batch can finish in two slots at
+    # the same time, and only one slot must send the email.
+    email_sent = models.BooleanField(default=False, editable=False)
     send_email = models.BooleanField("Email me when completed", default=True)
     from_api = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)

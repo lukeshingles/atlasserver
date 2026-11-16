@@ -519,16 +519,21 @@ def mark_started(task) -> None:
     # whole second, and two tasks of one user can start in one second: without this field, the
     # second start does not change the ETag, and the queue page gets a 304 for a list in which
     # the task still waits.
+    #
+    # retry_after has no value during an attempt. record_attempt_end writes it at the end, and
+    # thus a value shows that the end of this attempt is recorded; see record_abnormal_exit.
     Task.objects.filter(pk=task.id).update(
         starttimestamp=starttimestamp,
         attempt_count=models.F("attempt_count") + 1,
         queuepos_relative=None,
+        retry_after=None,
         task_modified_datetime=now,
     )
 
     task.starttimestamp = starttimestamp
     task.attempt_count += 1
     task.queuepos_relative = None
+    task.retry_after = None
     task.task_modified_datetime = now
 
 
@@ -548,11 +553,16 @@ def mark_finished(task, error_msg: str | None) -> None:
     # task_modified_datetime is written for the reason in mark_started: two tasks of one user can
     # finish in one second.
     Task.objects.filter(pk=task.id).update(
-        finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg, task_modified_datetime=now
+        finishtimestamp=finishtimestamp,
+        queuepos_relative=None,
+        retry_after=None,
+        error_msg=error_msg,
+        task_modified_datetime=now,
     )
 
     task.finishtimestamp = finishtimestamp
     task.queuepos_relative = None
+    task.retry_after = None
     task.task_modified_datetime = now
     task.error_msg = error_msg
 
@@ -615,6 +625,13 @@ def send_email_if_needed(task, logfunc) -> None:
             localresultfilelist.append(localresultfile)
 
     if batchtasks_unfinished == 0:
+        # Two tasks of one batch can finish in two slots at the same time. Each slot then finds
+        # no unfinished task in the batch. The update below changes rows for the first slot only,
+        # and thus only that slot sends the email.
+        if not batchtasks.filter(email_sent=False).update(email_sent=True):
+            logfunc("A different slot sends the email for this batch")
+            return
+
         logfunc(f"Sending email to {task.user.email} containing {batchtaskcount} tasks")
 
         message = EmailMessage(
@@ -799,6 +816,30 @@ def record_attempt_end(task, seconds: float, logfunc=log_general) -> None:
         logfunc(f"ERROR: could not record the end of the attempt: {ex}")
 
 
+def record_abnormal_exit(taskid: int, seconds: float, logfunc=log_general) -> None:
+    """Record the end of an attempt whose slot process stopped with no record of that end.
+
+    do_task records the end of its attempt also when the attempt raises an exception. A process
+    that the system stops (for example when the memory is full) records nothing. The task then
+    has no time for its next attempt, and its run time is in no usage record: it starts again at
+    once, with no cost. The main loop calls this for a slot process with an exit code that is
+    not zero, and `seconds` is the time for which the process had the slot.
+
+    The task has a record of this attempt if it has a time for its next attempt: mark_started
+    removes that time at the start of an attempt.
+    """
+    try:
+        task = Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).first()
+        if task is None or task.retry_after is not None:
+            return
+    except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
+        logfunc(f"ERROR: could not read the task of a slot that stopped: {ex}")
+        return
+
+    logfunc(f"The slot process of task {taskid} stopped with no record of the end of its attempt")
+    record_attempt_end(task, seconds, logfunc=logfunc)
+
+
 def start_in_slot(task: Task, slotid: int) -> mp.Process:
     """Start the task in a slot, and return the process of the slot.
 
@@ -877,10 +918,13 @@ def do_task(task, slotid: int, started: bool = False) -> None:
         else:
             # left unfinished on purpose, with no limit on the attempts: the dispatch loop picks
             # the task up again, so a task that fails while the remote host is down completes
-            # when the host is back
-            waittime = 5
-            logfunc(f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries...")
-            time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
+            # when the host is back. The slot becomes free at once: the wait before the next
+            # attempt is in Task.retry_after, and a task that waits there uses no slot.
+            waittime = taskqueue.retry_wait_seconds(task.attempt_count)
+            logfunc(
+                "ERROR: Task was not completed successfully. "
+                f"The task waits {waittime:.0f} seconds before the next attempt."
+            )
 
 
 def remove_old_tasks(
@@ -1091,6 +1135,7 @@ def main() -> None:
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
     procs_userids: dict[int, int] = {}  # user_id of the task each slot runs
     procs_taskids: dict[int, int] = {}  # id of the task each slot runs
+    procs_starttimes: dict[int, float] = {}  # time.perf_counter() at the start of each slot
 
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
@@ -1152,11 +1197,15 @@ def main() -> None:
         # renumbering, and the renumbering must not have the task of that slot as a task in a slot.
         for slotid, proc in enumerate(procs):
             if proc is not None and proc.exitcode is not None:
+                exitcode = proc.exitcode
                 proc.join()
                 proc.close()
                 procs[slotid] = None
                 procs_userids.pop(slotid)
-                procs_taskids.pop(slotid)
+                taskid = procs_taskids.pop(slotid)
+                slotseconds = time.perf_counter() - procs_starttimes.pop(slotid)
+                if exitcode != 0:
+                    record_abnormal_exit(taskid, slotseconds, logfunc=logfunc)
                 slot_became_free = True
                 if dispatch_waits_since is None:
                     dispatch_waits_since = time.perf_counter()
@@ -1246,10 +1295,25 @@ def main() -> None:
         printedwaiting = False
         logfunc(f"Unfinished tasks in queue: {queuedtasks.count()}")
         logfunc(f"Running task {task.id} in slot {slotid}")
+        # Caught, for the reason the renumbering above is: an exception here leaves main(), and
+        # the interpreter then waits for every running worker before the supervisor can start
+        # the task runner again. The slot stays free. If the start is in the database and the
+        # process is not there, the task has no position: the next renumbering gives it one.
+        try:
+            proc = start_in_slot(task, slotid)
+        except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
+            logfunc(f"ERROR: could not start task {task.id} in slot {slotid}: {ex}")
+            slot_became_free = True
+            # the next start waits for the renumbering, and thus an error that stays does not
+            # give a new attempt at a start on each pass of this loop
+            if dispatch_waits_since is None:
+                dispatch_waits_since = time.perf_counter()
+            continue
+
+        procs[slotid] = proc
         procs_userids[slotid] = task.user_id
         procs_taskids[slotid] = task.id
-
-        procs[slotid] = start_in_slot(task, slotid)
+        procs_starttimes[slotid] = time.perf_counter()
 
 
 if __name__ == "__main__":

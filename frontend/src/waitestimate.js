@@ -37,10 +37,10 @@
  * `ownqueued` is the caller's other queued tasks as {position, requesttype} pairs, or null while
  * that is not yet known — the two are different answers and an empty array only means the first.
  *
- * `ownstarted` is the number of the caller's tasks that have started and have no position (the
- * length of `startedids` in the queue positions answer). They use slots of the caller.
+ * `ownstarted` is the request type of each of the caller's tasks that have started and have no
+ * position (`startedtypes` in the queue positions answer). They use slots of the caller.
  */
-export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = 0, runnerstatus }) {
+export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = [], runnerstatus }) {
     // A queue that is not being dispatched from has no wait to report. `maintenance` means the
     // hourly sweep is blocking the runner's loop, so nothing starts for its duration and the slot
     // figures are frozen -- the banner already says so, and a countdown beside it would be against
@@ -106,18 +106,21 @@ export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = 0, runne
     // tasks in them, the task at the front waits for one of the eight to finish: that is one
     // pass. Some of these tasks can wait for a new attempt and not be in a slot. The count is
     // then too high, and the estimate is too long, which is the safe direction.
-    const ownpasses = Math.floor((ownahead.length + Math.max(0, ownstarted)) / ownslots);
+    const ownpasses = Math.floor((ownahead.length + ownstarted.length) / ownslots);
     let ownseconds = 0;
     if (ownpasses > 0) {
-        // The types of the tasks that have started are not known here. With no own task ahead,
-        // a pass has the price of the queue.
-        const ownprice = ownahead.length > 0
-            ? owntotal / ownahead.length
-            : meanQueuedRuntimeSeconds(runnerstatus.queued_by_request_type, runtimes);
-        if (ownprice == null) {
-            return null;
+        // A pass has the mean price of the started tasks and the own tasks ahead together. Eight
+        // image requests in the slots and one light curve ahead are passes of image requests.
+        let startedtotal = 0;
+        for (const requesttype of ownstarted) {
+            const median = runtimes?.[requesttype];
+            if (!(median > 0)) {
+                // a started task of this user cannot be priced, and it has a slot of the user
+                return null;
+            }
+            startedtotal += median;
         }
-        ownseconds = ownpasses * ownprice;
+        ownseconds = ownpasses * (owntotal + startedtotal) / (ownahead.length + ownstarted.length);
     }
 
     // Everybody else's drain in whole passes, not fractions of one. With fifteen other users'
