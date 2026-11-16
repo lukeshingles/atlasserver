@@ -1040,6 +1040,68 @@ class UsageAdminTests(TestCase):
         assert names[:2] == ["aa-heavy", "mm-middle"], names
 
 
+class ShortTermStatsLoadTests(TestCase):
+    """The stats page gives the use of the slots and the demand of the last seven days."""
+
+    def setUp(self) -> None:
+        # the view keeps its answer for 15 minutes, and the cache is the same for all tests of a process
+        caches["usagestats"].clear()
+        self.user = User.objects.create_user(username="statsload", email="statsload@example.com", password=None)
+        # the time of the request: 12:00 UTC of today
+        self.now = dt.datetime.combine(timezone.now().astimezone(dt.UTC).date(), dt.time(12), tzinfo=dt.UTC)
+
+    def page(self) -> str:
+        with mock.patch.object(views, "utcnow", return_value=self.now), mock.patch.object(runnerstatus, "NUMSLOTS", 2):
+            response = self.client.get(reverse("statsshortterm"))
+        assert response.status_code == 200, response.status_code
+        return response.content.decode()
+
+    def test_the_use_of_the_slots_comes_from_the_usage_records(self) -> None:
+        # The records of today and of the six days before it are 6.5 days at 12:00 UTC. Two slots
+        # have 13 slot-days in that time, and the attempts ran for 6.5 slot-days.
+        slotday = 86400.0
+        taskqueue.charge_usage(self.user.pk, 4 * slotday, when=self.now - dt.timedelta(days=6))
+        taskqueue.charge_usage(self.user.pk, 2.5 * slotday, when=self.now)
+        # a record of the day before the window is not in the use
+        taskqueue.charge_usage(self.user.pk, 9 * slotday, when=self.now - dt.timedelta(days=7))
+
+        assert "Use of the task runner slots: 50.0%" in self.page()
+
+    def test_the_demand_uses_the_run_time_of_the_tasks_that_finished_in_the_window(self) -> None:
+        def task(submitted_days_ago: float, runhours: float | None) -> None:
+            submitted = self.now - dt.timedelta(days=submitted_days_ago)
+            started = None if runhours is None else submitted + dt.timedelta(hours=1)
+            finished = None if started is None or runhours is None else started + dt.timedelta(hours=runhours)
+            Task.objects.create(
+                user=self.user, ra=1.0, dec=2.0, timestamp=submitted, starttimestamp=started, finishtimestamp=finished
+            )
+
+        # four requests in the window: two finished, with short run times, and two wait
+        task(3, 30)
+        task(3, 50)
+        task(2, None)
+        task(1, None)
+        # a long task from before the window finished in the window
+        task(10, 100)
+
+        content = self.page()
+
+        # The mean run time of the three tasks that finished in the window is 60 hours. The four
+        # requests thus need 240 hours, and two slots have 336 hours in seven days. The mean of
+        # the two finished requests of the window is 40 hours, which gives 47.6 %.
+        assert "Average task running time: 216000.0s" in content, content
+        assert "as a part of the capacity): 71.4%" in content, content
+
+    def test_the_page_has_no_demand_when_no_task_finished(self) -> None:
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=self.now - dt.timedelta(days=1))
+
+        content = self.page()
+
+        assert "as a part of the capacity): -" in content, content
+        assert "Average task running time: -" in content, content
+        assert "Use of the task runner slots: 0.0%" in content, content
+
+
 class UsageRecordsMigrationTests(TestCase):
     def test_the_migration_fills_the_usage_records_from_the_finished_tasks(self) -> None:
         migration = importlib.import_module("atlasserver.forcephot.migrations.0011_usage_day")

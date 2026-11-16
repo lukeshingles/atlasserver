@@ -33,7 +33,10 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
+from django.db.models import DurationField
+from django.db.models import F
 from django.db.models import Max
+from django.db.models import Sum
 from django.db.models.functions import Trunc
 from django.http import FileResponse
 from django.http import HttpResponse
@@ -82,6 +85,7 @@ from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.models import UsageDay
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
@@ -90,6 +94,7 @@ from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.queue import USAGE_HALF_LIFE_DAYS
 from atlasserver.forcephot.queue import user_usage_seconds
+from atlasserver.forcephot.queue import utcnow
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import count_in_window
@@ -1127,8 +1132,9 @@ def statslongterm(request):
 
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
-    now = dt.datetime.now(dt.UTC)
-    sevendaytasks = Task.objects.filter(timestamp__gt=now - dt.timedelta(days=7))
+    now = utcnow()
+    windowstart = now - dt.timedelta(days=7)
+    sevendaytasks = Task.objects.filter(timestamp__gt=windowstart)
     sevendaytaskcount = sevendaytasks.count()
 
     dictparams: dict[str, t.Any] = {
@@ -1164,22 +1170,39 @@ def statsshortterm(request):
         dictparams["sevendayavgwaittimeuserfirst"] = mean_seconds_str(
             [tsk.waittime() for tsk in finished if tsk.userqueuedtasks_on_submit == 0]
         )
-
-        sevenday_runtimes = [tsk.runtime() for tsk in finished]
-        dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
-        num_job_processors = runnerstatus.NUMSLOTS
-        # one definition of which values count, shared with the string above
-        sevenday_mean_runtime = mean_seconds(sevenday_runtimes) or 0.0
-        dictparams["sevendayloadpercent"] = (
-            f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
-        )
     else:
-        dictparams |= {
-            "sevendayavgwaittime": "-",
-            "sevendayavgwaittimeuserfirst": "-",
-            "sevendayavgruntime": "-",
-            "sevendayloadpercent": "0%",
-        }
+        dictparams |= {"sevendayavgwaittime": "-", "sevendayavgwaittimeuserfirst": "-"}
+
+    # The mean run time is from the tasks that finished in the window, and not from the tasks
+    # that were submitted in the window and are finished. When the queue is full, the tasks that
+    # were submitted in the window and wait the longest are not finished. Those are the tasks
+    # of the users with the most usage, which are the long tasks, and a mean without them is
+    # too low.
+    ranthisweek = Task.objects.filter(finishtimestamp__gt=windowstart, starttimestamp__isnull=False).aggregate(
+        runtime=Sum(F("finishtimestamp") - F("starttimestamp"), output_field=DurationField()), taskcount=Count("id")
+    )
+    meanruntime = (
+        ranthisweek["runtime"].total_seconds() / ranthisweek["taskcount"] if ranthisweek["taskcount"] else None
+    )
+    dictparams["sevendayavgruntime"] = "-" if meanruntime is None else f"{meanruntime:.1f}s"
+
+    # The slot count is the current one. After a change of the slot count, the two values below
+    # use the new count for the full window, and they are correct again when the window is past.
+    numslots = runnerstatus.NUMSLOTS
+
+    # The demand: the run time that the requests of the window need, as a part of the run time
+    # that the slots have in the window. A value of more than 100 % is a queue that grows.
+    dictparams["sevendaydemandpercent"] = (
+        "-" if meanruntime is None else f"{100.0 * sevendaytaskcount * meanruntime / (7 * 86400.0 * numslots):.1f}%"
+    )
+
+    # The use of the slots: the run time of all attempts, from the usage records of the task
+    # runner (forcephot.queue.charge_usage). A record is for one day in UTC, and thus the window
+    # starts at the start of a day: it has six full days and the part of today that is past.
+    firstday = now.date() - dt.timedelta(days=6)
+    usedseconds = UsageDay.objects.filter(day__gte=firstday).aggregate(Sum("seconds"))["seconds__sum"] or 0.0
+    recordseconds = (now - dt.datetime.combine(firstday, dt.time(0), tzinfo=dt.UTC)).total_seconds()
+    dictparams["sevendayslotusepercent"] = f"{100.0 * usedseconds / (recordseconds * numslots):.1f}%"
 
     return render(request, "statsshortterm.html", dictparams)
 
