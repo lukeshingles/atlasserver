@@ -81,14 +81,14 @@ EXPECTED_RUNTIME_MIN_TASKS: t.Final = 5
 # mean. The value is the mean run time of a task on the production server in November 2026.
 DEFAULT_TASK_SECONDS: t.Final = 420.0
 
-# A task whose attempt failed gets no queue position for this number of seconds after the start of
+# A task whose attempt failed gets no queue position for this number of seconds after the end of
 # that attempt, and thus it cannot start. The time is two times longer after each next failed
-# attempt, to the maximum. A task that always fails thus has a slot for some seconds in each 10
-# minutes, and it does not keep the slot.
+# attempt, to the maximum. A task that always fails thus does not keep a slot: it has a wait of
+# 10 minutes between two attempts.
 #
-# The failed attempts are not a cost in the usage of the user. While the remote host is away,
-# each attempt of each user fails, and a cost for each attempt then removes the differences in
-# usage between the users.
+# A failed attempt adds its real run time to the usage of the user, as each attempt does, and
+# it adds no other cost. While the remote host is away, each attempt of each user fails. A fixed
+# cost for each failed attempt then removes the differences in usage between the users.
 RETRY_WAIT_SECONDS: t.Final = 30.0
 RETRY_WAIT_MAX_SECONDS: t.Final = 600.0
 
@@ -285,7 +285,7 @@ def expected_task_seconds(usage: "Mapping[int, Usage]") -> "Callable[[int], floa
 
 
 def retry_wait_seconds(attempts: int) -> float:
-    """Return how long a task waits for a new attempt after the start of its failed attempt number `attempts`."""
+    """Return the seconds that a task waits for a new attempt after the end of failed attempt number `attempts`."""
     # the limit of the exponent keeps the power in the range of a float for a task with many attempts
     return min(RETRY_WAIT_MAX_SECONDS, RETRY_WAIT_SECONDS * 2 ** min(attempts - 1, 10))
 
@@ -441,11 +441,11 @@ def calculate_queue_positions(
     the two waits increase together.
 
     A task in a slot has no position. A task that has started and is not in a slot waits for a
-    new attempt (see taskrunner.main.do_task). It has no position for a time after the start of
-    its failed attempt (retry_wait_seconds), and after that it gets a position as the other tasks
-    do. Thus a task that always fails does not keep a slot. The renumbering at an interval of
-    RECALC_MAX_INTERVAL_SECONDS gives the position, and the wait is thus longer by that interval
-    at most.
+    new attempt (see taskrunner.main.do_task). It has no position before the time in its field
+    retry_after, which is the end of its failed attempt plus retry_wait_seconds. After that time
+    it gets a position as the other tasks do. Thus a task that always fails does not keep a slot.
+    The renumbering at an interval of RECALC_MAX_INTERVAL_SECONDS gives the position, and the
+    wait is thus longer by that interval at most.
 
     The task runner starts the task with the lowest position whose user is below the maximum
     number of slots (taskrunner.main.next_task). The positions give the real start order, and
@@ -472,9 +472,7 @@ def calculate_queue_positions(
         return task.starttimestamp is not None if running_taskids is None else task.id in running_taskids
 
     def waits_for_retry(task: Task) -> bool:
-        if task.attempt_count < 1 or task.starttimestamp is None:
-            return False
-        return now < task.starttimestamp + dt.timedelta(seconds=retry_wait_seconds(task.attempt_count))
+        return task.retry_after is not None and now < task.retry_after
 
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent

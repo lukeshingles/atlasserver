@@ -128,6 +128,11 @@ class Task(models.Model):
     attempt_count = models.IntegerField(default=0, verbose_name="Execution attempts")
 
     queuepos_relative = models.IntegerField(null=True, blank=True, default=None, verbose_name="Queue position")
+    # After an attempt that did not finish the task, the task gets no queue position before this
+    # time, and thus it cannot start; see forcephot.queue.retry_wait_seconds. The task runner
+    # writes the time at the end of each attempt. The value is None for a task with no attempt,
+    # and for a task whose process stopped before the end of its attempt.
+    retry_after = models.DateTimeField(null=True, blank=True, default=None, editable=False)
     userqueuedtasks_on_submit = models.IntegerField(
         null=True, blank=True, default=None, verbose_name="User queued tasks when submitted", editable=False
     )

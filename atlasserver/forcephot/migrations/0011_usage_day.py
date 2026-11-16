@@ -1,5 +1,7 @@
 """Make the table of the usage records, and fill it from the tasks that the database has.
 
+This migration also adds the time before which a task does not start again after a failed attempt.
+
 The queue order reads the usage of each user from this table; see forcephot.queue.charge_usage.
 With an empty table, each user has no usage at the first start of the new task runner, and the
 users with the most usage then get the same place as all other users.
@@ -80,4 +82,9 @@ class Migration(migrations.Migration):
         ),
         # The reverse operation does nothing: the reverse of CreateModel deletes the table.
         migrations.RunPython(fill_usage_records, migrations.RunPython.noop),
+        migrations.AddField(
+            model_name="task",
+            name="retry_after",
+            field=models.DateTimeField(blank=True, default=None, editable=False, null=True),
+        ),
     ]

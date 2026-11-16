@@ -88,10 +88,10 @@ users, and the fair share applies between the members. The maximum of 8 slots al
 member. Thus 3 members with large batches use all 24 slots, and the other users then get no slot.
 
 A task that fails with no result starts again without a limit. It waits before each new attempt:
-30 seconds after the first failure, and two times longer after each next failure, to a maximum
-of 10 minutes (`RETRY_WAIT_SECONDS` and `RETRY_WAIT_MAX_SECONDS`). Thus a task that always fails
-does not keep a slot. The failed attempts are not a cost in the usage of the user, because each
-attempt of each user fails while the remote host is away.
+30 seconds after the end of the first failed attempt, and two times longer after each next
+failure, to a maximum of 10 minutes (`RETRY_WAIT_SECONDS` and `RETRY_WAIT_MAX_SECONDS`). Thus a
+task that always fails does not keep a slot. A failed attempt adds its real run time to the usage
+of its user, as each attempt does, and it adds no other cost.
 
 The list of users in the admin site (`/admin/auth/user/`) has two columns for the usage. "Run
 time (7 days)" is the run time with no decay, and a click on its header sorts the list. "Usage in

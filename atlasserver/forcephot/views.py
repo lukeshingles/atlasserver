@@ -85,7 +85,6 @@ from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
-from atlasserver.forcephot.queue import HIGH_PRIORITY_GROUP
 from atlasserver.forcephot.queue import next_queuepos_relative
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
@@ -1252,12 +1251,6 @@ class QueuePositions(APIView):
                 # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint
                 # gives the usage only to a browser session.
                 "usagehours": round(user_usage_seconds(request.user.pk) / 3600, 1),
-                # True for a member of the high priority group, whose tasks have the first
-                # positions.
-                "prioritytier": request.user.groups.filter(name=HIGH_PRIORITY_GROUP).exists(),
-                # Always 0. The positions have no part that a caller must subtract, and a script
-                # that subtracts this value from a position gets the position.
-                "tierstart": 0,
             }
         )
 

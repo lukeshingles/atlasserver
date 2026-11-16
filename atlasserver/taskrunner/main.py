@@ -708,9 +708,13 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     # gives one user a maximum of MAX_USER_SLOTS slots, so the effective concurrency is
     # min(numslots, this times that maximum). A fact about the queue, counted on the runner's own
     # timescale instead of once per request from every open queue page.
+    #
+    # A user counts only with a task that can use a slot: a task with a queue position, or a task
+    # in a slot. A user whose tasks all wait for a new attempt after a failure fills no slot.
+    canuseslot = models.Q(queuepos_relative__isnull=False) | models.Q(id__in=list(procs_taskids.values()))
     queuestats = Task.queued().aggregate(
         queued_task_count=models.Count("id"),
-        distinct_queued_users=models.Count("user_id", distinct=True),
+        distinct_queued_users=models.Count("user_id", distinct=True, filter=canuseslot),
         oldest_queued=models.Min("timestamp"),
     )
     oldest_queued = queuestats["oldest_queued"]
@@ -774,17 +778,25 @@ def handler(signal_received, frame):
     sys.exit(0)
 
 
-def charge_attempt(task, seconds: float, logfunc=log_general) -> None:
-    """Add the run time of one attempt to the usage of the user of the task.
+def record_attempt_end(task, seconds: float, logfunc=log_general) -> None:
+    """Record the end of one attempt at the task, which ran for this number of seconds.
 
-    The queue order reads the usage; see forcephot.queue.charge_usage. An exception does not go
-    out of this function: an error of the usage records must not stop the finish of a task, whose
-    result is there.
+    The run time goes into the usage of the user of the task; see forcephot.queue.charge_usage.
+    This is the real time for which the attempt had a slot, also for an attempt that failed.
+
+    A task that is not finished gets the time of its next possible attempt (Task.retry_after).
+    The wait is from the end of the attempt and not from its start: an attempt can run for hours
+    before it fails, and a wait from its start is then over at its end.
+
+    An exception does not go out of this function: an error of these records must not stop the
+    finish of a task, whose result is there.
     """
     try:
         taskqueue.charge_usage(task.user_id, seconds)
-    except Exception as ex:  # noqa: BLE001 (the result of the task does not depend on the usage records)
-        logfunc(f"ERROR: could not record the usage of the task: {ex}")
+        retry_after = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=taskqueue.retry_wait_seconds(task.attempt_count))
+        Task.objects.filter(pk=task.id, finishtimestamp__isnull=True).update(retry_after=retry_after)
+    except Exception as ex:  # noqa: BLE001 (the result of the task does not depend on these records)
+        logfunc(f"ERROR: could not record the end of the attempt: {ex}")
 
 
 def start_in_slot(task: Task, slotid: int) -> mp.Process:
@@ -835,7 +847,7 @@ def do_task(task, slotid: int, started: bool = False) -> None:
         # failed, an attempt at a task that its user cancelled, and an attempt that stopped with
         # an exception. One call for all the cases, and thus no case is without its usage. An
         # exception continues after the call, and it stops the process of the slot.
-        charge_attempt(task, runtask_duration, logfunc=logfunc)
+        record_attempt_end(task, runtask_duration, logfunc=logfunc)
 
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
@@ -1094,8 +1106,9 @@ def main() -> None:
     # position: an attempt that failed, or a process that stopped. That task waits for a position
     # before it can start again; see next_task.
     slot_became_free = False
-    # No task starts between the end of an attempt and the next renumbering.
-    dispatch_waits_for_renumbering = False
+    # No task starts between the end of an attempt and the next renumbering that succeeds. The
+    # value is the time at which the wait started, or None.
+    dispatch_waits_since: float | None = None
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -1145,7 +1158,8 @@ def main() -> None:
                 procs_userids.pop(slotid)
                 procs_taskids.pop(slotid)
                 slot_became_free = True
-                dispatch_waits_for_renumbering = True
+                if dispatch_waits_since is None:
+                    dispatch_waits_since = time.perf_counter()
 
                 numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
@@ -1185,26 +1199,31 @@ def main() -> None:
                 # request and leave dispatch ordering by stale positions until the backstop.
                 last_recalc_generation = seen_generation
                 # also only on success: the task of the free slot has no position until a
-                # renumbering gives it one
+                # renumbering gives it one, and the free slot waits for the new order
                 slot_became_free = False
+                dispatch_waits_since = None
 
             # stamped even on failure, so a persistent one is retried on an interval rather than on
             # every pass of the loop
             last_queuerecalctime = time.perf_counter()
-            # also after a failure: with old positions, the order of the starts is wrong, but
-            # with no dispatch, no task starts
-            dispatch_waits_for_renumbering = False
 
         queuedtasks = Task.queued()
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()
 
-        if dispatch_waits_for_renumbering:
+        if dispatch_waits_since is not None:
             # An attempt ended, and its run time is in the usage of its user now. The positions
             # are from before that. A task that starts cannot be stopped, and thus the free slot
-            # waits for the renumbering, which is RECALC_CHECK_INTERVAL_SECONDS away at most.
-            continue
+            # waits for a renumbering that succeeds, which is RECALC_CHECK_INTERVAL_SECONDS away
+            # in the usual condition.
+            #
+            # The wait has a limit. If each renumbering fails, the positions stay old, and a
+            # start in a wrong order is then better than no start.
+            if (time.perf_counter() - dispatch_waits_since) < taskqueue.RECALC_MAX_INTERVAL_SECONDS:
+                continue
+            logfunc("WARNING: the queue positions are old, and the task runner starts tasks with them")
+            dispatch_waits_since = None
 
         slotid = procs.index(None) if None in procs else -1
 

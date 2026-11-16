@@ -209,7 +209,7 @@ class HighPriorityQueueTests(TestCase):
         self.client.force_login(user)
         return self.client.get(reverse("queuepositions")).json()
 
-    def test_the_queue_positions_tell_a_member_and_count_the_tasks_of_the_members(self) -> None:
+    def test_the_queue_positions_count_the_tasks_of_the_members(self) -> None:
         for _ in range(5):
             Task.objects.create(user=self.member, ra=10.0, dec=20.0)
         Task.objects.create(user=self.public_low, ra=10.0, dec=20.0)
@@ -220,10 +220,9 @@ class HighPriorityQueueTests(TestCase):
 
         # the 5 tasks of the member and the task of public_low start before this task
         assert answer["queuepositions"] == {str(publictask.pk): 6}, answer
-        assert (answer["prioritytier"], answer["tierstart"]) == (False, 0), answer
-
-        answer = self.queuepositions(self.member)
-        assert (answer["prioritytier"], answer["tierstart"]) == (True, 0), answer
+        # the position is the full answer: it has no start of a tier that a reader must subtract
+        assert "tierstart" not in answer
+        assert "prioritytier" not in answer
 
     def test_the_status_file_gives_the_maximum_number_of_slots_of_one_user(self) -> None:
         Task.objects.create(user=self.member, ra=10.0, dec=20.0)
@@ -366,9 +365,13 @@ class FairShareQueueTests(TestCase):
         self.run_attempt(finished, lambda: (None, "No data returned"))
         assert UsageDay.objects.get(user=self.light).tasks == 1
 
-        # an attempt with no result and no error: the task stays in the queue
+        # an attempt with no result and no error: the task stays in the queue, and it waits
+        # before its next attempt
         self.run_attempt(failed, lambda: (None, None))
-        assert Task.objects.get(pk=failed.pk).finishtimestamp is None
+        failed.refresh_from_db()
+        assert failed.finishtimestamp is None
+        assert failed.retry_after is not None
+        assert failed.retry_after > timezone.now()
         assert UsageDay.objects.get(user=self.light).tasks == 2
 
         # the user deletes the task while it runs
@@ -490,7 +493,7 @@ class FairShareQueueTests(TestCase):
             assert [task.pk for task in self.waiting()] == before
             assert dict(Task.queued().values_list("pk", "task_modified_datetime")) == modified
 
-    def test_a_task_waits_before_a_new_attempt_and_the_failed_attempts_are_not_usage(self) -> None:
+    def test_a_task_waits_before_a_new_attempt_and_a_failed_attempt_adds_only_its_run_time(self) -> None:
         failing = self.add_queued(self.heavy, 1)[0]
         other = self.add_queued(self.light, 2)
         calculate_queue_positions()
@@ -500,18 +503,51 @@ class FairShareQueueTests(TestCase):
         for _ in range(2):
             with mock.patch.object(taskrunner_main, "log_general"):
                 taskrunner_main.mark_started(failing)
+                taskrunner_main.record_attempt_end(failing, 5.0)
         assert taskrunner_main.next_task([], []) == other[0], "a task with no position cannot start"
 
         # the wait after the second failed attempt is 60 seconds, and the task has no position in it
         calculate_queue_positions(running_taskids=set())
+        assert [task.pk for task in self.waiting()] == [other[0].pk, other[1].pk]
+        with mock.patch.object(taskqueue, "utcnow", return_value=timezone.now() + dt.timedelta(seconds=55)):
+            calculate_queue_positions(running_taskids=set())
         assert [task.pk for task in self.waiting()] == [other[0].pk, other[1].pk]
 
         later = timezone.now() + dt.timedelta(seconds=61)
         with mock.patch.object(taskqueue, "utcnow", return_value=later):
             calculate_queue_positions(running_taskids=set())
 
-        # the failed attempts are no cost: the task has the place of its submission time again
-        assert [task.pk for task in self.waiting()] == [failing.pk, other[0].pk, other[1].pk]
+        # The two failed attempts ran for 5 seconds each, and that is all their cost: the task
+        # is after the first task of light, which has no usage, and before the second.
+        assert taskqueue.usage_by_user()[self.heavy.pk].seconds == 10.0
+        assert [task.pk for task in self.waiting()] == [other[0].pk, failing.pk, other[1].pk]
+
+    def test_the_wait_before_a_new_attempt_starts_at_the_end_of_the_failed_attempt(self) -> None:
+        # an attempt that ran for 4 hours before it failed: a wait from its start is over at its end
+        task = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(task)
+            Task.objects.filter(pk=task.pk).update(starttimestamp=timezone.now() - dt.timedelta(hours=4))
+            before = timezone.now()
+            taskrunner_main.record_attempt_end(task, 4 * 3600.0)
+
+        task.refresh_from_db()
+        assert task.retry_after is not None
+        wait = (task.retry_after - before).total_seconds()
+        assert 30 <= wait < 35, wait
+        calculate_queue_positions(running_taskids=set())
+        assert self.waiting() == []
+
+    def test_a_finished_task_gets_no_time_for_a_new_attempt(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(task)
+            taskrunner_main.mark_finished(task, error_msg=None)
+            taskrunner_main.record_attempt_end(task, 100.0)
+
+        task.refresh_from_db()
+        assert task.retry_after is None
+        assert UsageDay.objects.get(user=self.light).seconds == 100.0
 
     def test_the_wait_before_a_new_attempt_is_two_times_longer_after_each_failure(self) -> None:
         waits = [taskqueue.retry_wait_seconds(attempts) for attempts in (1, 2, 3, 4, 5, 6, 500)]
@@ -576,10 +612,7 @@ class FairShareQueueTests(TestCase):
         with mock.patch.object(taskrunner_main, "log_general"):
             for task in tasks[:2]:
                 taskrunner_main.mark_started(task)
-        # the two tasks started an hour before the restart
-        Task.objects.filter(pk__in=[task.pk for task in tasks[:2]]).update(
-            starttimestamp=timezone.now() - dt.timedelta(hours=1)
-        )
+        # the task runner stopped before the end of the two attempts, and thus no end is recorded
         assert taskrunner_main.next_task([], []) == tasks[2]
 
         # the new task runner has no task in a slot
@@ -716,6 +749,7 @@ class FairShareQueueTests(TestCase):
         # a task whose attempt failed has started and has no position while it waits for a new attempt
         with mock.patch.object(taskrunner_main, "log_general"):
             taskrunner_main.mark_started(tasks[1])
+            taskrunner_main.record_attempt_end(tasks[1], 5.0)
         calculate_queue_positions(running_taskids={tasks[0].pk})
         answer = self.queuepositions(self.light)
         assert sorted(answer["startedids"]) == [tasks[0].pk, tasks[1].pk], answer
@@ -822,6 +856,10 @@ class FairShareDispatchTests(TestCase):
                 taskqueue.charge_usage(task.user_id, (ended - started).total_seconds(), when=ended)
                 if task.user_id not in self.always_fail:
                     Task.objects.filter(pk=taskid).update(finishtimestamp=ended)
+                else:
+                    attempts = Task.objects.get(pk=taskid).attempt_count
+                    wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(attempts))
+                    Task.objects.filter(pk=taskid).update(retry_after=ended + wait)
 
     def started_by(self, user: User, *, first: int | None = None) -> int:
         return sum(1 for _, userid in self.starts[:first] if userid == user.pk)
@@ -5009,18 +5047,28 @@ class TaskRunnerStatusTests(TestCase):
         assert body["maintenance"] is True
 
     def test_the_queue_figures_the_wait_estimate_needs(self) -> None:
-        # distinct_queued_users bounds how fast the queue drains, since dispatch takes at most one
-        # task per user at a time -- so it counts users, not their tasks
+        # distinct_queued_users bounds how fast the queue drains, since one user has a maximum
+        # number of slots -- so it counts users, not their tasks
         user = User.objects.create_user(username="queuedone", email="q1@example.com", password=None)
         other = User.objects.create_user(username="queuedtwo", email="q2@example.com", password=None)
+        inslot = User.objects.create_user(username="queuedthree", email="q3@example.com", password=None)
+        retrying = User.objects.create_user(username="queuedfour", email="q4@example.com", password=None)
         for _ in range(3):
             Task.objects.create(user=user, ra=1.0, dec=2.0)
         Task.objects.create(user=other, ra=3.0, dec=4.0)
+        running = Task.objects.create(user=inslot, ra=5.0, dec=6.0)
+        failed = Task.objects.create(user=retrying, ra=7.0, dec=8.0)
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(running)
+            # the only task of this user waits for a new attempt, and thus the user fills no slot
+            taskrunner_main.mark_started(failed)
+            taskrunner_main.record_attempt_end(failed, 5.0)
+        calculate_queue_positions(running_taskids={running.pk})
 
-        body = self.status_response(procs_taskids={}).json()
+        body = self.status_response(procs_taskids={0: running.pk}).json()
 
-        assert body["queued_task_count"] == 4
-        assert body["distinct_queued_users"] == 2
+        assert body["queued_task_count"] == 6
+        assert body["distinct_queued_users"] == 3
 
     def test_the_queue_composition_the_wait_estimate_prices_passes_by(self) -> None:
         # dispatch orders one global queue across every request type, so a wait is priced by what
