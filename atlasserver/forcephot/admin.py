@@ -5,6 +5,8 @@ from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.contrib.admin.helpers import ActionForm
+from django.contrib.admin.models import CHANGE
+from django.contrib.admin.models import LogEntry
 from django.contrib.admin.widgets import AutocompleteSelectMultiple
 
 # this import also registers the stock admin classes of User and Group. atlasserver.forcephot
@@ -132,7 +134,7 @@ admin.site.register(Group, GroupWithMembersAdmin)
 
 
 class GroupActionForm(ActionForm):
-    # the changelist shows this field next to the action list. It is not required, because the
+    # the changelist shows this field next to the action list. The field is optional, because the
     # other actions (e.g. the delete action) do not use a group.
     group = forms.ModelChoiceField(queryset=Group.objects.all(), required=False, label="Group:")
 
@@ -147,18 +149,25 @@ class GroupUserAdmin(UserAdmin):
     # users. A staff member who can only view the users does not get the action.
     @admin.action(permissions=["change"], description="Add the selected users to the group")
     def add_to_group(self, request: HttpRequest, queryset: t.Any) -> None:
-        # the action form validates the value against the groups in the database
-        form = self.action_form(request.POST)
-        del form.fields["action"]
-        group = form.cleaned_data.get("group") if form.is_valid() else None
+        # Django validates the action form before it calls an action. Thus the value is the key of
+        # a group, or it is empty.
+        key = request.POST.get("group")
+        group: t.Any = Group.objects.filter(pk=key).first() if key else None
         if group is None:
-            self.message_user(request, "Select a group. No user was changed.", messages.ERROR)
+            self.message_user(request, "Select a group. The action changed no user.", messages.ERROR)
             return
 
-        # add() ignores a user who is a member already
-        group.user_set.add(*queryset)
+        new_members = list(queryset.exclude(groups=group))
+        group.user_set.add(*new_members)
+        # the history page of each new member shows the administrator and the group
+        administrator: t.Any = request.user
+        LogEntry.objects.log_actions(
+            administrator.pk, new_members, CHANGE, change_message=f"Added to the group '{group.name}'."
+        )
         self.message_user(
-            request, f"The group '{group.name}' contains all selected users ({queryset.count()}).", messages.SUCCESS
+            request,
+            f"The group '{group.name}' contains all selected users. New members: {len(new_members)}.",
+            messages.SUCCESS,
         )
 
 

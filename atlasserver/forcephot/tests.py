@@ -30,6 +30,8 @@ from django.apps import apps as django_apps
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
+from django.contrib.admin.models import CHANGE
+from django.contrib.admin.models import LogEntry
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User
@@ -2869,7 +2871,7 @@ class AdminAddUsersToGroupTests(TestCase):
 
         assert response.status_code == 200, response.status_code
         assert set(self.members()) == set(self.users[:2])
-        assert "contains all selected users (2)" in response.content.decode()
+        assert "contains all selected users. New members: 2." in response.content.decode()
 
     def test_a_user_who_is_a_member_already_stays_a_member_once(self) -> None:
         self.users[0].groups.add(self.group)
@@ -2879,10 +2881,30 @@ class AdminAddUsersToGroupTests(TestCase):
         assert self.members().count() == 3
         assert self.users[0].groups.count() == 1
 
+    def test_the_admin_log_names_each_new_member_and_no_other_user(self) -> None:
+        self.users[0].groups.add(self.group)
+
+        self.run_action(self.users, str(self.group.pk))
+
+        entries = LogEntry.objects.filter(change_message="Added to the group 'observers'.")
+        assert {entry.object_id for entry in entries} == {str(user.pk) for user in self.users[1:]}
+        assert {entry.user_id for entry in entries} == {self.staff.pk}
+        assert {entry.action_flag for entry in entries} == {CHANGE}
+
+    def test_a_staff_member_who_can_change_users_gets_the_action(self) -> None:
+        # a superuser has each permission, so only this test shows which permission gives the action
+        editor = User.objects.create_user(username="editor", email="editor@example.com", password=None, is_staff=True)
+        editor.user_permissions.add(Permission.objects.get(codename="change_user"))
+        self.client.force_login(editor)
+
+        self.run_action(self.users[:1], str(self.group.pk))
+
+        assert set(self.members()) == set(self.users[:1])
+
     def test_no_group_changes_no_user_and_says_so(self) -> None:
         response = self.run_action(self.users, "")
 
-        assert "No user was changed" in response.content.decode()
+        assert "The action changed no user" in response.content.decode()
         assert not self.members().exists()
 
     def test_an_unknown_group_changes_no_user(self) -> None:
@@ -2909,8 +2931,9 @@ class AdminAddUsersToGroupTests(TestCase):
         page = self.client.get(reverse("admin:auth_user_changelist")).content.decode()
 
         assert 'value="add_to_group"' in page
-        assert '<select name="group"' in page
-        assert "observers" in page
+        # the stock filter of the users also shows each group name, so the name must be an option
+        # of the field itself
+        assert re.search(r'<select name="group".*?<option value="\d+">observers</option>.*?</select>', page, re.DOTALL)
 
     def test_the_stock_user_pages_are_still_there(self) -> None:
         # the admin class replaces the registration of django.contrib.auth, which supplies the
