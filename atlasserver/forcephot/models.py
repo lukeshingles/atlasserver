@@ -428,7 +428,8 @@ class Task(models.Model):
 
         The positions do not start at 0. A task loses its position at its start, and the queue
         order keeps the positions of the other tasks; see forcephot.queue.calculate_queue_positions.
-        The position of a task minus this value is the number of tasks that start before it.
+        The position of a task minus this value is the number of tasks that are before it in the
+        queue order.
 
         This does not depend on any particular task, so a caller serialising many tasks should call
         it once rather than once per task (see ForcePhotTaskSerializer.min_queuepos_relative).

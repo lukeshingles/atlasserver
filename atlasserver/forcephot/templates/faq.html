@@ -38,7 +38,7 @@ mpc CK21Y010</pre>
 
     <p>An account that is less than {{ new_account_days }} days old does not start with zero usage. Its usage in the queue is not less than the median usage of all users.</p>
 
-    <p>If you are signed in and you have tasks in the queue, the status line at the top of each page shows your usage. The queue page shows the number of tasks that are ahead of each of your tasks, and an estimate of the wait. A user with less usage than you can submit a task after you, and that task can go before your tasks. The number of tasks ahead can thus increase.</p>
+    <p>If you are signed in and you have tasks in the queue, the status line at the top of each page shows your usage. The queue page shows the number of tasks that are ahead of each of your tasks in the queue order, and an estimate of the wait. A user with less usage than you can submit a task after you, and that task can go before your tasks. The number of tasks ahead can thus increase. Your task can also start before the number is zero: when a user ahead of you has the maximum number of slots, your task starts before the other tasks of that user.</p>
 
     <h2>Q: How do I report issues with the data or the website?</h2>
     <p>Please file an issue on the <a href="https://github.com/lukeshingles/atlasserver/issues">GitHub atlasserver repository</a>.</p>

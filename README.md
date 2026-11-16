@@ -100,9 +100,11 @@ reads the usage in the status line at the top of each page. The FAQ page (`/faq/
 users how the queue works. That page gets its numbers from the constants in `queue.py` and
 `status.py`.
 
-The queue page shows, for each task that waits, the number of tasks that start before it. A task
-of a different user that arrives later can go before the task, and thus the number can increase.
-A task in a slot has no queue position, and its `queuepos` field in the API is null.
+The queue page shows, for each task that waits, the number of tasks that are before it in the
+queue order. This is the largest number of tasks that start before the task. Fewer tasks start
+before it when a user with tasks before it has the maximum of 8 slots. A task of a different user
+that arrives later can go before the task, and thus the number can increase. A task that has
+started has no queue position, and its `queuepos` field in the API is null.
 
 The `migrate` command makes the table of the usage records and fills it from the finished tasks
 of the last 35 days. These first records are approximate: the database does not have the tasks

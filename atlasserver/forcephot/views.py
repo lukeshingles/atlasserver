@@ -1245,8 +1245,10 @@ class QueuePositions(APIView):
 
         # A task that has started has no position while it is in a slot, and while it waits for a
         # new attempt after a failed attempt; see forcephot.queue.calculate_queue_positions. The
-        # positions are thus only of the tasks that can start, and a position is the number of
-        # tasks that start before the task.
+        # positions are thus only of the tasks that can start. A position is the number of tasks
+        # that are before the task in the queue order. That is the largest number of tasks that
+        # start before it: fewer start before it when a user with tasks before it has the
+        # maximum number of slots.
         positions = [
             (taskid, queuepos, requesttype) for taskid, queuepos, requesttype in owntasks if queuepos is not None
         ]

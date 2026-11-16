@@ -448,8 +448,11 @@ def calculate_queue_positions(
     wait is thus longer by that interval at most.
 
     The task runner starts the task with the lowest position whose user is below the maximum
-    number of slots (taskrunner.main.next_task). The positions give the real start order, and
-    the task runner has no second rule for the priority.
+    number of slots (taskrunner.main.next_task). The task runner has no second rule for the
+    priority. The position of a task is thus the number of tasks that are before it in the
+    order, and it is the largest number of tasks that can start before it. Fewer tasks start
+    before it when a user with tasks before it has the maximum number of slots: the task then
+    starts before the other tasks of that user.
 
     `usage` is the usage of each user, as usage_by_user returns it. Without it, this function
     reads the usage.

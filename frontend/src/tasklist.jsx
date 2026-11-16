@@ -775,8 +775,9 @@ export const Task = React.memo(function Task(props) {
             </div>);
     } else if (task.queuepos != null) {
         // the position as a chip rather than inside the sentence, so it can be found down a column
-        // of rows. The position is the number of tasks that start before this one, so zero is the
-        // one that runs next. A task in a slot has no position.
+        // of rows. The position is the number of tasks that are before this one in the queue order,
+        // so zero is the one that runs next. A task in a slot has no position. Fewer tasks start
+        // before this one when a user ahead has the maximum number of slots.
         const ahead = task.queuepos == 0 ? 'next' : task.queuepos + ' ahead';
         // Only when the server gave enough to compute one -- a stale runner, or a request type it
         // has too few recent samples of, produces null and nothing is shown. An absent estimate is

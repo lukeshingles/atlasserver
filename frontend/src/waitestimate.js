@@ -7,8 +7,8 @@
 // counts in, a number or a string out.
 //
 // The queue order is a fair share of the run time (calculate_queue_positions in
-// forcephot/queue.py). The queue position of a task is the number of tasks that start before it,
-// and a task in a slot has no position. The runner starts the task with the lowest position whose
+// forcephot/queue.py). The queue position of a task is the number of tasks that are before it in
+// that order, and a task in a slot has no position. The runner starts the task with the lowest position whose
 // user has fewer tasks in the slots than a maximum (`max_user_slots` in the status).
 //
 // The obvious formula -- tasks ahead, divided by the number of slots, times how long a task takes
