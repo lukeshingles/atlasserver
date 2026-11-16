@@ -72,8 +72,14 @@ includes the tasks of the members.
 
 The `migrate` command makes the group. To add or remove a member, open the group in the admin site
 (`/admin/auth/group/`). Then change the field "Members". The field has a search by username, name
-and email address. Only an administrator who can change groups and users can do this. A change has an effect
-on the queue in a maximum of 30 seconds, and a restart of the task runner is not necessary.
+and email address. Only an administrator who can change groups and users can do this.
+
+To add many users at one time, open the list of users (`/admin/auth/user/`) and select the users.
+Then select the action "Add the selected users to the group", select the group in the field
+"Group:", and run the action. An administrator who can change users can do this.
+
+A change has an effect on the queue in a maximum of 30 seconds, and a restart of the task runner is
+not necessary.
 
 To update the code to the latest commit on the main branch, pull from the GitHub remote, apply any
 database changes, and then restart the two processes.

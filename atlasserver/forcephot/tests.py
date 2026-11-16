@@ -30,6 +30,8 @@ from django.apps import apps as django_apps
 from django.conf import settings
 
 # the project uses the default user model, and the concrete class is needed for typing
+from django.contrib.admin.models import CHANGE
+from django.contrib.admin.models import LogEntry
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User
@@ -2841,6 +2843,103 @@ class AdminBulkDeleteTests(TestCase):
         response = self.client.get(reverse("admin:forcephot_task_add"))
 
         assert response.status_code == 403, response.status_code
+
+
+class AdminAddUsersToGroupTests(TestCase):
+    """The changelist of the users has an action that adds the selected users to one group."""
+
+    def setUp(self) -> None:
+        self.staff = User.objects.create_superuser(username="root", email="root@example.com", password="pw12345678")
+        self.group = Group.objects.create(name="observers")
+        self.users = [
+            User.objects.create_user(username=f"user{i}", email=f"u{i}@example.com", password=None) for i in range(3)
+        ]
+        self.client.force_login(self.staff)
+
+    def members(self) -> models.QuerySet[User]:
+        return User.objects.filter(groups=self.group)
+
+    def run_action(self, users: list[User], group: str) -> t.Any:
+        return self.client.post(
+            reverse("admin:auth_user_changelist"),
+            {"action": "add_to_group", "_selected_action": [user.pk for user in users], "group": group},
+            follow=True,
+        )
+
+    def test_the_selected_users_become_members_and_the_others_do_not(self) -> None:
+        response = self.run_action(self.users[:2], str(self.group.pk))
+
+        assert response.status_code == 200, response.status_code
+        assert set(self.members()) == set(self.users[:2])
+        assert "contains all selected users. New members: 2." in response.content.decode()
+
+    def test_a_user_who_is_a_member_already_stays_a_member_once(self) -> None:
+        self.users[0].groups.add(self.group)
+
+        self.run_action(self.users, str(self.group.pk))
+
+        assert self.members().count() == 3
+        assert self.users[0].groups.count() == 1
+
+    def test_the_admin_log_names_each_new_member_and_no_other_user(self) -> None:
+        self.users[0].groups.add(self.group)
+
+        self.run_action(self.users, str(self.group.pk))
+
+        entries = LogEntry.objects.filter(change_message="Added to the group 'observers'.")
+        assert {entry.object_id for entry in entries} == {str(user.pk) for user in self.users[1:]}
+        assert {entry.user_id for entry in entries} == {self.staff.pk}
+        assert {entry.action_flag for entry in entries} == {CHANGE}
+
+    def test_a_staff_member_who_can_change_users_gets_the_action(self) -> None:
+        # a superuser has each permission, so only this test shows which permission gives the action
+        editor = User.objects.create_user(username="editor", email="editor@example.com", password=None, is_staff=True)
+        editor.user_permissions.add(Permission.objects.get(codename="change_user"))
+        self.client.force_login(editor)
+
+        self.run_action(self.users[:1], str(self.group.pk))
+
+        assert set(self.members()) == set(self.users[:1])
+
+    def test_no_group_changes_no_user_and_says_so(self) -> None:
+        response = self.run_action(self.users, "")
+
+        assert "The action changed no user" in response.content.decode()
+        assert not self.members().exists()
+
+    def test_an_unknown_group_changes_no_user(self) -> None:
+        # the changelist offers only the groups in the database, so only a forged request sends
+        # these values. Django refuses the action form and does not call the action.
+        for group in ("999999", "not a number"):
+            self.run_action(self.users, group)
+
+            assert not self.members().exists(), group
+
+    def test_a_staff_member_who_can_only_view_users_does_not_get_the_action(self) -> None:
+        viewer = User.objects.create_user(username="viewer", email="viewer@example.com", password=None, is_staff=True)
+        viewer.user_permissions.add(Permission.objects.get(codename="view_user"))
+        self.client.force_login(viewer)
+
+        page = self.client.get(reverse("admin:auth_user_changelist"))
+        assert page.status_code == 200, page.status_code
+        assert "add_to_group" not in page.content.decode()
+
+        self.run_action(self.users, str(self.group.pk))
+        assert not self.members().exists(), "a view-only staff member changed the members of a group"
+
+    def test_the_changelist_shows_the_action_and_the_group_field(self) -> None:
+        page = self.client.get(reverse("admin:auth_user_changelist")).content.decode()
+
+        assert 'value="add_to_group"' in page
+        # the stock filter of the users also shows each group name, so the name must be an option
+        # of the field itself
+        assert re.search(r'<select name="group".*?<option value="\d+">observers</option>.*?</select>', page, re.DOTALL)
+
+    def test_the_stock_user_pages_are_still_there(self) -> None:
+        # the admin class replaces the registration of django.contrib.auth, which supplies the
+        # password forms of the add page and of the change page
+        for url in (reverse("admin:auth_user_add"), reverse("admin:auth_user_change", args=[self.users[0].pk])):
+            assert self.client.get(url).status_code == 200, url
 
 
 class UnverifiedAccountSweepTests(TestCase):
