@@ -551,6 +551,27 @@ class FairShareQueueTests(TestCase):
         assert task.retry_after is None
         assert UsageDay.objects.get(user=self.light).seconds == 100.0
 
+    def test_the_end_of_an_attempt_is_one_record_or_no_record(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+        messages: list[str] = []
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(task)
+
+        # the write of the time for the next attempt fails after the write of the usage
+        with mock.patch.object(taskqueue, "retry_wait_seconds", side_effect=RuntimeError("the database is away")):
+            taskrunner_main.record_attempt_end(task, 100.0, logfunc=messages.append)
+
+        assert messages == ["ERROR: could not record the end of the attempt: the database is away"]
+        assert not UsageDay.objects.filter(user=self.light).exists(), "the usage has the run time with no mark"
+        assert Task.objects.get(pk=task.pk).retry_after is None
+
+        # the main loop then records the attempt one time
+        taskrunner_main.record_abnormal_exit(task.pk, 100.0, logfunc=messages.append)
+        taskrunner_main.record_abnormal_exit(task.pk, 100.0, logfunc=messages.append)
+
+        usage = UsageDay.objects.get(user=self.light)
+        assert (usage.seconds, usage.tasks) == (100.0, 1)
+
     def test_a_start_removes_the_time_for_a_new_attempt(self) -> None:
         task = self.add_queued(self.light, 1)[0]
         with mock.patch.object(taskrunner_main, "log_general"):
@@ -5191,10 +5212,23 @@ class TaskRunnerStatusTests(TestCase):
             Task.objects.create(user=user, ra=1.0, dec=2.0)
         parent = Task.objects.create(user=user, ra=3.0, dec=4.0)
         Task.objects.create(user=user, ra=3.0, dec=4.0, request_type="IMGZIP", parent_task=parent)
+        # A task in a slot counts. Two image requests wait for a new attempt after a failure:
+        # they are in no pass, and they must not make the passes shorter or longer.
+        running = Task.objects.create(user=user, ra=5.0, dec=6.0)
+        failed = [
+            Task.objects.create(user=user, ra=7.0, dec=8.0, request_type="IMGZIP", parent_task=parent) for _ in range(2)
+        ]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(running)
+            for task in failed:
+                taskrunner_main.mark_started(task)
+                taskrunner_main.record_attempt_end(task, 5.0)
+        calculate_queue_positions(running_taskids={running.pk})
 
-        body = self.status_response(procs_taskids={}).json()
+        body = self.status_response(procs_taskids={0: running.pk}).json()
 
-        assert body["queued_by_request_type"] == {"FP": 4, "IMGZIP": 1}
+        assert body["queued_by_request_type"] == {"FP": 5, "IMGZIP": 1}
+        assert body["queued_task_count"] == 8, "the count of the status sentence has all unfinished tasks"
 
     def test_an_empty_queue_is_composed_of_nothing(self) -> None:
         body = self.status_response(procs_taskids={}).json()

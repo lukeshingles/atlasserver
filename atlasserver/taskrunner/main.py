@@ -743,9 +743,13 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     # run times, not on its own.
     #
     # A second query rather than another aggregate: this one groups, and the counts above do not.
+    #
+    # Only the tasks that can use a slot, as for the count of the users above. A task that waits
+    # for a new attempt after a failure is in no pass, and a large batch of such tasks must not
+    # change the price of the passes.
     queued_by_request_type = {
         row["request_type"]: row["count"]
-        for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
+        for row in Task.queued().filter(canuseslot).values("request_type").annotate(count=models.Count("id"))
     }
 
     status = {
@@ -805,13 +809,20 @@ def record_attempt_end(task, seconds: float, logfunc=log_general) -> None:
     The wait is from the end of the attempt and not from its start: an attempt can run for hours
     before it fails, and a wait from its start is then over at its end.
 
+    The two records are one transaction. The time of the next attempt is also the mark that
+    the end of this attempt is recorded (record_abnormal_exit). With the run time in the usage
+    and no mark, the main loop adds the run time a second time.
+
     An exception does not go out of this function: an error of these records must not stop the
     finish of a task, whose result is there.
     """
     try:
-        taskqueue.charge_usage(task.user_id, seconds)
-        retry_after = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=taskqueue.retry_wait_seconds(task.attempt_count))
-        Task.objects.filter(pk=task.id, finishtimestamp__isnull=True).update(retry_after=retry_after)
+        with transaction.atomic():
+            taskqueue.charge_usage(task.user_id, seconds)
+            wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(task.attempt_count))
+            Task.objects.filter(pk=task.id, finishtimestamp__isnull=True).update(
+                retry_after=dt.datetime.now(dt.UTC) + wait
+            )
     except Exception as ex:  # noqa: BLE001 (the result of the task does not depend on these records)
         logfunc(f"ERROR: could not record the end of the attempt: {ex}")
 
