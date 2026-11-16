@@ -34,6 +34,7 @@ from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
+from django.db.models import Min
 from django.db.models.functions import Trunc
 from django.http import FileResponse
 from django.http import HttpResponse
@@ -86,6 +87,7 @@ from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
+from atlasserver.forcephot.queue import priority_userids
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
@@ -1201,7 +1203,7 @@ class QueuePositions(APIView):
     renderer_classes = [JSONRenderer]
     # No throttle, as before: the queue page polls this every two seconds per tab, and under the
     # read budget of the task list a user with many tabs open would have every read refused. The
-    # answer is two indexed queries for a signed-in user only.
+    # answer is a small number of indexed queries for a signed-in user only.
     throttle_classes = ()
 
     @extend_schema(
@@ -1209,17 +1211,44 @@ class QueuePositions(APIView):
         summary="The queue positions of the caller's unfinished tasks",
     )
     def get(self, request):
-        queueoffset = Task.min_queuepos_relative()
-        # the same set the offset was measured against, so the subtraction below cannot drift
-        positions = (
-            Task.queued()
-            .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
-            .values_list("id", "queuepos_relative", "request_type")
-        )
+        # One transaction for the three reads. The task runner can renumber the queue between two
+        # of them, and a new batch of a member then moves each position by the size of the batch.
+        # MariaDB reads all the queries of a transaction from one snapshot, and thus the offset,
+        # the positions and the start of the tier describe the same queue. The block only reads,
+        # and thus it needs no savepoint in a transaction that is already open.
+        with transaction.atomic(savepoint=False):
+            queueoffset = Task.min_queuepos_relative()
+            # the same set the offset was measured against, so the subtraction below cannot drift
+            positions = list(
+                Task.queued()
+                .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
+                .values_list("id", "queuepos_relative", "request_type")
+            )
+
+            # The tier of the caller, from the same request as the positions. The queue page
+            # subtracts tierstart from a position to get the number of tasks that compete with the
+            # task for a slot. A count from the status file of the task runner is older than the
+            # positions, and a comparison of the two puts a task in the incorrect tier each time a
+            # task finishes.
+            priorityuserids = priority_userids()
+            prioritytier = request.user.pk in priorityuserids
+            tierstart = 0
+            if priorityuserids and not prioritytier:
+                # the tasks of the members have the first positions, and the tier of the caller
+                # starts at the first task of a user who is not a member
+                firstposition = (
+                    Task.queued()
+                    .exclude(user_id__in=priorityuserids)
+                    .aggregate(Min("queuepos_relative"))["queuepos_relative__min"]
+                )
+                if firstposition is not None:
+                    tierstart = max(0, firstposition - queueoffset)
 
         return Response(
             {
                 "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
+                "prioritytier": prioritytier,
+                "tierstart": tierstart,
                 # What each of those tasks is. Dispatch runs one task per user at a time, so a
                 # user's own tasks ahead of this one are waited through in series -- and an IMGZIP
                 # among them is a quarter of an hour of that wait where an FP task is a minute.

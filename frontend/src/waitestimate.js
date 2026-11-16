@@ -20,16 +20,31 @@
 // everyone else's, which drain in parallel at min(slots, users sharing the queue). The wait is
 // whichever of those two takes longer, since they are happening at the same time.
 //
+// The queue has two tiers (calculate_queue_positions in forcephot/queue.py). The tasks of the
+// members of the high priority group have the first positions, and the tasks of the other users
+// follow them. Each member uses a maximum of one slot. Thus a task of another user does not wait
+// for all the tasks of the members that are ahead of it. It waits for the slots that the members
+// do not use, and the members free their slots when their tasks are done.
+//
+// The tier of a task comes from the queue positions endpoint, in the same answer as the position
+// (`prioritytier` and `tierstart`). The status of the task runner gives the size of the priority
+// tier (`priority_queued_depths` and `priority_queued_by_request_type`). The
+// status is older than the positions, and thus it does not decide the tier of a task.
+//
 // If the dispatch policy in taskrunner/main.py ever changes -- a second concurrent task per user,
-// a priority tier -- this is the copy of it that has to change with it.
+// a third tier -- this is the copy of it that has to change with it.
 
 /**
  * Seconds a task at this queue position is likely to wait, or null if that cannot be said.
  *
  * `ownqueued` is the caller's other queued tasks as {position, requesttype} pairs, or null while
  * that is not yet known — the two are different answers and an empty array only means the first.
+ *
+ * `tier` is the tier of the caller from the same answer as the positions: `priority` is true for a
+ * member of the high priority group, and `start` is the position of the first task of the tier.
+ * An absent `tier` is a queue with one tier.
  */
-export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus }) {
+export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus, tier }) {
     // A queue that is not being dispatched from has no wait to report. `maintenance` means the
     // hourly sweep is blocking the runner's loop, so nothing starts for its duration and the slot
     // figures are frozen -- the banner already says so, and a countdown beside it would be against
@@ -66,12 +81,48 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus }) {
     if (!(numslots > 0) || queuedusers == null) {
         return null;
     }
-    const concurrency = Math.max(1, Math.min(numslots, queuedusers));
+
+    // The number of queued tasks of each member of the high priority group, largest first. An
+    // absent field is an empty list: a task runner that does not write it has no priority tier.
+    const prioritydepths = runnerstatus.priority_queued_depths ?? [];
+    const priorityusers = prioritydepths.length;
+    const inprioritytier = tier?.priority === true;
+
+    // The status is older than the positions. If the positions show more tasks of the members
+    // ahead than the status counts, the members submitted tasks after the status was written.
+    // The status then does not know the slots that those tasks use, and an estimate from it is
+    // too short. The next status has the tasks.
+    if (!inprioritytier && (tier?.start ?? 0) > prioritydepths.reduce((total, depth) => total + depth, 0)) {
+        return null;
+    }
+
+    // How many tasks of this tier can start in the next pass. Each call is one pass.
+    //
+    // A task of a member competes only with the tasks of the other members, one task for each
+    // member in a pass.
+    //
+    // A task of another user gets the slots that the members do not use. A member uses one slot
+    // in a pass, but only while that member has tasks. After that, the slot serves the other
+    // users. If more members have tasks than there are slots, the members take turns: `waiting`
+    // is their queue, and the members who ran go to its end. The floor of one is for the user
+    // counts, which can be older than the queue (see above).
+    const otherusers = Math.max(1, queuedusers - priorityusers);
+    let waiting = prioritydepths.filter((depth) => depth > 0);
+    const slotsInNextPass = inprioritytier
+        ? () => Math.min(numslots, Math.max(1, priorityusers))
+        : () => {
+            const running = waiting.slice(0, numslots);
+            waiting = waiting.slice(numslots).concat(
+                running.map((depth) => depth - 1).filter((depth) => depth > 0));
+            return Math.min(otherusers, numslots - running.length);
+        };
 
     // Strictly ahead of this one. The endpoint reports the user's whole queued set, not the page on
     // screen, which is what makes this their queue rather than the rows that happen to be rendered.
     const ownahead = ownqueued.filter((task) => task.position < queuepos);
-    const otherahead = queuepos - ownahead.length;
+    // tasksAhead does not count the tasks of the members for a task of another user. The slots of
+    // each pass above already hold their effect.
+    const otherahead = Math.max(0, tasksAhead({ queuepos, tier }) - ownahead.length);
 
     // The user's own tasks ahead run one at a time, so their run times add up -- each priced by
     // what it actually is. A radeclist submission is one type throughout, but a user who asked for
@@ -97,22 +148,93 @@ export function estimateWaitSeconds({ queuepos, ownqueued, runnerstatus }) {
     // alternative of withholding whenever slots_busy equals numslots is worse in practice, because
     // slots_busy moves on its own and the figure would appear and vanish from one poll to the next
     // across the last `concurrency` positions -- the stretch a waiting user watches hardest.
-    const otherpasses = Math.floor(otherahead / concurrency);
+    //
+    // The full passes are the passes whose tasks all start before this one.
+    //
+    // Priced by what the queue is made of, not by this task's own type. Dispatch orders one
+    // global queue across every request type, so the work ahead is whatever was submitted --
+    // and an FP task behind a run of IMGZIP tasks waits on their run times, which are longer
+    // by orders of magnitude.
+    //
+    // A pass has the price of the tasks of the tier of this task. A batch of IMGZIP tasks of a
+    // member does not fill the passes of the other users. The exception is a pass in which the
+    // members use all the slots: only their tasks run, and the pass has their price.
+    const pricecache = new Map();
+    const priceOf = (priority) => {
+        if (!pricecache.has(priority)) {
+            pricecache.set(priority, meanQueuedRuntimeSeconds(tierRequestTypes(runnerstatus, priority), runtimes));
+        }
+        return pricecache.get(priority);
+    };
+    // The time of the passes in which the members use all the slots is apart from the rest. No
+    // task of this user runs in such a pass, and thus this time comes before the own tasks ahead
+    // and before the tasks of the other users.
+    let blockedseconds = 0;
     let otherseconds = 0;
-    if (otherpasses > 0) {
-        // Priced by what the queue is made of, not by this task's own type. Dispatch orders one
-        // global queue across every request type, so the work ahead is whatever was submitted --
-        // and an FP task behind a run of IMGZIP tasks waits on their run times, which are longer
-        // by orders of magnitude.
-        const meanpass = meanQueuedRuntimeSeconds(runnerstatus.queued_by_request_type, runtimes);
-        if (meanpass == null) {
+    let started = 0;
+    for (let pass = 1; ; pass += 1) {
+        const slots = slotsInNextPass();
+        if (slots > 0 && started + slots > otherahead) {
+            // this task starts in this pass
+            break;
+        }
+        if (pass > MAX_PASSES) {
             return null;
         }
-        otherseconds = otherpasses * meanpass;
+        const price = priceOf(inprioritytier || slots == 0);
+        if (price == null) {
+            return null;
+        }
+        started += slots;
+        if (slots == 0) {
+            blockedseconds += price;
+        } else {
+            otherseconds += price;
+        }
     }
 
-    // the two are worked through at the same time, so the wait is the longer of them
-    return Math.max(ownseconds, otherseconds);
+    // the own tasks and the tasks of the other users are worked through at the same time, so the
+    // wait is the longer of them
+    return blockedseconds + Math.max(ownseconds, otherseconds);
+}
+
+/**
+ * The number of tasks ahead of a task that compete with it for a slot.
+ *
+ * `tier.start` is the position of the first task of the tier of the caller. For a user who is not
+ * a member of the high priority group, the tasks of the members are thus not in this number. They
+ * have the first positions, but each member uses a maximum of one slot. A batch of a member does
+ * not delay the task by its full length.
+ *
+ * `tier` comes from the same answer as the position. Without it, the result is the position.
+ */
+export function tasksAhead({ queuepos, tier }) {
+    if (queuepos == null || !(tier?.start > 0)) {
+        return queuepos;
+    }
+    return Math.max(0, queuepos - tier.start);
+}
+
+// The loop that counts passes stops here. More passes than this is not a wait that a user plans.
+const MAX_PASSES = 100000;
+
+/**
+ * The number of queued tasks of each request type in one tier, or null if the status has none.
+ *
+ * The status gives the counts of the full queue and the counts of the tasks of the members. The
+ * counts of the other users are the difference.
+ */
+function tierRequestTypes(runnerstatus, inprioritytier) {
+    const all = runnerstatus.queued_by_request_type;
+    const priority = runnerstatus.priority_queued_by_request_type;
+    if (all == null || priority == null) {
+        return all;
+    }
+    if (inprioritytier) {
+        return priority;
+    }
+    return Object.fromEntries(Object.entries(all).map(
+        ([requesttype, count]) => [requesttype, Math.max(0, count - (priority[requesttype] ?? 0))]));
 }
 
 /**

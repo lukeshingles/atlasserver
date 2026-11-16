@@ -6,7 +6,7 @@ import { pollingPaused, subscribe } from "runnerstatus";
 import { csrfHeader } from "csrftoken";
 import { NewRequest } from "newrequest";
 import { NOT_MODIFIED, PollCache } from "pollcache";
-import { estimateWaitSeconds, formatDuration, formatWaitEstimate } from "waitestimate";
+import { estimateWaitSeconds, formatDuration, formatWaitEstimate, tasksAhead } from "waitestimate";
 
 function debug_log(...args) {
     // uncomment for debugging in development
@@ -388,6 +388,7 @@ function taskPropsEqual(prev, next) {
         prev.hidePlot === next.hidePlot
         // a string or null, so this stays the cheap check the rest of this function avoids
         && prev.waitestimate === next.waitestimate
+        && prev.ahead === next.ahead
         && prev.attempted === next.attempted
         && (prev.taskdata === next.taskdata
             || JSON.stringify(prev.taskdata) === JSON.stringify(next.taskdata))
@@ -764,8 +765,11 @@ export const Task = React.memo(function Task(props) {
             </div>);
     } else if (task.queuepos != null) {
         // the position as a chip rather than inside the sentence, so it can be found down a column
-        // of rows. queuepos counts the tasks ahead, so zero is the one that runs next.
-        const ahead = task.queuepos == 0 ? 'next' : task.queuepos + ' ahead';
+        // of rows. The count is of the tasks ahead, so zero is the one that runs next. props.ahead
+        // does not count the tasks of the high priority group for a task of another user; see
+        // tasksAhead in waitestimate.js.
+        const aheadcount = props.ahead ?? task.queuepos;
+        const ahead = aheadcount == 0 ? 'next' : aheadcount + ' ahead';
         // Only when the server gave enough to compute one -- a stale runner, or a request type it
         // has too few recent samples of, produces null and nothing is shown. An absent estimate is
         // a smaller failure than an invented one, which is the number the user plans around.
@@ -895,6 +899,12 @@ export function TaskPage() {
          * task is waiting behind.
          */
         ownqueued: null,
+        /**
+         * The tier of the user in the queue, as the queuepositions endpoint last reported it:
+         * `priority` and `start`. Null until the first answer. It arrives with the positions, and
+         * thus the two describe the same queue. See tasksAhead in waitestimate.js.
+         */
+        tier: null,
     });
 
     // The wait estimates read this status, and the site notice box reads it from the same store.
@@ -1195,7 +1205,12 @@ export function TaskPage() {
                         || ownqueued.some((task, index) => task.position !== previousqueued[index].position
                             || task.requesttype !== previousqueued[index].requesttype));
 
-                    if (!changed && !positionschanged) {
+                    const tier = { priority: data.prioritytier === true, start: data.tierstart ?? 0 };
+                    const tierchanged = (
+                        prevstate.tier == null
+                        || prevstate.tier.priority !== tier.priority || prevstate.tier.start !== tier.start);
+
+                    if (!changed && !positionschanged && !tierchanged) {
                         return null;
                     }
 
@@ -1204,6 +1219,7 @@ export function TaskPage() {
                     return {
                         results: changed ? newresults : prevstate.results,
                         ownqueued: positionschanged ? ownqueued : prevstate.ownqueued,
+                        tier: tierchanged ? tier : prevstate.tier,
                     };
                 });
 
@@ -1815,7 +1831,14 @@ export function TaskPage() {
             queuepos: task.queuepos,
             ownqueued: state.ownqueued,
             runnerstatus,
+            tier: state.tier,
         })));
+
+        // The tier is the tier of the viewer, and thus it applies only to the tasks of the viewer.
+        const aheadFor = (task) => tasksAhead({
+            queuepos: task.queuepos,
+            tier: tracksQueuePosition(task) ? state.tier : null,
+        });
 
         // A task with a start time that the runner does not list as running was started once and
         // given back, for example when the remote machine was unreachable. Known only from a fresh
@@ -1835,7 +1858,8 @@ export function TaskPage() {
             <ul key="ultasklist" className="tasks">
                 {state.results.map((task) => (
                     <Task key={task.id} taskdata={task} fetchData={fetchData} setSingleTaskView={setSingleTaskView}
-                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)} attempted={attempted(task)} />))}
+                        hidePlot={pagetaskcount > 10} waitestimate={waitEstimateFor(task)}
+                        ahead={aheadFor(task)} attempted={attempted(task)} />))}
             </ul>,
             <Pager key='pager' previous={state.previous} next={state.next} pagefirsttaskposition={state.pagefirsttaskposition} pagetaskcount={pagetaskcount} taskcount={state.taskcount} updateCursor={updateCursor} />
         ];

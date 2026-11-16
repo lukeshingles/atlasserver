@@ -631,6 +631,16 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
+def next_task(running_userids: t.Iterable[int]) -> Task | None:
+    """Return the task to start in a free slot, or None if no task can start.
+
+    This is the queued task with the lowest position whose user has no task in a slot. The
+    position holds the priority of the high priority group and the round-robin order of the users;
+    see forcephot.queue.calculate_queue_positions.
+    """
+    return Task.queued().exclude(user_id__in=list(running_userids)).order_by("queuepos_relative").first()
+
+
 def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool = False) -> None:
     """Write a snapshot of the runner's state for the status endpoint to read.
 
@@ -669,6 +679,35 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
     }
 
+    # The members of the high priority group have the first positions of the queue, and each of
+    # them uses a maximum of one slot. The queue page needs the fields below to estimate a wait.
+    # The tasks of the members are ahead of a task of another user, but they do not use all the
+    # slots.
+    priorityuserids = taskqueue.priority_userids()
+    prioritytasks = Task.queued().filter(user_id__in=priorityuserids)
+    # The number of queued tasks of each member who has one, largest first. A member uses a slot
+    # only while that member has tasks. A total for the group does not show when each slot becomes
+    # free: one member with 500 tasks and 14 members with one task use 15 slots for one pass only.
+    priority_queued_depths = (
+        sorted(
+            (row["count"] for row in prioritytasks.values("user_id").annotate(count=models.Count("id"))),
+            reverse=True,
+        )
+        if priorityuserids
+        else []
+    )
+    # The request types of the tasks of the members. The queue page prices the passes of one tier
+    # from the tasks of that tier: a batch of IMGZIP tasks of a member does not make the passes of
+    # the other users longer.
+    priority_queued_by_request_type = (
+        {
+            row["request_type"]: row["count"]
+            for row in prioritytasks.values("request_type").annotate(count=models.Count("id"))
+        }
+        if priority_queued_depths
+        else {}
+    )
+
     status = {
         "written": dt.datetime.now(dt.UTC).isoformat(),
         "pid": os.getpid(),
@@ -679,6 +718,8 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
         "queued_by_request_type": queued_by_request_type,
+        "priority_queued_depths": priority_queued_depths,
+        "priority_queued_by_request_type": priority_queued_by_request_type,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -1052,7 +1093,7 @@ def main() -> None:
                 numslotsfree = sum(1 if p is None else 0 for p in procs)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
-        queuedtasks = Task.queued().order_by("queuepos_relative")
+        queuedtasks = Task.queued()
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()
@@ -1065,7 +1106,7 @@ def main() -> None:
 
         # one query rather than a count() followed by a first(): the count was only used for a log
         # line, and is fetched below only when a task is actually dispatched
-        task = queuedtasks.exclude(user_id__in=list(procs_userids.values())).first()
+        task = next_task(procs_userids.values())
 
         if task is None:
             # nothing runnable. That is either an empty queue or a queue holding only tasks from

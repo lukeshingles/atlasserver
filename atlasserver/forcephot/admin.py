@@ -1,11 +1,18 @@
 import typing as t
 from typing import override
 
+from django import forms
 from django.contrib import admin
+from django.contrib.admin.widgets import AutocompleteSelectMultiple
+from django.contrib.auth.admin import GroupAdmin
+from django.contrib.auth.models import Group
+from django.contrib.auth.models import User
 from django.db.models import Model
 from django.http import HttpRequest
 
 import atlasserver.forcephot.models
+from atlasserver.forcephot.queue import HIGH_PRIORITY_GROUP
+from atlasserver.forcephot.queue import RECALC_MAX_INTERVAL_SECONDS
 
 # Register your models here.
 
@@ -41,3 +48,77 @@ class CustomAdmin(admin.ModelAdmin):
 
 
 admin.site.register(atlasserver.forcephot.models.Task, CustomAdmin)
+
+
+# pyrefly: ignore [implicit-any-type-argument]
+# ModelForm is generic only in django-stubs, as ModelAdmin is above.
+class GroupMembersForm(forms.ModelForm):
+    """The form of a group, with a field for the users who are its members.
+
+    The stock form of a group has no such field: the members are the reverse side of User.groups.
+    The widget gets the users from the search of the user admin. Thus the page holds only the
+    current members, and not the full table of users. The source field of the widget is the
+    foreign key to the user in the table that joins users and groups.
+    """
+
+    members = forms.ModelMultipleChoiceField(
+        queryset=User.objects.all(),
+        required=False,
+        widget=AutocompleteSelectMultiple(
+            User.groups.through._meta.get_field("user"),  # noqa: SLF001
+            admin.site,
+        ),
+        # This form is the form of each group, and only one group has an effect on the queue.
+        help_text=(
+            "Search by username, name or email address. "
+            f"A change of the members of the group '{HIGH_PRIORITY_GROUP}' has an effect on the queue "
+            f"in a maximum of {RECALC_MAX_INTERVAL_SECONDS:.0f} seconds."
+        ),
+    )
+
+    class Meta:
+        model = Group
+        fields = "__all__"  # noqa: DJ007
+
+    def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:
+        """Show the current members of a group that is in the database."""
+        super().__init__(*args, **kwargs)
+        if self.instance.pk is not None and "members" in self.fields:
+            self.fields["members"].initial = self.instance.user_set.all()
+
+
+class GroupWithMembersAdmin(GroupAdmin):
+    form = GroupMembersForm
+
+    def can_change_members(self, request: HttpRequest, obj: t.Any = None) -> bool:
+        """Return whether this user can change the members of a group.
+
+        A group gives its permissions to its members. Thus a change of the members is a change of
+        the users, and it needs the permission to change users as well as the permission to change
+        the group. Without this rule, a staff user who can change only groups can put permissions
+        in a group, join the group, and get those permissions.
+        """
+        user: t.Any = request.user
+        return self.has_change_permission(request, obj) and bool(user.has_perm("auth.change_user"))
+
+    @override
+    def get_form(
+        self, request: HttpRequest, obj: t.Any = None, change: bool = False, **kwargs: t.Any
+    ) -> type[forms.ModelForm]:  # pyrefly: ignore [implicit-any-type-argument]
+        form: t.Any = super().get_form(request, obj, change=change, **kwargs)
+        if self.can_change_members(request, obj):
+            return form
+        # A declared field with the value None is not a field of the subclass. The field must be
+        # absent and not only hidden: a form that has the field and gets no value for it removes
+        # all the members.
+        return type(form.__name__, (form,), {"members": None})
+
+    @override
+    def save_related(self, request: HttpRequest, form: t.Any, formsets: t.Any, change: bool) -> None:
+        super().save_related(request, form, formsets, change)
+        if "members" in form.cleaned_data:
+            form.instance.user_set.set(form.cleaned_data["members"])
+
+
+admin.site.unregister(Group)
+admin.site.register(Group, GroupWithMembersAdmin)
