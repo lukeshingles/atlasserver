@@ -1221,9 +1221,10 @@ class QueuePositions(APIView):
                 Task.queued().filter(user_id=request.user.pk).values_list("id", "queuepos_relative", "request_type")
             )
 
-        # A task in a slot has no position; see forcephot.queue.calculate_queue_positions. The
-        # positions are thus only of the tasks that wait, and a position is the number of tasks
-        # that start before the task.
+        # A task that has started has no position while it is in a slot, and while it waits for a
+        # new attempt after a failed attempt; see forcephot.queue.calculate_queue_positions. The
+        # positions are thus only of the tasks that can start, and a position is the number of
+        # tasks that start before the task.
         positions = [
             (taskid, queuepos, requesttype) for taskid, queuepos, requesttype in owntasks if queuepos is not None
         ]
@@ -1237,12 +1238,15 @@ class QueuePositions(APIView):
                 # being made, and only ever this user's own tasks.
                 "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
                 "queueoffset": queueoffset,
-                # All the unfinished tasks of the caller: the tasks that wait and the tasks in
-                # the slots. The Queue badge of the navigation bar shows this number.
+                # All the unfinished tasks of the caller. The Queue badge of the navigation bar
+                # shows this number.
                 "queuedcount": len(owntasks),
-                # The unfinished tasks of the caller that have no position: the tasks in the
-                # slots. The queue page counts the tasks that finished while its tab was hidden,
-                # and without this list a task that started is equal to a task that finished.
+                # The unfinished tasks of the caller that have started and have no position: a
+                # task in a slot, and a task that waits for a new attempt after a failed attempt.
+                # This endpoint does not know which of the two a task is: the task runner writes
+                # the tasks in its slots to its status file (running_taskids). The queue page
+                # counts the tasks that finished while its tab was hidden, and without this list
+                # a task that started is equal to a task that finished.
                 "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
                 # The usage of the caller in hours, as the queue order uses it; see
                 # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint

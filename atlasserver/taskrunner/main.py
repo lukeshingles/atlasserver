@@ -826,14 +826,16 @@ def do_task(task, slotid: int, started: bool = False) -> None:
 
     runtask_starttime = time.perf_counter()
 
-    localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
+    try:
+        localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
+    finally:
+        runtask_duration = time.perf_counter() - runtask_starttime
 
-    runtask_duration = time.perf_counter() - runtask_starttime
-
-    # Each attempt used a slot for this time: an attempt that gave a result, an attempt that
-    # failed, and an attempt at a task that its user cancelled. One call before the three cases,
-    # and thus no case is without its usage.
-    charge_attempt(task, runtask_duration, logfunc=logfunc)
+        # Each attempt used a slot for this time: an attempt that gave a result, an attempt that
+        # failed, an attempt at a task that its user cancelled, and an attempt that stopped with
+        # an exception. One call for all the cases, and thus no case is without its usage. An
+        # exception continues after the call, and it stops the process of the slot.
+        charge_attempt(task, runtask_duration, logfunc=logfunc)
 
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
@@ -1092,6 +1094,8 @@ def main() -> None:
     # position: an attempt that failed, or a process that stopped. That task waits for a position
     # before it can start again; see next_task.
     slot_became_free = False
+    # No task starts between the end of an attempt and the next renumbering.
+    dispatch_waits_for_renumbering = False
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -1130,6 +1134,21 @@ def main() -> None:
                 logfunc(f"ERROR: the maintenance sweep failed: {ex}")
             refresh_status()
             printedwaiting = False
+
+        # The slots are examined before the renumbering. A slot that became free asks for a
+        # renumbering, and the renumbering must not have the task of that slot as a task in a slot.
+        for slotid, proc in enumerate(procs):
+            if proc is not None and proc.exitcode is not None:
+                proc.join()
+                proc.close()
+                procs[slotid] = None
+                procs_userids.pop(slotid)
+                procs_taskids.pop(slotid)
+                slot_became_free = True
+                dispatch_waits_for_renumbering = True
+
+                numslotsfree = sum(1 if p is None else 0 for p in procs)
+                logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
         # Renumbering belongs here rather than in the submitting request: this loop is the only
         # thing that changes which task is running, it already reads the table twice a second, and
@@ -1172,23 +1191,20 @@ def main() -> None:
             # stamped even on failure, so a persistent one is retried on an interval rather than on
             # every pass of the loop
             last_queuerecalctime = time.perf_counter()
-
-        for slotid, proc in enumerate(procs):
-            if proc is not None and proc.exitcode is not None:
-                proc.join()
-                proc.close()
-                procs[slotid] = None
-                procs_userids.pop(slotid)
-                procs_taskids.pop(slotid)
-                slot_became_free = True
-
-                numslotsfree = sum(1 if p is None else 0 for p in procs)
-                logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
+            # also after a failure: with old positions, the order of the starts is wrong, but
+            # with no dispatch, no task starts
+            dispatch_waits_for_renumbering = False
 
         queuedtasks = Task.queued()
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()
+
+        if dispatch_waits_for_renumbering:
+            # An attempt ended, and its run time is in the usage of its user now. The positions
+            # are from before that. A task that starts cannot be stopped, and thus the free slot
+            # waits for the renumbering, which is RECALC_CHECK_INTERVAL_SECONDS away at most.
+            continue
 
         slotid = procs.index(None) if None in procs else -1
 

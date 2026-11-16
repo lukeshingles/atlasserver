@@ -97,6 +97,39 @@ describe('estimateWaitSeconds with several slots for one user', () => {
         assert.equal(seconds, 8 * 60);
     });
 
+    test('the tasks of the user that have started use slots of the user', () => {
+        // 8 tasks of the user are in the 8 slots of one user, and the tasks of other users wait.
+        // The task at the front waits for one of the 8 to finish: one pass at the price of the queue.
+        const waiting = { queuepos: 0, ownqueued: ownqueue(1), runnerstatus: sharing({ distinct_queued_users: 5 }) };
+
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: 8 }), 60);
+        assert.equal(estimateWaitSeconds({ ...waiting, ownstarted: 7 }), 0);
+        assert.equal(estimateWaitSeconds(waiting), 0);
+    });
+
+    test('the started tasks and the own tasks ahead fill the passes together', () => {
+        // 5 tasks in slots and 11 own tasks ahead are 2 full passes of 8
+        const seconds = estimateWaitSeconds({
+            queuepos: 11,
+            ownqueued: ownqueue(12),
+            ownstarted: 5,
+            runnerstatus: sharing(),
+        });
+
+        assert.equal(seconds, 2 * 60);
+    });
+
+    test('there is no estimate when a pass of started tasks has no price', () => {
+        const seconds = estimateWaitSeconds({
+            queuepos: 0,
+            ownqueued: ownqueue(1),
+            ownstarted: 8,
+            runnerstatus: sharing({ queued_by_request_type: undefined }),
+        });
+
+        assert.equal(seconds, null);
+    });
+
     test('a status with no maximum gives one slot to each user', () => {
         // a task runner that does not write the field runs one task of each user at a time
         const seconds = estimateWaitSeconds({ queuepos: 10, ownqueued: ownqueue(11), runnerstatus: status() });

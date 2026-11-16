@@ -384,6 +384,24 @@ class FairShareQueueTests(TestCase):
         Task.objects.filter(user=self.light).delete()
         assert taskqueue.usage_by_user()[self.light.pk].tasks == 3
 
+    def test_an_attempt_that_stops_with_an_exception_is_in_the_usage_records(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+
+        def stop() -> tuple[None, None]:
+            msg = "the disk of the results is full"
+            raise OSError(msg)
+
+        raised = False
+        try:
+            self.run_attempt(task, stop)
+        except OSError:
+            raised = True
+
+        assert raised, "the exception must stop the process of the slot"
+
+        assert UsageDay.objects.get(user=self.light).tasks == 1
+        assert Task.objects.get(pk=task.pk).finishtimestamp is None
+
     def test_an_error_of_the_usage_records_does_not_stop_the_finish_of_a_task(self) -> None:
         task = self.add_queued(self.light, 1)[0]
 
@@ -694,6 +712,14 @@ class FairShareQueueTests(TestCase):
         assert set(answer["queuedtypes"]) == set(answer["queuepositions"])
         assert answer["queuedcount"] == 3, "the count has the task in the slot"
         assert answer["startedids"] == [tasks[0].pk], answer
+
+        # a task whose attempt failed has started and has no position while it waits for a new attempt
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(tasks[1])
+        calculate_queue_positions(running_taskids={tasks[0].pk})
+        answer = self.queuepositions(self.light)
+        assert sorted(answer["startedids"]) == [tasks[0].pk, tasks[1].pk], answer
+        assert list(answer["queuepositions"]) == [str(tasks[2].pk)], answer
         assert self.queuepositions(self.light2)["queuepositions"] == {str(othertask.pk): 0}
 
 

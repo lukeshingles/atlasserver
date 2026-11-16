@@ -1704,6 +1704,27 @@ describe('TaskPage', () => {
         assert.match(status.textContent, /~20 min/);
     });
 
+    test('a waiting row waits for the tasks of the user that are in the slots', async () => {
+        // 8 tasks of the user have started, and one user has a maximum of 8 slots: the task at
+        // the front waits for one of them to finish
+        stubFetchWithPositions([task(9, { queuepos: 0 })], { 9: 0 }, {
+            queued_task_count: 20,
+            numslots: 24,
+            max_user_slots: 8,
+            slots_busy: 24,
+            distinct_queued_users: 5,
+            typical_runtime_seconds: { FP: 600 },
+            queued_by_request_type: { FP: 20 },
+        }).answerfields = { startedids: [1, 2, 3, 4, 5, 6, 7, 8] };
+        const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(root);
+        await flush(120);
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /^Waiting next/);
+        assert.match(status.textContent, /~10 min/);
+    });
+
     test('the queue badge counts the tasks in the slots with the tasks that wait', async () => {
         const badge = window.document.createElement('span');
         badge.className = 'badge rounded-pill queuecount';
