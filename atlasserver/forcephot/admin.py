@@ -3,8 +3,15 @@ from typing import override
 
 from django import forms
 from django.contrib import admin
+from django.contrib import messages
+from django.contrib.admin.helpers import ActionForm
 from django.contrib.admin.widgets import AutocompleteSelectMultiple
+
+# this import also registers the stock admin classes of User and Group. atlasserver.forcephot
+# comes before django.contrib.auth in INSTALLED_APPS, so without it the unregister calls below
+# find no User and no Group.
 from django.contrib.auth.admin import GroupAdmin
+from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import User
 from django.db.models import Model
@@ -122,3 +129,38 @@ class GroupWithMembersAdmin(GroupAdmin):
 
 admin.site.unregister(Group)
 admin.site.register(Group, GroupWithMembersAdmin)
+
+
+class GroupActionForm(ActionForm):
+    # the changelist shows this field next to the action list. It is not required, because the
+    # other actions (e.g. the delete action) do not use a group.
+    group = forms.ModelChoiceField(queryset=Group.objects.all(), required=False, label="Group:")
+
+
+# pyrefly: ignore [implicit-any-type-argument]
+# see CustomAdmin: UserAdmin has no __class_getitem__ at runtime either
+class GroupUserAdmin(UserAdmin):
+    action_form = GroupActionForm
+    actions = ["add_to_group"]
+
+    # A group gives its permissions to its members, so the action needs the permission to change
+    # users. A staff member who can only view the users does not get the action.
+    @admin.action(permissions=["change"], description="Add the selected users to the group")
+    def add_to_group(self, request: HttpRequest, queryset: t.Any) -> None:
+        # the action form validates the value against the groups in the database
+        form = self.action_form(request.POST)
+        del form.fields["action"]
+        group = form.cleaned_data.get("group") if form.is_valid() else None
+        if group is None:
+            self.message_user(request, "Select a group. No user was changed.", messages.ERROR)
+            return
+
+        # add() ignores a user who is a member already
+        group.user_set.add(*queryset)
+        self.message_user(
+            request, f"The group '{group.name}' contains all selected users ({queryset.count()}).", messages.SUCCESS
+        )
+
+
+admin.site.unregister(User)
+admin.site.register(User, GroupUserAdmin)
