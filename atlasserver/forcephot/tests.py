@@ -399,6 +399,58 @@ class FairShareQueueTests(TestCase):
             "  The maintenance deleted 3 of them.",
         ], messages
 
+    def test_the_maintenance_keeps_the_tasks_of_an_account_that_is_active_again(self) -> None:
+        tasks = self.add_queued(self.light, 3)
+        User.objects.filter(pk=self.light.pk).update(is_active=False)
+        delete = Task.delete
+
+        def delete_and_make_active(task: Task, *args: t.Any, **kwargs: t.Any) -> None:
+            # an administrator makes the account active after the maintenance read the task ids
+            delete(task, *args, **kwargs)
+            User.objects.filter(pk=self.light.pk).update(is_active=True)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+            mock.patch.object(Task, "delete", autospec=True, side_effect=delete_and_make_active),
+        ):
+            removed = taskrunner_main.remove_tasks_of_inactive_users(logfunc=lambda _msg: None)
+
+        assert removed == 1, removed
+        assert set(Task.objects.values_list("pk", flat=True)) == {tasks[1].pk, tasks[2].pk}
+
+    def test_a_slot_process_sends_no_notification_for_a_task_whose_row_is_gone(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+        copy = Task.objects.get(pk=task.pk)
+
+        def runtask(task: Task, logfunc: t.Any) -> tuple[None, str]:
+            return None, "No data returned"
+
+        def exists_then_goes(taskid: int) -> bool:
+            # the maintenance deletes the row between this check and the write of the finish
+            Task.objects.filter(pk=taskid).delete()
+            return True
+
+        with (
+            mock.patch.object(taskrunner_main, "runtask", side_effect=runtask),
+            mock.patch.object(taskrunner_main, "task_exists", side_effect=exists_then_goes),
+            mock.patch.object(taskrunner_main, "log_general") as log,
+            mock.patch.object(taskrunner_main, "notify_finished") as notify,
+            mock.patch.object(taskrunner_main, "remove_task_resultfiles") as removefiles,
+        ):
+            taskrunner_main.do_task(copy, slotid=0)
+
+        notify.assert_not_called()
+        removefiles.assert_called_once()
+        assert any("Task was deleted at the end of its execution" in str(call) for call in log.call_args_list)
+
+    def test_the_finish_of_a_task_tells_if_the_task_has_a_row(self) -> None:
+        task, gone = self.add_queued(self.light, 2)
+        Task.objects.filter(pk=gone.pk).delete()
+
+        assert taskrunner_main.mark_finished(task, error_msg=None) is True
+        assert taskrunner_main.mark_finished(gone, error_msg=None) is False
+
     def test_the_hourly_maintenance_removes_the_tasks_of_inactive_accounts(self) -> None:
         self.add_queued(self.light, 1)
         kept = self.add_queued(self.heavy, 1)[0]

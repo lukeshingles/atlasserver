@@ -543,7 +543,7 @@ def mark_started(task) -> None:
     task.task_modified_datetime = now
 
 
-def mark_finished(task, error_msg: str | None) -> None:
+def mark_finished(task, error_msg: str | None) -> bool:
     """Record that a task has finished, in the database and on the in-memory instance.
 
     The database write has to be a queryset update rather than a save(): `task` is a copy read when
@@ -552,6 +552,9 @@ def mark_finished(task, error_msg: str | None) -> None:
     The same values are then applied to the instance, because notify_finished() reports on it. Until
     this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
     had actually happened, because the instance still held the values it was loaded with.
+
+    Return False if the task has no row in the database. The caller then sends no notification:
+    see do_task.
     """
     now = dt.datetime.now(dt.UTC)
     finishtimestamp = now.replace(microsecond=0)
@@ -561,7 +564,7 @@ def mark_finished(task, error_msg: str | None) -> None:
     #
     # attempt_open stays as it is. The finish of the task is not the record of the attempt: a
     # finished task with the marker is an attempt that still needs its record.
-    Task.objects.filter(pk=task.id).update(
+    updated = Task.objects.filter(pk=task.id).update(
         finishtimestamp=finishtimestamp,
         queuepos_relative=None,
         retry_after=None,
@@ -574,6 +577,8 @@ def mark_finished(task, error_msg: str | None) -> None:
     task.retry_after = None
     task.task_modified_datetime = now
     task.error_msg = error_msg
+
+    return updated > 0
 
 
 def notify_finished(task, logfunc) -> None:
@@ -1100,22 +1105,27 @@ def do_task(task, slotid: int, started: bool = False) -> None:
     else:
         logfunc(f"Task ran for {runtask_duration:.1f} seconds")
 
-        # the task is marked finished before the email is sent, so that a mail failure can never
-        # leave the task looking unfinished and get it re-run
+        def finish(error_msg: str | None) -> None:
+            # the task is marked finished before the email is sent, so that a mail failure can
+            # never leave the task looking unfinished and get it re-run
+            if mark_finished(task=task, error_msg=error_msg):
+                notify_finished(task=task, logfunc=logfunc)
+            else:
+                # The row went between the check above and the write of the finish: its user
+                # deleted the task, or the maintenance deleted the task of an inactive account.
+                # A notification would tell about a task and a result that are not there.
+                logfunc("Task was deleted at the end of its execution (no longer in database)")
+                remove_task_resultfiles(taskid=task.id, logfunc=logfunc)
+
         if error_msg:
             # an error occurred and the task should not be retried (e.g. invalid
             # minor planet center object name or no data returned)
             logfunc(f"Error_msg: {error_msg}")
-
-            mark_finished(task=task, error_msg=error_msg)
-
-            notify_finished(task=task, logfunc=logfunc)
+            finish(error_msg)
 
         elif localresultfile and localresultfile.exists():
             # the result file is served from disk; nothing parses it into the database
-            mark_finished(task=task, error_msg=None)
-
-            notify_finished(task=task, logfunc=logfunc)
+            finish(None)
 
         else:
             # left unfinished on purpose, with no limit on the attempts: the dispatch loop picks
@@ -1313,12 +1323,22 @@ def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[]
     logfunc(f"Unfinished tasks of inactive accounts: {len(taskids)}. The maintenance deletes them now.")
     removed = 0
     for index, taskid in enumerate(taskids):
-        # One task at a time, with the lock and the removal of the files of Task.delete. A task
-        # can finish, and its user can delete it, between the read of the ids and this point.
-        task = Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).first()
-        if task is not None:
-            task.delete()
-            removed += 1
+        # One task at a time, with the removal of the files of Task.delete. Between the read of
+        # the ids and this point, the task can finish, its user can delete it, and an
+        # administrator can make the account active again. The two conditions are thus read
+        # again here, with a lock on the row of the task and on the row of its account. The
+        # slot process of the task writes the finish to the same row (mark_finished). It thus
+        # writes before this read, and the task stays, or after the deletion, and it then finds
+        # no row and sends no notification.
+        with transaction.atomic():
+            task = (
+                Task.objects.select_for_update()
+                .filter(pk=taskid, finishtimestamp__isnull=True, user__is_active=False)
+                .first()
+            )
+            if task is not None:
+                task.delete()
+                removed += 1
         if heartbeat is not None and index % 50 == 49:
             heartbeat()
 
