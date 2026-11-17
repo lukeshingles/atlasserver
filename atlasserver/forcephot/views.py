@@ -2156,7 +2156,12 @@ def resultplotdatajs(request, taskid):
                     # not named. With a plain dict they would be inferred instead, and a column of
                     # whole numbers would come back as int64, a column with a stray non-numeric
                     # token as object -- where dtype=float raises the ValueError caught below.
-                    dtype=defaultdict(lambda: float, {"F": str, "Obs": str, "uJy": int, "duJy": int}),
+                    #
+                    # The flux columns "uJy" and "duJy" hold whole numbers, but they are float
+                    # here. An integer dtype makes the parser raise OverflowError for a value
+                    # outside the 64-bit range, and that is not a ValueError. As a float, such a
+                    # value parses, and the flux cut below removes its row.
+                    dtype=defaultdict(lambda: float, {"F": str, "Obs": str}),
                 )
             except ValueError:
                 # an empty, truncated or ragged result file: EmptyDataError and ParserError are
@@ -2199,9 +2204,8 @@ def resultplotdatajs(request, taskid):
                 dffilter = dfforcedphot[dfforcedphot["F"] == filterband]
 
                 # itertuples rather than iterrows: iterrows builds a Series per row, and a result
-                # file holds thousands of them. The cast to float is one operation on the frame,
-                # and it keeps the integer flux columns printing as "100.0", the way the row
-                # iteration upcast them.
+                # file holds thousands of them. The six columns are float, so a whole number of
+                # microjanskys prints as "100.0".
                 jsout.extend(
                     (
                         '\njslabels.push({"color": '
@@ -2213,9 +2217,9 @@ def resultplotdatajs(request, taskid):
                         + ", ".join(
                             starmap(
                                 plotpoint,
-                                dffilter[["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]]
-                                .astype(float)
-                                .itertuples(index=False, name=None),
+                                dffilter[["#MJD", "uJy", "duJy", "m", "dm", "mag5sig"]].itertuples(
+                                    index=False, name=None
+                                ),
                             )
                         )
                         + "]);\n",

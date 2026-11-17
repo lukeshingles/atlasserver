@@ -3557,6 +3557,42 @@ class ResultPlotDataColumnTests(TestCase):
         assert response.status_code == 200, response.status_code
         assert b"jslcdataglobal" in response.content, "a readable file produced no plot data"
 
+    def test_a_flux_outside_the_64_bit_range_drops_only_its_row(self) -> None:
+        # an integer dtype for the flux columns makes pandas raise OverflowError for these values,
+        # and OverflowError is not a ValueError
+        toolarge = "99999999999999999999999"
+        rows = (
+            RESULTFILE_DATAROW
+            + f"59001.0 19.0 0.1 {toolarge} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            + f"59002.0 19.0 0.1 -{toolarge} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            + f"59003.0 19.0 0.1 100 {toolarge} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+        )
+
+        response = self.request_plot(RESULTFILE_HEADER, rows)
+
+        assert response.status_code == 200, response.status_code
+        content = response.content.decode()
+        assert "jslcdata.push([[59000.0,100.0,10.0,19.0,0.1]]);" in content, content[:400]
+        assert '"xmin": 59000.0, "xmax": 59000.0,' in content, content[:400]
+
+    def test_a_file_with_only_a_flux_outside_the_64_bit_range_gives_an_empty_plot(self) -> None:
+        rows = "59001.0 19.0 0.1 99999999999999999999999 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+
+        response = self.request_plot(RESULTFILE_HEADER, rows)
+
+        assert response.status_code == 200, response.status_code
+        assert b"jslcdataglobal" not in response.content, "a row with an unusable flux was plotted"
+
+    def test_two_fields_with_no_space_between_them_give_an_empty_plot(self) -> None:
+        # The flux and its error are one token, so each field after it moves one column to the
+        # left. The filter letter is then in a float column, and the parser raises ValueError.
+        rows = RESULTFILE_DATAROW + "59001.0 19.0 0.1 1000000000000000000000010 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+
+        response = self.request_plot(RESULTFILE_HEADER, rows)
+
+        assert response.status_code == 200, response.status_code
+        assert b"jslcdataglobal" not in response.content, "a file with a ragged row was plotted"
+
 
 class ArchivedTaskResultTests(TestCase):
     """Deleting a finished task must put its results out of reach, not only out of the list.
@@ -4548,7 +4584,7 @@ class ResultPlotDataTests(TestCase):
             assert "jslcdata.push([[59000.0,100.0,10.0,18.0,0.05], [59001.0,101.0,10.0,18.0,0.05]]);" in content, (
                 content[:400]
             )
-            assert '"ymin": 100, "ymax": 101,' in content, content[:400]
+            assert '"ymin": 100.0, "ymax": 101.0,' in content, content[:400]
 
     def test_a_point_fainter_than_the_image_depth_is_sent_as_an_upper_limit(self) -> None:
         """A limit carries the 5 sigma depth and no magnitude error, and keeps its measured flux.
