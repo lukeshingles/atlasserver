@@ -6431,22 +6431,42 @@ class SshOptionsTests(TestCase):
             assert controldir.is_dir()
             assert controldir.stat().st_mode & 0o077 == 0, oct(controldir.stat().st_mode)
 
-    def test_a_directory_that_exists_becomes_private(self) -> None:
-        # a different user must not be able to put a socket into the directory
+    def test_a_directory_that_other_users_can_write_to_is_not_used(self) -> None:
+        # a different user can put a socket or a link there, and a new mode does not remove it
+        for mode in (0o777, 0o770, 0o702):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as homedir:
+                controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+                controldir.mkdir(parents=True)
+                controldir.chmod(mode)
+                logged: list[str] = []
+
+                with mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)):
+                    options = taskrunner_main.ssh_options(0, logged.append)
+
+                assert options == []
+                assert any("not a private directory" in line for line in logged), logged
+
+    def test_a_directory_that_only_the_account_can_write_to_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as homedir:
             controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
             controldir.mkdir(parents=True)
-            controldir.chmod(0o777)
+            controldir.chmod(0o755)
 
             assert self.options(0, homedir)
-            assert controldir.stat().st_mode & 0o777 == 0o700, oct(controldir.stat().st_mode)
 
-    def test_there_are_no_options_when_the_directory_cannot_become_private(self) -> None:
-        # chmod fails for a directory that a different user owns
+    def test_a_directory_of_a_different_user_is_not_used(self) -> None:
         with (
             tempfile.TemporaryDirectory() as homedir,
-            mock.patch.object(Path, "chmod", side_effect=PermissionError("not the owner")),
+            mock.patch.object(taskrunner_main.os, "getuid", return_value=os.getuid() + 1),
         ):
+            assert self.options(0, homedir) == []
+
+    def test_a_link_to_a_directory_is_not_used(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir, tempfile.TemporaryDirectory() as elsewhere:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.parent.mkdir(parents=True)
+            controldir.symlink_to(elsewhere, target_is_directory=True)
+
             assert self.options(0, homedir) == []
 
     def test_no_option_contains_a_space(self) -> None:
@@ -6564,6 +6584,42 @@ class OpenSshMasterTests(TestCase):
         _, logged = self.open_master([255, subprocess.TimeoutExpired(cmd="ssh", timeout=60)])
 
         assert any("did not open the connection" in line for line in logged), logged
+
+    def test_a_lock_file_that_is_a_link_is_not_opened(self) -> None:
+        # an open for writing follows a link and removes the content of its target
+        logged: list[str] = []
+        with tempfile.TemporaryDirectory() as homedir:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.mkdir(parents=True)
+            target = Path(homedir, "target")
+            target.write_text("content", encoding="utf-8")
+            Path(controldir, "atlas-0.lock").symlink_to(target)
+
+            with (
+                mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+                mock.patch.object(taskrunner_main.subprocess, "run") as run,
+            ):
+                taskrunner_main.open_ssh_master(0, self.OPTIONS, logged.append)
+
+            assert target.read_text(encoding="utf-8") == "content"
+
+        run.assert_not_called()
+        assert any("did not open the connection" in line for line in logged), logged
+
+    def test_a_lock_file_keeps_its_content(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.mkdir(parents=True)
+            lockfile = Path(controldir, "atlas-0.lock")
+            lockfile.write_text("content", encoding="utf-8")
+
+            with (
+                mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+                mock.patch.object(taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0)),
+            ):
+                taskrunner_main.open_ssh_master(0, self.OPTIONS, lambda _msg: None)
+
+            assert lockfile.read_text(encoding="utf-8") == "content"
 
     def test_a_task_without_options_opens_no_connection(self) -> None:
         user = User.objects.create_user(username="nomaster", email="nomaster@example.com", password=None)
@@ -8831,7 +8887,7 @@ class ImageRequestDispatchTests(TestCase):
 
             taskrunner_main.runtask(self.child, logfunc=lambda _msg: None, slotid=9)
 
-        ssh_options.assert_called_once_with(9)
+        assert ssh_options.call_args.args[0] == 9, ssh_options.call_args
         # the connection of the group is open before the first command of the task
         assert open_ssh_master.call_args.args[:2] == (9, sshoptions), open_ssh_master.call_args
         sshcommand = popen.call_args.args[0]

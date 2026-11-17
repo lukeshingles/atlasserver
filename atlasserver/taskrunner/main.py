@@ -9,6 +9,7 @@ import json
 import multiprocessing as mp
 import os
 import pwd
+import stat
 import subprocess
 import time
 import typing as t
@@ -137,7 +138,7 @@ def ssh_control_dir() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
 
 
-def ssh_options(slotid: int | None) -> list[str]:
+def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = None) -> list[str]:
     """Return the ssh options that give a slot the connection of its group of slots.
 
     Each option is one argument with no space, because rsync divides its -e value at the spaces.
@@ -149,12 +150,20 @@ def ssh_options(slotid: int | None) -> list[str]:
     controldir = ssh_control_dir()
     try:
         controldir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        # mkdir does not change the mode of a directory that exists, and a different user must
-        # not be able to put a socket there. chmod fails if a different user owns the directory.
-        controldir.chmod(0o700)
+        # lstat and not stat, so that a link to a directory is not accepted as the directory
+        status = controldir.lstat()
     except OSError:
         # ssh exits with status 255 when it cannot make the socket, and the task then never
         # completes. A connection for each command is slower, but it works.
+        return []
+
+    # A different user who can write to the directory can put a socket or a link there, and ssh
+    # then sends the commands of a task to that socket. The mode alone is not sufficient to
+    # repair such a directory, because the entries stay. The task runner thus uses the
+    # directory only if no other user was able to write to it.
+    if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o022:
+        if logfunc is not None:
+            logfunc(f"ERROR: {controldir} is not a private directory of this account, so ssh uses no shared connection")
         return []
 
     group = slotid // SSH_SLOTS_PER_CONNECTION
@@ -184,8 +193,10 @@ def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callabl
     """
     lockfile = ssh_control_dir() / f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}.lock"
     try:
-        # the lock ends when the file closes, and also when this process ends
-        with lockfile.open("w", encoding="utf-8") as flock:
+        # O_NOFOLLOW gives an error for a link, and the open does not change the content of the
+        # file. The lock ends when the file closes, and also when this process ends.
+        lockfd = os.open(lockfile, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(lockfd) as flock:
             fcntl.flock(flock, fcntl.LOCK_EX)
 
             # the check asks only the local master, so it makes no connection
@@ -428,7 +439,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     if filename is None:
         return None, None
 
-    sshoptions = ssh_options(slotid)
+    sshoptions = ssh_options(slotid, logfunc)
     if slotid is not None and sshoptions:
         open_ssh_master(slotid, sshoptions, logfunc)
 
