@@ -664,7 +664,7 @@ def mark_started(task) -> None:
     task.task_modified_datetime = now
 
 
-def mark_finished(task, error_msg: str | None) -> None:
+def mark_finished(task, error_msg: str | None) -> bool:
     """Record that a task has finished, in the database and on the in-memory instance.
 
     The database write has to be a queryset update rather than a save(): `task` is a copy read when
@@ -673,6 +673,9 @@ def mark_finished(task, error_msg: str | None) -> None:
     The same values are then applied to the instance, because notify_finished() reports on it. Until
     this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
     had actually happened, because the instance still held the values it was loaded with.
+
+    Return False if the task has no row in the database. The caller then sends no notification:
+    see do_task.
     """
     now = dt.datetime.now(dt.UTC)
     finishtimestamp = now.replace(microsecond=0)
@@ -682,7 +685,7 @@ def mark_finished(task, error_msg: str | None) -> None:
     #
     # attempt_open stays as it is. The finish of the task is not the record of the attempt: a
     # finished task with the marker is an attempt that still needs its record.
-    Task.objects.filter(pk=task.id).update(
+    updated = Task.objects.filter(pk=task.id).update(
         finishtimestamp=finishtimestamp,
         queuepos_relative=None,
         retry_after=None,
@@ -695,6 +698,8 @@ def mark_finished(task, error_msg: str | None) -> None:
     task.retry_after = None
     task.task_modified_datetime = now
     task.error_msg = error_msg
+
+    return updated > 0
 
 
 def notify_finished(task, logfunc) -> None:
@@ -821,6 +826,11 @@ def next_task(running_taskids: t.Iterable[int], running_userids: t.Iterable[int]
     fails, or if its slot stops, it gets a position again at the next renumbering. Without this
     rule, such a task sorts before all the tasks that wait, and a task that always fails keeps a
     slot.
+
+    A task of an inactive account has no position, and thus it cannot start; see
+    forcephot.queue.calculate_queue_positions. This query does not read the users: a join to the
+    table of the users makes the database start from that table, and this query runs on each
+    pass of the main loop that has a free slot.
     """
     slotsofuser = collections.Counter(running_userids)
     users_at_maximum = [userid for userid, count in slotsofuser.items() if count >= runnerstatus.MAX_USER_SLOTS]
@@ -1216,22 +1226,27 @@ def do_task(task, slotid: int, started: bool = False) -> None:
     else:
         logfunc(f"Task ran for {runtask_duration:.1f} seconds")
 
-        # the task is marked finished before the email is sent, so that a mail failure can never
-        # leave the task looking unfinished and get it re-run
+        def finish(error_msg: str | None) -> None:
+            # the task is marked finished before the email is sent, so that a mail failure can
+            # never leave the task looking unfinished and get it re-run
+            if mark_finished(task=task, error_msg=error_msg):
+                notify_finished(task=task, logfunc=logfunc)
+            else:
+                # The row went between the check above and the write of the finish: its user
+                # deleted the task, or the maintenance deleted the task of an inactive account.
+                # A notification would tell about a task and a result that are not there.
+                logfunc("Task was deleted at the end of its execution (no longer in database)")
+                remove_task_resultfiles(taskid=task.id, logfunc=logfunc)
+
         if error_msg:
             # an error occurred and the task should not be retried (e.g. invalid
             # minor planet center object name or no data returned)
             logfunc(f"Error_msg: {error_msg}")
-
-            mark_finished(task=task, error_msg=error_msg)
-
-            notify_finished(task=task, logfunc=logfunc)
+            finish(error_msg)
 
         elif localresultfile and localresultfile.exists():
             # the result file is served from disk; nothing parses it into the database
-            mark_finished(task=task, error_msg=None)
-
-            notify_finished(task=task, logfunc=logfunc)
+            finish(None)
 
         else:
             # left unfinished on purpose, with no limit on the attempts: the dispatch loop picks
@@ -1401,6 +1416,59 @@ def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=
     return count
 
 
+def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[], None] | None = None) -> int:
+    """Delete the unfinished tasks of the accounts that are not active, and return their number.
+
+    An administrator makes an account inactive in the admin site to stop its use of the server.
+    The account stays in the database, and without this function its tasks stay in the queue.
+    The queue order gives no position to a task of an inactive account, and thus the task runner
+    does not start it (forcephot.queue.calculate_queue_positions). This function deletes those
+    tasks. The row of a task in a slot goes also. Its slot process keeps the slot until the end
+    of the attempt. It then finds no row, as for a task that its user deleted, and it removes
+    its result file.
+
+    The finished tasks of the account stay. The other sweeps of the maintenance remove them at
+    their usual age.
+
+    An account that waits for the confirmation of its address is also inactive. It cannot sign
+    in, and thus it has no task.
+
+    `heartbeat` is called during the work, as in remove_old_tasks.
+    """
+    taskids = list(
+        Task.objects.filter(finishtimestamp__isnull=True, user__is_active=False).values_list("id", flat=True)
+    )
+    if not taskids:
+        return 0
+
+    logfunc(f"Unfinished tasks of inactive accounts: {len(taskids)}. The maintenance deletes them now.")
+    removed = 0
+    for index, taskid in enumerate(taskids):
+        # One task at a time, with the removal of the files of Task.delete. Between the read of
+        # the ids and this point, the task can finish, its user can delete it, and an
+        # administrator can make the account active again. The two conditions are thus read
+        # again here, with a lock on the row of the task and on the row of its account. The
+        # slot process of the task writes the finish to the same row (mark_finished). It thus
+        # writes before this read, and the task stays, or after the deletion, and it then finds
+        # no row and sends no notification.
+        with transaction.atomic():
+            task = (
+                Task.objects.select_for_update()
+                .filter(pk=taskid, finishtimestamp__isnull=True, user__is_active=False)
+                .first()
+            )
+            if task is not None:
+                task.delete()
+                removed += 1
+        if heartbeat is not None and index % 50 == 49:
+            heartbeat()
+
+    # the tasks of the other users move forward in the queue
+    taskqueue.request_recalc()
+    logfunc(f"  The maintenance deleted {removed} of them.")
+    return removed
+
+
 def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     """Remove old tasks and associated files according to their type and age.
 
@@ -1433,6 +1501,8 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
         remove_old_tasks(**sweep, logfunc=logfunc, heartbeat=heartbeat)
 
     remove_unverified_accounts(logfunc=logfunc)
+
+    remove_tasks_of_inactive_users(logfunc=logfunc, heartbeat=heartbeat)
 
     removed = taskqueue.remove_old_usage_records()
     logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")

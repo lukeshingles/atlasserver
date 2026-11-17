@@ -155,6 +155,20 @@ def priority_userids() -> set[int]:
     return set(get_user_model().objects.filter(groups__name=HIGH_PRIORITY_GROUP).values_list("pk", flat=True))
 
 
+def inactive_userids() -> set[int]:
+    """Return the ids of the accounts that are not active.
+
+    An administrator makes an account inactive in the admin site to stop its use of the server.
+    An account that waits for the confirmation of its address is also inactive, and it has no
+    task. The queue order gives no position to a task of these accounts; see
+    calculate_queue_positions.
+
+    This is a query at each call, as for priority_userids: the next renumbering must see a
+    change that an administrator makes.
+    """
+    return set(get_user_model().objects.filter(is_active=False).values_list("pk", flat=True))
+
+
 class Usage(t.NamedTuple):
     """The usage of one user: the run time and the number of the attempts, with the decay."""
 
@@ -447,6 +461,11 @@ def calculate_queue_positions(
     The renumbering at an interval of RECALC_MAX_INTERVAL_SECONDS gives the position, and the
     wait is thus longer by that interval at most.
 
+    A task of an inactive account has no position, and thus it cannot start; see
+    inactive_userids. The renumbering at the same interval removes the positions after an
+    administrator makes an account inactive. The maintenance of the task runner deletes those
+    tasks (taskrunner.main.remove_tasks_of_inactive_users).
+
     The task runner starts the task with the lowest position whose user is below the maximum
     number of slots (taskrunner.main.next_task). The task runner has no second rule for the
     priority. The position of a task is thus the number of tasks that are before it in the
@@ -463,6 +482,7 @@ def calculate_queue_positions(
     # These queries run before the transaction locks the rows. Thus the lock does not include
     # the time of these queries.
     priorityuserids = priority_userids()
+    inactiveuserids = inactive_userids()
     if usage is None:
         usage = usage_by_user()
     expected = expected_task_seconds(usage)
@@ -494,7 +514,11 @@ def calculate_queue_positions(
                 usageseconds = max(usageseconds, newaccountseconds)
             tier = 0 if userid in priorityuserids else 1
             inslots = sum(1 for task in usertasks if in_slot(task))
-            waiting = [task for task in usertasks if not in_slot(task) and not waits_for_retry(task)]
+            waiting: list[Task] = (
+                []
+                if userid in inactiveuserids
+                else [task for task in usertasks if not in_slot(task) and not waits_for_retry(task)]
+            )
             # One multiplication for the tasks in the slots and the tasks before. A start moves
             # one unit from the tasks before to the tasks in the slots, and the product is then
             # the same number. A sum of two products can differ in its last bit, and that
