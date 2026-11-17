@@ -6264,6 +6264,91 @@ class RunRsyncTests(TestCase):
         assert result == 12
         assert any("exited with code 12" in line for line in logged), logged
 
+    def test_the_ssh_options_go_to_rsync_as_one_argument(self) -> None:
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+
+        with mock.patch("subprocess.Popen", return_value=proc) as popen:
+            taskrunner_main.run_rsync(["rsync", "a", "b"], lambda _msg: None, ["-oX=1", "-oY=2"])
+
+        assert popen.call_args.args[0] == ["rsync", "-e", "ssh -oX=1 -oY=2", "a", "b"], popen.call_args
+
+
+class SshOptionsTests(TestCase):
+    """The ssh connection that the commands of a slot use."""
+
+    def options(self, slotid: int | None, homedir: str) -> list[str]:
+        with mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)):
+            return taskrunner_main.ssh_options(slotid)
+
+    def controlpath(self, slotid: int, homedir: str) -> str:
+        (path,) = (x for x in self.options(slotid, homedir) if x.startswith("-oControlPath="))
+        return path
+
+    def test_the_slots_of_one_group_have_the_same_socket(self) -> None:
+        # sshd refuses the sessions above its limit for one connection, so a socket has a
+        # maximum number of slots
+        persocket = taskrunner_main.SSH_SLOTS_PER_CONNECTION
+        with tempfile.TemporaryDirectory() as homedir:
+            paths = [self.controlpath(slotid, homedir) for slotid in range(taskrunner_main.runnerstatus.NUMSLOTS)]
+
+        assert paths[0] == paths[persocket - 1], paths
+        assert paths[persocket - 1] != paths[persocket], paths
+        assert max(paths.count(path) for path in paths) <= persocket, paths
+
+    def test_the_directory_of_the_sockets_is_made_and_is_private(self) -> None:
+        # ssh exits with status 255 when the directory of the socket does not exist
+        with tempfile.TemporaryDirectory() as homedir:
+            self.options(0, homedir)
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+
+            assert controldir.is_dir()
+            assert controldir.stat().st_mode & 0o077 == 0, oct(controldir.stat().st_mode)
+
+    def test_no_option_contains_a_space(self) -> None:
+        # rsync divides the value of -e at each space
+        with tempfile.TemporaryDirectory() as homedir:
+            options = self.options(0, homedir)
+
+        assert options
+        assert not any(" " in option for option in options), options
+
+    def test_the_master_goes_to_the_background(self) -> None:
+        # a cancelled task sends SIGTERM to its ssh process. If that process is the master, the
+        # sessions of the other slots end too.
+        with tempfile.TemporaryDirectory() as homedir:
+            options = self.options(0, homedir)
+
+        assert "-oControlMaster=auto" in options, options
+        assert any(option.startswith("-oControlPersist=") for option in options), options
+
+    def test_there_are_no_options_when_the_directory_cannot_be_made(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            notadirectory = Path(tmpdir, "file")
+            notadirectory.write_text("", encoding="utf-8")
+
+            assert self.options(0, str(notadirectory)) == []
+
+    def test_a_task_gets_the_slot_of_its_process(self) -> None:
+        # without the slot, each command uses a connection of its own and nothing shows an error
+        user = User.objects.create_user(username="sshslot", email="sshslot@example.com", password=None)
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        with (
+            mock.patch.object(taskrunner_main, "runtask", return_value=(None, "No data returned")) as runtask,
+            mock.patch.object(taskrunner_main, "log_general"),
+            mock.patch.object(taskrunner_main, "notify_finished"),
+        ):
+            taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=17)
+
+        assert runtask.call_args.kwargs["slotid"] == 17, runtask.call_args
+
+    def test_there_are_no_options_without_a_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir:
+            assert self.options(None, homedir) == []
+            assert not Path(homedir, taskrunner_main.SSH_CONTROL_DIR).exists()
+
 
 def silent(_msg: object) -> None:
     """Swallow a log line: for a sweep whose output is not what the test is about."""
@@ -8471,7 +8556,7 @@ class ImageRequestDispatchTests(TestCase):
         """Run the child up to the remote command and return every rsync it issued."""
         rsyncs: list[list[str]] = []
 
-        def fake_rsync(command: list[str], logfunc: t.Any) -> int:
+        def fake_rsync(command: list[str], logfunc: t.Any, sshoptions: t.Sequence[str] = ()) -> int:
             rsyncs.append(command)
             return 0
 
@@ -8486,6 +8571,35 @@ class ImageRequestDispatchTests(TestCase):
             taskrunner_main.runtask(self.child, logfunc=lambda _msg: None)
 
         return rsyncs
+
+    def test_the_commands_of_a_slot_use_the_connection_of_the_slot(self) -> None:
+        sshoptions = ["-oControlPath=~/x/atlas-1"]
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=sshoptions) as ssh_options,
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0) as run_rsync,
+            mock.patch("subprocess.Popen", return_value=proc) as popen,
+            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+        ):
+            inputcopy = self.child.inputfile()
+            inputcopy.parent.mkdir(parents=True, exist_ok=True)
+            inputcopy.write_text("observations")
+
+            taskrunner_main.runtask(self.child, logfunc=lambda _msg: None, slotid=9)
+
+        ssh_options.assert_called_once_with(9)
+        sshcommand = popen.call_args.args[0]
+        assert sshcommand[:3] == ["ssh", *sshoptions, taskrunner_main.REMOTE_SERVER], sshcommand
+        assert len(sshcommand) == 4, "the remote command stays one argument"
+        assert run_rsync.call_count >= 2, run_rsync.call_args_list
+        assert all(call.args[2] == sshoptions for call in run_rsync.call_args_list), run_rsync.call_args_list
 
     def test_the_request_uploads_its_own_copy_under_its_own_name(self) -> None:
         # the runner reads its settings module directly, so its directories are patched on that
@@ -9438,7 +9552,7 @@ class NoDataTaskTests(TestCase):
             resultfile = Path(tmpdir, "job00001.txt")
             resultfile.write_text("###MJD m dm uJy duJy\n", encoding="utf-8")
 
-            def runtask(task: Task, logfunc: t.Any) -> tuple[Path, str | None]:
+            def runtask(task: Task, logfunc: t.Any, slotid: int | None = None) -> tuple[Path, str | None]:
                 # the end of runtask() for a forced photometry task, after the copy from the remote host
                 return resultfile, taskrunner_main.result_file_problem(resultfile)
 

@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import multiprocessing as mp
 import os
+import pwd
 import subprocess
 import time
 import typing as t
@@ -49,6 +50,19 @@ TASK_MAXTIME_SECONDS: int = 4 * 3600
 # the exit status ssh itself gives when the connection fails, as opposed to the status of the
 # remote command
 SSH_CONNECTION_FAILED: int = 255
+
+# The number of slots that use one ssh connection to the remote server. A slot has one session
+# at a time. The sshd of the remote server refuses a session above its MaxSessions limit, which
+# is 10 unless the administrator set a different value. ssh then opens a new connection for
+# that command.
+SSH_SLOTS_PER_CONNECTION: int = 8
+
+# the time that an ssh connection with no session stays open for the next task
+SSH_CONTROL_PERSIST: str = "1h"
+
+# the directory of the control sockets, relative to the home directory. ssh fails if the path of
+# a socket is longer than about 100 characters, so the names are short.
+SSH_CONTROL_DIR: str = ".ssh/atlasserver"
 
 # the columns that a forced photometry result file must have, as the header names them
 RESULT_REQUIRED_COLUMNS: tuple[str, ...] = ("MJD", "uJy")
@@ -109,8 +123,50 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
         flogfile.write(line + "\n")
 
 
-def run_rsync(copycommand: list[str], logfunc: t.Callable[[t.Any], None]) -> int | None:
-    """Run an rsync command, logging its output. Return the exit code, or None if it timed out."""
+def ssh_options(slotid: int | None) -> list[str]:
+    """Return the ssh options that give a slot the connection of its group of slots.
+
+    Each option is one argument with no space, because rsync divides its -e value at the spaces.
+    Without a slot there are no options, and ssh uses only the configuration of the account.
+    """
+    if slotid is None:
+        return []
+
+    # ssh expands ~ from the password database and not from $HOME, so the directory comes from
+    # the same source
+    controldir = Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
+    try:
+        controldir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        # ssh exits with status 255 when it cannot make the socket, and the task then never
+        # completes. A connection for each command is slower, but it works.
+        return []
+
+    group = slotid // SSH_SLOTS_PER_CONNECTION
+    return [
+        "-oControlMaster=auto",
+        f"-oControlPath=~/{SSH_CONTROL_DIR}/{REMOTE_SERVER}-{group}",
+        # ControlPersist puts the master into a background process. The ssh process of a slot is
+        # then a client, and the SIGTERM of a cancelled task does not close the sessions of the
+        # other slots.
+        f"-oControlPersist={SSH_CONTROL_PERSIST}",
+        # the master exits when the remote server does not reply. Without these options, each
+        # new session waits on a dead connection.
+        "-oServerAliveInterval=30",
+        "-oServerAliveCountMax=3",
+    ]
+
+
+def run_rsync(
+    copycommand: list[str], logfunc: t.Callable[[t.Any], None], sshoptions: t.Sequence[str] = ()
+) -> int | None:
+    """Run an rsync command, logging its output. Return the exit code, or None if it timed out.
+
+    rsync starts ssh with `sshoptions`; see ssh_options.
+    """
+    if sshoptions:
+        copycommand = [copycommand[0], "-e", " ".join(["ssh", *sshoptions]), *copycommand[1:]]
+
     logfunc(" ".join(copycommand))
 
     proc = subprocess.Popen(
@@ -300,8 +356,10 @@ def result_file_problem(localresultfile: Path) -> str | None:
     return None
 
 
-def runtask(task, logfunc) -> tuple[Path | None, str | None]:
+def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
+
+    `slotid` selects the ssh connection that the commands use; see ssh_options.
 
     returns (resultfilename, error_msg)
      - resultfilename will be None if it could not be created due to an error
@@ -310,6 +368,8 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
     filename = remote_result_filename(task)
     if filename is None:
         return None, None
+
+    sshoptions = ssh_options(slotid)
 
     remoteresultdir = Path("~/atlasserver/results/")
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
@@ -338,7 +398,7 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
             return None, "The forced photometry data file for the parent task is no longer available."
 
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
-        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc) != 0:
+        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc, sshoptions) != 0:
             # without the data file the remote script cannot select any images, so retry later
             # instead of burning a remote run that is certain to fail
             return None, None
@@ -357,7 +417,7 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
     proc = subprocess.Popen(
-        ["ssh", f"{REMOTE_SERVER}", atlascommand],
+        ["ssh", *sshoptions, f"{REMOTE_SERVER}", atlascommand],
         shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -471,7 +531,7 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
         )
 
     for copycommand in copycommands:
-        run_rsync(copycommand, logfunc)
+        run_rsync(copycommand, logfunc, sshoptions)
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
@@ -1083,7 +1143,7 @@ def do_task(task, slotid: int, started: bool = False) -> None:
 
     # The usage of this attempt is not recorded here. The main loop records it when this
     # process ends; see record_ended_attempts.
-    localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
+    localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly, slotid=slotid)
 
     runtask_duration = time.perf_counter() - runtask_starttime
 
