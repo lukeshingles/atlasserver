@@ -454,11 +454,13 @@ class FairShareQueueTests(TestCase):
             lastwrite = (now - dt.timedelta(seconds=60)).isoformat()
             statuspath.write_text(json.dumps({"written": lastwrite}), encoding="utf-8")
             with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 2
+                left = taskrunner_main.open_attempts(logfunc=messages.append)
+                assert sorted(attempt.taskid for attempt in left) == sorted([finished.pk, stopped.pk])
+                assert taskrunner_main.record_ended_attempts(left, logfunc=messages.append) == []
                 # a second start of a task runner finds no attempt
-                assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 0
+                assert taskrunner_main.open_attempts(logfunc=messages.append) == []
 
-        assert messages == ["Recorded the end of 2 attempts that a task runner left with no record"]
+        assert messages == ["A task runner left 2 attempts with no record of their end"]
         # 200 seconds to the finish, 240 seconds to the last status, and the 5 seconds from before.
         # A record is on the day of the end of its attempt, and thus the records can be on two days.
         records = list(UsageDay.objects.filter(user=self.light))
@@ -482,14 +484,16 @@ class FairShareQueueTests(TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
         ):
-            assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 1
+            left = taskrunner_main.open_attempts(logfunc=messages.append)
 
         assert len(messages) == 2, messages
         assert messages[0].startswith("There is no status file of a task runner."), messages
+        assert [(attempt.taskid, attempt.seconds, attempt.failed) for attempt in left] == [(stopped.pk, 0.0, False)]
+        assert taskrunner_main.record_ended_attempts(left, logfunc=messages.append) == []
         usage = UsageDay.objects.get(user=self.light)
         assert (usage.seconds, usage.tasks) == (0.0, 1)
 
-    def test_an_error_for_one_open_attempt_does_not_stop_the_record_of_the_others(self) -> None:
+    def test_an_open_attempt_whose_record_fails_stays_for_a_new_try(self) -> None:
         first, second = self.add_queued(self.light, 2)
         with mock.patch.object(taskrunner_main, "log_general"):
             taskrunner_main.mark_started(first)
@@ -506,15 +510,55 @@ class FairShareQueueTests(TestCase):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
-            mock.patch.object(taskrunner_main, "record_attempt_end", fails_for_first),
         ):
-            assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 1
+            left = taskrunner_main.open_attempts(logfunc=messages.append)
+        with mock.patch.object(taskrunner_main, "record_attempt_end", fails_for_first):
+            pending = taskrunner_main.record_ended_attempts(left, logfunc=messages.append)
 
-        assert messages[-1] == (
-            "ERROR: could not record the end of 1 attempts of a task runner that stopped: the database is away"
-        ), messages
-        # the attempt with the error keeps its marker for the next start of a task runner
+        assert [attempt.taskid for attempt in pending] == [first.pk]
+        assert messages[-1] == "ERROR: could not record the end of 1 attempts: the database is away", messages
         assert list(Task.objects.filter(attempt_open=True).values_list("pk", flat=True)) == [first.pk]
+        # The main loop gives a task no position while the record of its attempt is not there.
+        calculate_queue_positions(running_taskids={attempt.taskid for attempt in pending})
+        assert [task.pk for task in self.waiting()] == [second.pk]
+
+        # the database is back: the main loop makes the record, and the task gets a position
+        assert taskrunner_main.record_ended_attempts(pending, logfunc=messages.append) == []
+        usage = UsageDay.objects.get(user=self.light)
+        assert usage.tasks == 2
+        calculate_queue_positions(running_taskids=set())
+        assert sorted(task.pk for task in self.waiting()) == sorted([first.pk, second.pk])
+        assert Task.objects.get(pk=first.pk).retry_after is None
+
+    def test_the_task_runner_waits_for_the_read_of_the_open_attempts(self) -> None:
+        stopped = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(stopped)
+        messages: list[str] = []
+        waits: list[float] = []
+        read = taskrunner_main.open_attempts
+        calls = 0
+
+        def fails_two_times(logfunc: t.Any) -> list[taskrunner_main.EndedAttempt]:
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                msg = "the database is away"
+                raise RuntimeError(msg)
+            return read(logfunc=logfunc)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+            mock.patch.object(taskrunner_main, "open_attempts", fails_two_times),
+            mock.patch.object(taskrunner_main, "close_old_connections"),
+        ):
+            left = taskrunner_main.open_attempts_when_readable(logfunc=messages.append, sleep=waits.append)
+
+        assert [attempt.taskid for attempt in left] == [stopped.pk]
+        assert waits == [taskqueue.RECALC_MAX_INTERVAL_SECONDS] * 2
+        error = "ERROR: could not read the attempts that a task runner left with no record: the database is away"
+        assert messages[:2] == [error, error], messages
 
     def test_the_run_time_of_an_attempt_ends_at_the_end_of_its_slot_process(self) -> None:
         class Shared:

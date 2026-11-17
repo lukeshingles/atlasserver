@@ -140,7 +140,7 @@ class Task(models.Model):
     # True from the start of an attempt until the task runner has the record of the end of that
     # attempt; see taskrunner.main.record_attempt_end. The field is in the database because the
     # task runner can stop while an attempt has a slot: the next task runner finds the attempt by
-    # this field (taskrunner.main.record_open_attempts). The finish of a task does not change it.
+    # this field (taskrunner.main.open_attempts). The finish of a task does not change it.
     attempt_open = models.BooleanField(default=False, editable=False)
     userqueuedtasks_on_submit = models.IntegerField(
         null=True, blank=True, default=None, verbose_name="User queued tasks when submitted", editable=False

@@ -19,6 +19,7 @@ import django
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
+from django.db import close_old_connections
 from django.db import models
 from django.db import transaction
 from django.db.models import prefetch_related_objects
@@ -813,6 +814,11 @@ class EndedAttempt(t.NamedTuple):
     taskid: int
     userid: int
     seconds: float
+    # the time of the end, which gives the day of the usage record. None is the time of the record.
+    when: dt.datetime | None = None
+    # False for an attempt that a stop of the task runner cut: its task gets no wait; see
+    # open_attempts
+    failed: bool = True
 
 
 def record_attempt_end(
@@ -829,7 +835,7 @@ def record_attempt_end(
     A task that is not finished gets the time of its next possible attempt (Task.retry_after).
     The wait is from the end of the attempt and not from its start: an attempt can run for hours
     before it fails, and a wait from its start is then over at its end. With `failed` false, the
-    task gets no wait: see record_open_attempts.
+    task gets no wait: see open_attempts.
 
     The marker of the attempt (Task.attempt_open) makes one record for one attempt. This function
     removes the marker, and it makes the record only if the marker was there. A second call for
@@ -858,11 +864,11 @@ def record_attempt_end(
     return True
 
 
-def record_open_attempts(logfunc=log_general) -> int:
-    """Record the end of each attempt that a task runner left with no record, and return their number.
+def open_attempts(logfunc=log_general) -> list[EndedAttempt]:
+    """Return each attempt that a task runner left with no record of its end.
 
-    The main loop calls this one time, before it starts a task and before it writes the status
-    file. No slot process of this task runner exists at that time. Each attempt with the marker
+    The main loop calls this before it starts a task and before it writes the status file. No
+    slot process of this task runner exists at that time. Each attempt with the marker
     Task.attempt_open is thus an attempt of a task runner that stopped while the attempt had a
     slot.
 
@@ -878,8 +884,10 @@ def record_open_attempts(logfunc=log_general) -> int:
     A task that is not finished gets no wait before its next attempt. The attempt did not fail:
     the task runner stopped it.
 
-    An error for one attempt does not stop the others. That attempt keeps its marker for the
-    next call.
+    This function only reads. The main loop records the result as it records each other attempt
+    that ended (record_ended_attempts): it keeps an attempt whose record fails, and the task of
+    that attempt gets no queue position before the record is there. An error of the database
+    goes to the caller.
     """
     now = dt.datetime.now(dt.UTC)
     laststatus: dt.datetime | None = None
@@ -888,30 +896,40 @@ def record_open_attempts(logfunc=log_general) -> int:
     except (OSError, KeyError, TypeError, ValueError):
         logfunc("There is no status file of a task runner. An attempt with no end gets a record with no run time.")
 
-    recorded = 0
-    notrecorded = 0
-    lasterror: Exception | None = None
-    openattempts = Task.objects.filter(attempt_open=True).values_list(
-        "pk", "user_id", "starttimestamp", "finishtimestamp"
-    )
-    for taskid, userid, started, finished in list(openattempts):
+    attempts: list[EndedAttempt] = []
+    rows = Task.objects.filter(attempt_open=True).values_list("pk", "user_id", "starttimestamp", "finishtimestamp")
+    for taskid, userid, started, finished in rows:
         end = finished or laststatus
         seconds = 0.0
         if end is not None and started is not None:
             # between zero and the time from the start to now: the time in the status file and
             # the start time of the task are from two processes
             seconds = min(max(0.0, (end - started).total_seconds()), (now - started).total_seconds())
-        try:
-            recorded += record_attempt_end(taskid, userid, seconds, when=end, failed=False)
-        except Exception as ex:  # noqa: BLE001 (an error here must not stop the task runner)
-            notrecorded += 1
-            lasterror = ex
+        attempts.append(EndedAttempt(taskid=taskid, userid=userid, seconds=seconds, when=end, failed=False))
 
-    if recorded:
-        logfunc(f"Recorded the end of {recorded} attempts that a task runner left with no record")
-    if notrecorded:
-        logfunc(f"ERROR: could not record the end of {notrecorded} attempts of a task runner that stopped: {lasterror}")
-    return recorded
+    if attempts:
+        logfunc(f"A task runner left {len(attempts)} attempts with no record of their end")
+    return attempts
+
+
+def open_attempts_when_readable(
+    logfunc=log_general, sleep: t.Callable[[float], None] = time.sleep
+) -> list[EndedAttempt]:
+    """Return the result of open_attempts, and try again after each error of the database.
+
+    The main loop does not start before this read succeeds. Without the read, the main loop does
+    not know which tasks have an attempt with no record, and the first renumbering gives each of
+    them a queue position. The task runner cannot start a task without the database, and thus
+    this wait stops no start that is possible.
+    """
+    while True:
+        try:
+            return open_attempts(logfunc=logfunc)
+        except Exception as ex:  # noqa: BLE001 (an error of the database must not stop the task runner)
+            logfunc(f"ERROR: could not read the attempts that a task runner left with no record: {ex}")
+        sleep(taskqueue.RECALC_MAX_INTERVAL_SECONDS)
+        # Django opens a new connection for the next query if this one is not usable
+        close_old_connections()
 
 
 class SlotClock(t.NamedTuple):
@@ -950,21 +968,24 @@ def record_ended_attempts(attempts: list[EndedAttempt], logfunc=log_general) -> 
     The main loop is the only writer of these records. It calls this for each slot process that
     ends, with each exit code: a process that finished its task, a process whose attempt failed,
     and a process that the system stopped. A slot process thus cannot leave an attempt with no
-    record, and no attempt has two records.
+    record, and no attempt has two records. At its start, the main loop also calls this for the
+    attempts that a task runner left with no record; see open_attempts.
 
     The main loop keeps the result and gives it here again. An error of the database for a
     moment thus does not lose a record. Until the record of an attempt is there, the main loop
-    gives the task no queue position: without its time for the next attempt, the task starts
-    again at once.
+    gives the task no queue position. A task with a position can start, and a start before the
+    record loses the record. A failed attempt also needs its time for the next attempt first.
 
     If the main loop itself stops, the attempts in the slots keep their marker
-    (Task.attempt_open), and the next task runner records them; see record_open_attempts.
+    (Task.attempt_open), and the next task runner records them; see open_attempts.
     """
     failed: list[EndedAttempt] = []
     lasterror: Exception | None = None
     for attempt in attempts:
         try:
-            record_attempt_end(attempt.taskid, attempt.userid, attempt.seconds)
+            record_attempt_end(
+                attempt.taskid, attempt.userid, attempt.seconds, when=attempt.when, failed=attempt.failed
+            )
         except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
             failed.append(attempt)
             lasterror = ex
@@ -1313,20 +1334,14 @@ def main() -> None:
     # before it can start again; see next_task.
     slot_became_free = False
     # The attempts that ended and whose record is not in the database yet; see
-    # record_ended_attempts.
-    unrecorded: list[EndedAttempt] = []
+    # record_ended_attempts. At the start, these are the attempts that a task runner left with
+    # no record. This read is before the first write of the status file, because the file of the
+    # task runner that stopped gives the end of those attempts.
+    unrecorded: list[EndedAttempt] = record_ended_attempts(open_attempts_when_readable(logfunc), logfunc=logfunc)
     # No task starts between the end of an attempt and the next renumbering that succeeds. The
     # value is the time at which the wait started, or None.
     dispatch_waits_since: float | None = None
     printedwaiting = False
-
-    # Before the first write of the status file: the file of the task runner that stopped gives
-    # the end of its attempts. Caught, for the reason the renumbering below is. The markers stay
-    # in the database after an error here.
-    try:
-        record_open_attempts(logfunc=logfunc)
-    except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
-        logfunc(f"ERROR: could not record the attempts of a task runner that stopped: {ex}")
 
     def refresh_status(maintenance: bool = False) -> None:
         """Write the status snapshot now, and reset the interval that would have written it."""
