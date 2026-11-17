@@ -51,6 +51,7 @@ from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter
 from drf_spectacular.utils import OpenApiResponse
 from geoip2.errors import AddressNotFoundError
 from geoip2.errors import GeoIP2Error
@@ -1247,6 +1248,13 @@ class QueuePositions(APIView):
     throttle_classes = ()
 
     @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "usage",
+                str,
+                description="With the value 1, the answer also has `usagehours`: the usage of the caller in hours.",
+            )
+        ],
         responses={200: OpenApiResponse(description="The queue position and request type of each queued task")},
         summary="The queue positions of the caller's unfinished tasks",
     )
@@ -1272,37 +1280,41 @@ class QueuePositions(APIView):
             (taskid, queuepos, requesttype) for taskid, queuepos, requesttype in owntasks if queuepos is not None
         ]
 
-        return Response(
-            {
-                "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
-                # What each of those tasks is. The tasks of one user that are ahead of a task
-                # use a limited number of slots, and an IMGZIP among them is a quarter of an hour
-                # of the wait where an FP task is a minute. Another column on a query already
-                # being made, and only ever this user's own tasks.
-                "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
-                "queueoffset": queueoffset,
-                # All the unfinished tasks of the caller. The Queue badge of the navigation bar
-                # shows this number.
-                "queuedcount": len(owntasks),
-                # The unfinished tasks of the caller that have started and have no position: a
-                # task in a slot, and a task that waits for a new attempt after a failed attempt.
-                # This endpoint does not know which of the two a task is: the task runner writes
-                # the tasks in its slots to its status file (running_taskids). The queue page
-                # counts the tasks that finished while its tab was hidden, and without this list
-                # a task that started is equal to a task that finished.
-                "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
-                # The request type of each of those tasks. A task of the caller that waits behind
-                # them waits for their run times, and the wait estimate of the queue page needs
-                # the types for that.
-                "startedtypes": {
-                    str(taskid): requesttype for taskid, queuepos, requesttype in owntasks if queuepos is None
-                },
-                # The usage of the caller in hours, as the queue order uses it; see
-                # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint
-                # gives the usage only to a browser session.
-                "usagehours": round(user_usage_seconds(request.user.pk) / 3600, 1),
-            }
-        )
+        answer: dict[str, t.Any] = {
+            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
+            # What each of those tasks is. The tasks of one user that are ahead of a task
+            # use a limited number of slots, and an IMGZIP among them is a quarter of an hour
+            # of the wait where an FP task is a minute. Another column on a query already
+            # being made, and only ever this user's own tasks.
+            "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
+            "queueoffset": queueoffset,
+            # All the unfinished tasks of the caller. The Queue badge of the navigation bar
+            # shows this number.
+            "queuedcount": len(owntasks),
+            # The unfinished tasks of the caller that have started and have no position: a
+            # task in a slot, and a task that waits for a new attempt after a failed attempt.
+            # This endpoint does not know which of the two a task is: the task runner writes
+            # the tasks in its slots to its status file (running_taskids). The queue page
+            # counts the tasks that finished while its tab was hidden, and without this list
+            # a task that started is equal to a task that finished.
+            "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
+            # The request type of each of those tasks. A task of the caller that waits behind
+            # them waits for their run times, and the wait estimate of the queue page needs
+            # the types for that.
+            "startedtypes": {
+                str(taskid): requesttype for taskid, queuepos, requesttype in owntasks if queuepos is None
+            },
+        }
+
+        # The usage of the caller in hours, as the queue order uses it; see
+        # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint gives
+        # the usage only to a browser session. Only on request, because the value is one more
+        # query: the queue page polls this endpoint each two seconds for each tab, and it takes
+        # the usage from the status endpoint.
+        if request.query_params.get("usage") == "1":
+            answer["usagehours"] = round(user_usage_seconds(request.user.pk) / 3600, 1)
+
+        return Response(answer)
 
 
 # A browser can answer a second request from its cache, for one write interval of the task runner.

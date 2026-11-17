@@ -964,9 +964,9 @@ class FairShareQueueTests(TestCase):
         assert kept is usage
         assert messages == ["ERROR: could not update the usage of the users: the database is away"], messages
 
-    def queuepositions(self, user: User) -> dict[str, t.Any]:
+    def queuepositions(self, user: User, **params: str) -> dict[str, t.Any]:
         self.client.force_login(user)
-        return self.client.get(reverse("queuepositions")).json()
+        return self.client.get(reverse("queuepositions"), params).json()
 
     def test_the_queue_positions_count_only_the_tasks_that_wait(self) -> None:
         self.add_usage(self.light, hours=2.5)
@@ -980,10 +980,17 @@ class FairShareQueueTests(TestCase):
 
         # light2 has less usage than light, and thus its task is the first task that waits
         assert answer["queuepositions"] == {str(tasks[1].pk): 1, str(tasks[2].pk): 2}, answer
-        assert answer["usagehours"] == 2.5, "a script with a token reads its usage here"
+        assert "usagehours" not in answer, "the poll of the queue page must not read the usage"
+        withusage = self.queuepositions(self.light, usage="1")
+        assert withusage["usagehours"] == 2.5, "a script with a token reads its usage here"
+        assert withusage["queuepositions"] == answer["queuepositions"]
         assert set(answer["queuedtypes"]) == set(answer["queuepositions"])
         assert answer["queuedcount"] == 3, "the count has the task in the slot"
         assert answer["startedids"] == [tasks[0].pk], answer
+
+        with CaptureQueriesContext(connection) as queries:
+            self.queuepositions(self.light)
+        assert not [q["sql"] for q in queries if "usageday" in q["sql"].lower()], "the poll read the usage records"
 
         # a task whose attempt failed has started and has no position while it waits for a new attempt
         with mock.patch.object(taskrunner_main, "log_general"):
