@@ -1311,8 +1311,9 @@ export function TaskPage() {
                     return;
                 }
 
-                const unfinished = unfinishedIds(data);
-                const finished = waiting.filter(taskid => !unfinished.includes(taskid)).length;
+                // a set, because a user can have some thousands of unfinished tasks
+                const unfinished = new Set(unfinishedIds(data));
+                const finished = waiting.filter(taskid => !unfinished.has(taskid)).length;
                 if (finished != stateRef.current.finishedwhileaway) {
                     setState({ finishedwhileaway: finished });
                 }

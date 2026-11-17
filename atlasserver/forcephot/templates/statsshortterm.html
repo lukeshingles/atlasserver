@@ -5,9 +5,6 @@ In the last seven days there were {{ sevendaytasks }} tasks ({{ sevendaytaskrate
     <li>Wait time in the queue when the user had no other unfinished task (median, 90th percentile): {{ sevendaywaittimeuserfirst }}</li>
     <li>Wait time in the queue for all tasks (median, 90th percentile): {{ sevendaywaittime }}</li>
     <li>Average run time of a task: {{ sevendayavgruntime }}</li>
-    <li>Finished tasks with more than one attempt: {{ sevendaymanyattempts }}</li>
-    <li>Slot time of the attempts that did not finish a task: {{ sevendaylostslottime }}</li>
     <li>Solar System (MPC name) targets: {{ sevendaympctasks }}</li>
     <li>Image requests: {{ sevendayimgtasks }}</li>
 </ul>
-<p>The wait times and the run time are from the tasks that finished in this period. The wait times do not include the tasks with more than one attempt.</p>

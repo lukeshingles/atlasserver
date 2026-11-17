@@ -1169,38 +1169,36 @@ def statsshortterm(request):
     dictparams["sevendaympctasks"] = sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count()
     dictparams["sevendayimgtasks"] = sevendaytasks.filter(request_type="IMGZIP").count()
 
-    # The tasks that finished in the window, for the wait times, the run time, and the attempts.
-    # This is not the set of the tasks that were submitted in the window and are finished. When
-    # the queue is full, the tasks that were submitted in the window and wait the longest are not
-    # finished. Those are the tasks of the users with the most usage, which are the long tasks. A
-    # wait time or a run time without them is too low.
+    # The tasks that finished in the window, for the wait times and the run time. This is not the
+    # set of the tasks that were submitted in the window and are finished. When the queue is
+    # full, the tasks that were submitted in the window and wait the longest are not finished.
+    # Those are the tasks of the users with the most usage, which are the long tasks. A wait time
+    # or a run time without them is too low.
     #
     # One read of the columns that the values below use, and not one read for each value.
     finished = list(
         Task.objects.filter(finishtimestamp__gt=windowstart, starttimestamp__isnull=False).only(
-            "timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit", "attempt_count"
+            "timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit"
         )
     )
 
-    # The wait time of a task is the time from the request to the start of the last attempt. For
-    # a task with more than one attempt, that time includes the failed attempts and the waits
-    # between them, which are not a wait for a slot. Those tasks have their own line on the page.
-    oneattempt = [task for task in finished if task.attempt_count <= 1]
-
     def wait_times_str(tasks: list[Task]) -> str:
-        """Return the median and the 90th percentile of the wait times of the tasks."""
+        """Return the median and the 90th percentile of the wait times of the tasks.
+
+        The page gives these two values and not the mean: the queue order gives a short wait to
+        the users with little usage and a long wait to the users with much usage.
+
+        The wait time of a task is the time from the request to the start of the last attempt.
+        For a task with more than one attempt, it thus includes the failed attempts. Few tasks
+        have a failed attempt, and they change the two values little.
+        """
         waits = sorted(wait for task in tasks if (wait := task.waittime()) is not None)
         median, high = percentile(waits, 0.5), percentile(waits, 0.9)
         return "-" if median is None or high is None else f"{duration_str(median)}, {duration_str(high)}"
 
-    dictparams["sevendaywaittime"] = wait_times_str(oneattempt)
+    dictparams["sevendaywaittime"] = wait_times_str(finished)
     dictparams["sevendaywaittimeuserfirst"] = wait_times_str(
-        [task for task in oneattempt if task.userqueuedtasks_on_submit == 0]
-    )
-
-    manyattempts = len(finished) - len(oneattempt)
-    dictparams["sevendaymanyattempts"] = (
-        f"{manyattempts} ({100.0 * manyattempts / len(finished):.1f}%)" if finished else "-"
+        [task for task in finished if task.userqueuedtasks_on_submit == 0]
     )
 
     runtimes = [runtime for task in finished if (runtime := task.runtime()) is not None]
@@ -1224,35 +1222,6 @@ def statsshortterm(request):
     usedseconds = UsageDay.objects.filter(day__gte=firstday).aggregate(Sum("seconds"))["seconds__sum"] or 0.0
     recordseconds = (now - dt.datetime.combine(firstday, dt.time(0), tzinfo=dt.UTC)).total_seconds()
     dictparams["sevendayslotusepercent"] = f"{100.0 * usedseconds / (recordseconds * numslots):.1f}%"
-
-    # The slot time of the attempts that did not finish a task: the run time of all attempts
-    # minus the run time of the last attempt of each task that finished. The two sums are for the
-    # same days, because a usage record is on the day of the end of its attempt. The attempts
-    # that did not finish a task are the failed attempts, the attempts that a stop of the task
-    # runner cut, and the attempts of the tasks that a user deleted while they ran.
-    #
-    # The value is approximate. The start time and the finish time of a task have no fraction of
-    # a second, and a usage record has one. A usage record also ends at the end of the slot
-    # process, which is a moment after the finish time of the task. The error is a fraction of a
-    # second for each task, and the difference of the two sums can be less than zero when no
-    # attempt failed.
-    #
-    # The migration made the usage records of the days before the first start of the new task
-    # runner from the finished tasks. The value is thus zero for those days.
-    firstdaystart = dt.datetime.combine(firstday, dt.time(0), tzinfo=dt.UTC)
-    finishedseconds = sum(
-        runtime
-        for task in finished
-        if (runtime := task.runtime()) is not None
-        and task.finishtimestamp is not None
-        and task.finishtimestamp >= firstdaystart
-    )
-    lostseconds = max(0.0, usedseconds - finishedseconds)
-    dictparams["sevendaylostslottime"] = (
-        f"{lostseconds / 3600:.1f} h ({100.0 * lostseconds / usedseconds:.1f}% of the used slot time)"
-        if usedseconds > 0
-        else "-"
-    )
 
     return render(request, "statsshortterm.html", dictparams)
 
@@ -1500,23 +1469,19 @@ def queue_condition() -> dict[str, t.Any]:
     function makes no query when the task runner runs. The stats page is public and has no cache.
 
     When the status file is stale or not usable, its counts are for a queue of the past. The
-    result then has only the number of the unfinished tasks, from the database, and the age of
-    the status file when the file gives one.
+    result then has only the number of the unfinished tasks, from the database. The site notice
+    box of each page gives the age of a stale status file.
     """
-    condition: dict[str, t.Any] = {"runnerstale": True}
-    # An exception from a field of the file leaves the condition stale: Python makes the full
-    # dictionary of the values before it changes `condition`.
+    # an exception from a field of the file gives the result for a stale status file
     with contextlib.suppress(OSError, KeyError, TypeError, ValueError):
         status, age_seconds = runnerstatus.read_status()
-        condition["statusage"] = duration_str(max(0.0, age_seconds))
         if age_seconds <= runnerstatus.STALE_AFTER_SECONDS:
             oldest = status["oldest_queued_task_time"]
-            condition |= {
+            return {
                 "slotsbusy": int(status["slots_busy"]),
                 "numslots": int(status["numslots"]),
                 "maintenance": bool(status["maintenance"]),
                 "queuedtaskcount": int(status["queued_task_count"]),
-                "queuedusers": int(status["distinct_queued_users"]),
                 # a status file from before this field has no count, and the page then has no line
                 "retrywaittaskcount": status.get("retry_wait_task_count"),
                 "oldestqueuedage": (
@@ -1527,13 +1492,7 @@ def queue_condition() -> dict[str, t.Any]:
                 "runnerstale": False,
             }
 
-    if condition["runnerstale"]:
-        condition = {
-            "runnerstale": True,
-            "statusage": condition.get("statusage"),
-            "queuedtaskcount": Task.queued().count(),
-        }
-    return condition
+    return {"runnerstale": True, "queuedtaskcount": Task.queued().count()}
 
 
 def stats(request):

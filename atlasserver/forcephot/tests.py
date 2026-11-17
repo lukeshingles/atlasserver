@@ -1340,8 +1340,6 @@ class ShortTermStatsLoadTests(TestCase):
         assert "Average run time of a task: -" in content, content
         assert "Use of the task runner slots: 0.0%" in content, content
         assert "(median, 90th percentile): -" in content, content
-        assert "Finished tasks with more than one attempt: -" in content, content
-        assert "did not finish a task: -" in content, content
 
     def finished_task(
         self, submitted_days_ago: float, waithours: float, runhours: float = 1.0, **kwargs: t.Any
@@ -1355,7 +1353,7 @@ class ShortTermStatsLoadTests(TestCase):
             timestamp=submitted,
             starttimestamp=started,
             finishtimestamp=started + dt.timedelta(hours=runhours),
-            **{"attempt_count": 1, "userqueuedtasks_on_submit": 0} | kwargs,
+            **{"userqueuedtasks_on_submit": 0} | kwargs,
         )
 
     def test_the_wait_times_are_from_the_tasks_that_finished_in_the_window(self) -> None:
@@ -1364,51 +1362,12 @@ class ShortTermStatsLoadTests(TestCase):
         # A request from before the window waited for five days, and it finished in the window.
         # The tasks that were submitted in the window and are finished do not include it.
         self.finished_task(9, waithours=120)
-        # the wait time of a task with two attempts includes the first attempt
-        self.finished_task(1, waithours=10, attempt_count=2)
         Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=self.now - dt.timedelta(days=1))
 
         content = self.page()
 
         assert "for all tasks (median, 90th percentile): 3.0 h, 5.0 days" in content, content
         assert "no other unfinished task (median, 90th percentile): 60.0 min, 5.0 days" in content, content
-        assert "Finished tasks with more than one attempt: 1 (25.0%)" in content, content
-
-    def test_the_slot_time_of_the_attempts_that_did_not_finish_a_task(self) -> None:
-        # The attempts of yesterday ran for 10 hours, and the task that finished yesterday ran for
-        # 6 hours of them.
-        taskqueue.charge_usage(self.user.pk, 10 * 3600.0, when=self.now - dt.timedelta(days=1))
-        self.finished_task(1.5, waithours=1, runhours=6)
-        # This task finished in the seven days and before the first day of the usage records, which
-        # starts at 00:00 UTC. Its run time is thus not in the usage records of the window.
-        self.finished_task(7, waithours=1, runhours=3)
-
-        assert "did not finish a task: 4.0 h (40.0% of the used slot time)" in self.page()
-
-    def test_the_records_of_the_task_runner_give_the_slot_time_of_a_failed_attempt(self) -> None:
-        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, userqueuedtasks_on_submit=0)
-        with mock.patch.object(taskrunner_main, "log_general"):
-            # the first attempt fails after one hour, and the second attempt finishes the task
-            taskrunner_main.mark_started(task)
-            taskrunner_main.record_attempt_end(task.pk, task.user_id, 3600.0)
-            taskrunner_main.mark_started(task)
-            taskrunner_main.mark_finished(task, error_msg=None)
-            taskrunner_main.record_attempt_end(task.pk, task.user_id, 0.0)
-
-        content = self.page()
-
-        assert "did not finish a task: 1.0 h (100.0% of the used slot time)" in content, content
-        assert "Finished tasks with more than one attempt: 1 (100.0%)" in content, content
-        # the wait time of this task includes the failed attempt, and the page has no wait time
-        assert "for all tasks (median, 90th percentile): -" in content, content
-
-    def test_the_slot_time_is_zero_when_the_finished_tasks_ran_for_longer_than_the_records(self) -> None:
-        # a usage record ends a moment after the finish time of its task, and the difference of the
-        # two sums can be less than zero
-        taskqueue.charge_usage(self.user.pk, 3599.0, when=self.now - dt.timedelta(days=1))
-        self.finished_task(1.5, waithours=1, runhours=1)
-
-        assert "did not finish a task: 0.0 h (0.0% of the used slot time)" in self.page()
 
     def test_a_duration_has_the_unit_that_gives_a_short_number(self) -> None:
         durations = [views.duration_str(seconds) for seconds in (0.4, 99, 100, 5999, 6000, 172799, 172800)]
@@ -8160,7 +8119,6 @@ class StatsPageTests(TestCase):
 
         assert "Task runner slots in use: 1 of 24</li>" in content, content
         assert "Unfinished tasks: 4</li>" in content, content
-        assert "Users with a task that waits or that is in a slot: 2</li>" in content, content
         assert "Tasks that wait for a new attempt after a failed attempt: 1</li>" in content, content
         assert "Age of the oldest unfinished task: 3.0 h</li>" in content, content
         assert "does not process tasks" not in content, content
@@ -8190,7 +8148,7 @@ class StatsPageTests(TestCase):
         assert "Unfinished tasks: 1</li>" in content, content
         assert "slots in use" not in content, content
 
-    def test_a_stale_status_file_gives_its_age_and_no_counts(self) -> None:
+    def test_a_stale_status_file_gives_no_counts(self) -> None:
         written = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=10)
         status = {
             "written": written.isoformat(),
@@ -8204,7 +8162,7 @@ class StatsPageTests(TestCase):
 
         content = self.page_with_status(status)
 
-        assert "does not process tasks at the moment. It last reported 10.0 min ago.</li>" in content, content
+        assert "The task runner does not process tasks at the moment.</li>" in content, content
         assert "Unfinished tasks: 0</li>" in content, content
         assert "slots in use" not in content, content
 
