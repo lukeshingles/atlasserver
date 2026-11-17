@@ -4,9 +4,12 @@
 import collections
 import contextlib
 import datetime as dt
+import fcntl
 import json
 import multiprocessing as mp
 import os
+import pwd
+import stat
 import subprocess
 import time
 import typing as t
@@ -49,6 +52,23 @@ TASK_MAXTIME_SECONDS: int = 4 * 3600
 # the exit status ssh itself gives when the connection fails, as opposed to the status of the
 # remote command
 SSH_CONNECTION_FAILED: int = 255
+
+# The number of slots that use one ssh connection to the remote server. A slot has one session
+# at a time. The sshd of the remote server refuses a session above its MaxSessions limit, which
+# is 10 unless the administrator set a different value. ssh then opens a new connection for
+# that command.
+SSH_SLOTS_PER_CONNECTION: int = 8
+
+# the time that an ssh connection with no session stays open for the next task
+SSH_CONTROL_PERSIST: str = "1h"
+
+# the directory of the control sockets, relative to the home directory. ssh fails if the path of
+# a socket is longer than about 100 characters, so the names are short.
+SSH_CONTROL_DIR: str = ".ssh/atlasserver"
+
+# the maximum time for the first connection of a group of slots. The other slots of the group
+# wait for this connection, so the time has a limit.
+SSH_MASTER_CONNECT_SECONDS: int = 30
 
 # the columns that a forced photometry result file must have, as the header names them
 RESULT_REQUIRED_COLUMNS: tuple[str, ...] = ("MJD", "uJy")
@@ -109,8 +129,114 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
         flogfile.write(line + "\n")
 
 
-def run_rsync(copycommand: list[str], logfunc: t.Callable[[t.Any], None]) -> int | None:
-    """Run an rsync command, logging its output. Return the exit code, or None if it timed out."""
+def ssh_control_dir() -> Path:
+    """Return the directory of the control sockets.
+
+    ssh expands ~ from the password database and not from $HOME, so the directory comes from the
+    same source.
+    """
+    return Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
+
+
+def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = None) -> list[str]:
+    """Return the ssh options that give a slot the connection of its group of slots.
+
+    Each option is one argument with no space, because rsync divides its -e value at the spaces.
+    Without a slot there are no options, and ssh uses only the configuration of the account.
+    """
+    if slotid is None:
+        return []
+
+    controldir = ssh_control_dir()
+    try:
+        controldir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # lstat and not stat, so that a link to a directory is not accepted as the directory
+        status = controldir.lstat()
+    except OSError:
+        # ssh exits with status 255 when it cannot make the socket, and the task then never
+        # completes. A connection for each command is slower, but it works.
+        return []
+
+    # A different user who can write to the directory can put a socket or a link there, and ssh
+    # then sends the commands of a task to that socket. The mode alone is not sufficient to
+    # repair such a directory, because the entries stay. The task runner thus uses the
+    # directory only if no other user was able to write to it.
+    if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o022:
+        if logfunc is not None:
+            logfunc(f"ERROR: {controldir} is not a private directory of this account, so ssh uses no shared connection")
+        return []
+
+    group = slotid // SSH_SLOTS_PER_CONNECTION
+    return [
+        "-oControlMaster=auto",
+        f"-oControlPath=~/{SSH_CONTROL_DIR}/{REMOTE_SERVER}-{group}",
+        # ControlPersist puts the master into a background process. The ssh process of a slot is
+        # then a client, and the SIGTERM of a cancelled task does not close the sessions of the
+        # other slots.
+        f"-oControlPersist={SSH_CONTROL_PERSIST}",
+        # the master exits when the remote server does not reply. Without these options, each
+        # new session waits on a dead connection.
+        "-oServerAliveInterval=30",
+        "-oServerAliveCountMax=3",
+    ]
+
+
+def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None]) -> None:
+    """Open the ssh connection of the group of a slot, if it is not open.
+
+    ControlMaster=auto does not wait for a master that a different process starts. Each ssh that
+    finds no socket opens a connection of its own, and many new connections at the same time make
+    the remote server reset some of them. With a lock for each socket, one slot opens the
+    connection, and the other slots of the group wait and then find the socket.
+
+    A failure here does not stop the task. The commands of the task then connect without a master.
+    """
+    lockfile = ssh_control_dir() / f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}.lock"
+    try:
+        # O_NOFOLLOW gives an error for a link, and the open does not change the content of the
+        # file. The lock ends when the file closes, and also when this process ends.
+        lockfd = os.open(lockfile, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(lockfd) as flock:
+            fcntl.flock(flock, fcntl.LOCK_EX)
+
+            # the check asks only the local master, so it makes no connection
+            check = subprocess.run(
+                ["ssh", "-O", "check", *sshoptions, REMOTE_SERVER],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=SSH_MASTER_CONNECT_SECONDS,
+                check=False,
+            )
+            if check.returncode == 0:
+                return
+
+            # this ssh finds no socket, so it starts the master and then runs the command as a
+            # client of that master
+            start = subprocess.run(
+                ["ssh", *sshoptions, f"-oConnectTimeout={SSH_MASTER_CONNECT_SECONDS}", REMOTE_SERVER, "true"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=SSH_MASTER_CONNECT_SECONDS * 2,
+                check=False,
+            )
+            if start.returncode != 0:
+                logfunc(f"ERROR: ssh did not open the connection of the slot group: {start.stderr.strip()}")
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        logfunc(f"ERROR: ssh did not open the connection of the slot group: {ex}")
+
+
+def run_rsync(
+    copycommand: list[str], logfunc: t.Callable[[t.Any], None], sshoptions: t.Sequence[str] = ()
+) -> int | None:
+    """Run an rsync command, logging its output. Return the exit code, or None if it timed out.
+
+    rsync starts ssh with `sshoptions`; see ssh_options.
+    """
+    if sshoptions:
+        copycommand = [copycommand[0], "-e", " ".join(["ssh", *sshoptions]), *copycommand[1:]]
+
     logfunc(" ".join(copycommand))
 
     proc = subprocess.Popen(
@@ -300,8 +426,10 @@ def result_file_problem(localresultfile: Path) -> str | None:
     return None
 
 
-def runtask(task, logfunc) -> tuple[Path | None, str | None]:
+def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
+
+    `slotid` selects the ssh connection that the commands use; see ssh_options.
 
     returns (resultfilename, error_msg)
      - resultfilename will be None if it could not be created due to an error
@@ -310,6 +438,10 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
     filename = remote_result_filename(task)
     if filename is None:
         return None, None
+
+    sshoptions = ssh_options(slotid, logfunc)
+    if slotid is not None and sshoptions:
+        open_ssh_master(slotid, sshoptions, logfunc)
 
     remoteresultdir = Path("~/atlasserver/results/")
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
@@ -338,7 +470,7 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
             return None, "The forced photometry data file for the parent task is no longer available."
 
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
-        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc) != 0:
+        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc, sshoptions) != 0:
             # without the data file the remote script cannot select any images, so retry later
             # instead of burning a remote run that is certain to fail
             return None, None
@@ -357,7 +489,7 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
     proc = subprocess.Popen(
-        ["ssh", f"{REMOTE_SERVER}", atlascommand],
+        ["ssh", *sshoptions, f"{REMOTE_SERVER}", atlascommand],
         shell=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -471,7 +603,7 @@ def runtask(task, logfunc) -> tuple[Path | None, str | None]:
         )
 
     for copycommand in copycommands:
-        run_rsync(copycommand, logfunc)
+        run_rsync(copycommand, logfunc, sshoptions)
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
@@ -1093,7 +1225,7 @@ def do_task(task, slotid: int, started: bool = False) -> None:
 
     # The usage of this attempt is not recorded here. The main loop records it when this
     # process ends; see record_ended_attempts.
-    localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
+    localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly, slotid=slotid)
 
     runtask_duration = time.perf_counter() - runtask_starttime
 

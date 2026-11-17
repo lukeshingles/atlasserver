@@ -50,6 +50,16 @@ For atlastaskrunner to process tasks, there must be an SSH host alias named 'atl
 cd atlasserver/taskrunner && ./upload_scripts_to_atlas.sh
 ```
 
+The task runner gives its own multiplexing options to each `ssh` and `rsync` command, so the alias
+needs no `ControlMaster`, `ControlPath`, or `ControlPersist` option. The sshd of sc01 permits a
+limited number of sessions for one connection. Thus each group of 8 slots uses a different
+connection, and the task runner keeps the sockets in `~/.ssh/atlasserver/`. The constant
+`SSH_SLOTS_PER_CONNECTION` in `atlasserver/taskrunner/main.py` sets the size of a group. This
+command shows if the connection of the first group is open:
+```sh
+ssh -O check -S ~/.ssh/atlasserver/atlas-0 atlas
+```
+
 The `python3` command of the account on sc01 runs these scripts. For the production account, this
 is Python 3.8.5. This command shows the version:
 ```sh

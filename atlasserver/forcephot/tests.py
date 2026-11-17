@@ -2,6 +2,7 @@ import ast
 import base64
 import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import importlib
 import io
@@ -423,7 +424,7 @@ class FairShareQueueTests(TestCase):
         task = self.add_queued(self.light, 1)[0]
         copy = Task.objects.get(pk=task.pk)
 
-        def runtask(task: Task, logfunc: t.Any) -> tuple[None, str]:
+        def runtask(task: Task, logfunc: t.Any, slotid: int | None = None) -> tuple[None, str]:
             return None, "No data returned"
 
         def exists_then_goes(taskid: int) -> bool:
@@ -6388,6 +6389,258 @@ class RunRsyncTests(TestCase):
         assert result == 12
         assert any("exited with code 12" in line for line in logged), logged
 
+    def test_the_ssh_options_go_to_rsync_as_one_argument(self) -> None:
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+
+        with mock.patch("subprocess.Popen", return_value=proc) as popen:
+            taskrunner_main.run_rsync(["rsync", "a", "b"], lambda _msg: None, ["-oX=1", "-oY=2"])
+
+        assert popen.call_args.args[0] == ["rsync", "-e", "ssh -oX=1 -oY=2", "a", "b"], popen.call_args
+
+
+class SshOptionsTests(TestCase):
+    """The ssh connection that the commands of a slot use."""
+
+    def options(self, slotid: int | None, homedir: str) -> list[str]:
+        with mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)):
+            return taskrunner_main.ssh_options(slotid)
+
+    def controlpath(self, slotid: int, homedir: str) -> str:
+        (path,) = (x for x in self.options(slotid, homedir) if x.startswith("-oControlPath="))
+        return path
+
+    def test_the_slots_of_one_group_have_the_same_socket(self) -> None:
+        # sshd refuses the sessions above its limit for one connection, so a socket has a
+        # maximum number of slots
+        persocket = taskrunner_main.SSH_SLOTS_PER_CONNECTION
+        with tempfile.TemporaryDirectory() as homedir:
+            paths = [self.controlpath(slotid, homedir) for slotid in range(taskrunner_main.runnerstatus.NUMSLOTS)]
+
+        assert paths[0] == paths[persocket - 1], paths
+        assert paths[persocket - 1] != paths[persocket], paths
+        assert max(paths.count(path) for path in paths) <= persocket, paths
+
+    def test_the_directory_of_the_sockets_is_made_and_is_private(self) -> None:
+        # ssh exits with status 255 when the directory of the socket does not exist
+        with tempfile.TemporaryDirectory() as homedir:
+            self.options(0, homedir)
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+
+            assert controldir.is_dir()
+            assert controldir.stat().st_mode & 0o077 == 0, oct(controldir.stat().st_mode)
+
+    def test_a_directory_that_other_users_can_write_to_is_not_used(self) -> None:
+        # a different user can put a socket or a link there, and a new mode does not remove it
+        for mode in (0o777, 0o770, 0o702):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as homedir:
+                controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+                controldir.mkdir(parents=True)
+                controldir.chmod(mode)
+                logged: list[str] = []
+
+                with mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)):
+                    options = taskrunner_main.ssh_options(0, logged.append)
+
+                assert options == []
+                assert any("not a private directory" in line for line in logged), logged
+
+    def test_a_directory_that_only_the_account_can_write_to_is_used(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.mkdir(parents=True)
+            controldir.chmod(0o755)
+
+            assert self.options(0, homedir)
+
+    def test_a_directory_of_a_different_user_is_not_used(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as homedir,
+            mock.patch.object(taskrunner_main.os, "getuid", return_value=os.getuid() + 1),
+        ):
+            assert self.options(0, homedir) == []
+
+    def test_a_link_to_a_directory_is_not_used(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir, tempfile.TemporaryDirectory() as elsewhere:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.parent.mkdir(parents=True)
+            controldir.symlink_to(elsewhere, target_is_directory=True)
+
+            assert self.options(0, homedir) == []
+
+    def test_no_option_contains_a_space(self) -> None:
+        # rsync divides the value of -e at each space
+        with tempfile.TemporaryDirectory() as homedir:
+            options = self.options(0, homedir)
+
+        assert options
+        assert not any(" " in option for option in options), options
+
+    def test_the_master_goes_to_the_background(self) -> None:
+        # a cancelled task sends SIGTERM to its ssh process. If that process is the master, the
+        # sessions of the other slots end too.
+        with tempfile.TemporaryDirectory() as homedir:
+            options = self.options(0, homedir)
+
+        assert "-oControlMaster=auto" in options, options
+        assert any(option.startswith("-oControlPersist=") for option in options), options
+
+    def test_there_are_no_options_when_the_directory_cannot_be_made(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            notadirectory = Path(tmpdir, "file")
+            notadirectory.write_text("", encoding="utf-8")
+
+            assert self.options(0, str(notadirectory)) == []
+
+    def test_a_task_gets_the_slot_of_its_process(self) -> None:
+        # without the slot, each command uses a connection of its own and nothing shows an error
+        user = User.objects.create_user(username="sshslot", email="sshslot@example.com", password=None)
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+
+        with (
+            mock.patch.object(taskrunner_main, "runtask", return_value=(None, "No data returned")) as runtask,
+            mock.patch.object(taskrunner_main, "log_general"),
+            mock.patch.object(taskrunner_main, "notify_finished"),
+        ):
+            taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=17)
+
+        assert runtask.call_args.kwargs["slotid"] == 17, runtask.call_args
+
+    def test_there_are_no_options_without_a_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir:
+            assert self.options(None, homedir) == []
+            assert not Path(homedir, taskrunner_main.SSH_CONTROL_DIR).exists()
+
+
+class OpenSshMasterTests(TestCase):
+    """One slot opens the connection of a group, and the other slots wait for it."""
+
+    OPTIONS: t.ClassVar[list[str]] = ["-oControlMaster=auto", "-oControlPath=~/x/atlas-0"]
+
+    def open_master(self, returncodes: list[int | Exception], slotid: int = 0) -> tuple[list[list[str]], list[str]]:
+        """Run open_ssh_master with an ssh that gives `returncodes`. Return the commands and the log."""
+        commands: list[list[str]] = []
+        logged: list[str] = []
+        self.locked: list[bool] = []
+        results = iter(returncodes)
+
+        def fake_run(command: list[str], **_kwargs: t.Any) -> mock.Mock:
+            commands.append(command)
+            # flock gives an error to a second open file of the same process, as it does to a
+            # different process
+            lockfile = Path(self.homedir, taskrunner_main.SSH_CONTROL_DIR, f"atlas-{self.group}.lock")
+            with lockfile.open("w", encoding="utf-8") as second:
+                try:
+                    fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    self.locked.append(True)
+                else:
+                    self.locked.append(False)
+            result = next(results)
+            if isinstance(result, Exception):
+                raise result
+            return mock.Mock(returncode=result, stderr="Connection reset by peer\n")
+
+        self.group = slotid // taskrunner_main.SSH_SLOTS_PER_CONNECTION
+        with tempfile.TemporaryDirectory() as homedir:
+            self.homedir = homedir
+            Path(homedir, taskrunner_main.SSH_CONTROL_DIR).mkdir(parents=True)
+            with (
+                mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+                mock.patch.object(taskrunner_main.subprocess, "run", side_effect=fake_run),
+            ):
+                taskrunner_main.open_ssh_master(slotid, self.OPTIONS, logged.append)
+
+        return commands, logged
+
+    def test_an_open_connection_needs_no_new_connection(self) -> None:
+        commands, logged = self.open_master([0])
+
+        assert commands == [["ssh", "-O", "check", *self.OPTIONS, "atlas"]], commands
+        assert logged == []
+
+    def test_a_closed_connection_is_opened_with_the_options_of_the_slot(self) -> None:
+        commands, logged = self.open_master([255, 0])
+
+        assert len(commands) == 2, commands
+        assert commands[1][: 1 + len(self.OPTIONS)] == ["ssh", *self.OPTIONS], commands[1]
+        assert commands[1][-2:] == ["atlas", "true"], commands[1]
+        assert logged == []
+
+    def test_the_lock_of_the_group_is_held_for_the_check_and_for_the_connection(self) -> None:
+        # without the lock, each slot that finds no socket opens a connection of its own
+        self.open_master([255, 0], slotid=taskrunner_main.SSH_SLOTS_PER_CONNECTION)
+
+        assert self.locked == [True, True], self.locked
+
+    def test_a_failed_connection_is_logged_and_does_not_stop_the_task(self) -> None:
+        commands, logged = self.open_master([255, 255])
+
+        assert len(commands) == 2, commands
+        assert any("Connection reset by peer" in line for line in logged), logged
+
+    def test_a_connection_that_does_not_return_is_logged_and_does_not_stop_the_task(self) -> None:
+        _, logged = self.open_master([255, subprocess.TimeoutExpired(cmd="ssh", timeout=60)])
+
+        assert any("did not open the connection" in line for line in logged), logged
+
+    def test_a_lock_file_that_is_a_link_is_not_opened(self) -> None:
+        # an open for writing follows a link and removes the content of its target
+        logged: list[str] = []
+        with tempfile.TemporaryDirectory() as homedir:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.mkdir(parents=True)
+            target = Path(homedir, "target")
+            target.write_text("content", encoding="utf-8")
+            Path(controldir, "atlas-0.lock").symlink_to(target)
+
+            with (
+                mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+                mock.patch.object(taskrunner_main.subprocess, "run") as run,
+            ):
+                taskrunner_main.open_ssh_master(0, self.OPTIONS, logged.append)
+
+            assert target.read_text(encoding="utf-8") == "content"
+
+        run.assert_not_called()
+        assert any("did not open the connection" in line for line in logged), logged
+
+    def test_a_lock_file_keeps_its_content(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir:
+            controldir = Path(homedir, taskrunner_main.SSH_CONTROL_DIR)
+            controldir.mkdir(parents=True)
+            lockfile = Path(controldir, "atlas-0.lock")
+            lockfile.write_text("content", encoding="utf-8")
+
+            with (
+                mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+                mock.patch.object(taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0)),
+            ):
+                taskrunner_main.open_ssh_master(0, self.OPTIONS, lambda _msg: None)
+
+            assert lockfile.read_text(encoding="utf-8") == "content"
+
+    def test_a_task_without_options_opens_no_connection(self) -> None:
+        user = User.objects.create_user(username="nomaster", email="nomaster@example.com", password=None)
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=[]),
+            mock.patch.object(taskrunner_main, "open_ssh_master") as open_ssh_master,
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
+            mock.patch("subprocess.Popen", return_value=proc),
+            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+        ):
+            taskrunner_main.runtask(task, logfunc=lambda _msg: None, slotid=3)
+
+        open_ssh_master.assert_not_called()
+
 
 def silent(_msg: object) -> None:
     """Swallow a log line: for a sweep whose output is not what the test is about."""
@@ -8595,7 +8848,7 @@ class ImageRequestDispatchTests(TestCase):
         """Run the child up to the remote command and return every rsync it issued."""
         rsyncs: list[list[str]] = []
 
-        def fake_rsync(command: list[str], logfunc: t.Any) -> int:
+        def fake_rsync(command: list[str], logfunc: t.Any, sshoptions: t.Sequence[str] = ()) -> int:
             rsyncs.append(command)
             return 0
 
@@ -8610,6 +8863,38 @@ class ImageRequestDispatchTests(TestCase):
             taskrunner_main.runtask(self.child, logfunc=lambda _msg: None)
 
         return rsyncs
+
+    def test_the_commands_of_a_slot_use_the_connection_of_the_slot(self) -> None:
+        sshoptions = ["-oControlPath=~/x/atlas-1"]
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            tempfile.TemporaryDirectory() as inputsdir,
+            override_settings(STATIC_ROOT=tmpdir, TASK_INPUTS_DIR=Path(inputsdir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=sshoptions) as ssh_options,
+            mock.patch.object(taskrunner_main, "open_ssh_master") as open_ssh_master,
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0) as run_rsync,
+            mock.patch("subprocess.Popen", return_value=proc) as popen,
+            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+        ):
+            inputcopy = self.child.inputfile()
+            inputcopy.parent.mkdir(parents=True, exist_ok=True)
+            inputcopy.write_text("observations")
+
+            taskrunner_main.runtask(self.child, logfunc=lambda _msg: None, slotid=9)
+
+        assert ssh_options.call_args.args[0] == 9, ssh_options.call_args
+        # the connection of the group is open before the first command of the task
+        assert open_ssh_master.call_args.args[:2] == (9, sshoptions), open_ssh_master.call_args
+        sshcommand = popen.call_args.args[0]
+        assert sshcommand[:3] == ["ssh", *sshoptions, taskrunner_main.REMOTE_SERVER], sshcommand
+        assert len(sshcommand) == 4, "the remote command stays one argument"
+        assert run_rsync.call_count >= 2, run_rsync.call_args_list
+        assert all(call.args[2] == sshoptions for call in run_rsync.call_args_list), run_rsync.call_args_list
 
     def test_the_request_uploads_its_own_copy_under_its_own_name(self) -> None:
         # the runner reads its settings module directly, so its directories are patched on that
@@ -9562,7 +9847,7 @@ class NoDataTaskTests(TestCase):
             resultfile = Path(tmpdir, "job00001.txt")
             resultfile.write_text("###MJD m dm uJy duJy\n", encoding="utf-8")
 
-            def runtask(task: Task, logfunc: t.Any) -> tuple[Path, str | None]:
+            def runtask(task: Task, logfunc: t.Any, slotid: int | None = None) -> tuple[Path, str | None]:
                 # the end of runtask() for a forced photometry task, after the copy from the remote host
                 return resultfile, taskrunner_main.result_file_problem(resultfile)
 
