@@ -2188,10 +2188,12 @@ def resultplotdatajs(request, taskid):
                     # removes points that the result file does contain, and this plot is read beside
                     # that file.
                     #
-                    # The lower limit removes a flux error of "-inf", which the float dtype parses
-                    # and which is not a JavaScript literal. A NaN fails each of the comparisons.
+                    # The lower limit is the lower limit of the flux. It removes a negative flux
+                    # error that is outside the 64-bit range, and it removes "-inf", which is not
+                    # a JavaScript literal. The float dtype parses each of them. A NaN fails each
+                    # of the comparisons.
                     dfforcedphot = dfforcedphot[
-                        (dfforcedphot["duJy"] > -math.inf)
+                        (dfforcedphot["duJy"] > ujy_min)
                         & (dfforcedphot["duJy"] <= 4000)
                         & (dfforcedphot["chi/N"] <= 100)
                     ]

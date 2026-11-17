@@ -3566,6 +3566,7 @@ class ResultPlotDataColumnTests(TestCase):
             + f"59001.0 19.0 0.1 {toolarge} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
             + f"59002.0 19.0 0.1 -{toolarge} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
             + f"59003.0 19.0 0.1 100 {toolarge} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            + f"59004.0 19.0 0.1 100 -{toolarge} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
         )
 
         response = self.request_plot(RESULTFILE_HEADER, rows)
