@@ -42,6 +42,7 @@ from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.db import IntegrityError
 from django.db import models
+from django.db.migrations import RunPython
 from django.test import Client
 from django.test import override_settings
 from django.test import RequestFactory
@@ -1385,7 +1386,7 @@ class ShortTermStatsLoadTests(TestCase):
 
 class UsageRecordsMigrationTests(TestCase):
     def test_the_migration_fills_the_usage_records_from_the_finished_tasks(self) -> None:
-        migration = importlib.import_module("atlasserver.forcephot.migrations.0011_usage_day")
+        migration = importlib.import_module("atlasserver.forcephot.migrations.0012_fill_usage_records")
         user = User.objects.create_user(username="filled", email="filled@example.com", password=None)
         today = dt.datetime.combine(timezone.now().astimezone(dt.UTC).date(), dt.time(12), tzinfo=dt.UTC)
 
@@ -1410,6 +1411,30 @@ class UsageRecordsMigrationTests(TestCase):
             (user.pk, today.date() - dt.timedelta(days=3), 50.0, 1),
             (user.pk, today.date() - dt.timedelta(days=1), 300.0, 2),
         ], records
+
+    def test_the_fill_keeps_a_table_that_has_records(self) -> None:
+        migration = importlib.import_module("atlasserver.forcephot.migrations.0012_fill_usage_records")
+        user = User.objects.create_user(username="refilled", email="refilled@example.com", password=None)
+        end = timezone.now() - dt.timedelta(hours=1)
+        Task.objects.create(
+            user=user, ra=1.0, dec=2.0, starttimestamp=end - dt.timedelta(seconds=100), finishtimestamp=end
+        )
+        taskqueue.charge_usage(user.pk, 100.0, when=end)
+
+        # the reverse of the migration keeps the records, and thus the fill can run a second time
+        migration.fill_usage_records(django_apps, mock.Mock(connection=connection))
+
+        records = list(UsageDay.objects.values_list("user_id", "seconds", "tasks"))
+        assert records == [(user.pk, 100.0, 1)], records
+
+    def test_the_fill_is_not_in_the_migration_that_makes_the_table(self) -> None:
+        # MariaDB does not undo a new table when a later operation of the same migration fails,
+        # and a second run of that migration then stops at the table
+        schema = importlib.import_module("atlasserver.forcephot.migrations.0011_usage_day")
+        fill = importlib.import_module("atlasserver.forcephot.migrations.0012_fill_usage_records")
+
+        assert not any(isinstance(op, RunPython) for op in schema.Migration.operations)
+        assert [type(op) for op in fill.Migration.operations] == [RunPython]
 
 
 class HighPriorityGroupMigrationTests(TestCase):
