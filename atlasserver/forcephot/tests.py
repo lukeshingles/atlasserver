@@ -1328,7 +1328,7 @@ class ShortTermStatsLoadTests(TestCase):
         # The mean run time of the three tasks that finished in the window is 60 hours. The four
         # requests thus need 240 hours, and two slots have 336 hours in seven days. The mean of
         # the two finished requests of the window is 40 hours, which gives 47.6 %.
-        assert "Average task running time: 216000.0s" in content, content
+        assert "Average run time of a task: 2.5 days" in content, content
         assert "as a part of the capacity): 71.4%" in content, content
 
     def test_the_page_has_no_demand_when_no_task_finished(self) -> None:
@@ -1337,8 +1337,91 @@ class ShortTermStatsLoadTests(TestCase):
         content = self.page()
 
         assert "as a part of the capacity): -" in content, content
-        assert "Average task running time: -" in content, content
+        assert "Average run time of a task: -" in content, content
         assert "Use of the task runner slots: 0.0%" in content, content
+        assert "(median, 90th percentile): -" in content, content
+        assert "Finished tasks with more than one attempt: -" in content, content
+        assert "did not finish a task: -" in content, content
+
+    def finished_task(
+        self, submitted_days_ago: float, waithours: float, runhours: float = 1.0, **kwargs: t.Any
+    ) -> None:
+        submitted = self.now - dt.timedelta(days=submitted_days_ago)
+        started = submitted + dt.timedelta(hours=waithours)
+        Task.objects.create(
+            user=self.user,
+            ra=1.0,
+            dec=2.0,
+            timestamp=submitted,
+            starttimestamp=started,
+            finishtimestamp=started + dt.timedelta(hours=runhours),
+            **{"attempt_count": 1, "userqueuedtasks_on_submit": 0} | kwargs,
+        )
+
+    def test_the_wait_times_are_from_the_tasks_that_finished_in_the_window(self) -> None:
+        self.finished_task(2, waithours=1)
+        self.finished_task(2, waithours=3, userqueuedtasks_on_submit=3)
+        # A request from before the window waited for five days, and it finished in the window.
+        # The tasks that were submitted in the window and are finished do not include it.
+        self.finished_task(9, waithours=120)
+        # the wait time of a task with two attempts includes the first attempt
+        self.finished_task(1, waithours=10, attempt_count=2)
+        Task.objects.create(user=self.user, ra=1.0, dec=2.0, timestamp=self.now - dt.timedelta(days=1))
+
+        content = self.page()
+
+        assert "for all tasks (median, 90th percentile): 3.0 h, 5.0 days" in content, content
+        assert "no other unfinished task (median, 90th percentile): 60.0 min, 5.0 days" in content, content
+        assert "Finished tasks with more than one attempt: 1 (25.0%)" in content, content
+
+    def test_the_slot_time_of_the_attempts_that_did_not_finish_a_task(self) -> None:
+        # The attempts of yesterday ran for 10 hours, and the task that finished yesterday ran for
+        # 6 hours of them.
+        taskqueue.charge_usage(self.user.pk, 10 * 3600.0, when=self.now - dt.timedelta(days=1))
+        self.finished_task(1.5, waithours=1, runhours=6)
+        # This task finished in the seven days and before the first day of the usage records, which
+        # starts at 00:00 UTC. Its run time is thus not in the usage records of the window.
+        self.finished_task(7, waithours=1, runhours=3)
+
+        assert "did not finish a task: 4.0 h (40.0% of the used slot time)" in self.page()
+
+    def test_the_records_of_the_task_runner_give_the_slot_time_of_a_failed_attempt(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, userqueuedtasks_on_submit=0)
+        with mock.patch.object(taskrunner_main, "log_general"):
+            # the first attempt fails after one hour, and the second attempt finishes the task
+            taskrunner_main.mark_started(task)
+            taskrunner_main.record_attempt_end(task.pk, task.user_id, 3600.0)
+            taskrunner_main.mark_started(task)
+            taskrunner_main.mark_finished(task, error_msg=None)
+            taskrunner_main.record_attempt_end(task.pk, task.user_id, 0.0)
+
+        content = self.page()
+
+        assert "did not finish a task: 1.0 h (100.0% of the used slot time)" in content, content
+        assert "Finished tasks with more than one attempt: 1 (100.0%)" in content, content
+        # the wait time of this task includes the failed attempt, and the page has no wait time
+        assert "for all tasks (median, 90th percentile): -" in content, content
+
+    def test_the_slot_time_is_zero_when_the_finished_tasks_ran_for_longer_than_the_records(self) -> None:
+        # a usage record ends a moment after the finish time of its task, and the difference of the
+        # two sums can be less than zero
+        taskqueue.charge_usage(self.user.pk, 3599.0, when=self.now - dt.timedelta(days=1))
+        self.finished_task(1.5, waithours=1, runhours=1)
+
+        assert "did not finish a task: 0.0 h (0.0% of the used slot time)" in self.page()
+
+    def test_a_duration_has_the_unit_that_gives_a_short_number(self) -> None:
+        durations = [views.duration_str(seconds) for seconds in (0.4, 99, 100, 5999, 6000, 172799, 172800)]
+
+        assert durations == ["0 s", "99 s", "1.7 min", "100.0 min", "1.7 h", "48.0 h", "2.0 days"], durations
+
+    def test_a_percentile_is_one_of_the_values(self) -> None:
+        values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+
+        assert views.percentile(values, 0.5) == 5.0
+        assert views.percentile(values, 0.9) == 9.0
+        assert views.percentile([7.0], 0.9) == 7.0
+        assert views.percentile([], 0.5) is None
 
 
 class UsageRecordsMigrationTests(TestCase):
@@ -5384,6 +5467,7 @@ class TaskRunnerStatusTests(TestCase):
 
         assert body["queued_task_count"] == 6
         assert body["distinct_queued_users"] == 3
+        assert body["retry_wait_task_count"] == 1
 
     def test_the_queue_composition_the_wait_estimate_prices_passes_by(self) -> None:
         # dispatch orders one global queue across every request type, so a wait is priced by what
@@ -8041,6 +8125,113 @@ class StatsPageTests(TestCase):
         response = self.client.get(reverse("stats"))
 
         assert response.context["lastfinishtime"] == "2026-03-04 05:06:07 UTC"
+
+    def page_with_status(self, status: dict[str, t.Any] | None) -> str:
+        """Return the page for a status file with this content, or for no status file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            if status is not None:
+                statuspath.write_text(json.dumps(status), encoding="utf-8")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                response = self.client.get(reverse("stats"))
+        assert response.status_code == 200, response.status_code
+        return response.content.decode()
+
+    def test_the_condition_of_the_queue_comes_from_the_status_file(self) -> None:
+        waiting = User.objects.create_user(username="condwaits", email="cw@example.com", password=None)
+        inslot = User.objects.create_user(username="condruns", email="cr@example.com", password=None)
+        retrying = User.objects.create_user(username="condretries", email="ct@example.com", password=None)
+        Task.objects.create(user=waiting, ra=1.0, dec=2.0, timestamp=timezone.now() - dt.timedelta(hours=3))
+        Task.objects.create(user=waiting, ra=1.0, dec=2.0)
+        running = Task.objects.create(user=inslot, ra=5.0, dec=6.0)
+        failed = Task.objects.create(user=retrying, ra=7.0, dec=8.0)
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(running)
+            taskrunner_main.mark_started(failed)
+            taskrunner_main.record_attempt_end(failed.pk, failed.user_id, 5.0)
+        calculate_queue_positions(running_taskids={running.pk})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(procs_taskids={0: running.pk}, numslots=24)
+                with CaptureQueriesContext(connection) as queries:
+                    content = self.client.get(reverse("stats")).content.decode()
+
+        assert "Task runner slots in use: 1 of 24</li>" in content, content
+        assert "Unfinished tasks: 4</li>" in content, content
+        assert "Users with a task that waits or that is in a slot: 2</li>" in content, content
+        assert "Tasks that wait for a new attempt after a failed attempt: 1</li>" in content, content
+        assert "Age of the oldest unfinished task: 3.0 h</li>" in content, content
+        assert "does not process tasks" not in content, content
+        # the task runner counts the queue for the status file, and the page counts no task
+        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper()]
+        assert not counts, counts
+
+    def test_the_page_names_the_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                taskrunner_main.write_status(procs_taskids={}, numslots=24, maintenance=True)
+                content = self.client.get(reverse("stats")).content.decode()
+
+        assert "slots in use: 0 of 24 (the hourly maintenance runs" in content, content
+        # the queue is empty, and thus no task has an age
+        assert "Age of the oldest unfinished task" not in content, content
+
+    def test_the_page_shows_an_outage_when_there_is_no_status_file(self) -> None:
+        user = User.objects.create_user(username="condnofile", email="cn@example.com", password=None)
+        Task.objects.create(user=user, ra=1.0, dec=2.0)
+        Task.objects.create(user=user, ra=1.0, dec=2.0, is_archived=True)
+
+        content = self.page_with_status(None)
+
+        assert "The task runner does not process tasks at the moment.</li>" in content, content
+        assert "Unfinished tasks: 1</li>" in content, content
+        assert "slots in use" not in content, content
+
+    def test_a_stale_status_file_gives_its_age_and_no_counts(self) -> None:
+        written = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=10)
+        status = {
+            "written": written.isoformat(),
+            "slots_busy": 24,
+            "numslots": 24,
+            "maintenance": False,
+            "queued_task_count": 99,
+            "distinct_queued_users": 9,
+            "oldest_queued_task_time": None,
+        }
+
+        content = self.page_with_status(status)
+
+        assert "does not process tasks at the moment. It last reported 10.0 min ago.</li>" in content, content
+        assert "Unfinished tasks: 0</li>" in content, content
+        assert "slots in use" not in content, content
+
+    def test_a_status_file_with_no_count_of_the_tasks_that_wait_for_a_new_attempt(self) -> None:
+        # the status file of a task runner from before this count
+        status = {
+            "written": dt.datetime.now(dt.UTC).isoformat(),
+            "slots_busy": 2,
+            "numslots": 24,
+            "maintenance": False,
+            "queued_task_count": 5,
+            "distinct_queued_users": 3,
+            "oldest_queued_task_time": None,
+        }
+
+        content = self.page_with_status(status)
+
+        assert "Task runner slots in use: 2 of 24</li>" in content, content
+        assert "wait for a new attempt" not in content, content
+
+    def test_a_status_file_with_a_field_that_is_not_usable_gives_an_outage(self) -> None:
+        status = {"written": dt.datetime.now(dt.UTC).isoformat(), "slots_busy": "many"}
+
+        content = self.page_with_status(status)
+
+        assert "The task runner does not process tasks at the moment." in content, content
+        assert "slots in use" not in content, content
 
 
 class ThirdPartyScriptTests(TestCase):

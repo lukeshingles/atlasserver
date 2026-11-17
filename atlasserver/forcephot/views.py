@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from itertools import starmap
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,6 @@ from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
-from django.db.models import DurationField
-from django.db.models import F
 from django.db.models import Max
 from django.db.models import Sum
 from django.db.models.functions import Trunc
@@ -1130,6 +1129,28 @@ def statslongterm(request):
     return render(request, "statslongterm.html", dictparams)
 
 
+def duration_str(seconds: float) -> str:
+    """Return a duration with the unit that gives a short number: seconds, minutes, hours, or days."""
+    if seconds < 100:
+        return f"{seconds:.0f} s"
+    if seconds < 100 * 60:
+        return f"{seconds / 60:.1f} min"
+    if seconds < 48 * 3600:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 86400:.1f} days"
+
+
+def percentile(ordered: Sequence[float], fraction: float) -> float | None:
+    """Return the smallest value that `fraction` of the values are not larger than, or None.
+
+    `ordered` is the values in ascending order. The result is one of the values (the nearest-rank
+    method), and thus the page shows no wait time that no task had.
+    """
+    if not ordered:
+        return None
+    return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
+
+
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
     now = utcnow()
@@ -1148,43 +1169,43 @@ def statsshortterm(request):
     dictparams["sevendaympctasks"] = sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count()
     dictparams["sevendayimgtasks"] = sevendaytasks.filter(request_type="IMGZIP").count()
 
-    sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
-
-    def mean_seconds(values: list[float | None]) -> float | None:
-        """Return the mean of the values that have one, or None if none of them do."""
-        known = [value for value in values if value is not None]
-        return statistics.fmean(known) if known else None
-
-    def mean_seconds_str(values: list[float | None]) -> str:
-        """Format the mean of a list of second counts, ignoring the unanswerable ones and empties."""
-        mean = mean_seconds(values)
-        return "-" if mean is None else f"{mean:.1f}s"
-
-    # one read of the four columns the figures below use, rather than a full read per figure
+    # The tasks that finished in the window, for the wait times, the run time, and the attempts.
+    # This is not the set of the tasks that were submitted in the window and are finished. When
+    # the queue is full, the tasks that were submitted in the window and wait the longest are not
+    # finished. Those are the tasks of the users with the most usage, which are the long tasks. A
+    # wait time or a run time without them is too low.
+    #
+    # One read of the columns that the values below use, and not one read for each value.
     finished = list(
-        sevendaytasks_finished.only("timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit")
-    )
-
-    if finished:
-        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in finished])
-        dictparams["sevendayavgwaittimeuserfirst"] = mean_seconds_str(
-            [tsk.waittime() for tsk in finished if tsk.userqueuedtasks_on_submit == 0]
+        Task.objects.filter(finishtimestamp__gt=windowstart, starttimestamp__isnull=False).only(
+            "timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit", "attempt_count"
         )
-    else:
-        dictparams |= {"sevendayavgwaittime": "-", "sevendayavgwaittimeuserfirst": "-"}
+    )
 
-    # The mean run time is from the tasks that finished in the window, and not from the tasks
-    # that were submitted in the window and are finished. When the queue is full, the tasks that
-    # were submitted in the window and wait the longest are not finished. Those are the tasks
-    # of the users with the most usage, which are the long tasks, and a mean without them is
-    # too low.
-    ranthisweek = Task.objects.filter(finishtimestamp__gt=windowstart, starttimestamp__isnull=False).aggregate(
-        runtime=Sum(F("finishtimestamp") - F("starttimestamp"), output_field=DurationField()), taskcount=Count("id")
+    # The wait time of a task is the time from the request to the start of the last attempt. For
+    # a task with more than one attempt, that time includes the failed attempts and the waits
+    # between them, which are not a wait for a slot. Those tasks have their own line on the page.
+    oneattempt = [task for task in finished if task.attempt_count <= 1]
+
+    def wait_times_str(tasks: list[Task]) -> str:
+        """Return the median and the 90th percentile of the wait times of the tasks."""
+        waits = sorted(wait for task in tasks if (wait := task.waittime()) is not None)
+        median, high = percentile(waits, 0.5), percentile(waits, 0.9)
+        return "-" if median is None or high is None else f"{duration_str(median)}, {duration_str(high)}"
+
+    dictparams["sevendaywaittime"] = wait_times_str(oneattempt)
+    dictparams["sevendaywaittimeuserfirst"] = wait_times_str(
+        [task for task in oneattempt if task.userqueuedtasks_on_submit == 0]
     )
-    meanruntime = (
-        ranthisweek["runtime"].total_seconds() / ranthisweek["taskcount"] if ranthisweek["taskcount"] else None
+
+    manyattempts = len(finished) - len(oneattempt)
+    dictparams["sevendaymanyattempts"] = (
+        f"{manyattempts} ({100.0 * manyattempts / len(finished):.1f}%)" if finished else "-"
     )
-    dictparams["sevendayavgruntime"] = "-" if meanruntime is None else f"{meanruntime:.1f}s"
+
+    runtimes = [runtime for task in finished if (runtime := task.runtime()) is not None]
+    meanruntime = statistics.fmean(runtimes) if runtimes else None
+    dictparams["sevendayavgruntime"] = "-" if meanruntime is None else duration_str(meanruntime)
 
     # The slot count is the current one. After a change of the slot count, the two values below
     # use the new count for the full window, and they are correct again when the window is past.
@@ -1203,6 +1224,35 @@ def statsshortterm(request):
     usedseconds = UsageDay.objects.filter(day__gte=firstday).aggregate(Sum("seconds"))["seconds__sum"] or 0.0
     recordseconds = (now - dt.datetime.combine(firstday, dt.time(0), tzinfo=dt.UTC)).total_seconds()
     dictparams["sevendayslotusepercent"] = f"{100.0 * usedseconds / (recordseconds * numslots):.1f}%"
+
+    # The slot time of the attempts that did not finish a task: the run time of all attempts
+    # minus the run time of the last attempt of each task that finished. The two sums are for the
+    # same days, because a usage record is on the day of the end of its attempt. The attempts
+    # that did not finish a task are the failed attempts, the attempts that a stop of the task
+    # runner cut, and the attempts of the tasks that a user deleted while they ran.
+    #
+    # The value is approximate. The start time and the finish time of a task have no fraction of
+    # a second, and a usage record has one. A usage record also ends at the end of the slot
+    # process, which is a moment after the finish time of the task. The error is a fraction of a
+    # second for each task, and the difference of the two sums can be less than zero when no
+    # attempt failed.
+    #
+    # The migration made the usage records of the days before the first start of the new task
+    # runner from the finished tasks. The value is thus zero for those days.
+    firstdaystart = dt.datetime.combine(firstday, dt.time(0), tzinfo=dt.UTC)
+    finishedseconds = sum(
+        runtime
+        for task in finished
+        if (runtime := task.runtime()) is not None
+        and task.finishtimestamp is not None
+        and task.finishtimestamp >= firstdaystart
+    )
+    lostseconds = max(0.0, usedseconds - finishedseconds)
+    dictparams["sevendaylostslottime"] = (
+        f"{lostseconds / 3600:.1f} h ({100.0 * lostseconds / usedseconds:.1f}% of the used slot time)"
+        if usedseconds > 0
+        else "-"
+    )
 
     return render(request, "statsshortterm.html", dictparams)
 
@@ -1442,11 +1492,55 @@ def bokeh_cdn_scripts() -> tuple[dict[str, str], ...]:
     return tuple(scripts)
 
 
+def queue_condition() -> dict[str, t.Any]:
+    """Return the current condition of the queue for the stats page.
+
+    The values come from the status file of the task runner, which is a maximum of
+    STATUS_WRITE_SECONDS old. The task runner counts the queue for that file, and thus this
+    function makes no query when the task runner runs. The stats page is public and has no cache.
+
+    When the status file is stale or not usable, its counts are for a queue of the past. The
+    result then has only the number of the unfinished tasks, from the database, and the age of
+    the status file when the file gives one.
+    """
+    condition: dict[str, t.Any] = {"runnerstale": True}
+    # An exception from a field of the file leaves the condition stale: Python makes the full
+    # dictionary of the values before it changes `condition`.
+    with contextlib.suppress(OSError, KeyError, TypeError, ValueError):
+        status, age_seconds = runnerstatus.read_status()
+        condition["statusage"] = duration_str(max(0.0, age_seconds))
+        if age_seconds <= runnerstatus.STALE_AFTER_SECONDS:
+            oldest = status["oldest_queued_task_time"]
+            condition |= {
+                "slotsbusy": int(status["slots_busy"]),
+                "numslots": int(status["numslots"]),
+                "maintenance": bool(status["maintenance"]),
+                "queuedtaskcount": int(status["queued_task_count"]),
+                "queuedusers": int(status["distinct_queued_users"]),
+                # a status file from before this field has no count, and the page then has no line
+                "retrywaittaskcount": status.get("retry_wait_task_count"),
+                "oldestqueuedage": (
+                    None
+                    if oldest is None
+                    else duration_str(max(0.0, (utcnow() - dt.datetime.fromisoformat(oldest)).total_seconds()))
+                ),
+                "runnerstale": False,
+            }
+
+    if condition["runnerstale"]:
+        condition = {
+            "runnerstale": True,
+            "statusage": condition.get("statusage"),
+            "queuedtaskcount": Task.queued().count(),
+        }
+    return condition
+
+
 def stats(request):
     dictparams = {
         "name": "Usage Statistics",
-        "queuedtaskcount": Task.objects.filter(finishtimestamp__isnull=True).count(),
         "bokehscripts": bokeh_cdn_scripts(),
+        **queue_condition(),
     }
 
     lastfinishtime = (

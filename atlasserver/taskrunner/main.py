@@ -742,6 +742,9 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         queued_task_count=models.Count("id"),
         distinct_queued_users=models.Count("user_id", distinct=True, filter=canuseslot),
         oldest_queued=models.Min("timestamp"),
+        # the tasks that wait for a new attempt after a failed attempt; see
+        # forcephot.queue.calculate_queue_positions. The stats page shows this count.
+        retry_wait_task_count=models.Count("id", filter=models.Q(retry_after__gt=dt.datetime.now(dt.UTC))),
     )
     oldest_queued = queuestats["oldest_queued"]
 
@@ -770,6 +773,7 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "maintenance": maintenance,
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
+        "retry_wait_task_count": queuestats["retry_wait_task_count"],
         "queued_by_request_type": queued_by_request_type,
         # the maximum number of slots for the tasks of one user; the wait estimate of the queue
         # page uses it for the tasks of the reader that are ahead of a task
