@@ -41,7 +41,9 @@ function task(id, overrides = {}) {
         imagerequest_task_id: null,
         parent_task_id: null,
         parent_task_url: null,
-        queuepos: 0,
+        // The server gives a queue position only to a task that waits for its start. A task in a
+        // slot has none, and a task that waits for the time of its next attempt has none.
+        queuepos: overrides.starttimestamp != null ? null : 0,
         attempt_count: 1,
         ...overrides,
     };
@@ -458,8 +460,8 @@ describe('TaskPage', () => {
                     status: 200,
                     json: () => Promise.resolve({
                         queuepositions: body,
-                        // the tier of the caller, when a test sets it
-                        ...control.tier,
+                        // more fields of the answer, when a test sets them
+                        ...control.answerfields,
                         // the endpoint sends a type per queued task; FP unless a test says otherwise
                         queuedtypes: { ...Object.fromEntries(Object.keys(body).map((id) => [id, 'FP'])),
                             ...control.queuedtypes },
@@ -659,7 +661,7 @@ describe('TaskPage', () => {
             if (running_taskids != null) {
                 runnerstatus.running_taskids = running_taskids;
             }
-            stubScriptedList([() => answer({ ...listpage(), results: [started] })], { runnerstatus, positions: { 7: 0 } });
+            stubScriptedList([() => answer({ ...listpage(), results: [started] })], { runnerstatus });
 
             const rendered = await mountPage();
 
@@ -679,7 +681,6 @@ describe('TaskPage', () => {
         const started = task(7, { starttimestamp: '2026-09-01T00:00:00Z' });
         const handle = stubScriptedList([() => answer({ ...listpage(), results: [started] })], {
             runnerstatus: { queued_task_count: 1, running_taskids: [], written: '2026-09-01T00:00:05Z' },
-            positions: { 7: 0 },
         });
 
         try {
@@ -1682,26 +1683,116 @@ describe('TaskPage', () => {
         assert.match(status.textContent, /~40 min/);
     });
 
-    test('a waiting row does not count the tasks of the high priority group as ahead', async () => {
-        stubFetchWithPositions([task(1, { queuepos: 503 })], { 1: 503 }, {
-            queued_task_count: 504,
-            numslots: 16,
-            slots_busy: 5,
-            distinct_queued_users: 5,
-            // The status is older than the positions and counts more member tasks than the answer
-            // of the positions. The tier comes from that answer, and the row stays correct.
-            priority_queued_depths: [510],
-            priority_queued_by_request_type: { FP: 510 },
+    test('a waiting row of a batch waits for the slots of one user', async () => {
+        // 16 tasks of the same user are ahead of this task, and one user has a maximum of 8 slots:
+        // two full passes of 8 start before it
+        const positions = Object.fromEntries(Array.from({ length: 17 }, (unused, index) => [index + 1, index]));
+        stubFetchWithPositions([task(17, { queuepos: 16 })], positions, {
+            queued_task_count: 17,
+            numslots: 24,
+            max_user_slots: 8,
+            slots_busy: 8,
+            distinct_queued_users: 1,
             typical_runtime_seconds: { FP: 600 },
-            queued_by_request_type: { FP: 514 },
-        }).tier = { prioritytier: false, tierstart: 500 };
+            queued_by_request_type: { FP: 17 },
+        });
         const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
         mounted.push(root);
         await flush(120);
 
         const status = container.querySelector('.taskstatus.waiting');
-        assert.match(status.textContent, /^Waiting 3 ahead/);
-        assert.match(status.textContent, /under a minute/);
+        assert.match(status.textContent, /^Waiting 16 ahead/);
+        assert.match(status.textContent, /~20 min/);
+    });
+
+    test('a waiting row waits for the tasks of the user that are in the slots', async () => {
+        // 8 tasks of the user have started, and one user has a maximum of 8 slots: the task at
+        // the front waits for one of them to finish
+        stubFetchWithPositions([task(9, { queuepos: 0 })], { 9: 0 }, {
+            queued_task_count: 20,
+            numslots: 24,
+            max_user_slots: 8,
+            slots_busy: 24,
+            distinct_queued_users: 5,
+            typical_runtime_seconds: { FP: 600 },
+            queued_by_request_type: { FP: 20 },
+        }).answerfields = {
+            startedids: [1, 2, 3, 4, 5, 6, 7, 8],
+            startedtypes: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map((id) => [id, 'FP'])),
+        };
+        const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(root);
+        await flush(120);
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.match(status.textContent, /^Waiting next/);
+        assert.match(status.textContent, /~10 min/);
+    });
+
+    test('a task that is past its wait for a new attempt shows its queue position', async () => {
+        // the attempt of this task failed: it has a start time, and it has a queue position again
+        stubFetchWithPositions(
+            [task(1, { queuepos: 4, starttimestamp: '2026-01-01T00:00:00Z' })], { 1: 4 });
+        const { container, root } = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(root);
+        await flush(120);
+
+        const status = container.querySelector('.taskstatus.waiting');
+        assert.ok(status, 'the row shows the task as a task that runs');
+        assert.match(status.textContent, /^Waiting 4 ahead/);
+        assert.equal(container.querySelector('.taskstatus.running'), null);
+    });
+
+    test('the queue badge counts the tasks in the slots with the tasks that wait', async () => {
+        const badge = window.document.createElement('span');
+        badge.className = 'badge rounded-pill queuecount';
+        badge.hidden = true;
+        badge.innerHTML = '<span class="queuecount-number">0</span>';
+        window.document.body.appendChild(badge);
+        // a task in a slot has no position, and the answer lists it in startedids
+        stubFetchWithPositions([task(1, { queuepos: 1 })], { 1: 1, 2: 2 }).answerfields = { startedids: [3, 4] };
+
+        try {
+            const { root } = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(root);
+            await flush(120);
+
+            assert.equal(badge.querySelector('.queuecount-number').textContent, '4');
+        } finally {
+            badge.remove();
+        }
+    });
+
+    test('a task that started while the tab was hidden is not counted as finished', async () => {
+        mock.timers.enable({ apis: ['setInterval'] });
+        const wasHidden = Object.getOwnPropertyDescriptor(window.document, 'hidden');
+        let hidden = false;
+        Object.defineProperty(window.document, 'hidden', { configurable: true, get: () => hidden });
+        const control = stubFetchWithPositions([task(1, { queuepos: 1 }), task(2, { queuepos: 2 })], { 1: 1, 2: 2 });
+
+        try {
+            const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+            mounted.push(rendered.root);
+            await flush(120);
+            mock.timers.tick(2000);
+            await flush(60);
+
+            // task 1 starts and task 2 finishes: the two tasks have no position
+            hidden = true;
+            control.positions = {};
+            control.answerfields = { startedids: [1] };
+            mock.timers.tick(60000);
+            await flush(60);
+
+            assert.match(window.document.title, /^\(1\) Task Queue/);
+        } finally {
+            mock.timers.reset();
+            if (wasHidden) {
+                Object.defineProperty(window.document, 'hidden', wasHidden);
+            } else {
+                delete window.document.hidden;
+            }
+        }
     });
 
     test('a waiting row shows no estimate when the runner is not running', async () => {

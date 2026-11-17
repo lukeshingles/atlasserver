@@ -4,7 +4,9 @@ Lives outside views.py so that the task runner can import it without pulling in 
 rest of the web stack, and so that the two processes cannot drift on what "queue position" means.
 """
 
+import collections
 import datetime as dt
+import itertools
 import operator
 import statistics
 import time
@@ -12,13 +14,18 @@ import typing as t
 
 from django.contrib.auth import get_user_model
 from django.core.cache import caches
+from django.db import IntegrityError
 from django.db import models
 from django.db import transaction
 
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.models import UsageDay
 
 if t.TYPE_CHECKING:
+    from collections.abc import Callable
+    from collections.abc import Collection
     from collections.abc import Iterable
+    from collections.abc import Mapping
 
 # Bumped by the web app when the queued set changes; the runner watches it and remembers the value
 # it last acted on. A counter rather than a flag it clears, because clearing loses a request that
@@ -32,9 +39,62 @@ RECALC_GENERATION_CACHEKEY: t.Final = "queue-positions-generation"
 # group in the Django admin.
 HIGH_PRIORITY_GROUP: t.Final = "High priority"
 
-# Renumber at least this often even when the flag says nothing changed. Covers the task runner's
-# own dispatches (which move the running task to the front) and any flag lost to a cache eviction
-# or a wiped cache directory, so a stale ordering can never persist.
+# The usage of a user is the run time of the attempts of that user, where older run time counts
+# less: run time of this number of days ago counts half, and run time of two times this number of
+# days ago counts a quarter. The value is the default half-life of the fair share of Slurm
+# (PriorityDecayHalfLife).
+USAGE_HALF_LIFE_DAYS: t.Final = 7
+
+# The number of days of usage records that the usage of a user includes, and that the maintenance
+# of the task runner keeps. Run time of 5 half-lives ago counts 3 %.
+USAGE_RETENTION_DAYS: t.Final = 5 * USAGE_HALF_LIFE_DAYS
+
+# How much the wait of a task decreases its key in the queue order: each second of wait takes
+# this number of seconds from the key. This is the age factor of the priority of Slurm. With the
+# decay of the usage, a user with much usage never gets to zero, and without this term the tasks
+# of such a user can wait for as long as other users have tasks.
+#
+# The value is low, as the weight of the age is in a Slurm configuration: the fair share must
+# decide the order in the usual condition. On the production server in November 2026, the oldest
+# tasks of the three users with the most usage had waited for 320 hours, and each of those users
+# had 135 hours of run time in 7 days. With 0.25, a wait of 320 hours is 80 hours of usage: such
+# a task stays behind the tasks of a user with no usage, and it goes before the tasks that a user
+# with more than 55 hours of usage submits now.
+WAIT_CREDIT: t.Final = 0.25
+
+# The wait of a task is in its key as its submission time after this time. The key is thus the
+# same number at each renumbering, and the order of two tasks does not change as time goes on.
+WAIT_EPOCH: t.Final = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
+
+# An account that is younger than this number of days is a new account. The usage of a new
+# account in the queue order is not less than the median usage of the users; see
+# new_account_usage. Registration is open, and without this rule a user with much usage gets the
+# first place in the queue again with each new account.
+NEW_ACCOUNT_DAYS: t.Final = USAGE_HALF_LIFE_DAYS
+
+# A user with less finished run time than this number of tasks gets the expected run time of a
+# task from the tasks of all users; see expected_task_seconds. The mean of some tasks is not a
+# good estimate.
+EXPECTED_RUNTIME_MIN_TASKS: t.Final = 5
+
+# The expected run time of a task, in seconds, when the usage records have too few tasks for a
+# mean. The value is the mean run time of a task on the production server in November 2026.
+DEFAULT_TASK_SECONDS: t.Final = 420.0
+
+# A task whose attempt failed gets no queue position for this number of seconds after the end of
+# that attempt, and thus it cannot start. The time is two times longer after each next failed
+# attempt, to the maximum. A task that always fails thus does not keep a slot: it has a wait of
+# 10 minutes between two attempts.
+#
+# A failed attempt adds its real run time to the usage of the user, as each attempt does, and
+# it adds no other cost. While the remote host is away, each attempt of each user fails. A fixed
+# cost for each failed attempt then removes the differences in usage between the users.
+RETRY_WAIT_SECONDS: t.Final = 30.0
+RETRY_WAIT_MAX_SECONDS: t.Final = 600.0
+
+# Renumber at least this often even when the flag says nothing changed. Covers a task that lost
+# its position at a start and did not finish (a task with no position cannot start), and any flag
+# lost to a cache eviction or a wiped cache directory, so a stale ordering can never persist.
 RECALC_MAX_INTERVAL_SECONDS: t.Final = 30.0
 
 # How often the runner asks whether a renumbering was requested. Its loop runs twice a second, and
@@ -43,7 +103,7 @@ RECALC_MAX_INTERVAL_SECONDS: t.Final = 30.0
 #
 # The added delay is not visible: a submitted task is given a provisional position at the back of
 # the queue before the request returns (see next_queuepos_relative), so what waits is only the
-# round-robin reordering among users.
+# move of the task to its place in the fair share order.
 RECALC_CHECK_INTERVAL_SECONDS: t.Final = 2.0
 
 # How far back typical_runtime_seconds() looks. A day rather than the stats page's week: this
@@ -79,6 +139,11 @@ TYPICAL_RUNTIME_MEMO_SECONDS: t.Final = 15.0
 _typical_runtime_memo: tuple[float, dict[str, float]] | None = None
 
 
+def utcnow() -> dt.datetime:
+    """Return the time now. A test replaces this function to set the day of the usage."""
+    return dt.datetime.now(dt.UTC)
+
+
 def priority_userids() -> set[int]:
     """Return the ids of the users who are members of the high priority group.
 
@@ -88,6 +153,141 @@ def priority_userids() -> set[int]:
     change the members while the task runner runs, and the next renumbering must see the change.
     """
     return set(get_user_model().objects.filter(groups__name=HIGH_PRIORITY_GROUP).values_list("pk", flat=True))
+
+
+class Usage(t.NamedTuple):
+    """The usage of one user: the run time and the number of the attempts, with the decay."""
+
+    # the sum of the run times, in seconds
+    seconds: float
+    # the number of the attempts. The decay makes it a fraction.
+    tasks: float
+
+
+def charge_usage(userid: int, seconds: float, when: dt.datetime | None = None) -> None:
+    """Add one attempt with this run time to the usage record of the user for the day of `when`.
+
+    The task runner calls this at the end of each attempt: a finish, an attempt that failed, and
+    a task that its user cancelled while it ran. The usage records thus hold all the time that
+    the tasks of a user had a slot. They do not change when the user or the maintenance deletes
+    the row of a task.
+
+    Two slots can finish tasks of one user at the same time. The update adds in the database, and
+    thus no addition is lost.
+    """
+    day = (utcnow() if when is None else when).astimezone(dt.UTC).date()
+    seconds = max(0.0, seconds)
+    for _ in range(2):
+        updated = UsageDay.objects.filter(user_id=userid, day=day).update(
+            seconds=models.F("seconds") + seconds, tasks=models.F("tasks") + 1
+        )
+        if updated:
+            return
+        if not get_user_model().objects.filter(pk=userid).exists():
+            # The account is deleted, and its usage has no reader. SQLite reports a row for a
+            # user who does not exist only at the end of the transaction, and thus the insert
+            # below cannot find this condition.
+            return
+        try:
+            # the transaction keeps an error of this insert out of a transaction of the caller
+            with transaction.atomic():
+                UsageDay.objects.create(user_id=userid, day=day, seconds=seconds, tasks=1)
+        except IntegrityError:
+            # a different slot made the row between the update and the insert: the second pass
+            # updates that row
+            continue
+        return
+
+
+def decayed_usage(rows: "Iterable[tuple[int, dt.date, float, int]]", today: dt.date) -> dict[int, Usage]:
+    """Return the usage of each user from usage records (user id, day, seconds, tasks).
+
+    The record of today counts fully, and the record of USAGE_HALF_LIFE_DAYS ago counts half. The
+    weight changes one time in a day, at the start of the day in UTC. The usage of a user is thus
+    constant during a day if no attempt of the user ends, and the queue order does not move
+    continuously.
+    """
+    totals: dict[int, list[float]] = {}
+    for userid, day, seconds, tasks in rows:
+        weight = 0.5 ** ((today - day).days / USAGE_HALF_LIFE_DAYS)
+        total = totals.setdefault(userid, [0.0, 0.0])
+        total[0] += seconds * weight
+        total[1] += tasks * weight
+    return {userid: Usage(seconds, tasks) for userid, (seconds, tasks) in totals.items()}
+
+
+def usage_records() -> "models.QuerySet[UsageDay]":
+    """Return the usage records that the usage of a user includes."""
+    firstday = utcnow().date() - dt.timedelta(days=USAGE_RETENTION_DAYS)
+    return UsageDay.objects.filter(day__gte=firstday)
+
+
+def usage_by_user() -> dict[int, Usage]:
+    """Return the usage of each user who has a usage record.
+
+    The table has one row for each user and day, and thus the query reads some thousands of small
+    rows. The task runner calls this at each renumbering.
+    """
+    return decayed_usage(usage_records().values_list("user_id", "day", "seconds", "tasks"), utcnow().date())
+
+
+def user_usage_seconds(userid: int) -> float:
+    """Return the usage of one user, in seconds of run time with the decay."""
+    rows = usage_records().filter(user_id=userid).values_list("user_id", "day", "seconds", "tasks")
+    usage = decayed_usage(rows, utcnow().date()).get(userid)
+    return 0.0 if usage is None else usage.seconds
+
+
+def remove_old_usage_records() -> int:
+    """Delete the usage records that the usage of a user does not include, and return their number."""
+    firstday = utcnow().date() - dt.timedelta(days=USAGE_RETENTION_DAYS)
+    return UsageDay.objects.filter(day__lt=firstday).delete()[0]
+
+
+def new_account_userids() -> set[int]:
+    """Return the ids of the users whose account is a new account; see NEW_ACCOUNT_DAYS."""
+    joinedafter = utcnow() - dt.timedelta(days=NEW_ACCOUNT_DAYS)
+    return set(get_user_model().objects.filter(date_joined__gt=joinedafter).values_list("pk", flat=True))
+
+
+def new_account_usage(usage: "Mapping[int, Usage]") -> float:
+    """Return the lowest usage that a new account has in the queue order, in seconds.
+
+    This is the median usage of the users who have a usage record. A new account is thus before
+    each user with more usage than the median, and it is not before the half of the users with
+    the least usage. The scheduler of Linux has a rule of the same type for a new process. That
+    process starts with the lowest usage of the current processes, and not with zero.
+    """
+    return statistics.median(own.seconds for own in usage.values()) if usage else 0.0
+
+
+def expected_task_seconds(usage: "Mapping[int, Usage]") -> "Callable[[int], float]":
+    """Return the function that gives the expected run time of one task of a user, in seconds.
+
+    The queue order charges a user this time for each task of the user in a slot, and it puts
+    this time between two tasks of the user that wait. The mean run time of the
+    attempts of the user is the best value: the tasks of one user are frequently of one type, and
+    a user with long tasks then gets fewer tasks for the same run time. A user with few attempts
+    gets the mean of all users.
+    """
+    totalseconds = sum(own.seconds for own in usage.values())
+    totaltasks = sum(own.tasks for own in usage.values())
+    allusers = totalseconds / totaltasks if totaltasks >= EXPECTED_RUNTIME_MIN_TASKS else DEFAULT_TASK_SECONDS
+
+    def expected(userid: int) -> float:
+        own = usage.get(userid)
+        seconds = own.seconds / own.tasks if own is not None and own.tasks >= EXPECTED_RUNTIME_MIN_TASKS else allusers
+        # A time of zero puts all the tasks of a user at one place in the order, and the user
+        # then has no turns with the other users.
+        return max(1.0, seconds)
+
+    return expected
+
+
+def retry_wait_seconds(attempts: int) -> float:
+    """Return the seconds that a task waits for a new attempt after the end of failed attempt number `attempts`."""
+    # the limit of the exponent keeps the power in the range of a float for a task with many attempts
+    return min(RETRY_WAIT_MAX_SECONDS, RETRY_WAIT_SECONDS * 2 ** min(attempts - 1, 10))
 
 
 def request_recalc() -> None:
@@ -121,10 +321,9 @@ def recalc_generation() -> int:
 def next_queuepos_relative() -> int:
     """Return a queue position at the back of the current queue.
 
-    Not only cosmetic. The task runner dispatches in `order_by("queuepos_relative")`, and NULL
-    sorts first, so a task left unnumbered between two renumberings would be picked up ahead of
-    everything already waiting. Renumbering used to happen inside the submitting request, so the
-    window did not exist; now it does, and this closes it.
+    Not only cosmetic. A task with no position cannot start (taskrunner.main.next_task), and the
+    queue page shows no number for it. With this position, a new task can start before the next
+    renumbering if the queue is empty, and the page shows a number for it at once.
     """
     maxpos = Task.queued().aggregate(models.Max("queuepos_relative"))["queuepos_relative__max"]
 
@@ -211,78 +410,72 @@ def clear_typical_runtime_memo() -> None:
     _typical_runtime_memo = None
 
 
-def round_robin_order(tasks: list[Task]) -> list[int]:
-    """Return the ids of these tasks in the order in which the task runner starts them.
+def calculate_queue_positions(
+    usage: "Mapping[int, Usage] | None" = None, running_taskids: "Collection[int] | None" = None
+) -> None:
+    """Assign each task that waits its position, which is the order in which the task runner starts the tasks.
 
-    The tasks must be in the order (user id, submission time, id). The result is a sequence of
-    passes, and each pass has a maximum of one task for each user. Thus a user with one task does
-    not wait for all the tasks of a user with many.
+    The order is a fair share of the run time, as in the multifactor priority of Slurm: the usage
+    of the user decides, and the wait of the task counts also. The tasks of the members of the
+    high priority group have the first positions. After that, the task with the lowest key is
+    first. The key of a task that waits is in seconds:
+
+        the usage of its user (the run time in the usage records, with the decay)
+        + the expected run time of a task, for each task of the user in a slot
+        + the expected run time of a task, for each task of the user that waits before it
+        - WAIT_CREDIT, for each second that the task waits
+
+    The first three terms are the usage that the user will have at the start of the task. Users
+    with equal usage thus take turns, and a user with less usage gets tasks until the usage is
+    equal. The usage of a new account is not less than the median usage; see new_account_usage.
+
+    The last term makes sure that each task starts: a task that waits gets a lower key, in
+    comparison with each task that a user submits later, until it is before those tasks. The
+    submission time decides between equal keys.
+
+    A start of a task does not change a key: the started task becomes a task in a slot, and each
+    later task of its user has one task less before it. The order of the tasks that wait is thus the
+    same before and after a start, and the task runner can start many tasks between two calls of
+    this function. The end of an attempt changes the keys of one user by the difference between
+    the real run time and the expected run time. Time does not change the order of two tasks:
+    the two waits increase together.
+
+    A task in a slot has no position. A task that has started and is not in a slot waits for a
+    new attempt (see taskrunner.main.record_attempt_end). It has no position before the time in its field
+    retry_after, which is the end of its failed attempt plus retry_wait_seconds. After that time
+    it gets a position as the other tasks do. Thus a task that always fails does not keep a slot.
+    The renumbering at an interval of RECALC_MAX_INTERVAL_SECONDS gives the position, and the
+    wait is thus longer by that interval at most.
+
+    The task runner starts the task with the lowest position whose user is below the maximum
+    number of slots (taskrunner.main.next_task). The task runner has no second rule for the
+    priority. The position of a task is thus the number of tasks that are before it in the
+    order, and it is the largest number of tasks that can start before it. Fewer tasks start
+    before it when a user with tasks before it has the maximum number of slots: the task then
+    starts before the other tasks of that user.
+
+    `usage` is the usage of each user, as usage_by_user returns it. Without it, this function
+    reads the usage.
+
+    `running_taskids` is the ids of the tasks in the slots of the task runner. Without it, each
+    task that has started is a task in a slot.
     """
-    # to get position in current pass, check if job currently running (the one started last).
-    # attrgetter rather than a lambda: the generator's None filter cannot narrow the
-    # attribute type inside a lambda, so a lambda key would not type check
-    runningtask = max(
-        (tsk for tsk in tasks if tsk.starttimestamp is not None),
-        key=operator.attrgetter("starttimestamp"),
-        default=None,
-    )
-    runningtask_userid = runningtask.user_id if runningtask is not None else None
-
-    # the currently running task is the first
-    order: list[int] = [] if runningtask is None else [runningtask.id]
-
-    # (task id, user id) pairs: one list, so that the two cannot drift apart
-    unassigned = [(tsk.id, tsk.user_id) for tsk in tasks if tsk is not runningtask]
-
-    # work through passes (max one task per user in each pass)
-    passnum: int = 0
-    while unassigned:
-        # the running task is the task of its user in the first pass
-        useridsassigned_currentpass: set[int] = set()
-        if passnum == 0 and runningtask_userid is not None:
-            useridsassigned_currentpass.add(runningtask_userid)
-
-        # collect the tasks not assigned in this pass rather than popping from
-        # the list during iteration (which would skip elements)
-        remaining: list[tuple[int, int]] = []
-        for taskid, task_userid in unassigned:
-            if task_userid not in useridsassigned_currentpass and (
-                passnum != 0 or runningtask_userid is None or (task_userid > runningtask_userid)
-            ):
-                order.append(taskid)
-                useridsassigned_currentpass.add(task_userid)
-            else:
-                remaining.append((taskid, task_userid))
-
-        unassigned = remaining
-
-        # bail out rather than spin forever if a pass somehow assigns nothing. Not an assert:
-        # those are stripped under python -O, which is exactly when a hung request would be
-        # hardest to explain
-        if passnum >= (2 * len(tasks) + 1):
-            msg = f"queue position assignment made no progress after {passnum} passes over {len(tasks)} tasks"
-            raise RuntimeError(msg)
-
-        passnum += 1
-
-    return order
-
-
-def calculate_queue_positions() -> None:
-    """Assign every queued task its position, which is the order the task runner executes them in.
-
-    The queue has two tiers. The tasks of the members of the high priority group have the first
-    positions, and the tasks of the other users follow them. Each tier is in round-robin order;
-    see round_robin_order.
-
-    The task runner starts the task with the lowest position whose user has no task in a slot.
-    Thus the positions give the real start order, and the task runner has no second rule for the
-    priority. For a task of another user, the queue page shows a count without the tasks of the
-    members; see tasksAhead in frontend/src/waitestimate.js.
-    """
-    # This query runs before the transaction locks the rows. Thus the lock does not include the
-    # time of this query.
+    # These queries run before the transaction locks the rows. Thus the lock does not include
+    # the time of these queries.
     priorityuserids = priority_userids()
+    if usage is None:
+        usage = usage_by_user()
+    expected = expected_task_seconds(usage)
+    newaccounts = new_account_userids()
+    newaccountseconds = new_account_usage(usage)
+
+    now = utcnow()
+
+    def in_slot(task: Task) -> bool:
+        return task.starttimestamp is not None if running_taskids is None else task.id in running_taskids
+
+    def waits_for_retry(task: Task) -> bool:
+        return task.retry_after is not None and now < task.retry_after
 
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent
@@ -290,27 +483,66 @@ def calculate_queue_positions() -> None:
         # and end up assigning duplicate queue positions.
         queuedtasks = list(Task.queued().select_for_update().order_by("user_id", "timestamp", "id"))
 
-        # Each tier continues its passes from its own task that started last. A start of a task
-        # of a member thus does not move the turn of the other users.
-        prioritytasks = [tsk for tsk in queuedtasks if tsk.user_id in priorityuserids]
-        othertasks = [tsk for tsk in queuedtasks if tsk.user_id not in priorityuserids]
+        # (member of the group or not, key, submission time, id) for each task that waits
+        keys: list[tuple[int, float, dt.datetime, int]] = []
+        for userid, tasksofuser in itertools.groupby(queuedtasks, key=operator.attrgetter("user_id")):
+            usertasks = list(tasksofuser)
+            taskseconds = expected(userid)
+            own = usage.get(userid)
+            usageseconds = 0.0 if own is None else own.seconds
+            if userid in newaccounts:
+                usageseconds = max(usageseconds, newaccountseconds)
+            tier = 0 if userid in priorityuserids else 1
+            inslots = sum(1 for task in usertasks if in_slot(task))
+            waiting = [task for task in usertasks if not in_slot(task) and not waits_for_retry(task)]
+            # One multiplication for the tasks in the slots and the tasks before. A start moves
+            # one unit from the tasks before to the tasks in the slots, and the product is then
+            # the same number. A sum of two products can differ in its last bit, and that
+            # difference changes the order of two users with equal usage.
+            keys.extend(
+                (
+                    tier,
+                    usageseconds
+                    + (inslots + index) * taskseconds
+                    + WAIT_CREDIT * (task.timestamp - WAIT_EPOCH).total_seconds(),
+                    task.timestamp,
+                    task.id,
+                )
+                for index, task in enumerate(waiting)
+            )
 
-        # collected and written in one statement at the end: issuing an UPDATE per task meant a
-        # round trip per task while holding a lock on every queued row, so a deep queue made every
-        # submission slow and serialised concurrent submitters behind it
-        queuepos_updates: dict[int, int] = {
-            taskid: queuepos
-            for queuepos, taskid in enumerate(round_robin_order(prioritytasks) + round_robin_order(othertasks))
-        }
+        order = [taskid for _, _, _, taskid in sorted(keys)]
 
-        # Only the rows that move. The task runner calls this on a 30-second backstop, and a write
-        # of an unchanged row changes its task_modified_datetime, which get_tasklist_etag()
+        # The positions give an order, and they do not start at a fixed number: a reader
+        # subtracts the lowest position (Task.min_queuepos_relative). The first position is thus
+        # free, and this code selects the one that keeps the position of the largest number of
+        # tasks. After a start, all the tasks that wait keep their positions. After a new task
+        # at the front, the tasks behind it keep theirs, and the new task gets a lower number.
+        # With positions from 0, each of these events is a write of each row of the queue, and
+        # each write makes the ETag of a task list invalid.
+        currentpositions = {task.id: task.queuepos_relative for task in queuedtasks}
+        firstpositions = collections.Counter(
+            position - index for index, taskid in enumerate(order) if (position := currentpositions[taskid]) is not None
+        )
+        firstposition = firstpositions.most_common(1)[0][0] if firstpositions else 0
+
+        newpositions: dict[int, int | None] = dict.fromkeys(currentpositions, None)
+        for index, taskid in enumerate(order):
+            newpositions[taskid] = firstposition + index
+
+        # Only the rows that change. The task runner calls this on a 30-second backstop, and a
+        # write of an unchanged row changes its task_modified_datetime, which get_tasklist_etag()
         # aggregates. Such a write invalidates the ETag of every user with a queued task twice a
         # minute, and the next poll of each open queue page then pays a full serialisation.
-        currentpositions = {tsk.id: tsk.queuepos_relative for tsk in queuedtasks}
-        moved = {taskid: newpos for taskid, newpos in queuepos_updates.items() if currentpositions[taskid] != newpos}
+        changed = {
+            taskid: position for taskid, position in newpositions.items() if currentpositions[taskid] != position
+        }
 
-        if moved:
+        if changed:
+            # collected and written in one statement: issuing an UPDATE per task meant a round
+            # trip per task while holding a lock on every queued row, so a deep queue made every
+            # submission slow and serialised concurrent submitters behind it
+            #
             # This writes task_modified_datetime by name: Model.save() applies auto_now, and a
             # bulk write does not. Without it get_tasklist_etag() cannot see a reordering, and the
             # server could serve a stale queue position.
@@ -318,7 +550,7 @@ def calculate_queue_positions() -> None:
             Task.objects.bulk_update(
                 [
                     Task(id=taskid, queuepos_relative=newpos, task_modified_datetime=now)
-                    for taskid, newpos in moved.items()
+                    for taskid, newpos in changed.items()
                 ],
                 ["queuepos_relative", "task_modified_datetime"],
             )

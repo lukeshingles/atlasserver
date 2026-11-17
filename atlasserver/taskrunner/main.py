@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Task runner: it runs the forced photometry tasks on ATLAS sc01 over ssh."""
 
+import collections
 import contextlib
 import datetime as dt
 import json
@@ -18,6 +19,7 @@ import django
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
+from django.db import close_old_connections
 from django.db import models
 from django.db import transaction
 from django.db.models import prefetch_related_objects
@@ -506,12 +508,39 @@ def mark_started(task) -> None:
     the reasons given in mark_finished below -- `task` is a copy read when the queue was scanned,
     and do_task logs model_to_dict(task) immediately after calling this.
     """
-    starttimestamp = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    now = dt.datetime.now(dt.UTC)
+    starttimestamp = now.replace(microsecond=0)
 
-    Task.objects.filter(pk=task.id).update(starttimestamp=starttimestamp, attempt_count=models.F("attempt_count") + 1)
+    # A task in a slot has no queue position. The positions of the tasks that wait are relative
+    # to the lowest one (Task.min_queuepos_relative), and thus they are correct after this write
+    # with no renumbering.
+    #
+    # task_modified_datetime is written by name, because a queryset update does not apply
+    # auto_now. The ETag of the task list uses it (views.get_tasklist_etag). The start time is a
+    # whole second, and two tasks of one user can start in one second: without this field, the
+    # second start does not change the ETag, and the queue page gets a 304 for a list in which
+    # the task still waits.
+    #
+    # retry_after has no value during an attempt: the main loop writes it at the end of the
+    # attempt (record_attempt_end).
+    #
+    # attempt_open is the marker of an attempt whose end has no record. The record of the end
+    # removes it. It is in the same write as the start, and thus each start has the marker.
+    Task.objects.filter(pk=task.id).update(
+        starttimestamp=starttimestamp,
+        attempt_count=models.F("attempt_count") + 1,
+        queuepos_relative=None,
+        retry_after=None,
+        attempt_open=True,
+        task_modified_datetime=now,
+    )
 
     task.starttimestamp = starttimestamp
     task.attempt_count += 1
+    task.queuepos_relative = None
+    task.retry_after = None
+    task.attempt_open = True
+    task.task_modified_datetime = now
 
 
 def mark_finished(task, error_msg: str | None) -> None:
@@ -524,12 +553,26 @@ def mark_finished(task, error_msg: str | None) -> None:
     this was done, every callback said `finishtimestamp: null` and `success: true` no matter what
     had actually happened, because the instance still held the values it was loaded with.
     """
-    finishtimestamp = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    now = dt.datetime.now(dt.UTC)
+    finishtimestamp = now.replace(microsecond=0)
 
-    Task.objects.filter(pk=task.id).update(finishtimestamp=finishtimestamp, queuepos_relative=None, error_msg=error_msg)
+    # task_modified_datetime is written for the reason in mark_started: two tasks of one user can
+    # finish in one second.
+    #
+    # attempt_open stays as it is. The finish of the task is not the record of the attempt: a
+    # finished task with the marker is an attempt that still needs its record.
+    Task.objects.filter(pk=task.id).update(
+        finishtimestamp=finishtimestamp,
+        queuepos_relative=None,
+        retry_after=None,
+        error_msg=error_msg,
+        task_modified_datetime=now,
+    )
 
     task.finishtimestamp = finishtimestamp
     task.queuepos_relative = None
+    task.retry_after = None
+    task.task_modified_datetime = now
     task.error_msg = error_msg
 
 
@@ -591,6 +634,13 @@ def send_email_if_needed(task, logfunc) -> None:
             localresultfilelist.append(localresultfile)
 
     if batchtasks_unfinished == 0:
+        # Two tasks of one batch can finish in two slots at the same time. Each slot then finds
+        # no unfinished task in the batch. The update below changes rows for the first slot only,
+        # and thus only that slot sends the email.
+        if not batchtasks.filter(email_sent=False).update(email_sent=True):
+            logfunc("A different slot sends the email for this batch")
+            return
+
         logfunc(f"Sending email to {task.user.email} containing {batchtaskcount} tasks")
 
         message = EmailMessage(
@@ -631,14 +681,38 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
-def next_task(running_userids: t.Iterable[int]) -> Task | None:
+def next_task(running_taskids: t.Iterable[int], running_userids: t.Iterable[int]) -> Task | None:
     """Return the task to start in a free slot, or None if no task can start.
 
-    This is the queued task with the lowest position whose user has no task in a slot. The
-    position holds the priority of the high priority group and the round-robin order of the users;
-    see forcephot.queue.calculate_queue_positions.
+    This is the task with the lowest queue position whose user has fewer tasks in the slots than
+    the maximum (status.MAX_USER_SLOTS). The position holds the priority of the high priority
+    group and the fair share of the run time; see forcephot.queue.calculate_queue_positions.
+
+    If each task that waits is a task of a user at the maximum, the result is the task with the
+    lowest position: a slot does not stay idle while a task waits. The maximum thus divides the
+    slots between the users who want them, and it does not decrease the work of the task runner.
+    A user who arrives later waits only for the next task that finishes.
+
+    `running_taskids` is the ids of the tasks in the slots. `running_userids` is the user of each
+    of those tasks, and thus a user with three tasks in the slots is in it three times.
+
+    A task with no position cannot start. A task loses its position at a start. If its attempt
+    fails, or if its slot stops, it gets a position again at the next renumbering. Without this
+    rule, such a task sorts before all the tasks that wait, and a task that always fails keeps a
+    slot.
     """
-    return Task.queued().exclude(user_id__in=list(running_userids)).order_by("queuepos_relative").first()
+    slotsofuser = collections.Counter(running_userids)
+    users_at_maximum = [userid for userid, count in slotsofuser.items() if count >= runnerstatus.MAX_USER_SLOTS]
+    waiting = (
+        Task.queued()
+        .filter(queuepos_relative__isnull=False)
+        .exclude(id__in=list(running_taskids))
+        .order_by("queuepos_relative")
+    )
+    task = waiting.exclude(user_id__in=users_at_maximum).first()
+    if task is None and users_at_maximum:
+        task = waiting.first()
+    return task
 
 
 def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool = False) -> None:
@@ -657,13 +731,20 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     # STATUS_WRITE_SECONDS for as long as the runner is up, and the scan grows with the queue.
     #
     # distinct users is here because it is what bounds the rate the queue drains at: dispatch below
-    # takes at most one task per user at a time, so the effective concurrency is min(numslots,
-    # this). A fact about the queue, counted on the runner's own timescale instead of once per
-    # request from every open queue page.
+    # gives one user a maximum of MAX_USER_SLOTS slots, so the effective concurrency is
+    # min(numslots, this times that maximum). A fact about the queue, counted on the runner's own
+    # timescale instead of once per request from every open queue page.
+    #
+    # A user counts only with a task that can use a slot: a task with a queue position, or a task
+    # in a slot. A user whose tasks all wait for a new attempt after a failure fills no slot.
+    canuseslot = models.Q(queuepos_relative__isnull=False) | models.Q(id__in=list(procs_taskids.values()))
     queuestats = Task.queued().aggregate(
         queued_task_count=models.Count("id"),
-        distinct_queued_users=models.Count("user_id", distinct=True),
+        distinct_queued_users=models.Count("user_id", distinct=True, filter=canuseslot),
         oldest_queued=models.Min("timestamp"),
+        # the tasks that wait for a new attempt after a failed attempt; see
+        # forcephot.queue.calculate_queue_positions. The stats page shows this count.
+        retry_wait_task_count=models.Count("id", filter=models.Q(retry_after__gt=dt.datetime.now(dt.UTC))),
     )
     oldest_queued = queuestats["oldest_queued"]
 
@@ -674,39 +755,14 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
     # run times, not on its own.
     #
     # A second query rather than another aggregate: this one groups, and the counts above do not.
+    #
+    # Only the tasks that can use a slot, as for the count of the users above. A task that waits
+    # for a new attempt after a failure is in no pass, and a large batch of such tasks must not
+    # change the price of the passes.
     queued_by_request_type = {
         row["request_type"]: row["count"]
-        for row in Task.queued().values("request_type").annotate(count=models.Count("id"))
+        for row in Task.queued().filter(canuseslot).values("request_type").annotate(count=models.Count("id"))
     }
-
-    # The members of the high priority group have the first positions of the queue, and each of
-    # them uses a maximum of one slot. The queue page needs the fields below to estimate a wait.
-    # The tasks of the members are ahead of a task of another user, but they do not use all the
-    # slots.
-    priorityuserids = taskqueue.priority_userids()
-    prioritytasks = Task.queued().filter(user_id__in=priorityuserids)
-    # The number of queued tasks of each member who has one, largest first. A member uses a slot
-    # only while that member has tasks. A total for the group does not show when each slot becomes
-    # free: one member with 500 tasks and 14 members with one task use 15 slots for one pass only.
-    priority_queued_depths = (
-        sorted(
-            (row["count"] for row in prioritytasks.values("user_id").annotate(count=models.Count("id"))),
-            reverse=True,
-        )
-        if priorityuserids
-        else []
-    )
-    # The request types of the tasks of the members. The queue page prices the passes of one tier
-    # from the tasks of that tier: a batch of IMGZIP tasks of a member does not make the passes of
-    # the other users longer.
-    priority_queued_by_request_type = (
-        {
-            row["request_type"]: row["count"]
-            for row in prioritytasks.values("request_type").annotate(count=models.Count("id"))
-        }
-        if priority_queued_depths
-        else {}
-    )
 
     status = {
         "written": dt.datetime.now(dt.UTC).isoformat(),
@@ -717,9 +773,11 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         "maintenance": maintenance,
         "queued_task_count": queuestats["queued_task_count"],
         "distinct_queued_users": queuestats["distinct_queued_users"],
+        "retry_wait_task_count": queuestats["retry_wait_task_count"],
         "queued_by_request_type": queued_by_request_type,
-        "priority_queued_depths": priority_queued_depths,
-        "priority_queued_by_request_type": priority_queued_by_request_type,
+        # the maximum number of slots for the tasks of one user; the wait estimate of the queue
+        # page uses it for the tasks of the reader that are ahead of a task
+        "max_user_slots": runnerstatus.MAX_USER_SLOTS,
         "oldest_queued_task_time": oldest_queued.isoformat() if oldest_queued is not None else None,
     }
 
@@ -734,14 +792,276 @@ def write_status(procs_taskids: dict[int, int], numslots: int, maintenance: bool
         log_general(f"WARNING: could not write status file: {ex}")
 
 
+def current_usage(lastusage: dict[int, taskqueue.Usage], logfunc=log_general) -> dict[int, taskqueue.Usage]:
+    """Return the usage of each user, or `lastusage` if the query fails.
+
+    The main loop calls this before each renumbering, and that loop starts every task. Thus an
+    exception must not go out of this function: the renumbering then uses the usage of the last
+    call, and the next renumbering asks again.
+    """
+    try:
+        return taskqueue.usage_by_user()
+    except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
+        logfunc(f"ERROR: could not update the usage of the users: {ex}")
+        return lastusage
+
+
 def handler(signal_received, frame):
     """Handle any cleanup here."""
     log_general("SIGINT or CTRL-C detected. Exiting")
     sys.exit(0)
 
 
-def do_task(task, slotid: int) -> None:
-    """Run a task in a particular slot and send a result email if requested."""
+class EndedAttempt(t.NamedTuple):
+    """An attempt whose slot process ended: the task, its user, and the seconds that it had the slot."""
+
+    taskid: int
+    userid: int
+    seconds: float
+    # the time of the end, which gives the day of the usage record. None is the time of the record.
+    when: dt.datetime | None = None
+    # False for an attempt that a stop of the task runner cut: its task gets no wait; see
+    # open_attempts
+    failed: bool = True
+
+
+def record_attempt_end(
+    taskid: int, userid: int, seconds: float, when: dt.datetime | None = None, failed: bool = True
+) -> bool:
+    """Record the end of one attempt at a task, whose process had a slot for this number of seconds.
+
+    Return True if this call made the record, and False if the attempt had its record before.
+
+    `when` is the time of the end of the attempt, and the default is now. The time goes into the
+    usage of the user, for the day of `when`; see forcephot.queue.charge_usage. This is the real
+    time for which the attempt had a slot, also for an attempt that failed and for a task that
+    its user deleted while it ran.
+
+    A task that is not finished gets the time of its next possible attempt (Task.retry_after).
+    The wait is from the end of the attempt and not from its start: an attempt can run for hours
+    before it fails, and a wait from its start is then over at its end. With `failed` false, the
+    task gets no wait: see open_attempts.
+
+    The marker of the attempt (Task.attempt_open) makes one record for one attempt. This function
+    removes the marker, and it makes the record only if the marker was there. A second call for
+    the same attempt thus adds no usage. A task that its user deleted has no row for a marker,
+    and its attempt always gets the record.
+
+    The marker and the two records are one transaction: an attempt has all of them or none of
+    them. An error of the database goes to the caller.
+    """
+    with transaction.atomic():
+        marked = Task.objects.filter(pk=taskid, attempt_open=True).update(attempt_open=False)
+        if not marked and Task.objects.filter(pk=taskid).exists():
+            return False
+
+        taskqueue.charge_usage(userid, seconds, when=when)
+        attempts = (
+            Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).values_list("attempt_count", flat=True).first()
+            if failed
+            else None
+        )
+        if attempts is not None:
+            wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(attempts))
+            # From the end of the attempt, and not from the time of this write: the main loop
+            # can make this record late, and the task had no queue position during that time.
+            ended = dt.datetime.now(dt.UTC) if when is None else when
+            Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).update(retry_after=ended + wait)
+    return True
+
+
+def open_attempts(logfunc=log_general) -> list[EndedAttempt]:
+    """Return each attempt that a task runner left with no record of its end.
+
+    The main loop calls this before it starts a task and before it writes the status file. No
+    slot process of this task runner exists at that time. Each attempt with the marker
+    Task.attempt_open is thus an attempt of a task runner that stopped while the attempt had a
+    slot.
+
+    The usage of such an attempt is the time from its start to its end:
+
+    - A finished task has the time of its end: its slot process finished after the main loop
+      stopped.
+    - The end of an attempt at a task that is not finished is not known. The status file holds
+      the last time at which the main loop wrote it, at an interval of STATUS_WRITE_SECONDS. The
+      attempt had its slot until that time or longer, and that time is the end in the record.
+      With no status file, the record has no run time.
+
+    A task that is not finished gets no wait before its next attempt. The attempt did not fail:
+    the task runner stopped it.
+
+    This function only reads. The main loop records the result as it records each other attempt
+    that ended (record_ended_attempts): it keeps an attempt whose record fails, and the task of
+    that attempt gets no queue position before the record is there. An error of the database
+    goes to the caller.
+    """
+    now = dt.datetime.now(dt.UTC)
+    laststatus: dt.datetime | None = None
+    try:
+        laststatus = now - dt.timedelta(seconds=runnerstatus.read_status()[1])
+    except (OSError, KeyError, TypeError, ValueError):
+        logfunc("There is no status file of a task runner. An attempt with no end gets a record with no run time.")
+
+    attempts: list[EndedAttempt] = []
+    rows = Task.objects.filter(attempt_open=True).values_list("pk", "user_id", "starttimestamp", "finishtimestamp")
+    for taskid, userid, started, finished in rows:
+        end = finished or laststatus
+        seconds = 0.0
+        if end is not None and started is not None:
+            # between zero and the time from the start to now: the time in the status file and
+            # the start time of the task are from two processes
+            seconds = min(max(0.0, (end - started).total_seconds()), (now - started).total_seconds())
+        attempts.append(EndedAttempt(taskid=taskid, userid=userid, seconds=seconds, when=end, failed=False))
+
+    if attempts:
+        logfunc(f"A task runner left {len(attempts)} attempts with no record of their end")
+    return attempts
+
+
+def open_attempts_when_readable(
+    logfunc=log_general, sleep: t.Callable[[float], None] = time.sleep
+) -> list[EndedAttempt]:
+    """Return the result of open_attempts, and try again after each error of the database.
+
+    The main loop does not start before this read succeeds. Without the read, the main loop does
+    not know which tasks have an attempt with no record, and the first renumbering gives each of
+    them a queue position. The task runner cannot start a task without the database, and thus
+    this wait stops no start that is possible.
+    """
+    while True:
+        try:
+            return open_attempts(logfunc=logfunc)
+        except Exception as ex:  # noqa: BLE001 (an error of the database must not stop the task runner)
+            logfunc(f"ERROR: could not read the attempts that a task runner left with no record: {ex}")
+        sleep(taskqueue.RECALC_MAX_INTERVAL_SECONDS)
+        # Django opens a new connection for the next query if this one is not usable
+        close_old_connections()
+
+
+class SlotClock(t.NamedTuple):
+    """The times of the attempt in a slot, from which the main loop gets the run time of the attempt."""
+
+    # time.perf_counter() of the main loop at the start of the attempt
+    started: float
+    # time.time() at the start of the attempt
+    startedwall: float
+    # A double that the main loop and the slot process share. The slot process writes time.time()
+    # there at its end (run_slot). The value is 0.0 before that write.
+    endedwall: t.Any
+
+    def seconds(self) -> float:
+        """Return the seconds for which the attempt had its slot. Call this when the process has ended.
+
+        The main loop can find the end of a slot process late: the maintenance blocks the loop
+        for minutes. The time from the start to now is thus too long, and the slot process gives
+        the time of its own end. That time is from the wall clock, because the values of
+        time.perf_counter() of two processes cannot be compared.
+
+        The time from the start to now is the result for a process that did not write its end,
+        which is a process that the system stopped. It is also the upper limit of the result,
+        because the wall clock can change.
+        """
+        untilnow = time.perf_counter() - self.started
+        endedwall = float(self.endedwall.value)
+        if endedwall <= 0.0:
+            return untilnow
+        return min(untilnow, max(0.0, endedwall - self.startedwall))
+
+    def end(self, seconds: float) -> dt.datetime:
+        """Return the time of the end of the attempt, for the run time that seconds() gave.
+
+        The usage record of the attempt is on the day of this time. The main loop can make the
+        record later, and on a later day: it can find the end of the process late, and it tries
+        a record that failed again.
+        """
+        return dt.datetime.fromtimestamp(self.startedwall + seconds, dt.UTC)
+
+
+def record_ended_attempts(attempts: list[EndedAttempt], logfunc=log_general) -> list[EndedAttempt]:
+    """Record the end of each of these attempts, and return the attempts whose record failed.
+
+    The main loop is the only writer of these records. It calls this for each slot process that
+    ends, with each exit code: a process that finished its task, a process whose attempt failed,
+    and a process that the system stopped. A slot process thus cannot leave an attempt with no
+    record, and no attempt has two records. At its start, the main loop also calls this for the
+    attempts that a task runner left with no record; see open_attempts.
+
+    The main loop keeps the result and gives it here again. An error of the database for a
+    moment thus does not lose a record. Until the record of an attempt is there, the main loop
+    gives the task no queue position. A task with a position can start, and a start before the
+    record loses the record. A failed attempt also needs its time for the next attempt first.
+
+    If the main loop itself stops, the attempts in the slots keep their marker
+    (Task.attempt_open), and the next task runner records them; see open_attempts.
+    """
+    failed: list[EndedAttempt] = []
+    lasterror: Exception | None = None
+    for attempt in attempts:
+        try:
+            record_attempt_end(
+                attempt.taskid, attempt.userid, attempt.seconds, when=attempt.when, failed=attempt.failed
+            )
+        except Exception as ex:  # noqa: BLE001 (the main loop dispatches every task)
+            failed.append(attempt)
+            lasterror = ex
+
+    if failed:
+        logfunc(f"ERROR: could not record the end of {len(failed)} attempts: {lasterror}")
+    return failed
+
+
+def start_in_slot(task: Task, slotid: int, endedwall: t.Any = None) -> mp.Process:
+    """Start the task in a slot, and return the process of the slot.
+
+    `endedwall` is the shared double of SlotClock, in which the process writes the time of its end.
+
+    This function records the start before it makes the process. The queue order charges a user
+    for each task in a slot (forcephot.queue.calculate_queue_positions), and the main loop can
+    renumber the queue before the new process runs its first statement. If the process recorded
+    the start, that renumbering has the task in a slot with no start: each task of the user that
+    waits is then one task too far forward, and the user gets the next free slot also.
+
+    If the process does not start, this function removes the record of the start, and the
+    exception goes to the caller. No attempt ran: the task keeps its queue position, and its
+    number of attempts does not increase.
+    """
+    before = (task.starttimestamp, task.queuepos_relative, task.retry_after, task.attempt_count, task.attempt_open)
+    mark_started(task)
+    try:
+        proc = mp.Process(target=run_slot, kwargs={"task": task, "slotid": slotid, "endedwall": endedwall})
+        proc.start()
+    except Exception:
+        task.starttimestamp, task.queuepos_relative, task.retry_after, task.attempt_count, task.attempt_open = before
+        Task.objects.filter(pk=task.id).update(
+            starttimestamp=task.starttimestamp,
+            queuepos_relative=task.queuepos_relative,
+            retry_after=task.retry_after,
+            attempt_count=task.attempt_count,
+            attempt_open=task.attempt_open,
+            task_modified_datetime=dt.datetime.now(dt.UTC),
+        )
+        raise
+    return proc
+
+
+def run_slot(task, slotid: int, endedwall: t.Any = None) -> None:
+    """Run one attempt at the task, as the process of a slot, and give the time of its end.
+
+    The main loop recorded the start; see start_in_slot. The time of the end goes to the main
+    loop through the shared double, also when the attempt stops with an exception; see SlotClock.
+    """
+    try:
+        do_task(task, slotid, started=True)
+    finally:
+        if endedwall is not None:
+            endedwall.value = time.time()
+
+
+def do_task(task, slotid: int, started: bool = False) -> None:
+    """Run a task in a particular slot and send a result email if requested.
+
+    `started` is true when the caller has recorded the start of this attempt; see start_in_slot.
+    """
 
     def logfunc_slotonly(x) -> None:
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
@@ -752,7 +1072,8 @@ def do_task(task, slotid: int) -> None:
         # also log to the main process
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
 
-    mark_started(task)
+    if not started:
+        mark_started(task)
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
@@ -760,7 +1081,11 @@ def do_task(task, slotid: int) -> None:
 
     runtask_starttime = time.perf_counter()
 
+    # The usage of this attempt is not recorded here. The main loop records it when this
+    # process ends; see record_ended_attempts.
     localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly)
+
+    runtask_duration = time.perf_counter() - runtask_starttime
 
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
@@ -768,8 +1093,6 @@ def do_task(task, slotid: int) -> None:
         # in case a result file was created, delete it
         remove_task_resultfiles(taskid=task.id, logfunc=logfunc)
     else:
-        runtask_duration = time.perf_counter() - runtask_starttime
-
         logfunc(f"Task ran for {runtask_duration:.1f} seconds")
 
         # the task is marked finished before the email is sent, so that a mail failure can never
@@ -792,10 +1115,13 @@ def do_task(task, slotid: int) -> None:
         else:
             # left unfinished on purpose, with no limit on the attempts: the dispatch loop picks
             # the task up again, so a task that fails while the remote host is down completes
-            # when the host is back
-            waittime = 5
-            logfunc(f"ERROR: Task was not completed successfully. Waiting {waittime} seconds to slow down retries...")
-            time.sleep(waittime)  # in case we're stuck in an error loop, wait a bit before trying again
+            # when the host is back. The slot becomes free at once: the wait before the next
+            # attempt is in Task.retry_after, and a task that waits there uses no slot.
+            waittime = taskqueue.retry_wait_seconds(task.attempt_count)
+            logfunc(
+                "ERROR: Task was not completed successfully. "
+                f"The task waits {waittime:.0f} seconds before the next attempt."
+            )
 
 
 def remove_old_tasks(
@@ -960,7 +1286,7 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
     and blocks it, and a long sweep would otherwise leave the status file untouched for minutes,
     which from outside is indistinguishable from a dead runner: the queue page would tell every
-    user that their tasks are not being processed while all sixteen slots were in fact busy.
+    user that their tasks are not being processed while all the slots were in fact busy.
     """
     # no maxtime parameter: one used to be accepted and silently ignored (its only reference was a
     # commented-out call), which read as a five-minute bound on the sweep that did not exist
@@ -987,6 +1313,9 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
 
     remove_unverified_accounts(logfunc=logfunc)
 
+    removed = taskqueue.remove_old_usage_records()
+    logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")
+
 
 def main() -> None:
     """Run queued tasks and clean up on old tasks."""
@@ -1003,6 +1332,7 @@ def main() -> None:
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
     procs_userids: dict[int, int] = {}  # user_id of the task each slot runs
     procs_taskids: dict[int, int] = {}  # id of the task each slot runs
+    procs_clocks: dict[int, SlotClock] = {}  # the times of the attempt in each slot
 
     last_maintenancetime: float = float("-inf")
     last_statustime: float = float("-inf")
@@ -1012,6 +1342,20 @@ def main() -> None:
     # forcephot.queue.recalc_generation. Starts below any real value so the first pass renumbers.
     last_recalc_generation: int = -1
     seen_generation: int = -1
+    # the usage of each user, for the queue order; see forcephot.queue.usage_by_user
+    usage: dict[int, taskqueue.Usage] = {}
+    # A slot that became free asks for a renumbering. The task of the slot can be without a
+    # position: an attempt that failed, or a process that stopped. That task waits for a position
+    # before it can start again; see next_task.
+    slot_became_free = False
+    # The attempts that ended and whose record is not in the database yet; see
+    # record_ended_attempts. At the start, these are the attempts that a task runner left with
+    # no record. This read is before the first write of the status file, because the file of the
+    # task runner that stopped gives the end of those attempts.
+    unrecorded: list[EndedAttempt] = record_ended_attempts(open_attempts_when_readable(logfunc), logfunc=logfunc)
+    # No task starts between the end of an attempt and the next renumbering that succeeds. The
+    # value is the time at which the wait started, or None.
+    dispatch_waits_since: float | None = None
     printedwaiting = False
 
     def refresh_status(maintenance: bool = False) -> None:
@@ -1051,6 +1395,32 @@ def main() -> None:
             refresh_status()
             printedwaiting = False
 
+        # The slots are examined before the renumbering. A slot that became free asks for a
+        # renumbering, and the renumbering must not have the task of that slot as a task in a slot.
+        attempt_ended = False
+        for slotid, proc in enumerate(procs):
+            if proc is not None and proc.exitcode is not None:
+                proc.join()
+                proc.close()
+                procs[slotid] = None
+                clock = procs_clocks.pop(slotid)
+                seconds = clock.seconds()
+                unrecorded.append(
+                    EndedAttempt(
+                        taskid=procs_taskids.pop(slotid),
+                        userid=procs_userids.pop(slotid),
+                        seconds=seconds,
+                        when=clock.end(seconds),
+                    )
+                )
+                attempt_ended = True
+                slot_became_free = True
+                if dispatch_waits_since is None:
+                    dispatch_waits_since = time.perf_counter()
+
+                numslotsfree = sum(1 if p is None else 0 for p in procs)
+                logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
+
         # Renumbering belongs here rather than in the submitting request: this loop is the only
         # thing that changes which task is running, it already reads the table twice a second, and
         # doing it here keeps positions fresh as tasks finish. The counter is a file read in
@@ -1059,15 +1429,32 @@ def main() -> None:
         if (time.perf_counter() - last_queueflagchecktime) > taskqueue.RECALC_CHECK_INTERVAL_SECONDS:
             last_queueflagchecktime = time.perf_counter()
             seen_generation = taskqueue.recalc_generation()
-            recalc_requested = seen_generation != last_recalc_generation
+            # A free slot asks at this interval also, and not at each pass. While the remote host
+            # is away, each attempt fails after some seconds, and a slot becomes free on almost
+            # each pass. A renumbering locks each queued row.
+            recalc_requested = seen_generation != last_recalc_generation or slot_became_free
+            # the records that failed get a new try at this interval also
+            attempt_ended = attempt_ended or bool(unrecorded)
+
+        # Before the renumbering: the record of a failed attempt holds the time before which the
+        # task gets no position.
+        if attempt_ended:
+            unrecorded = record_ended_attempts(unrecorded, logfunc=logfunc)
 
         if recalc_requested or ((time.perf_counter() - last_queuerecalctime) > taskqueue.RECALC_MAX_INTERVAL_SECONDS):
             # caught, because this loop is what dispatches every task: unguarded, a lock timeout or
             # a bad queue state would take the exception out of main() and stop the runner, and the
             # supervisor would restart it into the same state. Stale queue positions only change
             # the display. An exception that stops this loop stops every dispatch.
+            #
+            # The usage has its own guard: if its query fails, the renumbering uses the usage of
+            # the last pass.
+            usage = current_usage(usage, logfunc=logfunc)
+
             try:
-                taskqueue.calculate_queue_positions()
+                # a task whose attempt has no record yet gets no position, as a task in a slot
+                noposition = set(procs_taskids.values()) | {attempt.taskid for attempt in unrecorded}
+                taskqueue.calculate_queue_positions(usage=usage, running_taskids=noposition)
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task; stale
                 # queue positions only change the display)
                 logfunc(f"ERROR: could not update queue positions: {ex}")
@@ -1077,26 +1464,32 @@ def main() -> None:
                 # outstanding so the next check retries it. Recording it either way would drop the
                 # request and leave dispatch ordering by stale positions until the backstop.
                 last_recalc_generation = seen_generation
+                # also only on success: the task of the free slot has no position until a
+                # renumbering gives it one, and the free slot waits for the new order
+                slot_became_free = False
+                dispatch_waits_since = None
 
             # stamped even on failure, so a persistent one is retried on an interval rather than on
             # every pass of the loop
             last_queuerecalctime = time.perf_counter()
 
-        for slotid, proc in enumerate(procs):
-            if proc is not None and proc.exitcode is not None:
-                proc.join()
-                proc.close()
-                procs[slotid] = None
-                procs_userids.pop(slotid)
-                procs_taskids.pop(slotid)
-
-                numslotsfree = sum(1 if p is None else 0 for p in procs)
-                logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
-
         queuedtasks = Task.queued()
 
         if (time.perf_counter() - last_statustime) >= runnerstatus.STATUS_WRITE_SECONDS:
             refresh_status()
+
+        if dispatch_waits_since is not None:
+            # An attempt ended, and its run time is in the usage of its user now. The positions
+            # are from before that. A task that starts cannot be stopped, and thus the free slot
+            # waits for a renumbering that succeeds, which is RECALC_CHECK_INTERVAL_SECONDS away
+            # in the usual condition.
+            #
+            # The wait has a limit. If each renumbering fails, the positions stay old, and a
+            # start in a wrong order is then better than no start.
+            if (time.perf_counter() - dispatch_waits_since) < taskqueue.RECALC_MAX_INTERVAL_SECONDS:
+                continue
+            logfunc("WARNING: the queue positions are old, and the task runner starts tasks with them")
+            dispatch_waits_since = None
 
         slotid = procs.index(None) if None in procs else -1
 
@@ -1106,11 +1499,11 @@ def main() -> None:
 
         # one query rather than a count() followed by a first(): the count was only used for a log
         # line, and is fetched below only when a task is actually dispatched
-        task = next_task(procs_userids.values())
+        task = next_task(procs_taskids.values(), procs_userids.values())
 
         if task is None:
-            # nothing runnable. That is either an empty queue or a queue holding only tasks from
-            # users who already have a task running, and only the former should slow the polling
+            # nothing runnable. That is either an empty queue or a queue holding only tasks that
+            # are in the slots or have no position yet, and only the former should slow the polling
             if not printedwaiting and not queuedtasks.exists():
                 logfunc("Waiting for tasks...")
                 printedwaiting = True
@@ -1119,12 +1512,28 @@ def main() -> None:
         printedwaiting = False
         logfunc(f"Unfinished tasks in queue: {queuedtasks.count()}")
         logfunc(f"Running task {task.id} in slot {slotid}")
+        # Caught, for the reason the renumbering above is: an exception here leaves main(), and
+        # the interpreter then waits for every running worker before the supervisor can start
+        # the task runner again. The slot stays free. If the start is in the database and the
+        # process is not there, the task has no position: the next renumbering gives it one.
+        clock = SlotClock(
+            started=time.perf_counter(), startedwall=time.time(), endedwall=mp.Value("d", 0.0, lock=False)
+        )
+        try:
+            proc = start_in_slot(task, slotid, endedwall=clock.endedwall)
+        except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
+            logfunc(f"ERROR: could not start task {task.id} in slot {slotid}: {ex}")
+            slot_became_free = True
+            # the next start waits for the renumbering, and thus an error that stays does not
+            # give a new attempt at a start on each pass of this loop
+            if dispatch_waits_since is None:
+                dispatch_waits_since = time.perf_counter()
+            continue
+
+        procs[slotid] = proc
         procs_userids[slotid] = task.user_id
         procs_taskids[slotid] = task.id
-
-        proc = mp.Process(target=do_task, kwargs={"task": task, "slotid": slotid})
-        proc.start()
-        procs[slotid] = proc
+        procs_clocks[slotid] = clock
 
 
 if __name__ == "__main__":

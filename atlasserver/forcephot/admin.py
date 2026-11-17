@@ -1,3 +1,4 @@
+import datetime as dt
 import typing as t
 from typing import override
 
@@ -16,12 +17,21 @@ from django.contrib.auth.admin import GroupAdmin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import User
+from django.db.models import FloatField
 from django.db.models import Model
+from django.db.models import OuterRef
+from django.db.models import Subquery
+from django.db.models import Sum
 from django.http import HttpRequest
 
 import atlasserver.forcephot.models
+from atlasserver.forcephot.models import UsageDay
 from atlasserver.forcephot.queue import HIGH_PRIORITY_GROUP
 from atlasserver.forcephot.queue import RECALC_MAX_INTERVAL_SECONDS
+from atlasserver.forcephot.queue import Usage
+from atlasserver.forcephot.queue import usage_by_user
+from atlasserver.forcephot.queue import USAGE_HALF_LIFE_DAYS
+from atlasserver.forcephot.queue import utcnow
 
 # Register your models here.
 
@@ -144,6 +154,45 @@ class GroupActionForm(ActionForm):
 class GroupUserAdmin(UserAdmin):
     action_form = GroupActionForm
     actions = ["add_to_group"]
+
+    # The usage of each user, which sets the place of the tasks of the user in the queue; see
+    # forcephot.queue.calculate_queue_positions. A click on the header of the run time column
+    # sorts the list by the run time.
+    @override
+    def get_list_display(self, request: HttpRequest) -> t.Any:
+        # The usage that the queue order uses: older run time counts less. The column is a
+        # function of this request, and it reads the usage of all users one time for the page.
+        # A method of this class is the same object for each request, and it has no place for
+        # the usage of one request: it then makes one query for each row.
+        usage: dict[int, Usage] | None = None
+
+        @admin.display(description="Usage in the queue")
+        def usage_decayed(user: t.Any) -> str:
+            nonlocal usage
+            if usage is None:
+                usage = usage_by_user()
+            own = usage.get(user.pk)
+            return f"{0.0 if own is None else own.seconds / 3600:.1f} h"
+
+        return (*super().get_list_display(request), "usage_runtime", usage_decayed)
+
+    @override
+    def get_queryset(self, request: HttpRequest) -> t.Any:
+        # The run time of each user comes with the row of the user. A query for each row of the
+        # list is thus not necessary, and the database can sort the list by the run time. The
+        # value is None for a user with no usage record in these days.
+        firstday = utcnow().date() - dt.timedelta(days=USAGE_HALF_LIFE_DAYS - 1)
+        runtime = (
+            UsageDay.objects.filter(user=OuterRef("pk"), day__gte=firstday)
+            .values("user")
+            .annotate(runtime=Sum("seconds"))
+            .values("runtime")
+        )
+        return super().get_queryset(request).annotate(usage_runtime_sum=Subquery(runtime, output_field=FloatField()))
+
+    @admin.display(description=f"Run time ({USAGE_HALF_LIFE_DAYS} days)", ordering="usage_runtime_sum")
+    def usage_runtime(self, user: t.Any) -> str:
+        return f"{(user.usage_runtime_sum or 0.0) / 3600:.1f} h"
 
     # A group gives its permissions to its members, so the action needs the permission to change
     # users. A staff member who can only view the users does not get the action.

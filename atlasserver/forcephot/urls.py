@@ -27,10 +27,12 @@ from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework import routers
 
+from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import views
 from atlasserver.forcephot.login import ObtainAuthTokenThrottled
 from atlasserver.forcephot.login import ThrottledAdminAuthenticationForm
 from atlasserver.forcephot.login import ThrottledLoginView
+from atlasserver.taskrunner import status as runnerstatus
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
@@ -44,6 +46,16 @@ admin.site.site_title = "ATLAS Forced Photometry"
 
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
+# The numbers in the text about the queue on the FAQ page and in the API guide, from the constants
+# that the queue uses.
+QUEUE_CONTEXT = {
+    "numslots": runnerstatus.NUMSLOTS,
+    "max_user_slots": runnerstatus.MAX_USER_SLOTS,
+    "usage_half_life_days": taskqueue.USAGE_HALF_LIFE_DAYS,
+    "wait_credit_minutes": round(taskqueue.WAIT_CREDIT * 60),
+    "new_account_days": taskqueue.NEW_ACCOUNT_DAYS,
+}
+
 urlpatterns = [
     path("", TemplateView.as_view(template_name="index.html"), name="index"),
     path("", include(router.urls)),
@@ -59,7 +71,11 @@ urlpatterns = [
     path("verify/<uidb64>/<token>/", views.verify_email, name="verify_email"),
     path("resendverification/", views.resend_verification, name="resend_verification"),
     path("emailchange/confirm/<token>/", views.confirm_email_change, name="email_change_confirm"),
-    path("faq/", TemplateView.as_view(template_name="faq.html", extra_context={"name": "FAQ"}), name="faq"),
+    path(
+        "faq/",
+        TemplateView.as_view(template_name="faq.html", extra_context={"name": "FAQ", **QUEUE_CONTEXT}),
+        name="faq",
+    ),
     path(
         "resultdesc/",
         TemplateView.as_view(template_name="resultdesc.html", extra_context={"name": "Output Description"}),
@@ -79,7 +95,7 @@ urlpatterns = [
     path("queue/<int:taskid>/images.zip", views.taskimagezip, name="taskimagezip"),
     path(
         "apiguide/",
-        TemplateView.as_view(template_name="apiguide.html", extra_context={"name": "API Guide"}),
+        TemplateView.as_view(template_name="apiguide.html", extra_context={"name": "API Guide", **QUEUE_CONTEXT}),
         name="apiguide",
     ),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

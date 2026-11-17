@@ -99,6 +99,10 @@ class Task(models.Model):
     mjd_max = models.FloatField(null=True, blank=True, default=None, verbose_name="MJD max")
     comment = models.CharField(default=None, null=True, blank=True, max_length=300)
     use_reduced = models.BooleanField("Use reduced images instead of difference images", default=False)
+    # True after a slot of the task runner took the email of the batch of this task for itself;
+    # see taskrunner.main.send_email_if_needed. Two tasks of one batch can finish in two slots at
+    # the same time, and only one slot must send the email.
+    email_sent = models.BooleanField(default=False, editable=False)
     send_email = models.BooleanField("Email me when completed", default=True)
     from_api = models.BooleanField(default=False)
     country_code = models.CharField(default=None, null=True, blank=True, max_length=2)
@@ -128,6 +132,16 @@ class Task(models.Model):
     attempt_count = models.IntegerField(default=0, verbose_name="Execution attempts")
 
     queuepos_relative = models.IntegerField(null=True, blank=True, default=None, verbose_name="Queue position")
+    # After an attempt that did not finish the task, the task gets no queue position before this
+    # time, and thus it cannot start; see forcephot.queue.retry_wait_seconds. The task runner
+    # writes the time at the end of each attempt. The value is None for a task with no attempt,
+    # for a task in a slot, and for a task whose attempt a stop of the task runner cut.
+    retry_after = models.DateTimeField(null=True, blank=True, default=None, editable=False)
+    # True from the start of an attempt until the task runner has the record of the end of that
+    # attempt; see taskrunner.main.record_attempt_end. The field is in the database because the
+    # task runner can stop while an attempt has a slot: the next task runner finds the attempt by
+    # this field (taskrunner.main.open_attempts). The finish of a task does not change it.
+    attempt_open = models.BooleanField(default=False, editable=False)
     userqueuedtasks_on_submit = models.IntegerField(
         null=True, blank=True, default=None, verbose_name="User queued tasks when submitted", editable=False
     )
@@ -405,12 +419,15 @@ class Task(models.Model):
 
     @staticmethod
     def queued() -> "models.QuerySet[Task]":
-        """Return the tasks that are waiting or running: everything the queue positions cover.
+        """Return the tasks that are waiting or running: the unfinished tasks that a reader may be shown.
 
         One definition, because both ends of the range are read together -- Task.queuepos subtracts
         the minimum while forcephot.queue assigns from the maximum -- and the task runner scans the
         same set. Changing what counts as queued in one place only would give a submitted task a
         position measured against a differently scoped baseline.
+
+        Only a task that waits has a queue position. A task in a slot of the task runner has none;
+        see forcephot.queue.calculate_queue_positions.
         """
         return Task.live().filter(finishtimestamp__isnull=True)
 
@@ -418,8 +435,10 @@ class Task(models.Model):
     def min_queuepos_relative() -> int:
         """Return the lowest queue position currently assigned, or 0 if the queue is empty.
 
-        After completing a job, the next job might not have queuepos_relative=0 until a queue order
-        refresh is done, so queuepos_relative=1 could have queuepos 0 (is next).
+        The positions do not start at 0. A task loses its position at its start, and the queue
+        order keeps the positions of the other tasks; see forcephot.queue.calculate_queue_positions.
+        The position of a task minus this value is the number of tasks that are before it in the
+        queue order.
 
         This does not depend on any particular task, so a caller serialising many tasks should call
         it once rather than once per task (see ForcePhotTaskSerializer.min_queuepos_relative).
@@ -633,6 +652,41 @@ class Task(models.Model):
                 self.forget_derived_cache()
             else:
                 super().delete(using=using, keep_parents=keep_parents)
+
+
+class UsageDay(models.Model):
+    """The run time that the tasks of one user had in the slots of the task runner in one day.
+
+    The queue order gives each user a fair share of the run time, and it reads the usage of a user
+    from these rows; see forcephot.queue.calculate_queue_positions. The task runner adds to the
+    row of the day at the end of each attempt (forcephot.queue.charge_usage).
+
+    A table of its own, and not a sum of the rows of Task, for two reasons. A row of Task goes
+    away: a user can delete a task that waits or runs, and the maintenance of the task runner
+    deletes old rows, the rows of archived API tasks first. And a row of Task holds only the last
+    attempt. A sum of the rows of Task is thus too low for the users with the most tasks.
+
+    One row for each day, and not one row for each attempt: the queue order reads all the rows at
+    each renumbering.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="usagedays")
+    # the day in UTC in which the attempts ended
+    day = models.DateField()
+    # the sum of the run times of the attempts, in seconds
+    seconds = models.FloatField(default=0.0)
+    # the number of the attempts
+    tasks = models.IntegerField(default=0)
+
+    user_id: int
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "day"], name="usageday_user_day_unique")]
+        indexes = [models.Index(fields=["day"], name="usageday_day_idx")]
+
+    def __str__(self) -> str:
+        """Return a description for the admin and the shell."""
+        return f"{self.user_id} {self.day}: {self.seconds:.0f} s in {self.tasks} attempts"
 
 
 class PendingEmailVerification(models.Model):

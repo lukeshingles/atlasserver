@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from itertools import starmap
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
-from django.db.models import Min
+from django.db.models import Sum
 from django.db.models.functions import Trunc
 from django.http import FileResponse
 from django.http import HttpResponse
@@ -50,6 +51,7 @@ from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter
 from drf_spectacular.utils import OpenApiResponse
 from geoip2.errors import AddressNotFoundError
 from geoip2.errors import GeoIP2Error
@@ -83,13 +85,16 @@ from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
 from atlasserver.forcephot.models import Task
+from atlasserver.forcephot.models import UsageDay
 from atlasserver.forcephot.netaddr import address_is_public
 from atlasserver.forcephot.netaddr import client_ip
 from atlasserver.forcephot.pagination import TaskPagination
 from atlasserver.forcephot.queue import next_queuepos_relative
-from atlasserver.forcephot.queue import priority_userids
 from atlasserver.forcephot.queue import request_recalc as request_queue_recalc
 from atlasserver.forcephot.queue import typical_runtime_seconds
+from atlasserver.forcephot.queue import USAGE_HALF_LIFE_DAYS
+from atlasserver.forcephot.queue import user_usage_seconds
+from atlasserver.forcephot.queue import utcnow
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import count_in_window
@@ -480,10 +485,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         extra_fields["from_api"] = request_is_from_api(self.request)
 
         # One transaction for the inserts and the positions. Each insert is otherwise committed on
-        # its own with queuepos_relative NULL, and the runner polls twice a second with
-        # order_by("queuepos_relative"), where NULL sorts first: a task submitted a moment ago was
-        # dispatched ahead of everything already waiting, which is the window
-        # next_queuepos_relative() exists to close.
+        # its own with queuepos_relative NULL, and a reader between the two writes gets a task
+        # that has no place in the queue; see next_queuepos_relative().
         with transaction.atomic():
             serializer.save(**extra_fields)
 
@@ -494,8 +497,8 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             created = serializer.instance
             newtasks: list[Task] = list(created) if isinstance(created, list) else ([created] if created else [])
 
-            # Provisional positions at the back of the queue. The real ordering is round-robin
-            # across users and is assigned by the task runner; this only stops a task submitted
+            # Provisional positions at the back of the queue. The real ordering is a fair share
+            # between the users and is assigned by the task runner; this only stops a task submitted
             # between two renumberings from showing no position at all, and costs one aggregate
             # for the whole batch.
             nextqueuepos = next_queuepos_relative()
@@ -1127,10 +1130,33 @@ def statslongterm(request):
     return render(request, "statslongterm.html", dictparams)
 
 
+def duration_str(seconds: float) -> str:
+    """Return a duration with the unit that gives a short number: seconds, minutes, hours, or days."""
+    if seconds < 100:
+        return f"{seconds:.0f} s"
+    if seconds < 100 * 60:
+        return f"{seconds / 60:.1f} min"
+    if seconds < 48 * 3600:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 86400:.1f} days"
+
+
+def percentile(ordered: Sequence[float], fraction: float) -> float | None:
+    """Return the smallest value that `fraction` of the values are not larger than, or None.
+
+    `ordered` is the values in ascending order. The result is one of the values (the nearest-rank
+    method), and thus the page shows no wait time that no task had.
+    """
+    if not ordered:
+        return None
+    return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
+
+
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
-    now = dt.datetime.now(dt.UTC)
-    sevendaytasks = Task.objects.filter(timestamp__gt=now - dt.timedelta(days=7))
+    now = utcnow()
+    windowstart = now - dt.timedelta(days=7)
+    sevendaytasks = Task.objects.filter(timestamp__gt=windowstart)
     sevendaytaskcount = sevendaytasks.count()
 
     dictparams: dict[str, t.Any] = {
@@ -1144,44 +1170,59 @@ def statsshortterm(request):
     dictparams["sevendaympctasks"] = sevendaytasks.exclude(mpc_name__isnull=True).exclude(mpc_name="").count()
     dictparams["sevendayimgtasks"] = sevendaytasks.filter(request_type="IMGZIP").count()
 
-    sevendaytasks_finished = sevendaytasks.filter(finishtimestamp__isnull=False)
-
-    def mean_seconds(values: list[float | None]) -> float | None:
-        """Return the mean of the values that have one, or None if none of them do."""
-        known = [value for value in values if value is not None]
-        return statistics.fmean(known) if known else None
-
-    def mean_seconds_str(values: list[float | None]) -> str:
-        """Format the mean of a list of second counts, ignoring the unanswerable ones and empties."""
-        mean = mean_seconds(values)
-        return "-" if mean is None else f"{mean:.1f}s"
-
-    # one read of the four columns the figures below use, rather than a full read per figure
+    # The tasks that finished in the window, for the wait times and the run time. This is not the
+    # set of the tasks that were submitted in the window and are finished. When the queue is
+    # full, the tasks that were submitted in the window and wait the longest are not finished.
+    # Those are the tasks of the users with the most usage, which are the long tasks. A wait time
+    # or a run time without them is too low.
+    #
+    # One read of the columns that the values below use, and not one read for each value.
     finished = list(
-        sevendaytasks_finished.only("timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit")
+        Task.objects.filter(finishtimestamp__gt=windowstart, starttimestamp__isnull=False).only(
+            "timestamp", "starttimestamp", "finishtimestamp", "userqueuedtasks_on_submit"
+        )
     )
 
-    if finished:
-        dictparams["sevendayavgwaittime"] = mean_seconds_str([tsk.waittime() for tsk in finished])
-        dictparams["sevendayavgwaittimeuserfirst"] = mean_seconds_str(
-            [tsk.waittime() for tsk in finished if tsk.userqueuedtasks_on_submit == 0]
-        )
+    def wait_times_str(tasks: list[Task]) -> str:
+        """Return the median and the 90th percentile of the wait times of the tasks.
 
-        sevenday_runtimes = [tsk.runtime() for tsk in finished]
-        dictparams["sevendayavgruntime"] = mean_seconds_str(sevenday_runtimes)
-        num_job_processors = runnerstatus.NUMSLOTS
-        # one definition of which values count, shared with the string above
-        sevenday_mean_runtime = mean_seconds(sevenday_runtimes) or 0.0
-        dictparams["sevendayloadpercent"] = (
-            f"{100.0 * sevendaytaskcount * sevenday_mean_runtime / (7 * 24.0 * 60 * 60) / num_job_processors:.1f}%"
-        )
-    else:
-        dictparams |= {
-            "sevendayavgwaittime": "-",
-            "sevendayavgwaittimeuserfirst": "-",
-            "sevendayavgruntime": "-",
-            "sevendayloadpercent": "0%",
-        }
+        The page gives these two values and not the mean: the queue order gives a short wait to
+        the users with little usage and a long wait to the users with much usage.
+
+        The wait time of a task is the time from the request to the start of the last attempt.
+        For a task with more than one attempt, it thus includes the failed attempts. Few tasks
+        have a failed attempt, and they change the two values little.
+        """
+        waits = sorted(wait for task in tasks if (wait := task.waittime()) is not None)
+        median, high = percentile(waits, 0.5), percentile(waits, 0.9)
+        return "-" if median is None or high is None else f"{duration_str(median)}, {duration_str(high)}"
+
+    dictparams["sevendaywaittime"] = wait_times_str(finished)
+    dictparams["sevendaywaittimeuserfirst"] = wait_times_str(
+        [task for task in finished if task.userqueuedtasks_on_submit == 0]
+    )
+
+    runtimes = [runtime for task in finished if (runtime := task.runtime()) is not None]
+    meanruntime = statistics.fmean(runtimes) if runtimes else None
+    dictparams["sevendayavgruntime"] = "-" if meanruntime is None else duration_str(meanruntime)
+
+    # The slot count is the current one. After a change of the slot count, the two values below
+    # use the new count for the full window, and they are correct again when the window is past.
+    numslots = runnerstatus.NUMSLOTS
+
+    # The demand: the run time that the requests of the window need, as a part of the run time
+    # that the slots have in the window. A value of more than 100 % is a queue that grows.
+    dictparams["sevendaydemandpercent"] = (
+        "-" if meanruntime is None else f"{100.0 * sevendaytaskcount * meanruntime / (7 * 86400.0 * numslots):.1f}%"
+    )
+
+    # The use of the slots: the run time of all attempts, from the usage records of the task
+    # runner (forcephot.queue.charge_usage). A record is for one day in UTC, and thus the window
+    # starts at the start of a day: it has six full days and the part of today that is past.
+    firstday = now.date() - dt.timedelta(days=6)
+    usedseconds = UsageDay.objects.filter(day__gte=firstday).aggregate(Sum("seconds"))["seconds__sum"] or 0.0
+    recordseconds = (now - dt.datetime.combine(firstday, dt.time(0), tzinfo=dt.UTC)).total_seconds()
+    dictparams["sevendayslotusepercent"] = f"{100.0 * usedseconds / (recordseconds * numslots):.1f}%"
 
     return render(request, "statsshortterm.html", dictparams)
 
@@ -1207,57 +1248,73 @@ class QueuePositions(APIView):
     throttle_classes = ()
 
     @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "usage",
+                str,
+                description="With the value 1, the answer also has `usagehours`: the usage of the caller in hours.",
+            )
+        ],
         responses={200: OpenApiResponse(description="The queue position and request type of each queued task")},
         summary="The queue positions of the caller's unfinished tasks",
     )
     def get(self, request):
-        # One transaction for the three reads. The task runner can renumber the queue between two
-        # of them, and a new batch of a member then moves each position by the size of the batch.
-        # MariaDB reads all the queries of a transaction from one snapshot, and thus the offset,
-        # the positions and the start of the tier describe the same queue. The block only reads,
-        # and thus it needs no savepoint in a transaction that is already open.
+        # One transaction for the two reads. The task runner can renumber the queue between them.
+        # MariaDB reads all the queries of a transaction from one snapshot, and thus the offset
+        # and the positions describe the same queue. The block only reads, and thus it needs no
+        # savepoint in a transaction that is already open.
         with transaction.atomic(savepoint=False):
             queueoffset = Task.min_queuepos_relative()
             # the same set the offset was measured against, so the subtraction below cannot drift
-            positions = list(
-                Task.queued()
-                .filter(user_id=request.user.pk, queuepos_relative__isnull=False)
-                .values_list("id", "queuepos_relative", "request_type")
+            owntasks = list(
+                Task.queued().filter(user_id=request.user.pk).values_list("id", "queuepos_relative", "request_type")
             )
 
-            # The tier of the caller, from the same request as the positions. The queue page
-            # subtracts tierstart from a position to get the number of tasks that compete with the
-            # task for a slot. A count from the status file of the task runner is older than the
-            # positions, and a comparison of the two puts a task in the incorrect tier each time a
-            # task finishes.
-            priorityuserids = priority_userids()
-            prioritytier = request.user.pk in priorityuserids
-            tierstart = 0
-            if priorityuserids and not prioritytier:
-                # the tasks of the members have the first positions, and the tier of the caller
-                # starts at the first task of a user who is not a member
-                firstposition = (
-                    Task.queued()
-                    .exclude(user_id__in=priorityuserids)
-                    .aggregate(Min("queuepos_relative"))["queuepos_relative__min"]
-                )
-                if firstposition is not None:
-                    tierstart = max(0, firstposition - queueoffset)
+        # A task that has started has no position while it is in a slot, and while it waits for a
+        # new attempt after a failed attempt; see forcephot.queue.calculate_queue_positions. The
+        # positions are thus only of the tasks that can start. A position is the number of tasks
+        # that are before the task in the queue order. That is the largest number of tasks that
+        # start before it: fewer start before it when a user with tasks before it has the
+        # maximum number of slots.
+        positions = [
+            (taskid, queuepos, requesttype) for taskid, queuepos, requesttype in owntasks if queuepos is not None
+        ]
 
-        return Response(
-            {
-                "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
-                "prioritytier": prioritytier,
-                "tierstart": tierstart,
-                # What each of those tasks is. Dispatch runs one task per user at a time, so a
-                # user's own tasks ahead of this one are waited through in series -- and an IMGZIP
-                # among them is a quarter of an hour of that wait where an FP task is a minute.
-                # Another column on a query already being made, and only ever this user's own
-                # tasks.
-                "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
-                "queueoffset": queueoffset,
-            }
-        )
+        answer: dict[str, t.Any] = {
+            "queuepositions": {str(taskid): queuepos - queueoffset for taskid, queuepos, _ in positions},
+            # What each of those tasks is. The tasks of one user that are ahead of a task
+            # use a limited number of slots, and an IMGZIP among them is a quarter of an hour
+            # of the wait where an FP task is a minute. Another column on a query already
+            # being made, and only ever this user's own tasks.
+            "queuedtypes": {str(taskid): requesttype for taskid, _, requesttype in positions},
+            "queueoffset": queueoffset,
+            # All the unfinished tasks of the caller. The Queue badge of the navigation bar
+            # shows this number.
+            "queuedcount": len(owntasks),
+            # The unfinished tasks of the caller that have started and have no position: a
+            # task in a slot, and a task that waits for a new attempt after a failed attempt.
+            # This endpoint does not know which of the two a task is: the task runner writes
+            # the tasks in its slots to its status file (running_taskids). The queue page
+            # counts the tasks that finished while its tab was hidden, and without this list
+            # a task that started is equal to a task that finished.
+            "startedids": [taskid for taskid, queuepos, _ in owntasks if queuepos is None],
+            # The request type of each of those tasks. A task of the caller that waits behind
+            # them waits for their run times, and the wait estimate of the queue page needs
+            # the types for that.
+            "startedtypes": {
+                str(taskid): requesttype for taskid, queuepos, requesttype in owntasks if queuepos is None
+            },
+        }
+
+        # The usage of the caller in hours, as the queue order uses it; see
+        # forcephot.queue.user_usage_seconds. A script reads it here: the status endpoint gives
+        # the usage only to a browser session. Only on request, because the value is one more
+        # query: the queue page polls this endpoint each two seconds for each tab, and it takes
+        # the usage from the status endpoint.
+        if request.query_params.get("usage") == "1":
+            answer["usagehours"] = round(user_usage_seconds(request.user.pk) / 3600, 1)
+
+        return Response(answer)
 
 
 # A browser can answer a second request from its cache, for one write interval of the task runner.
@@ -1307,6 +1364,7 @@ def taskrunnerstatus(request):
                 "stale": True,
                 "typical_runtime_seconds": {},
                 "user_queued_task_count": 0,
+                "user_usage_hours": None,
                 "detail": f"no usable status file ({type(ex).__name__})",
             },
         )
@@ -1317,7 +1375,13 @@ def taskrunnerstatus(request):
     # The medians and the count below can change while `written` does not. But the task runner
     # writes the file every STATUS_WRITE_SECONDS, and thus this version holds for that interval
     # at most. The poll asks each minute.
-    etag = entity_tag(status["written"])
+    #
+    # The session of the reader is in the version, because the response has fields about the
+    # reader: the count of queued tasks and the usage. Without it, a browser that changes
+    # to a different account gets a 304 for the body of the first account. A sign-in makes a new
+    # session key. The key comes from the cookie and not from request.user, because a read of the
+    # user is a query, and a 304 must cost no query.
+    etag = entity_tag(status["written"], request.COOKIES.get(settings.SESSION_COOKIE_NAME))
 
     # A browser that holds the current version asks with If-None-Match, and the answer is 304 with
     # no body. This comes before the medians and the count, because a 304 makes both unnecessary.
@@ -1338,6 +1402,18 @@ def taskrunnerstatus(request):
         Task.queued().filter(user_id=request.user.pk).count() if request.user.is_authenticated else 0
     )
 
+    # The usage of this reader, in hours: the run time of the tasks of the reader, where older
+    # run time counts less. The queue order starts the tasks of the user with the least usage
+    # first; see forcephot.queue.calculate_queue_positions. The status sentence of each page gives
+    # the usage to a reader who waits on the queue. Only when the task runner runs, as for the
+    # medians: no sentence about the queue shows when the status is stale.
+    #
+    # One decimal place. runnerstatus.js compares each field of two answers, and a value in
+    # seconds would make a difference each time a task finishes.
+    user_usage_hours: float | None = None
+    if request.user.is_authenticated and not stale:
+        user_usage_hours = round(user_usage_seconds(request.user.pk) / 3600, 1)
+
     response = JsonResponse(
         {
             **status,
@@ -1346,6 +1422,8 @@ def taskrunnerstatus(request):
             "status_age_seconds": round(age_seconds, 1),
             "typical_runtime_seconds": typical_runtimes,
             "user_queued_task_count": user_queued_task_count,
+            "user_usage_hours": user_usage_hours,
+            "usage_half_life_days": USAGE_HALF_LIFE_DAYS,
         },
     )
     # Still no ETag on an outage. The tag is the write time of the file, and while the runner is
@@ -1395,11 +1473,45 @@ def bokeh_cdn_scripts() -> tuple[dict[str, str], ...]:
     return tuple(scripts)
 
 
+def queue_condition() -> dict[str, t.Any]:
+    """Return the current condition of the queue for the stats page.
+
+    The values come from the status file of the task runner, which is a maximum of
+    STATUS_WRITE_SECONDS old. The task runner counts the queue for that file, and thus this
+    function makes no query when the task runner runs. The stats page is public and has no cache.
+
+    When the status file is stale or not usable, its counts are for a queue of the past. The
+    result then has only the number of the unfinished tasks, from the database. The site notice
+    box of each page gives the age of a stale status file.
+    """
+    # an exception from a field of the file gives the result for a stale status file
+    with contextlib.suppress(OSError, KeyError, TypeError, ValueError):
+        status, age_seconds = runnerstatus.read_status()
+        if age_seconds <= runnerstatus.STALE_AFTER_SECONDS:
+            oldest = status["oldest_queued_task_time"]
+            return {
+                "slotsbusy": int(status["slots_busy"]),
+                "numslots": int(status["numslots"]),
+                "maintenance": bool(status["maintenance"]),
+                "queuedtaskcount": int(status["queued_task_count"]),
+                # a status file from before this field has no count, and the page then has no line
+                "retrywaittaskcount": status.get("retry_wait_task_count"),
+                "oldestqueuedage": (
+                    None
+                    if oldest is None
+                    else duration_str(max(0.0, (utcnow() - dt.datetime.fromisoformat(oldest)).total_seconds()))
+                ),
+                "runnerstale": False,
+            }
+
+    return {"runnerstale": True, "queuedtaskcount": Task.queued().count()}
+
+
 def stats(request):
     dictparams = {
         "name": "Usage Statistics",
-        "queuedtaskcount": Task.objects.filter(finishtimestamp__isnull=True).count(),
         "bokehscripts": bokeh_cdn_scripts(),
+        **queue_condition(),
     }
 
     lastfinishtime = (
