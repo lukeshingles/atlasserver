@@ -3541,6 +3541,11 @@ class ResultPlotDataColumnTests(TestCase):
 
             return self.client.get(reverse("resultplotdatajs", args=[self.task.id]))
 
+    @staticmethod
+    def datarow(mjd: object, ujy: object, dujy: object) -> str:
+        """Return RESULTFILE_DATAROW with a different date, flux, and flux error."""
+        return f"{mjd} 19.0 0.1 {ujy} {dujy} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+
     def test_a_file_with_no_filter_column_gives_an_empty_plot(self) -> None:
         # every column the view reads except F, so the old guard let it through
         header = "###MJD m dm uJy duJy err chi/N RA Dec x y maj min phi apfit mag5sig Sky Obs"
@@ -3563,10 +3568,10 @@ class ResultPlotDataColumnTests(TestCase):
         toolarge = "99999999999999999999999"
         rows = (
             RESULTFILE_DATAROW
-            + f"59001.0 19.0 0.1 {toolarge} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
-            + f"59002.0 19.0 0.1 -{toolarge} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
-            + f"59003.0 19.0 0.1 100 {toolarge} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
-            + f"59004.0 19.0 0.1 100 -{toolarge} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            + self.datarow(59001.0, toolarge, 10)
+            + self.datarow(59002.0, f"-{toolarge}", 10)
+            + self.datarow(59003.0, 100, toolarge)
+            + self.datarow(59004.0, 100, f"-{toolarge}")
         )
 
         response = self.request_plot(RESULTFILE_HEADER, rows)
@@ -3577,20 +3582,21 @@ class ResultPlotDataColumnTests(TestCase):
         assert '"xmin": 59000.0, "xmax": 59000.0,' in content, content[:400]
 
     def test_a_file_with_only_a_flux_outside_the_64_bit_range_gives_an_empty_plot(self) -> None:
-        rows = "59001.0 19.0 0.1 99999999999999999999999 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+        rows = self.datarow(59001.0, "99999999999999999999999", 10)
 
         response = self.request_plot(RESULTFILE_HEADER, rows)
 
         assert response.status_code == 200, response.status_code
-        assert b"jslcdataglobal" not in response.content, "a row with an unusable flux was plotted"
+        assert b"jslcdataglobal" not in response.content, "the view plotted a row with an unusable flux"
 
-    def test_a_flux_or_a_flux_error_that_is_not_finite_drops_only_its_row(self) -> None:
+    def test_a_date_a_flux_or_a_flux_error_that_is_not_finite_drops_only_its_row(self) -> None:
         # the float dtype parses each of these tokens, and none of them is a JavaScript literal
         rows = RESULTFILE_DATAROW
         mjd = 59001.0
         for token in ("1e999", "-1e999", "inf", "-inf", "nan"):
-            rows += f"{mjd} 19.0 0.1 {token} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
-            rows += f"{mjd + 0.5} 19.0 0.1 100 {token} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            rows += self.datarow(token, 100, 10)
+            rows += self.datarow(mjd, token, 10)
+            rows += self.datarow(mjd + 0.5, 100, token)
             mjd += 1.0
 
         response = self.request_plot(RESULTFILE_HEADER, rows)
@@ -3608,7 +3614,7 @@ class ResultPlotDataColumnTests(TestCase):
         response = self.request_plot(RESULTFILE_HEADER, rows)
 
         assert response.status_code == 200, response.status_code
-        assert b"jslcdataglobal" not in response.content, "a file with a ragged row was plotted"
+        assert b"jslcdataglobal" not in response.content, "the view plotted a file with a ragged row"
 
 
 class ArchivedTaskResultTests(TestCase):

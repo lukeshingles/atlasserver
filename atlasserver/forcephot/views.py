@@ -2180,6 +2180,10 @@ def resultplotdatajs(request, taskid):
                     ujy_max = int(1e10)
                     dfforcedphot = dfforcedphot[(dfforcedphot["uJy"] > ujy_min) & (dfforcedphot["uJy"] < ujy_max)]
 
+                    # The date goes into each point and into the limits of the time axis. "nan"
+                    # and "inf" are not JavaScript literals, and a NaN fails the comparison.
+                    dfforcedphot = dfforcedphot[dfforcedphot["#MJD"].abs() < math.inf]
+
                     # The cut that plot_atlas_fp.py makes before it draws the PDF plot, applied here
                     # so that the interactive plot shows the same points. A very large flux error or
                     # a poor profile fit means the measurement is not usable.
