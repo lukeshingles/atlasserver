@@ -700,6 +700,11 @@ def next_task(running_taskids: t.Iterable[int], running_userids: t.Iterable[int]
     fails, or if its slot stops, it gets a position again at the next renumbering. Without this
     rule, such a task sorts before all the tasks that wait, and a task that always fails keeps a
     slot.
+
+    A task of an inactive account has no position, and thus it cannot start; see
+    forcephot.queue.calculate_queue_positions. This query does not read the users: a join to the
+    table of the users makes the database start from that table, and this query runs on each
+    pass of the main loop that has a free slot.
     """
     slotsofuser = collections.Counter(running_userids)
     users_at_maximum = [userid for userid, count in slotsofuser.items() if count >= runnerstatus.MAX_USER_SLOTS]
@@ -1280,6 +1285,49 @@ def remove_unverified_accounts(days_ago: int = UNVERIFIED_ACCOUNT_DAYS, logfunc=
     return count
 
 
+def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[], None] | None = None) -> int:
+    """Delete the unfinished tasks of the accounts that are not active, and return their number.
+
+    An administrator makes an account inactive in the admin site to stop its use of the server.
+    The account stays in the database, and without this function its tasks stay in the queue.
+    The queue order gives no position to a task of an inactive account, and thus the task runner
+    does not start it (forcephot.queue.calculate_queue_positions). This function deletes those
+    tasks. The row of a task in a slot goes also. Its slot process keeps the slot until the end
+    of the attempt. It then finds no row, as for a task that its user deleted, and it removes
+    its result file.
+
+    The finished tasks of the account stay. The other sweeps of the maintenance remove them at
+    their usual age.
+
+    An account that waits for the confirmation of its address is also inactive. It cannot sign
+    in, and thus it has no task.
+
+    `heartbeat` is called during the work, as in remove_old_tasks.
+    """
+    taskids = list(
+        Task.objects.filter(finishtimestamp__isnull=True, user__is_active=False).values_list("id", flat=True)
+    )
+    if not taskids:
+        return 0
+
+    logfunc(f"Unfinished tasks of inactive accounts: {len(taskids)}. The maintenance deletes them now.")
+    removed = 0
+    for index, taskid in enumerate(taskids):
+        # One task at a time, with the lock and the removal of the files of Task.delete. A task
+        # can finish, and its user can delete it, between the read of the ids and this point.
+        task = Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).first()
+        if task is not None:
+            task.delete()
+            removed += 1
+        if heartbeat is not None and index % 50 == 49:
+            heartbeat()
+
+    # the tasks of the other users move forward in the queue
+    taskqueue.request_recalc()
+    logfunc(f"  The maintenance deleted {removed} of them.")
+    return removed
+
+
 def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     """Remove old tasks and associated files according to their type and age.
 
@@ -1312,6 +1360,8 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
         remove_old_tasks(**sweep, logfunc=logfunc, heartbeat=heartbeat)
 
     remove_unverified_accounts(logfunc=logfunc)
+
+    remove_tasks_of_inactive_users(logfunc=logfunc, heartbeat=heartbeat)
 
     removed = taskqueue.remove_old_usage_records()
     logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")

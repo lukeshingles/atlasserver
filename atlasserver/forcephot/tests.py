@@ -341,6 +341,78 @@ class FairShareQueueTests(TestCase):
         assert list(UsageDay.objects.values_list("user_id", flat=True)) == [self.heavy.pk]
         assert any("Removed 2 usage records" in str(call) for call in log.call_args_list), log.call_args_list
 
+    def test_a_task_of_an_inactive_account_has_no_position_and_cannot_start(self) -> None:
+        self.add_usage(self.heavy, hours=5)
+        first = self.add_queued(self.light, 2)
+        second = self.add_queued(self.heavy, 2)
+        calculate_queue_positions()
+        assert taskrunner_main.next_task([], []) == first[0]
+
+        User.objects.filter(pk=self.light.pk).update(is_active=False)
+        calculate_queue_positions()
+
+        assert [task.pk for task in self.waiting()] == [task.pk for task in second]
+        assert taskrunner_main.next_task([], []) == second[0]
+        # also when the other user has the maximum number of slots: no other task can start
+        slots = [self.heavy.pk] * runnerstatus.MAX_USER_SLOTS
+        assert taskrunner_main.next_task([], slots) == second[0]
+
+        # an account that is active again gets its positions at the next renumbering
+        User.objects.filter(pk=self.light.pk).update(is_active=True)
+        calculate_queue_positions()
+        assert taskrunner_main.next_task([], []) == first[0]
+
+    def test_the_maintenance_deletes_the_unfinished_tasks_of_an_inactive_account(self) -> None:
+        waiting = self.add_queued(self.light, 2)
+        inslot = self.add_queued(self.light, 1)[0]
+        finished = Task.objects.create(
+            user=self.light, ra=10.0, dec=20.0, starttimestamp=timezone.now(), finishtimestamp=timezone.now()
+        )
+        other = self.add_queued(self.heavy, 1)[0]
+        calculate_queue_positions()
+        messages: list[str] = []
+        beats: list[int] = []
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+            mock.patch.object(taskrunner_main, "log_general"),
+        ):
+            taskrunner_main.mark_started(inslot)
+            # each account is active: the maintenance deletes no task
+            assert taskrunner_main.remove_tasks_of_inactive_users(logfunc=messages.append) == 0
+            assert not messages
+
+            User.objects.filter(pk=self.light.pk).update(is_active=False)
+            generation = taskqueue.recalc_generation()
+            removed = taskrunner_main.remove_tasks_of_inactive_users(
+                logfunc=messages.append, heartbeat=lambda: beats.append(1)
+            )
+
+        assert removed == 3, removed
+        left = set(Task.objects.values_list("pk", flat=True))
+        assert left == {finished.pk, other.pk}, (left, [task.pk for task in waiting])
+        assert not Task.objects.get(pk=finished.pk).is_archived, "a finished task of the account stays as it is"
+        assert User.objects.filter(pk=self.light.pk).exists(), "the account stays"
+        assert taskqueue.recalc_generation() != generation, "the queue needs new positions"
+        assert messages == [
+            "Unfinished tasks of inactive accounts: 3. The maintenance deletes them now.",
+            "  The maintenance deleted 3 of them.",
+        ], messages
+
+    def test_the_hourly_maintenance_removes_the_tasks_of_inactive_accounts(self) -> None:
+        self.add_queued(self.light, 1)
+        kept = self.add_queued(self.heavy, 1)[0]
+        User.objects.filter(pk=self.light.pk).update(is_active=False)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            override_settings(STATIC_ROOT=tmpdir),
+            mock.patch.object(taskrunner_main, "log_general"),
+        ):
+            taskrunner_main.do_maintenance()
+
+        assert list(Task.objects.values_list("pk", flat=True)) == [kept.pk]
+
     def test_a_usage_record_for_a_deleted_account_is_not_an_error(self) -> None:
         missing = self.light2.pk
         self.light2.delete()
