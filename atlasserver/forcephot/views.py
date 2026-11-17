@@ -2187,7 +2187,14 @@ def resultplotdatajs(request, taskid):
                     # The PDF plot also sigma clips with a rolling window. That is not done here: it
                     # removes points that the result file does contain, and this plot is read beside
                     # that file.
-                    dfforcedphot = dfforcedphot[(dfforcedphot["duJy"] <= 4000) & (dfforcedphot["chi/N"] <= 100)]
+                    #
+                    # The lower limit removes a flux error of "-inf", which the float dtype parses
+                    # and which is not a JavaScript literal. A NaN fails each of the comparisons.
+                    dfforcedphot = dfforcedphot[
+                        (dfforcedphot["duJy"] > -math.inf)
+                        & (dfforcedphot["duJy"] <= 4000)
+                        & (dfforcedphot["chi/N"] <= 100)
+                    ]
 
         # with no rows, the limits below would be NaN, which is not a JavaScript literal
         if dfforcedphot is not None and not dfforcedphot.empty:

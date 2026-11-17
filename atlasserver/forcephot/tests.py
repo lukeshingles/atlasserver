@@ -3583,6 +3583,22 @@ class ResultPlotDataColumnTests(TestCase):
         assert response.status_code == 200, response.status_code
         assert b"jslcdataglobal" not in response.content, "a row with an unusable flux was plotted"
 
+    def test_a_flux_or_a_flux_error_that_is_not_finite_drops_only_its_row(self) -> None:
+        # the float dtype parses each of these tokens, and none of them is a JavaScript literal
+        rows = RESULTFILE_DATAROW
+        mjd = 59001.0
+        for token in ("1e999", "-1e999", "inf", "-inf", "nan"):
+            rows += f"{mjd} 19.0 0.1 {token} 10 o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            rows += f"{mjd + 0.5} 19.0 0.1 100 {token} o 0 1.0 1.0 2.0 0 0 0 0 0 0 20.0 0 x\n"
+            mjd += 1.0
+
+        response = self.request_plot(RESULTFILE_HEADER, rows)
+
+        assert response.status_code == 200, response.status_code
+        content = response.content.decode()
+        assert "jslcdata.push([[59000.0,100.0,10.0,19.0,0.1]]);" in content, content[:400]
+        assert '"xmin": 59000.0, "xmax": 59000.0,' in content, content[:400]
+
     def test_two_fields_with_no_space_between_them_give_an_empty_plot(self) -> None:
         # The flux and its error are one token, so each field after it moves one column to the
         # left. The filter letter is then in a float column, and the parser raises ValueError.
