@@ -424,7 +424,7 @@ class FairShareQueueTests(TestCase):
         task = self.add_queued(self.light, 1)[0]
         copy = Task.objects.get(pk=task.pk)
 
-        def runtask(task: Task, logfunc: t.Any) -> tuple[None, str]:
+        def runtask(task: Task, logfunc: t.Any, slotid: int | None = None) -> tuple[None, str]:
             return None, "No data returned"
 
         def exists_then_goes(taskid: int) -> bool:
