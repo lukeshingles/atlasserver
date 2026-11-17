@@ -4,6 +4,7 @@
 import collections
 import contextlib
 import datetime as dt
+import fcntl
 import json
 import multiprocessing as mp
 import os
@@ -64,6 +65,10 @@ SSH_CONTROL_PERSIST: str = "1h"
 # a socket is longer than about 100 characters, so the names are short.
 SSH_CONTROL_DIR: str = ".ssh/atlasserver"
 
+# the maximum time for the first connection of a group of slots. The other slots of the group
+# wait for this connection, so the time has a limit.
+SSH_MASTER_CONNECT_SECONDS: int = 30
+
 # the columns that a forced photometry result file must have, as the header names them
 RESULT_REQUIRED_COLUMNS: tuple[str, ...] = ("MJD", "uJy")
 
@@ -123,6 +128,15 @@ def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
         flogfile.write(line + "\n")
 
 
+def ssh_control_dir() -> Path:
+    """Return the directory of the control sockets.
+
+    ssh expands ~ from the password database and not from $HOME, so the directory comes from the
+    same source.
+    """
+    return Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
+
+
 def ssh_options(slotid: int | None) -> list[str]:
     """Return the ssh options that give a slot the connection of its group of slots.
 
@@ -132,11 +146,12 @@ def ssh_options(slotid: int | None) -> list[str]:
     if slotid is None:
         return []
 
-    # ssh expands ~ from the password database and not from $HOME, so the directory comes from
-    # the same source
-    controldir = Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
+    controldir = ssh_control_dir()
     try:
         controldir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # mkdir does not change the mode of a directory that exists, and a different user must
+        # not be able to put a socket there. chmod fails if a different user owns the directory.
+        controldir.chmod(0o700)
     except OSError:
         # ssh exits with status 255 when it cannot make the socket, and the task then never
         # completes. A connection for each command is slower, but it works.
@@ -155,6 +170,50 @@ def ssh_options(slotid: int | None) -> list[str]:
         "-oServerAliveInterval=30",
         "-oServerAliveCountMax=3",
     ]
+
+
+def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None]) -> None:
+    """Open the ssh connection of the group of a slot, if it is not open.
+
+    ControlMaster=auto does not wait for a master that a different process starts. Each ssh that
+    finds no socket opens a connection of its own, and many new connections at the same time make
+    the remote server reset some of them. With a lock for each socket, one slot opens the
+    connection, and the other slots of the group wait and then find the socket.
+
+    A failure here does not stop the task. The commands of the task then connect without a master.
+    """
+    lockfile = ssh_control_dir() / f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}.lock"
+    try:
+        # the lock ends when the file closes, and also when this process ends
+        with lockfile.open("w", encoding="utf-8") as flock:
+            fcntl.flock(flock, fcntl.LOCK_EX)
+
+            # the check asks only the local master, so it makes no connection
+            check = subprocess.run(
+                ["ssh", "-O", "check", *sshoptions, REMOTE_SERVER],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=SSH_MASTER_CONNECT_SECONDS,
+                check=False,
+            )
+            if check.returncode == 0:
+                return
+
+            # this ssh finds no socket, so it starts the master and then runs the command as a
+            # client of that master
+            start = subprocess.run(
+                ["ssh", *sshoptions, f"-oConnectTimeout={SSH_MASTER_CONNECT_SECONDS}", REMOTE_SERVER, "true"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=SSH_MASTER_CONNECT_SECONDS * 2,
+                check=False,
+            )
+            if start.returncode != 0:
+                logfunc(f"ERROR: ssh did not open the connection of the slot group: {start.stderr.strip()}")
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        logfunc(f"ERROR: ssh did not open the connection of the slot group: {ex}")
 
 
 def run_rsync(
@@ -370,6 +429,8 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         return None, None
 
     sshoptions = ssh_options(slotid)
+    if slotid is not None and sshoptions:
+        open_ssh_master(slotid, sshoptions, logfunc)
 
     remoteresultdir = Path("~/atlasserver/results/")
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
