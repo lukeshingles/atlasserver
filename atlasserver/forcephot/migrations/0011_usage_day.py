@@ -1,7 +1,10 @@
 """Make the table of the usage records, and fill it from the tasks that the database has.
 
-This migration also adds two fields of a task: the time before which the task does not start again
-after a failed attempt, and the marker that a slot took the email of the batch of the task.
+This migration also adds three fields of a task:
+
+- the time before which the task does not start again after a failed attempt;
+- the marker that a slot took the email of the batch of the task;
+- the marker of an attempt whose end has no record.
 
 The queue order reads the usage of each user from this table; see forcephot.queue.charge_usage.
 With an empty table, each user has no usage at the first start of the new task runner, and the
@@ -91,6 +94,11 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="task",
             name="email_sent",
+            field=models.BooleanField(default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name="task",
+            name="attempt_open",
             field=models.BooleanField(default=False, editable=False),
         ),
     ]

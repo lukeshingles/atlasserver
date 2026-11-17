@@ -384,8 +384,11 @@ class FairShareQueueTests(TestCase):
         ):
             taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=0)
 
-        assert Task.objects.get(pk=task.pk).finishtimestamp is not None
+        finished = Task.objects.get(pk=task.pk)
+        assert finished.finishtimestamp is not None
         assert not UsageDay.objects.exists()
+        # the finish of the task leaves the marker of the attempt for the record of the main loop
+        assert finished.attempt_open
 
     def test_a_record_that_fails_stays_for_a_new_try_and_is_made_one_time(self) -> None:
         failed = self.add_queued(self.light, 1)[0]
@@ -414,6 +417,139 @@ class FairShareQueueTests(TestCase):
         usage = UsageDay.objects.get(user=self.light)
         assert (usage.seconds, usage.tasks) == (100.0, 1)
         assert Task.objects.get(pk=failed.pk).retry_after is not None
+
+    def test_a_second_record_of_one_attempt_adds_no_usage(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(task)
+        assert Task.objects.get(pk=task.pk).attempt_open
+
+        assert taskrunner_main.record_attempt_end(task.pk, self.light.pk, 100.0)
+        # for example, the database made the first record, and its answer did not arrive
+        assert not taskrunner_main.record_attempt_end(task.pk, self.light.pk, 100.0)
+
+        usage = UsageDay.objects.get(user=self.light)
+        assert (usage.seconds, usage.tasks) == (100.0, 1)
+        assert not Task.objects.get(pk=task.pk).attempt_open
+
+    def test_a_new_task_runner_records_the_attempts_that_a_stopped_task_runner_left(self) -> None:
+        finished, stopped, recorded, waits = self.add_queued(self.light, 4)
+        now = timezone.now()
+        started = now - dt.timedelta(seconds=300)
+        with mock.patch.object(taskrunner_main, "log_general"):
+            for task in (finished, stopped, recorded):
+                taskrunner_main.mark_started(task)
+            # the slot process of this task finished after the main loop stopped
+            taskrunner_main.mark_finished(finished, error_msg=None)
+        Task.objects.filter(pk__in=[finished.pk, stopped.pk]).update(starttimestamp=started)
+        Task.objects.filter(pk=finished.pk).update(finishtimestamp=started + dt.timedelta(seconds=200))
+        # the main loop recorded this attempt before it stopped
+        taskrunner_main.record_attempt_end(recorded.pk, self.light.pk, 5.0)
+        retry_after = Task.objects.get(pk=recorded.pk).retry_after
+        messages: list[str] = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # the old main loop wrote its status for the last time 60 seconds ago
+            statuspath = Path(tmpdir, "taskrunner_status.json")
+            lastwrite = (now - dt.timedelta(seconds=60)).isoformat()
+            statuspath.write_text(json.dumps({"written": lastwrite}), encoding="utf-8")
+            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
+                assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 2
+                # a second start of a task runner finds no attempt
+                assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 0
+
+        assert messages == ["Recorded the end of 2 attempts that a task runner left with no record"]
+        # 200 seconds to the finish, 240 seconds to the last status, and the 5 seconds from before.
+        # A record is on the day of the end of its attempt, and thus the records can be on two days.
+        records = list(UsageDay.objects.filter(user=self.light))
+        assert sum(record.tasks for record in records) == 3
+        assert abs(sum(record.seconds for record in records) - 445.0) < 2.0, records
+        assert not Task.objects.filter(attempt_open=True).exists()
+        # The task runner stopped the attempt, and the attempt did not fail: the task has no wait.
+        assert Task.objects.get(pk=stopped.pk).retry_after is None
+        assert Task.objects.get(pk=recorded.pk).retry_after == retry_after
+        calculate_queue_positions(running_taskids=set())
+        assert sorted(task.pk for task in self.waiting()) == sorted([stopped.pk, waits.pk])
+
+    def test_an_attempt_with_no_end_gets_no_run_time_when_there_is_no_status_file(self) -> None:
+        stopped = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(stopped)
+        Task.objects.filter(pk=stopped.pk).update(starttimestamp=timezone.now() - dt.timedelta(hours=3))
+        messages: list[str] = []
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+        ):
+            assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 1
+
+        assert len(messages) == 2, messages
+        assert messages[0].startswith("There is no status file of a task runner."), messages
+        usage = UsageDay.objects.get(user=self.light)
+        assert (usage.seconds, usage.tasks) == (0.0, 1)
+
+    def test_an_error_for_one_open_attempt_does_not_stop_the_record_of_the_others(self) -> None:
+        first, second = self.add_queued(self.light, 2)
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(first)
+            taskrunner_main.mark_started(second)
+        messages: list[str] = []
+        record = taskrunner_main.record_attempt_end
+
+        def fails_for_first(taskid: int, *args: t.Any, **kwargs: t.Any) -> bool:
+            if taskid == first.pk:
+                msg = "the database is away"
+                raise RuntimeError(msg)
+            return record(taskid, *args, **kwargs)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
+            mock.patch.object(taskrunner_main, "record_attempt_end", fails_for_first),
+        ):
+            assert taskrunner_main.record_open_attempts(logfunc=messages.append) == 1
+
+        assert messages[-1] == (
+            "ERROR: could not record the end of 1 attempts of a task runner that stopped: the database is away"
+        ), messages
+        # the attempt with the error keeps its marker for the next start of a task runner
+        assert list(Task.objects.filter(attempt_open=True).values_list("pk", flat=True)) == [first.pk]
+
+    def test_the_run_time_of_an_attempt_ends_at_the_end_of_its_slot_process(self) -> None:
+        class Shared:
+            def __init__(self, value: float) -> None:
+                self.value = value
+
+        def clock(endedwall: float) -> taskrunner_main.SlotClock:
+            # the attempt started 600 seconds ago, and the main loop finds its end only now
+            return taskrunner_main.SlotClock(
+                started=time.perf_counter() - 600.0, startedwall=time.time() - 600.0, endedwall=Shared(endedwall)
+            )
+
+        # the slot process ended after 100 seconds, while the maintenance had the main loop
+        assert abs(clock(time.time() - 500.0).seconds() - 100.0) < 1.0
+        # the system stopped the process, and the process wrote no end
+        assert abs(clock(0.0).seconds() - 600.0) < 1.0
+        # a change of the wall clock gives an end after now, or an end before the start
+        assert abs(clock(time.time() + 3600.0).seconds() - 600.0) < 1.0
+        assert clock(time.time() - 3600.0).seconds() == 0.0
+
+    def test_a_slot_process_gives_the_time_of_its_end_also_after_an_exception(self) -> None:
+        class Shared:
+            value = 0.0
+
+        task = self.add_queued(self.light, 1)[0]
+        before = time.time()
+        raised = False
+        try:
+            with mock.patch.object(taskrunner_main, "do_task", side_effect=RuntimeError("no connection")):
+                taskrunner_main.run_slot(task, slotid=0, endedwall=Shared)
+        except RuntimeError:
+            raised = True
+
+        assert raised
+        assert before <= Shared.value <= time.time()
 
     def test_the_expected_run_time_of_a_task_is_the_mean_of_the_user_or_of_all_users(self) -> None:
         usage = {1: taskqueue.Usage(5000.0, 5), 2: taskqueue.Usage(100.0, 1)}
@@ -573,8 +709,8 @@ class FairShareQueueTests(TestCase):
         with mock.patch.object(taskrunner_main.mp, "Process", FakeProcess):
             taskrunner_main.start_in_slot(task, slotid=3)
 
-        assert seen["target"] is taskrunner_main.do_task
-        assert (seen["kwargs"]["slotid"], seen["kwargs"]["started"]) == (3, True)
+        assert seen["target"] is taskrunner_main.run_slot
+        assert seen["kwargs"]["slotid"] == 3
         assert (seen["row"]["attempt_count"], seen["row"]["queuepos_relative"]) == (1, None), seen["row"]
         assert seen["row"]["starttimestamp"] is not None
 
@@ -584,7 +720,7 @@ class FairShareQueueTests(TestCase):
             mock.patch.object(taskrunner_main, "log_general"),
             mock.patch.object(taskrunner_main, "notify_finished"),
         ):
-            taskrunner_main.do_task(seen["kwargs"]["task"], slotid=3, started=True)
+            taskrunner_main.run_slot(**seen["kwargs"])
         task.refresh_from_db()
         assert (task.attempt_count, task.error_msg) == (1, "no data")
 
@@ -612,8 +748,15 @@ class FairShareQueueTests(TestCase):
 
         assert raised, "the main loop must get the error"
         # no attempt ran: the task has its position, and it can start at the next pass
-        row = Task.objects.values("attempt_count", "queuepos_relative", "starttimestamp").get(pk=task.pk)
-        assert row == {"attempt_count": 0, "queuepos_relative": position, "starttimestamp": None}, row
+        row = Task.objects.values("attempt_count", "queuepos_relative", "starttimestamp", "attempt_open").get(
+            pk=task.pk
+        )
+        assert row == {
+            "attempt_count": 0,
+            "queuepos_relative": position,
+            "starttimestamp": None,
+            "attempt_open": False,
+        }, row
         assert (task.attempt_count, task.queuepos_relative, task.starttimestamp) == (0, position, None)
         assert taskrunner_main.next_task([], []) == task
 

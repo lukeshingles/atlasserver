@@ -93,6 +93,11 @@ failure, to a maximum of 10 minutes (`RETRY_WAIT_SECONDS` and `RETRY_WAIT_MAX_SE
 task that always fails does not keep a slot. A failed attempt adds its real run time to the usage
 of its user, as each attempt does, and it adds no other cost.
 
+The task runner can stop while tasks are in the slots. The next task runner records the usage of
+those attempts when it starts, and their tasks start again with no wait. For a task that is not
+finished, the record has the run time to the last write of the status file, which is a maximum of
+15 seconds before the stop.
+
 The list of users in the admin site (`/admin/auth/user/`) has two columns for the usage. "Run
 time (7 days)" is the run time with no decay, and a click on its header sorts the list. "Usage in
 the queue" is the usage that the queue order uses. A user who is signed in and has queued tasks
