@@ -1231,10 +1231,17 @@ class QueuePagesTests(TestCase):
 
         assert "In what order do the tasks in the queue start?" in content
         assert f"The server runs {runnerstatus.NUMSLOTS} tasks at one time" in content
-        assert f"a maximum of {runnerstatus.MAX_USER_SLOTS} of these slots" in content
+        assert f"use a maximum of {runnerstatus.MAX_USER_SLOTS} slots" in content
         assert f"the run time of {taskqueue.USAGE_HALF_LIFE_DAYS} days ago counts half" in content
         assert f"the same effect as {round(taskqueue.WAIT_CREDIT * 60)} minutes less usage" in content
         assert f"less than {taskqueue.NEW_ACCOUNT_DAYS} days old" in content
+
+    def test_the_faq_page_tells_that_a_person_can_have_one_account(self) -> None:
+        content = self.client.get(reverse("faq")).content.decode()
+
+        assert "Can I have more than one account?" in content
+        assert "Each person can have only one account." in content
+        assert "we will ban the accounts of that person" in content
 
     def test_the_api_guide_tells_the_order_of_the_queue(self) -> None:
         content = self.client.get(reverse("apiguide")).content.decode()
