@@ -961,6 +961,15 @@ class SlotClock(t.NamedTuple):
             return untilnow
         return min(untilnow, max(0.0, endedwall - self.startedwall))
 
+    def end(self, seconds: float) -> dt.datetime:
+        """Return the time of the end of the attempt, for the run time that seconds() gave.
+
+        The usage record of the attempt is on the day of this time. The main loop can make the
+        record later, and on a later day: it can find the end of the process late, and it tries
+        a record that failed again.
+        """
+        return dt.datetime.fromtimestamp(self.startedwall + seconds, dt.UTC)
+
 
 def record_ended_attempts(attempts: list[EndedAttempt], logfunc=log_general) -> list[EndedAttempt]:
     """Record the end of each of these attempts, and return the attempts whose record failed.
@@ -1388,11 +1397,14 @@ def main() -> None:
                 proc.join()
                 proc.close()
                 procs[slotid] = None
+                clock = procs_clocks.pop(slotid)
+                seconds = clock.seconds()
                 unrecorded.append(
                     EndedAttempt(
                         taskid=procs_taskids.pop(slotid),
                         userid=procs_userids.pop(slotid),
-                        seconds=procs_clocks.pop(slotid).seconds(),
+                        seconds=seconds,
+                        when=clock.end(seconds),
                     )
                 )
                 attempt_ended = True

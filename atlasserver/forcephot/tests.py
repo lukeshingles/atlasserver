@@ -579,6 +579,22 @@ class FairShareQueueTests(TestCase):
         assert abs(clock(time.time() + 3600.0).seconds() - 600.0) < 1.0
         assert clock(time.time() - 3600.0).seconds() == 0.0
 
+        # the end of the attempt is its start plus its run time, and not the time of this read
+        end = clock(time.time() - 500.0).end(100.0)
+        assert abs((timezone.now() - end).total_seconds() - 500.0) < 1.0
+
+    def test_the_usage_record_of_an_attempt_is_on_the_day_of_its_end(self) -> None:
+        task = self.add_queued(self.light, 1)[0]
+        with mock.patch.object(taskrunner_main, "log_general"):
+            taskrunner_main.mark_started(task)
+        # the main loop makes the record one day after the end, for example after an error of the database
+        ended = timezone.now() - dt.timedelta(days=1)
+        attempts = [taskrunner_main.EndedAttempt(taskid=task.pk, userid=self.light.pk, seconds=100.0, when=ended)]
+
+        assert taskrunner_main.record_ended_attempts(attempts, logfunc=mock.Mock()) == []
+
+        assert UsageDay.objects.get(user=self.light).day == ended.astimezone(dt.UTC).date()
+
     def test_a_slot_process_gives_the_time_of_its_end_also_after_an_exception(self) -> None:
         class Shared:
             value = 0.0

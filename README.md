@@ -113,7 +113,9 @@ started has no queue position, and its `queuepos` field in the API is null.
 
 The `migrate` command makes the table of the usage records and fills it from the finished tasks
 of the last 35 days. These first records are approximate: the database does not have the tasks
-that a user deleted and the attempts that failed.
+that a user deleted and the attempts that failed. The attempts that are in the slots at the first
+restart of the task runner also get no usage record, because the old task runner does not write the
+marker of an attempt.
 
 The `migrate` command makes the group. To add or remove a member, open the group in the admin site
 (`/admin/auth/group/`). Then change the field "Members". The field has a search by username, name
