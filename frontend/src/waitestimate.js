@@ -8,8 +8,9 @@
 //
 // The queue order is a fair share of the run time (calculate_queue_positions in
 // forcephot/queue.py). The queue position of a task is the number of tasks that are before it in
-// that order, and a task in a slot has no position. The runner starts the task with the lowest position whose
-// user has fewer tasks in the slots than a maximum (`max_user_slots` in the status).
+// that order, and a task in a slot has no position. The runner starts the task with the lowest
+// position whose user has fewer tasks in the slots than a maximum (`max_user_slots` in the
+// status).
 //
 // The obvious formula -- tasks ahead, divided by the number of slots, times how long a task takes
 // -- is thus correct for the tasks of the other users, but not for the tasks of the user. A
@@ -27,6 +28,14 @@
 // different user who has the maximum number of slots: the runner then starts tasks from behind
 // that batch, and the estimate does not know the users of the tasks ahead. The second is when no
 // task of a different user waits: the runner then gives the user more slots than the maximum.
+//
+// The estimate is too short in one condition: tasks of other users with long run times have most
+// of the slots, and few tasks of other users wait. The user then gets fewer slots than the
+// maximum until those tasks end. The estimate does not use the number of busy slots, for two
+// reasons. In the usual condition the slots change tasks all the time, and the user with the least
+// usage gets the next free slots: an estimate from the busy slots is then too long by up to the
+// maximum number of slots of one user. That number also changes with each status, and the
+// estimate would change with it.
 //
 // If the dispatch policy in taskrunner/main.py ever changes, this is the copy of it that has to
 // change with it.

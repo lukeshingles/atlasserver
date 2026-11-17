@@ -828,9 +828,10 @@ def record_attempt_end(
 
     Return True if this call made the record, and False if the attempt had its record before.
 
-    The time goes into the usage of the user, for the day of `when` (the default is today); see
-    forcephot.queue.charge_usage. This is the real time for which the attempt had a slot, also
-    for an attempt that failed and for a task that its user deleted while it ran.
+    `when` is the time of the end of the attempt, and the default is now. The time goes into the
+    usage of the user, for the day of `when`; see forcephot.queue.charge_usage. This is the real
+    time for which the attempt had a slot, also for an attempt that failed and for a task that
+    its user deleted while it ran.
 
     A task that is not finished gets the time of its next possible attempt (Task.retry_after).
     The wait is from the end of the attempt and not from its start: an attempt can run for hours
@@ -858,9 +859,10 @@ def record_attempt_end(
         )
         if attempts is not None:
             wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(attempts))
-            Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).update(
-                retry_after=dt.datetime.now(dt.UTC) + wait
-            )
+            # From the end of the attempt, and not from the time of this write: the main loop
+            # can make this record late, and the task had no queue position during that time.
+            ended = dt.datetime.now(dt.UTC) if when is None else when
+            Task.objects.filter(pk=taskid, finishtimestamp__isnull=True).update(retry_after=ended + wait)
     return True
 
 

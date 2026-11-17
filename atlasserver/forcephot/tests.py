@@ -594,6 +594,12 @@ class FairShareQueueTests(TestCase):
         assert taskrunner_main.record_ended_attempts(attempts, logfunc=mock.Mock()) == []
 
         assert UsageDay.objects.get(user=self.light).day == ended.astimezone(dt.UTC).date()
+        # The wait for the next attempt is from the end of the attempt also. That wait is over,
+        # and the task gets a position at the next renumbering.
+        wait = dt.timedelta(seconds=taskqueue.retry_wait_seconds(1))
+        assert Task.objects.get(pk=task.pk).retry_after == ended + wait
+        calculate_queue_positions(running_taskids=set())
+        assert [waiting.pk for waiting in self.waiting()] == [task.pk]
 
     def test_a_slot_process_gives_the_time_of_its_end_also_after_an_exception(self) -> None:
         class Shared:
