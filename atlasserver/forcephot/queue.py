@@ -213,17 +213,22 @@ def charge_usage(userid: int, seconds: float, when: dt.datetime | None = None) -
         return
 
 
-def decayed_usage(rows: "Iterable[tuple[int, dt.date, float, int]]", today: dt.date) -> dict[int, Usage]:
-    """Return the usage of each user from usage records (user id, day, seconds, tasks).
+def usage_weight(agedays: int) -> float:
+    """Return the weight that a usage record of this number of days ago has in the usage of a user.
 
     The record of today counts fully, and the record of USAGE_HALF_LIFE_DAYS ago counts half. The
     weight changes one time in a day, at the start of the day in UTC. The usage of a user is thus
     constant during a day if no attempt of the user ends, and the queue order does not move
     continuously.
     """
+    return 0.5 ** (agedays / USAGE_HALF_LIFE_DAYS)
+
+
+def decayed_usage(rows: "Iterable[tuple[int, dt.date, float, int]]", today: dt.date) -> dict[int, Usage]:
+    """Return the usage of each user from usage records (user id, day, seconds, tasks); see usage_weight."""
     totals: dict[int, list[float]] = {}
     for userid, day, seconds, tasks in rows:
-        weight = 0.5 ** ((today - day).days / USAGE_HALF_LIFE_DAYS)
+        weight = usage_weight((today - day).days)
         total = totals.setdefault(userid, [0.0, 0.0])
         total[0] += seconds * weight
         total[1] += tasks * weight

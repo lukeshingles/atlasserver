@@ -17,20 +17,29 @@ from django.contrib.auth.admin import GroupAdmin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import User
+from django.db.models import Case
+from django.db.models import Count
+from django.db.models import F
 from django.db.models import FloatField
+from django.db.models import IntegerField
 from django.db.models import Model
 from django.db.models import OuterRef
 from django.db.models import Subquery
 from django.db.models import Sum
+from django.db.models import Value
+from django.db.models import When
+from django.db.models.functions import Coalesce
 from django.http import HttpRequest
 
 import atlasserver.forcephot.models
+from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.models import UsageDay
 from atlasserver.forcephot.queue import HIGH_PRIORITY_GROUP
 from atlasserver.forcephot.queue import RECALC_MAX_INTERVAL_SECONDS
-from atlasserver.forcephot.queue import Usage
-from atlasserver.forcephot.queue import usage_by_user
 from atlasserver.forcephot.queue import USAGE_HALF_LIFE_DAYS
+from atlasserver.forcephot.queue import usage_records
+from atlasserver.forcephot.queue import USAGE_RETENTION_DAYS
+from atlasserver.forcephot.queue import usage_weight
 from atlasserver.forcephot.queue import utcnow
 
 # Register your models here.
@@ -155,44 +164,62 @@ class GroupUserAdmin(UserAdmin):
     action_form = GroupActionForm
     actions = ["add_to_group"]
 
-    # The usage of each user, which sets the place of the tasks of the user in the queue; see
-    # forcephot.queue.calculate_queue_positions. A click on the header of the run time column
-    # sorts the list by the run time.
+    # The usage and the queued tasks of each user. The usage sets the place of the tasks of the
+    # user in the queue; see forcephot.queue.calculate_queue_positions. A click on the header of
+    # one of these columns sorts the list by that column.
     @override
     def get_list_display(self, request: HttpRequest) -> t.Any:
-        # The usage that the queue order uses: older run time counts less. The column is a
-        # function of this request, and it reads the usage of all users one time for the page.
-        # A method of this class is the same object for each request, and it has no place for
-        # the usage of one request: it then makes one query for each row.
-        usage: dict[int, Usage] | None = None
-
-        @admin.display(description="Usage in the queue")
-        def usage_decayed(user: t.Any) -> str:
-            nonlocal usage
-            if usage is None:
-                usage = usage_by_user()
-            own = usage.get(user.pk)
-            return f"{0.0 if own is None else own.seconds / 3600:.1f} h"
-
-        return (*super().get_list_display(request), "usage_runtime", usage_decayed)
+        return (*super().get_list_display(request), "usage_runtime", "usage_decayed", "queued_tasks")
 
     @override
     def get_queryset(self, request: HttpRequest) -> t.Any:
-        # The run time of each user comes with the row of the user. A query for each row of the
-        # list is thus not necessary, and the database can sort the list by the run time. The
-        # value is None for a user with no usage record in these days.
-        firstday = utcnow().date() - dt.timedelta(days=USAGE_HALF_LIFE_DAYS - 1)
-        runtime = (
-            UsageDay.objects.filter(user=OuterRef("pk"), day__gte=firstday)
-            .values("user")
-            .annotate(runtime=Sum("seconds"))
-            .values("runtime")
+        # The values of the three columns come with the row of the user. A query for each row of
+        # the list is thus not necessary, and the database can sort the list by each column.
+        today = utcnow().date()
+
+        def of_user(rows: t.Any, total: t.Any, zero: float) -> Coalesce:
+            # the subquery has no row for a user with no row in `rows`, and the value is then zero
+            totals = rows.filter(user=OuterRef("pk")).values("user").annotate(total=total).values("total")
+            return Coalesce(Subquery(totals), Value(zero), output_field=total.output_field)
+
+        # The weight of a usage record is a function of its day, and the usage records are of a
+        # small number of days. The weights thus come from the function that the queue order
+        # uses, and the database does no date arithmetic.
+        weight = Case(
+            *(
+                When(day=today - dt.timedelta(days=agedays), then=Value(usage_weight(agedays)))
+                for agedays in range(USAGE_RETENTION_DAYS + 1)
+            ),
+            default=Value(0.0),
+            output_field=FloatField(),
         )
-        return super().get_queryset(request).annotate(usage_runtime_sum=Subquery(runtime, output_field=FloatField()))
+        firstday = today - dt.timedelta(days=USAGE_HALF_LIFE_DAYS - 1)
+        return (
+            super()
+            .get_queryset(request)
+            .annotate(
+                usage_runtime_sum=of_user(
+                    UsageDay.objects.filter(day__gte=firstday), Sum("seconds", output_field=FloatField()), 0.0
+                ),
+                usage_decayed_sum=of_user(usage_records(), Sum(F("seconds") * weight, output_field=FloatField()), 0.0),
+                queued_tasks_count=of_user(Task.queued(), Count("pk", output_field=IntegerField()), 0),
+            )
+        )
 
     @admin.display(description=f"Run time ({USAGE_HALF_LIFE_DAYS} days)", ordering="usage_runtime_sum")
     def usage_runtime(self, user: t.Any) -> str:
-        return f"{(user.usage_runtime_sum or 0.0) / 3600:.1f} h"
+        return f"{user.usage_runtime_sum / 3600:.1f} h"
+
+    # the usage that the queue order uses: older run time counts less
+    @admin.display(description="Usage in the queue", ordering="usage_decayed_sum")
+    def usage_decayed(self, user: t.Any) -> str:
+        return f"{user.usage_decayed_sum / 3600:.1f} h"
+
+    # The tasks of the user that wait or run. The Queue badge of the navigation bar shows the same
+    # number to the user.
+    @admin.display(description="Queued tasks", ordering="queued_tasks_count")
+    def queued_tasks(self, user: t.Any) -> int:
+        return user.queued_tasks_count
 
     # A group gives its permissions to its members, so the action needs the permission to change
     # users. A staff member who can only view the users does not get the action.
