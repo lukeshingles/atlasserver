@@ -17,7 +17,7 @@ jobs:
 
             # setup-uv publishes no floating major tag from v8 on, so the version here is exact
             - name: Set up Python and uv
-              uses: astral-sh/setup-uv@v10.3.3
+              uses: astral-sh/setup-uv@v10.4.0
               with:
                   activate-environment: true
 
@@ -124,7 +124,7 @@ jobs:
 
             # setup-uv publishes no floating major tag from v8 on, so the version here is exact
             - name: Set up Python and uv
-              uses: astral-sh/setup-uv@v10.3.3
+              uses: astral-sh/setup-uv@v10.4.0
               with:
                   activate-environment: true
 
