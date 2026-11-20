@@ -29,6 +29,7 @@ from unittest import skipUnless
 import psutil
 from django.apps import apps as django_apps
 from django.conf import settings
+from django.contrib import admin
 
 # the project uses the default user model, and the concrete class is needed for typing
 from django.contrib.admin.models import CHANGE
@@ -1377,46 +1378,96 @@ class QueuePagesTests(TestCase):
 
 
 class UsageAdminTests(TestCase):
-    """The list of the users in the admin shows the usage of each user."""
+    """The list of the users in the admin shows the usage and the queued tasks of each user."""
 
-    def test_the_list_shows_the_run_time_and_the_usage_and_sorts_by_the_run_time(self) -> None:
+    def setUp(self) -> None:
         staff = User.objects.create_superuser(username="root", email="root@example.com", password=None)
-        users = {
+        self.users = {
             name: User.objects.create_user(username=name, email=f"{name}@example.com", password=None)
             for name in ("zz-old", "aa-heavy", "mm-middle")
         }
-        FairShareQueueTests.add_usage(users["aa-heavy"], hours=100)
-        FairShareQueueTests.add_usage(users["mm-middle"], hours=2.5)
+        FairShareQueueTests.add_usage(self.users["aa-heavy"], hours=100)
+        FairShareQueueTests.add_usage(self.users["mm-middle"], hours=2.5)
         # run time of two half-lives ago is not in the run time column, and it counts a quarter
-        FairShareQueueTests.add_usage(users["zz-old"], hours=40, days_ago=2 * taskqueue.USAGE_HALF_LIFE_DAYS)
+        FairShareQueueTests.add_usage(self.users["zz-old"], hours=40, days_ago=2 * taskqueue.USAGE_HALF_LIFE_DAYS)
+
+        # two tasks that wait and one task that runs
+        FairShareQueueTests.add_queued(self.users["mm-middle"], 2)
+        Task.objects.create(user=self.users["mm-middle"], ra=10.0, dec=20.0, starttimestamp=timezone.now())
+        FairShareQueueTests.add_queued(self.users["zz-old"], 1)
+        # a finished task and an archived task are not in the queue
+        Task.objects.create(user=self.users["aa-heavy"], ra=10.0, dec=20.0, finishtimestamp=timezone.now())
+        Task.objects.create(user=self.users["aa-heavy"], ra=10.0, dec=20.0, is_archived=True)
         self.client.force_login(staff)
 
-        response = self.client.get(reverse("admin:auth_user_changelist"))
-
+    def changelist(self, sortby: str | None = None, *, descending: bool = True) -> t.Any:
+        """Return the list of the users, sorted by a click on the header of this column."""
+        url = reverse("admin:auth_user_changelist")
+        params = {}
+        if sortby is not None:
+            modeladmin = admin.site.get_model_admin(User)
+            request = RequestFactory().get(url)
+            # the column is after the selection box and the columns of the stock list
+            column = list(modeladmin.get_list_display(request)).index(sortby) + 1
+            params["o"] = f"-{column}" if descending else f"{column}"
+        response = self.client.get(url, params)
         assert response.status_code == 200, response.status_code
+        return response
+
+    def names(self, sortby: str, *, descending: bool = True) -> list[str]:
+        response = self.changelist(sortby, descending=descending)
+        return [user.username for user in response.context["cl"].result_list]
+
+    def test_the_list_shows_the_run_time_the_usage_and_the_queued_tasks(self) -> None:
+        response = self.changelist()
+
         content = response.content.decode()
         assert f"Run time ({taskqueue.USAGE_HALF_LIFE_DAYS} days)" in content
         assert "Usage in the queue" in content
+        assert "Queued tasks" in content
         rows = {user.username: user for user in response.context["cl"].result_list}
         modeladmin = response.context["cl"].model_admin
-        # the usage column is the last column of the list, and it read the usage for the page
-        usage_decayed = response.context["cl"].list_display[-1]
         with CaptureQueriesContext(connection) as queries:
-            shown = {name: (modeladmin.usage_runtime(rows[name]), usage_decayed(rows[name])) for name in users}
-        assert len(queries) == 0, "the column made a query for a row"
+            shown = {
+                name: (modeladmin.usage_runtime(row), modeladmin.usage_decayed(row), modeladmin.queued_tasks(row))
+                for name, row in rows.items()
+            }
+        assert len(queries) == 0, "a column made a query for a row"
         assert shown == {
-            "aa-heavy": ("100.0 h", "100.0 h"),
-            "mm-middle": ("2.5 h", "2.5 h"),
-            "zz-old": ("0.0 h", "10.0 h"),
+            "aa-heavy": ("100.0 h", "100.0 h", 0),
+            "mm-middle": ("2.5 h", "2.5 h", 3),
+            "zz-old": ("0.0 h", "10.0 h", 1),
+            "root": ("0.0 h", "0.0 h", 0),
         }, shown
 
-        # the run time column is after the selection box and the columns of the stock list
-        column = list(modeladmin.get_list_display(response.wsgi_request)).index("usage_runtime") + 1
-        response = self.client.get(reverse("admin:auth_user_changelist"), {"o": f"-{column}"})
+    def test_the_usage_is_the_usage_that_the_queue_order_uses(self) -> None:
+        # days that are not a multiple of the half-life, the two ends of the days that the usage
+        # includes, and a day before them
+        for name, hours, days_ago in (
+            ("aa-heavy", 7.0, 1),
+            ("mm-middle", 11.0, 3),
+            ("mm-middle", 5.0, taskqueue.USAGE_HALF_LIFE_DAYS + 3),
+            ("zz-old", 13.0, taskqueue.USAGE_RETENTION_DAYS),
+            ("zz-old", 99.0, taskqueue.USAGE_RETENTION_DAYS + 1),
+        ):
+            FairShareQueueTests.add_usage(self.users[name], hours=hours, days_ago=days_ago)
 
-        assert response.status_code == 200, response.status_code
-        names = [user.username for user in response.context["cl"].result_list]
-        assert names[:2] == ["aa-heavy", "mm-middle"], names
+        rows = {user.username: user for user in self.changelist().context["cl"].result_list}
+
+        usage = taskqueue.usage_by_user()
+        for name, user in self.users.items():
+            expected = usage[user.pk].seconds
+            assert expected > 0.0, name
+            assert abs(rows[name].usage_decayed_sum - expected) < 1e-9 * expected, (name, expected)
+
+    def test_a_click_on_a_header_sorts_the_list_by_that_column(self) -> None:
+        assert self.names("usage_runtime")[:2] == ["aa-heavy", "mm-middle"]
+        # the order by username, which is the order of the stock list, has a different end
+        assert self.names("usage_runtime", descending=False)[-2:] == ["mm-middle", "aa-heavy"]
+        assert self.names("usage_decayed")[:3] == ["aa-heavy", "zz-old", "mm-middle"]
+        assert self.names("usage_decayed", descending=False)[-3:] == ["mm-middle", "zz-old", "aa-heavy"]
+        assert self.names("queued_tasks")[:2] == ["mm-middle", "zz-old"]
+        assert self.names("queued_tasks", descending=False)[-2:] == ["zz-old", "mm-middle"]
 
 
 class ShortTermStatsLoadTests(TestCase):
