@@ -27,7 +27,9 @@ export ATLASSERVER_NTHREADPERPROC='1'
 # Number of reverse proxies in front of this server that maintain X-Forwarded-For. Leave at 0
 # unless one really is in front: with 0 the header is ignored and the client address is taken from
 # the connection, which is what stops a caller choosing the country their submissions are filed
-# under. Count the proxies exactly — one hop too many reads a value the client wrote.
+# under. Count the proxies exactly — one hop too many reads a value the client wrote. The
+# production server has one: the Apache of the host forwards to port 8086 with ProxyPass, which
+# appends the header. Set 1 there, or each per-address limit becomes one limit for all clients.
 export ATLASSERVER_TRUSTED_PROXY_COUNT='0'
 
 # Origin used to build the links in account-verification and email-change mail. Set this in
