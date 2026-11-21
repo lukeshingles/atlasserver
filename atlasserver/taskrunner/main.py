@@ -689,6 +689,10 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         # already, empty, and collecting it would finish the task with "No data returned" for a
         # target that has data; a retry runs the command again
         logfunc("ERROR: the ssh connection failed, so the task will be retried")
+        # The remote command has no tty, so it continues without its connection. The retry would
+        # then run a second remote command that writes the same files. The stop fails while sc01
+        # is not reachable, and then the remote command runs to its end.
+        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=False)
         return None, None
 
     if stdout:
@@ -962,7 +966,9 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
-def send_pending_batch_emails(since: dt.datetime, logfunc=log_general) -> int:
+def send_pending_batch_emails(
+    since: dt.datetime, logfunc=log_general, heartbeat: t.Callable[[], None] | None = None
+) -> int:
     """Send the email of each batch whose last unfinished task went away before it finished, and return their number.
 
     A slot sends the email of a batch when it finishes the last unfinished task of the batch; see
@@ -975,6 +981,9 @@ def send_pending_batch_emails(since: dt.datetime, logfunc=log_general) -> int:
     Only the tasks that finished after `since`, which is the start of this task runner. A task that
     finished before that time can have email_sent False for a batch that got its email: the field
     did not exist when that email went.
+
+    `heartbeat` is called before each send, as in remove_old_tasks: each send waits for the mail
+    server, and this runs in the main loop.
     """
     candidates = (
         Task.live()
@@ -1004,6 +1013,8 @@ def send_pending_batch_emails(since: dt.datetime, logfunc=log_general) -> int:
         ).exists():
             continue
 
+        if heartbeat is not None:
+            heartbeat()
         send_email_if_needed(task=task, logfunc=logfunc)
         sent += 1
 
@@ -1426,6 +1437,12 @@ def do_task(task, slotid: int, started: bool = False) -> None:
 
     runtask_duration = time.perf_counter() - runtask_starttime
 
+    if attempt_must_stop():
+        # runtask stopped the attempt and its remote command. The task stays unfinished with no
+        # retry wait, and the next task runner starts it again; see open_attempts.
+        logfunc("The attempt stopped because the task runner stops. The next task runner starts the task again.")
+        return
+
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
 
@@ -1717,7 +1734,7 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None, emailsince: dt
 
     # after the sweeps, because a sweep can delete the last unfinished task of a batch
     if emailsince is not None:
-        batches = send_pending_batch_emails(since=emailsince, logfunc=logfunc)
+        batches = send_pending_batch_emails(since=emailsince, logfunc=logfunc, heartbeat=heartbeat)
         logfunc(f"Checked {batches} batches whose last unfinished task went before it finished")
 
 

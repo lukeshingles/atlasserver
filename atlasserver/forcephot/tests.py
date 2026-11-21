@@ -4892,14 +4892,16 @@ class RemoteStopTests(TestCase):
         self.task = Task.objects.create(user=user, ra=1.0, dec=2.0)
         self.sshoptions = ["-oControlPath=~/x/atlas-0"]
 
-    def run_attempt(self, *, cancelled: bool = False, stopping: bool = False) -> tuple[list[str], mock.Mock]:
+    def run_attempt(
+        self, *, cancelled: bool = False, stopping: bool = False, returncode: int = 0
+    ) -> tuple[list[str], mock.Mock]:
         """Run runtask with a remote command that does not end, and return the ssh command and the stop mock."""
         proc = mock.MagicMock()
         if cancelled or stopping:
             proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=1)
         else:
             proc.communicate.return_value = ("", "")
-            proc.returncode = 0
+            proc.returncode = returncode
 
         with (
             tempfile.TemporaryDirectory() as tmpdir,
@@ -4947,6 +4949,27 @@ class RemoteStopTests(TestCase):
 
         stop.assert_called_once()
         assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_dropped_connection_stops_the_remote_command_and_keeps_the_files(self) -> None:
+        # the remote command continues without its connection, and the retry writes the same files
+        _command, stop = self.run_attempt(returncode=taskrunner_main.SSH_CONNECTION_FAILED)
+
+        stop.assert_called_once()
+        assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_stopped_attempt_is_not_logged_as_a_failure_with_a_wait(self) -> None:
+        logged: list[str] = []
+        with (
+            mock.patch.object(taskrunner_main, "runtask", return_value=(None, None)),
+            mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=True),
+            mock.patch.object(taskrunner_main, "log_general", side_effect=lambda msg, *_a, **_k: logged.append(msg)),
+            mock.patch.object(taskrunner_main, "mark_finished") as finish,
+        ):
+            taskrunner_main.do_task(self.task, slotid=0)
+
+        finish.assert_not_called()
+        assert any("The next task runner starts the task again" in line for line in logged), logged
+        assert not any("before the next attempt" in line for line in logged), logged
 
     def test_the_stop_command_stops_only_a_session_with_the_token(self) -> None:
         token = "0" * 31 + "a"
@@ -5114,6 +5137,22 @@ class TaskRunnerEmailTests(TestCase):
         assert len(django_mail.outbox) == 1, [message.subject for message in django_mail.outbox]
         assert django_mail.outbox[0].to == ["m@example.com"]
         assert (first, second) == (1, 0), (first, second)
+
+    def test_the_step_keeps_the_status_file_fresh_before_each_send(self) -> None:
+        # each send waits for the mail server, and the maintenance blocks the main loop
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        beats: list[None] = []
+
+        taskrunner_main.send_pending_batch_emails(
+            since=timezone.now() - dt.timedelta(minutes=1),
+            logfunc=lambda _msg: None,
+            heartbeat=lambda: beats.append(None),
+        )
+
+        assert len(beats) == 1, beats
+        assert len(django_mail.outbox) == 1
 
     def test_the_step_waits_for_a_batch_with_an_unfinished_task(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main

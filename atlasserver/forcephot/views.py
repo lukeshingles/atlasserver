@@ -1780,9 +1780,9 @@ def verify_email(request, uidb64: str, token: str):
     # address of someone else and choose the password. Without this check, the owner of the
     # address activates an account whose password a different person knows.
     #
-    # hashers.check_password and not User.check_password: the method of the model saves a new hash
-    # when the hasher settings changed, and the token hashes the password, so the save makes the
-    # link invalid before the locked check below.
+    # hashers.check_password and not User.check_password. The method of the model saves a new hash
+    # when the hasher settings changed. The token hashes the password, so that save makes the link
+    # invalid before the locked check below.
     if account_password_failures_exceeded(user.pk):
         return render(
             request,

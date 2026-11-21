@@ -34,7 +34,7 @@ TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split
 # header, which is right with no proxy: any value is then whatever the client chose to claim. The
 # production server has one proxy, the Apache of the host, which forwards to port 8086 with
 # ProxyPass and appends the header, so its .env sets 1. With 0 there, each request has the
-# address of that proxy, and each budget for one address is then one budget for the whole site.
+# address of that proxy. Each budget for one address is then one budget for the whole site.
 # Count the hops exactly -- one too far left reads the attacker's value again. Validated rather than passed to
 # int(), so a typo names the variable instead of failing the whole import with a bare ValueError.
 _proxycount_env = os.environ.get("ATLASSERVER_TRUSTED_PROXY_COUNT", "0").strip() or "0"
