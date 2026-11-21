@@ -108,11 +108,17 @@ those attempts when it starts, and their tasks start again with no wait. For a t
 finished, the record has the run time to the last write of the status file, which is a maximum of
 15 seconds before the stop.
 
+A slot that gets a stop signal, or whose task runner stopped, first stops the remote command of
+its task on sc01. The kill of the local `ssh` alone does not stop that command, because the
+session has no tty. When a user deletes a running task, its slot stops in a maximum of 15
+seconds, and it also stops the remote command and deletes the remote files of the task.
+
 To stop the use of the server by an account, clear the "Active" box of the account in the admin
 site. The account and its finished tasks stay in the database. The tasks of an inactive account
 lose their queue positions in a maximum of 30 seconds, and a task with no position cannot start.
 The hourly maintenance of the task runner then deletes the unfinished tasks of the account. A
-task of the account that is in a slot keeps the slot until the end of its attempt.
+task of the account that is in a slot stops in a maximum of 15 seconds, as a task that its user
+deletes.
 
 The list of users in the admin site (`/admin/auth/user/`) has two columns for the usage. "Run
 time (7 days)" is the run time with no decay, and a click on its header sorts the list. "Usage in

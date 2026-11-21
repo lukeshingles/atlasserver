@@ -13,7 +13,9 @@ import stat
 import subprocess
 import time
 import typing as t
+import uuid
 from pathlib import Path
+from signal import SIGHUP
 from signal import SIGINT
 from signal import signal
 from signal import SIGTERM
@@ -75,6 +77,18 @@ RESULT_REQUIRED_COLUMNS: tuple[str, ...] = ("MJD", "uJy")
 
 # how often a running task asks the database whether it has been cancelled
 CANCEL_CHECK_SECONDS: float = 15.0
+
+# How long the ssh command that stops a remote command can take; see stop_remote_job.
+REMOTE_STOP_TIMEOUT_SECONDS: float = 60.0
+
+# The directory on sc01 that holds the files of the tasks.
+REMOTE_RESULT_DIR: t.Final = "~/atlasserver/results"
+
+# The state of a slot process for its stop signals; see request_stop. _stop_requested is True
+# after a stop signal. _defer_stop is True while the poll loop of runtask runs, where a stop
+# signal waits for the loop: the loop then stops the remote command before the slot ends.
+_stop_requested = False
+_defer_stop = False
 
 # how long the main loop waits between polls of the queue. The longer interval applies once the
 # queue has been seen to be empty, so that an idle server is not querying twice a second all night.
@@ -294,6 +308,96 @@ def replace_lost_connection() -> None:
         close_old_connections()
 
 
+def remote_pidfile(taskid: int, token: str) -> str:
+    """Return the remote file of one attempt that holds the session id of its remote command; see stop_remote_job.
+
+    The token is new for each attempt. Thus the file of an attempt is not the file of a different
+    attempt of the same task, which a new task runner can start while the old slot still stops.
+    """
+    return f"{REMOTE_RESULT_DIR}/{jobfilename(taskid, f'.{token}.pid')}"
+
+
+def stop_remote_job(
+    taskid: int, token: str, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, delete_files: bool
+) -> None:
+    """Stop the remote command of one attempt on sc01 if it still runs.
+
+    A kill of the local ssh client does not stop the remote command. The session has no tty, so
+    sshd sends no signal to its processes when the client goes, and they run to their end or to
+    the time limit of timeout. The remote command writes the id of its session to its pid file
+    (see remote_pidfile), and this function stops each process of that session. The session
+    must have a process whose arguments hold the token. Thus a session id that a different
+    command uses now is not stopped.
+
+    With delete_files, the remote files of the task go also: the task has no row, and nothing
+    collects them. Without it, only the pid file goes, because the next attempt of the task
+    writes the same file names.
+    """
+    pidfile = remote_pidfile(taskid, token)
+    command = (
+        f'p={pidfile}; if [ -s "$p" ]; then s=$(cat "$p"); '
+        f'if ps -s "$s" -o args= 2>/dev/null | grep -q -F {token}; then pkill -TERM -s "$s"; fi; fi; rm -f "$p"'
+    )
+    if delete_files:
+        command += f"; rm -rf {REMOTE_RESULT_DIR}/{jobfilename(taskid)}.* {REMOTE_RESULT_DIR}/task{taskid:05d}"
+
+    try:
+        result = subprocess.run(
+            ["ssh", *sshoptions, REMOTE_SERVER, command],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=REMOTE_STOP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logfunc(f"ERROR: the stop of the remote command took more than {REMOTE_STOP_TIMEOUT_SECONDS:.0f}s")
+        return
+
+    if result.returncode == 0:
+        logfunc(f"Stopped the remote command{' and deleted the remote files' if delete_files else ''}")
+    else:
+        logfunc(f"ERROR: could not stop the remote command (exit code {result.returncode}): {result.stderr.strip()}")
+
+
+def request_stop(signum: int, frame: object) -> None:
+    """Handle a stop signal in a slot process.
+
+    In the poll loop of runtask, the signal only sets _stop_requested. The loop then stops the
+    remote command and ends the attempt; see attempt_must_stop. Outside the loop, the slot ends at
+    once, as with the default action of the signal.
+    """
+    global _stop_requested  # noqa: PLW0603
+    _stop_requested = True
+    if not _defer_stop:
+        raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def stop_signals_deferred() -> t.Generator[None]:
+    """Make a stop signal wait for the poll loop of runtask, for the duration of the block; see request_stop."""
+    global _defer_stop  # noqa: PLW0603
+    _defer_stop = True
+    try:
+        yield
+    finally:
+        _defer_stop = False
+
+
+def attempt_must_stop() -> bool:
+    """Return whether this slot must stop its attempt, after a stop signal or the end of the main process.
+
+    A slot process outlives a kill of the main process alone. The next task runner then finds
+    the attempt open, and it starts the task again. Without this check, the old slot also
+    continues, and two remote commands of the task write the same files.
+    """
+    if _stop_requested:
+        return True
+
+    parent = mp.parent_process()
+    return parent is not None and not parent.is_alive()
+
+
 def task_exists(taskid: int) -> bool:
     """Return true if the task exists in the database."""
     # a slot polls this during an attempt that can last hours, so it is the place where a slot
@@ -470,7 +574,11 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     localresultfile = Path(settings.RESULTS_DIR, filename)
     settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    atlascommand = f"nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
+    # The remote command writes the id of its session first, so that a cancel can stop it; see
+    # stop_remote_job. sshd makes the remote shell the leader of a new session, so $$ is that id.
+    token = uuid.uuid4().hex
+    pidfile = remote_pidfile(task.id, token)
+    atlascommand = f"echo $$ > {pidfile}; nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
     if task.request_type == "FP":
         atlascommand += build_fp_command(task, remoteresultfile=remoteresultfile)
 
@@ -504,6 +612,9 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             remotetaskdir=remotetaskdir,
         )
 
+    # the exit status of the command of the task, and not of the removal of the pid file
+    atlascommand = f"{atlascommand.rstrip().rstrip(';')}; status=$?; rm -f {pidfile}; exit $status"
+
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
     proc = subprocess.Popen(
@@ -527,35 +638,48 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     lastcancelcheck = 0.0
     cancelled = False
     timed_out = False
-    while not cancelled and not timed_out:
-        try:
-            proc.communicate(timeout=1)
+    stopping = False
+    with stop_signals_deferred():
+        while not cancelled and not timed_out and not stopping:
+            try:
+                proc.communicate(timeout=1)
 
-        except subprocess.TimeoutExpired:
-            now = time.perf_counter()
-            # the cancellation check is a database query, and the 1s communicate() timeout used to
-            # run one per second per slot. Across 16 slots that was ~16 queries/sec forever, and a
-            # single task at the 4 hour limit issued over ten thousand of them. Cancelling a task
-            # that has already been running for minutes is not more urgent than this.
-            if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
-                lastcancelcheck = now
-                cancelled = not task_exists(taskid=task.id)
-            timed_out = (now - starttime) >= (
-                TASK_MAXTIME_SECONDS + 30
-            )  # give a little extra time for cleanup after timeout
-            if (now - lastlogtime) >= 10:
-                logfunc(f"ssh has been running for {now - starttime:.0f} seconds        ")
-                lastlogtime = now
-        else:
-            break
+            except subprocess.TimeoutExpired:
+                now = time.perf_counter()
+                # the cancellation check is a database query, and the 1s communicate() timeout used
+                # to run one per second per slot. Across 16 slots that was ~16 queries/sec forever,
+                # and a single task at the 4 hour limit issued over ten thousand of them. Cancelling
+                # a task that has already been running for minutes is not more urgent than this.
+                if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
+                    lastcancelcheck = now
+                    cancelled = not task_exists(taskid=task.id)
+                # no query: a flag and a pipe of the parent process
+                stopping = attempt_must_stop()
+                timed_out = (now - starttime) >= (
+                    TASK_MAXTIME_SECONDS + 30
+                )  # give a little extra time for cleanup after timeout
+                if (now - lastlogtime) >= 10:
+                    logfunc(f"ssh has been running for {now - starttime:.0f} seconds        ")
+                    lastlogtime = now
+            else:
+                break
 
-    if cancelled or timed_out:
-        if timed_out:
-            logfunc(f"ERROR: ssh was killed after exceeding TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds")
-        os.kill(proc.pid, SIGTERM)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
-        return None, None  # don't finish with an error message, because we'll retry it later
+        if cancelled or timed_out or stopping:
+            if timed_out:
+                logfunc(
+                    f"ERROR: ssh was killed after exceeding TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds"
+                )
+            elif stopping:
+                logfunc("The task runner stops, so this slot stops its attempt")
+            os.kill(proc.pid, SIGTERM)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
+
+            # The kill above stops only the local ssh client. At a timeout, the remote timeout
+            # stopped the command already. A cancelled task has no row, so its files go too.
+            if cancelled or stopping:
+                stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=cancelled)
+            return None, None  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = proc.communicate()
     logfunc(f"ssh finished after running for {time.perf_counter() - starttime:.1f} seconds")
@@ -576,6 +700,8 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             logfunc(f"{REMOTE_SERVER} STDERR: {line}")
 
     if not task_exists(taskid=task.id):  # check if the task was cancelled
+        # the remote command ended, and nothing collects its files
+        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=True)
         return None, None
 
     # copy files from sc01 to local machine, deleting the remote files after successful copy
@@ -1258,6 +1384,11 @@ def run_slot(task, slotid: int, endedwall: t.Any = None) -> None:
     The main loop recorded the start; see start_in_slot. The time of the end goes to the main
     loop through the shared double, also when the attempt stops with an exception; see SlotClock.
     """
+    # SIGINT and SIGHUP come from `atlastaskrunner stop` and `restart`, to each process of the
+    # session of the task runner. A slot that ends at once leaves its remote command running.
+    for stopsignal in (SIGHUP, SIGINT, SIGTERM):
+        signal(stopsignal, request_stop)
+
     try:
         do_task(task, slotid, started=True)
     finally:
@@ -1500,9 +1631,9 @@ def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[]
     The account stays in the database, and without this function its tasks stay in the queue.
     The queue order gives no position to a task of an inactive account, and thus the task runner
     does not start it (forcephot.queue.calculate_queue_positions). This function deletes those
-    tasks. The row of a task in a slot goes also. Its slot process keeps the slot until the end
-    of the attempt. It then finds no row, as for a task that its user deleted, and it removes
-    its result file.
+    tasks. The row of a task in a slot goes also. Its slot process finds no row in a maximum of
+    CANCEL_CHECK_SECONDS, as for a task that its user deleted. It then stops the remote command
+    and removes the result files.
 
     The finished tasks of the account stay. The other sweeps of the maintenance remove them at
     their usual age.

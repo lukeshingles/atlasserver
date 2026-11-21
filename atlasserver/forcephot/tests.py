@@ -4879,6 +4879,138 @@ class ResultPlotDataTests(TestCase):
         assert "/* stub */" not in content
 
 
+class RemoteStopTests(TestCase):
+    """A kill of the local ssh client does not stop the remote command, because the session has no tty.
+
+    A test on sc01 showed this: after a SIGTERM to the client, the remote shell had parent 1, and
+    its pipeline ran on. Each attempt thus records the id of its remote session, and a cancel or a
+    stop of the slot stops that session.
+    """
+
+    def setUp(self) -> None:
+        user = User.objects.create_user(username="stopper", email="stop@example.com", password=None)
+        self.task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+        self.sshoptions = ["-oControlPath=~/x/atlas-0"]
+
+    def run_attempt(self, *, cancelled: bool = False, stopping: bool = False) -> tuple[list[str], mock.Mock]:
+        """Run runtask with a remote command that does not end, and return the ssh command and the stop mock."""
+        proc = mock.MagicMock()
+        if cancelled or stopping:
+            proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=1)
+        else:
+            proc.communicate.return_value = ("", "")
+            proc.returncode = 0
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
+            mock.patch("subprocess.Popen", return_value=proc) as popen,
+            mock.patch.object(taskrunner_main, "task_exists", return_value=not cancelled),
+            mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=stopping),
+            mock.patch.object(taskrunner_main.os, "kill") as kill,
+            mock.patch.object(taskrunner_main, "stop_remote_job") as stop,
+        ):
+            result = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+
+        assert result == (None, None), result
+        if cancelled or stopping:
+            kill.assert_called_once_with(proc.pid, signal.SIGTERM)
+        return popen.call_args.args[0], stop
+
+    def test_the_remote_command_records_its_session_and_keeps_its_exit_status(self) -> None:
+        command, _stop = self.run_attempt()
+
+        remote = command[-1]
+        match = re.match(
+            r"echo \$\$ > (~/atlasserver/results/job\d+\.([0-9a-f]{32})\.pid); nice -n 19 timeout ", remote
+        )
+        assert match is not None, remote
+        assert remote.endswith(f"; status=$?; rm -f {match.group(1)}; exit $status"), remote
+        assert ";;" not in remote.replace(" ", ""), remote
+
+    def test_a_cancel_stops_the_remote_command_and_deletes_its_files(self) -> None:
+        command, stop = self.run_attempt(cancelled=True)
+
+        found = re.search(r"\.([0-9a-f]{32})\.pid", command[-1])
+        assert found is not None, command[-1]
+        token = found.group(1)
+        stop.assert_called_once()
+        assert stop.call_args.args[:3] == (self.task.id, token, self.sshoptions), stop.call_args
+        assert stop.call_args.kwargs == {"delete_files": True}, stop.call_args
+
+    def test_a_stopping_slot_stops_the_remote_command_and_keeps_the_files(self) -> None:
+        # the next task runner starts the task again, and that attempt writes the same file names
+        _command, stop = self.run_attempt(stopping=True)
+
+        stop.assert_called_once()
+        assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_the_stop_command_stops_only_a_session_with_the_token(self) -> None:
+        token = "0" * 31 + "a"
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stderr="")
+        ) as run:
+            taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=False)
+            kept = run.call_args.args[0]
+            taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=True)
+            deleted = run.call_args.args[0]
+
+        assert kept[:3] == ["ssh", *self.sshoptions, taskrunner_main.REMOTE_SERVER], kept
+        assert f"grep -q -F {token}; then pkill -TERM -s" in kept[-1], kept[-1]
+        assert taskrunner_main.remote_pidfile(self.task.id, token) in kept[-1]
+        assert "rm -rf" not in kept[-1], "the files of the next attempt must stay"
+        jobname = taskrunner_main.jobfilename(self.task.id)
+        assert f"rm -rf ~/atlasserver/results/{jobname}.* ~/atlasserver/results/task{self.task.id:05d}" in deleted[-1]
+
+    def test_a_stop_command_that_fails_is_reported_and_not_raised(self) -> None:
+        logged: list[str] = []
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=60)
+        ):
+            taskrunner_main.stop_remote_job(self.task.id, "a" * 32, [], logged.append, delete_files=True)
+
+        assert any("took more than" in line for line in logged), logged
+
+
+class SlotStopSignalTests(SimpleTestCase):
+    """A stop signal waits for the poll loop, and a slot stops when its task runner is gone."""
+
+    def tearDown(self) -> None:
+        taskrunner_main._stop_requested = False  # noqa: SLF001
+        taskrunner_main._defer_stop = False  # noqa: SLF001
+
+    def test_a_signal_in_the_poll_loop_only_asks_for_a_stop(self) -> None:
+        with taskrunner_main.stop_signals_deferred():
+            taskrunner_main.request_stop(signal.SIGINT, None)
+            assert taskrunner_main.attempt_must_stop()
+
+    def test_a_signal_outside_the_poll_loop_ends_the_slot(self) -> None:
+        # as the default action of the signal does: the slot has no remote command to stop there
+        code = None
+        try:
+            taskrunner_main.request_stop(signal.SIGHUP, None)
+        except SystemExit as ex:
+            code = ex.code
+        assert code == 128 + signal.SIGHUP, f"a stop signal outside the poll loop gave {code}"
+
+    def test_a_slot_whose_task_runner_stopped_must_stop(self) -> None:
+        dead = mock.Mock()
+        dead.is_alive.return_value = False
+        with mock.patch.object(taskrunner_main.mp, "parent_process", return_value=dead):
+            assert taskrunner_main.attempt_must_stop()
+
+    def test_a_slot_with_its_task_runner_continues(self) -> None:
+        alive = mock.Mock()
+        alive.is_alive.return_value = True
+        with mock.patch.object(taskrunner_main.mp, "parent_process", return_value=alive):
+            assert not taskrunner_main.attempt_must_stop()
+        # and a process with no parent process, such as this test, also continues
+        assert not taskrunner_main.attempt_must_stop()
+
+
 class LostConnectionTests(TestCase):
     """The task runner has no request, so nothing else closes a connection that the database closed."""
 
