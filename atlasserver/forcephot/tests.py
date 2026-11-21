@@ -5207,6 +5207,29 @@ class TaskRunnerEmailTests(TestCase):
         taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
         assert len(django_mail.outbox) == 1, "the open batch whose last task went got no email"
 
+    def test_migration_0013_keeps_a_complete_batch_after_the_reliable_time(self) -> None:
+        """After a runner that writes email_sent ran, a complete batch with False got no email.
+
+        For example its last task was cancelled before migration 0013. The migration leaves it, and
+        the maintenance then sends the email that the batch did not get.
+        """
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        migration = import_module("atlasserver.forcephot.migrations.0013_mark_complete_batches_emailed")
+        finished = self.make_batch_task(finished=True)
+
+        # the reliable time before the finish of the task: migration 0011 ran a day ago
+        with mock.patch.object(migration, "RESTART_MARGIN", -dt.timedelta(days=1)):
+            migration.mark_complete_batches(django_apps, None)
+
+        assert Task.objects.get(pk=finished.pk).email_sent is False
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        assert len(django_mail.outbox) == 1, "the batch that got no email got none from the maintenance"
+
     def test_email_waits_for_the_rest_of_the_batch(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
 
