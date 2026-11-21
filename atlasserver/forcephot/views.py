@@ -83,6 +83,7 @@ from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
+from atlasserver.forcephot.misc import pdfplot_failed_cachekey
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
@@ -160,6 +161,11 @@ PASSWORD_RESET_INTERVAL_SECONDS: t.Final = 60
 # Named slots, each one lock (see forcephot.locks), rather than a counter.
 PDF_PLOT_RENDER_SLOTS: t.Final = 2
 
+# How long a render that made no PDF stops a new render of the same task. The view needs no
+# credentials, so without this time each request for such a task starts a new render. Limited and
+# not permanent, so that a change to plot_atlas_fp gets a new render in a maximum of one day.
+PDF_PLOT_FAILURE_SECONDS: t.Final = 60 * 60 * 24
+
 logger = logging.getLogger(__name__)
 
 
@@ -218,11 +224,11 @@ def origin_only_referrer(view):
 def path_only(view):
     """Redirect a request that carries a query string to the bare path, before the page cache.
 
-    For the chart endpoints, which read no parameter and cost a table scan and a bokeh figure to
-    build. cache_page keys its entries on the full URL, query string included, so every distinct
-    query string was a cache miss and a full rebuild, and a loop of them could occupy every worker
-    and cull the cache directory. The redirect costs nothing, and the bare path is what the stats
-    page requests.
+    For the stats endpoints: the two charts and the two fragments of the stats page. They read no
+    parameter, and each costs large queries to build. cache_page keys its entries on the full URL,
+    query string included. Without this redirect, each distinct query string is a cache miss and a
+    full rebuild, and a loop of them can occupy each worker and cull the cache directory. The
+    redirect costs nothing, and the bare path is what the stats page requests.
     """
 
     @functools.wraps(view)
@@ -451,7 +457,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
 
-        usertaskcount = Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
+        # Each unfinished task of the user, and not only the tasks that did not start: a task in a
+        # slot and a task that waits for a new attempt both have a start time. During an outage of
+        # the remote host each attempt fails quickly, and a count of the tasks with no start then
+        # falls to near zero, so the limit stops nothing.
+        usertaskcount = Task.queued().filter(user_id=self.request.user.pk).count()
 
         # Each callback URL is resolved once for the whole submission: splitradeclist validates
         # every row, and the serializer validates the list again. See webhooks._validated_urls.
@@ -472,7 +482,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
             if usertaskcount + newtaskcount > MAX_USER_TASKS:
                 msg = (
-                    f"ERROR: You have too many queued tasks ({usertaskcount} queued"
+                    f"ERROR: You have too many unfinished tasks ({usertaskcount} unfinished"
                     f" + {newtaskcount} requested > {MAX_USER_TASKS})."
                 )
                 raise serializers.ValidationError({"non_field_errors": msg})
@@ -1103,6 +1113,7 @@ def statsusagechart(request):
     return JsonResponse({"item": json_item(plot)})
 
 
+@path_only
 @cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
     dictparams: dict[str, t.Any] = {}
@@ -1163,6 +1174,7 @@ def percentile(ordered: Sequence[float], fraction: float) -> float | None:
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
+@path_only
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
     now = utcnow()
@@ -2397,6 +2409,11 @@ def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpRes
 
                 if completed and renderpath.is_file():
                     renderpath.replace(pdfpath)
+                elif completed:
+                    # The render ended and made no file, for example because the plotter refused
+                    # each row. The same file gives the same result, so the next request does not
+                    # start a new render; see taskpdfplot.
+                    caches["taskderived"].set(pdfplot_failed_cachekey(taskid), True, timeout=PDF_PLOT_FAILURE_SECONDS)
             finally:
                 renderpath.unlink(missing_ok=True)
 
@@ -2425,9 +2442,14 @@ def taskpdfplot(request, taskid):
         # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
         # refresh plots after a change to plot_atlas_fp. A plot that exists is served whatever the
         # task's error_msg says; only a render is refused for a task that finished with an error.
+        #
+        # Only a forced photometry task has a light curve to render. The data file of a stack
+        # request is the output of the stack script, and the plotter makes no PDF of it.
         if (
             not pdfpath.is_file()
+            and item.request_type == Task.RequestType.FP
             and not item.error_msg
+            and not caches["taskderived"].get(pdfplot_failed_cachekey(taskid))
             and (refusal := _render_pdfplot(taskid, resultfilepath, pdfpath)) is not None
         ):
             return refusal

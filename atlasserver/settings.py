@@ -502,6 +502,16 @@ LOGGING = {
             "handlers": cast("list[str]", []),
             "propagate": False,
         },
+        # Each SuspiciousOperation that Django answers with a 400 logs an ERROR here, for example
+        # a query string with more than DATA_UPLOAD_MAX_NUMBER_FIELDS fields. An anonymous client
+        # can send such a request in a loop. Through the "django" logger, each one sends a mail to
+        # ADMINS with the mail account of the site, which the verification and the result mails
+        # also use. This entry keeps the records in the file and sends no mail.
+        "django.security": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "django.server": {
             "handlers": ["django.server"],
             "level": "INFO",

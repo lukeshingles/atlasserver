@@ -4582,6 +4582,33 @@ class TaskCreateLimitTests(TestCase):
         assert response.status_code == 400, response.status_code
         assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS - 1
 
+    def test_started_unfinished_tasks_count_towards_the_limit(self) -> None:
+        """A task in a slot and a task that waits for a new attempt both have a start time.
+
+        During an outage of the remote host each attempt fails quickly. A count of only the tasks
+        with no start then falls to near zero, and the limit stops nothing.
+        """
+        from atlasserver.forcephot.views import MAX_USER_TASKS
+
+        started = timezone.now() - dt.timedelta(minutes=5)
+        Task.objects.bulk_create(
+            [
+                Task(user=self.user, ra=1.0, dec=2.0, starttimestamp=started, retry_after=timezone.now())
+                for _ in range(MAX_USER_TASKS)
+            ]
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 10.0, "dec": 20.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.status_code
+        assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS
+
 
 class TaskCreateAtomicityTests(TestCase):
     """The inserts and the queue positions are one transaction.
@@ -7335,6 +7362,12 @@ class PdfPlotViewTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="pdfuser", email="pdf@example.com", password=None)
         self.task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        # the record of a failed render is in a locmem cache that outlives the rollback of the
+        # database, and the task ids repeat between tests
+        caches["taskderived"].clear()
+
+    def tearDown(self) -> None:
+        caches["taskderived"].clear()
 
     @contextlib.contextmanager
     def result_file(self):
@@ -7417,6 +7450,60 @@ class PdfPlotViewTests(TestCase):
 
         with locks.try_lock(f"pdfplot-lock-{self.task.id}") as held:
             assert held, "the per-task lock was left behind"
+
+    def test_a_render_that_makes_no_file_is_not_repeated(self) -> None:
+        """The view needs no credentials, and a render starts a new interpreter with matplotlib.
+
+        A result file whose rows the plotter refuses gives no PDF each time. Without a record of
+        the failure, each request for it starts a new render, and a loop of such requests keeps
+        the render slots of the site busy.
+        """
+        renders: list[None] = []
+
+        def render_nothing(**_kwargs: t.Any) -> bool:
+            renders.append(None)
+            return True
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=render_nothing):
+            first = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+            second = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert first.status_code == 404, first.status_code
+        assert second.status_code == 404, second.status_code
+        assert len(renders) == 1, f"{len(renders)} renders for one result file that gives no PDF"
+
+    def test_forgetting_the_derived_cache_permits_a_new_render(self) -> None:
+        renders: list[None] = []
+
+        def render_nothing(**_kwargs: t.Any) -> bool:
+            renders.append(None)
+            return True
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=render_nothing):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+            self.task.forget_derived_cache()
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert len(renders) == 2, renders
+
+    def test_a_stack_request_gets_no_render_and_no_plot_url(self) -> None:
+        # the data file of a stack request is the output of the stack script, not a light curve
+        stack = Task.objects.create(
+            user=self.user, mpc_name="Ceres", request_type=Task.RequestType.IMGSTACK, finishtimestamp=timezone.now()
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{stack.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text("stack_rock.sh output\n", encoding="utf-8")
+            with mock.patch.object(views, "make_pdf_plot") as render:
+                response = self.client.get(reverse("taskpdfplot", args=[stack.id]))
+            self.client.force_login(self.user)
+            detail = self.client.get(reverse("task-detail", args=[stack.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 404, response.status_code
+        render.assert_not_called()
+        assert detail.json()["pdfplot_url"] is None, detail.json()["pdfplot_url"]
 
 
 class RegistrationVerificationTests(TestCase):
@@ -8425,9 +8512,12 @@ class PdfPlotRenderSlotTests(TestCase):
         )
         # the slots this test holds, released by tearDown
         self.heldslots = contextlib.ExitStack()
+        # a render that makes no file leaves a record in this cache, and the task ids repeat
+        caches["taskderived"].clear()
 
     def tearDown(self) -> None:
         self.heldslots.close()
+        caches["taskderived"].clear()
 
     def take_every_slot(self) -> None:
         for slot in range(views.PDF_PLOT_RENDER_SLOTS):
@@ -9727,8 +9817,9 @@ class RequestCostTests(TestCase):
             )
 
         assert response.status_code == 201, response.content
-        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper() and "starttimestamp" in q["sql"]]
-        assert len(counts) == 1, f"the user's queued tasks were counted {len(counts)} times"
+        # the count of the unfinished tasks, which filters on finishtimestamp
+        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper() and "finishtimestamp" in q["sql"]]
+        assert len(counts) == 1, f"the user's unfinished tasks were counted {len(counts)} times"
         assert Task.objects.get(user=self.user).userqueuedtasks_on_submit == 0
 
     def test_image_links_are_looked_up_for_the_rows_that_can_have_them(self) -> None:
@@ -10281,6 +10372,34 @@ class ChartQueryStringTests(TestCase):
         response = self.client.get(f"{reverse('statscoordchart')}?&&")
 
         assert response.status_code == 302, response.status_code
+
+
+class StatsFragmentQueryStringTests(TestCase):
+    """The two fragments of the stats page send a query string back to the bare path, as the charts do."""
+
+    def test_a_query_string_is_redirected_to_the_path(self) -> None:
+        for name in ("statsshortterm", "statslongterm"):
+            response = self.client.get(f"{reverse(name)}?n=1")
+
+            assert response.status_code == 302, (name, response.status_code)
+            assert response["Location"] == reverse(name), name
+
+
+class SuspiciousRequestMailTests(TestCase):
+    """A SuspiciousOperation is logged at ERROR, and the "django" logger mails ADMINS.
+
+    An anonymous client can send such a request in a loop, and each mail uses the mail account that
+    the verification and the result mails also use.
+    """
+
+    @override_settings(ADMINS=[("Admin", "admin@example.com")])
+    def test_too_many_fields_send_no_admin_mail(self) -> None:
+        django_mail.outbox.clear()
+
+        response = self.client.get(f"{reverse('login')}?{'&' * 1001}")
+
+        assert response.status_code == 400, response.status_code
+        assert not django_mail.outbox, [message.subject for message in django_mail.outbox]
 
 
 class PasswordResetLimitPageTests(TestCase):

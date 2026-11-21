@@ -22,6 +22,7 @@ from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.forcephot.misc import pdfplot_failed_cachekey
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 
 
@@ -625,8 +626,8 @@ class Task(models.Model):
             self._unlink_results([".pdf", ".fits", ".jpg", ".txt", ".zip"])
 
     def forget_derived_cache(self) -> None:
-        """Drop the cached plot data generated from this task's result file."""
-        caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
+        """Drop the cached plot data generated from this task's result file, and the record of a failed PDF render."""
+        caches["taskderived"].delete_many([resultplotdatajs_cachekey(self.id), pdfplot_failed_cachekey(self.id)])
 
     # returns None rather than Model.delete's (count, per-type counts): a finished task is archived
     # instead of deleted, so there is no honest count to report for that branch

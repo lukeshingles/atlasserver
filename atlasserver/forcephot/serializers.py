@@ -72,7 +72,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return None
 
     def get_pdfplot_url(self, obj) -> str | None:
-        if obj.localresultfile() and not obj.error_msg and (request := self.context.get("request")):
+        # only a forced photometry task has a light curve; see views.taskpdfplot
+        if (
+            obj.request_type == Task.RequestType.FP
+            and obj.localresultfile()
+            and not obj.error_msg
+            and (request := self.context.get("request"))
+        ):
             return request.build_absolute_uri(reverse("taskpdfplot", args=[obj.id]))
 
         return None

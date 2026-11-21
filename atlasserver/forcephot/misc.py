@@ -154,6 +154,11 @@ def resultplotdatajs_cachekey(taskid: int) -> str:
     return f"task{taskid}_resultplotdatajs_v3"
 
 
+def pdfplot_failed_cachekey(taskid: int) -> str:
+    """Return the cache key that records a PDF render of the task that made no file."""
+    return f"task{taskid}_pdfplot_failed_v1"
+
+
 def datetime_to_mjd(dtime: dt.datetime) -> float:
     return julian.to_jd(dtime) - 2400000.5
 
