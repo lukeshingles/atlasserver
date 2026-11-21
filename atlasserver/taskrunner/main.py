@@ -279,8 +279,26 @@ def run_rsync(
     return proc.returncode
 
 
+def replace_lost_connection() -> None:
+    """Close the database connection of this process if it is not usable, so that the next query opens a new one.
+
+    Django does this at the start and at the end of each request, and the task runner has no
+    request. Without it, a connection that the server closed (for example at a restart of the
+    database) stays in the process, and each later query raises OperationalError.
+
+    Not inside a transaction: there, the close would end the transaction of the caller. The main
+    loop and the polls of a slot call this outside a transaction, and a test that runs in a
+    transaction keeps its connection.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        close_old_connections()
+
+
 def task_exists(taskid: int) -> bool:
     """Return true if the task exists in the database."""
+    # a slot polls this during an attempt that can last hours, so it is the place where a slot
+    # finds a connection that the database closed
+    replace_lost_connection()
     try:
         Task.objects.all().get(id=taskid)
     except (ObjectDoesNotExist, IndexError):
@@ -816,6 +834,54 @@ def send_email_if_needed(task, logfunc) -> None:
             f"Waiting to send email until remaining {batchtasks_unfinished} "
             f"of {batchtaskcount} batched tasks are finished."
         )
+
+
+def send_pending_batch_emails(since: dt.datetime, logfunc=log_general) -> int:
+    """Send the email of each batch whose last unfinished task went away before it finished, and return their number.
+
+    A slot sends the email of a batch when it finishes the last unfinished task of the batch; see
+    send_email_if_needed. When that task goes before it finishes (its user cancels it, or the
+    maintenance deletes it), no slot finishes the batch, and the email of the finished tasks does
+    not go. This step finds the batches with a finished task that has no email and with no
+    unfinished task, and sends their email. The email_sent marker of send_email_if_needed makes
+    sure that one batch gets one email, also when a slot finishes a task of it at the same time.
+
+    Only the tasks that finished after `since`, which is the start of this task runner. A task that
+    finished before that time can have email_sent False for a batch that got its email: the field
+    did not exist when that email went.
+    """
+    candidates = (
+        Task.live()
+        .filter(
+            send_email=True,
+            from_api=False,
+            email_sent=False,
+            finishtimestamp__gt=since,
+            user__is_active=True,
+        )
+        .exclude(user__email="")
+        .select_related("user")
+        .order_by("user_id", "timestamp", "id")
+    )
+
+    batches: set[tuple[int, dt.datetime]] = set()
+    sent = 0
+    for task in candidates:
+        batch = (task.user_id, task.timestamp)
+        if batch in batches:
+            continue
+        batches.add(batch)
+
+        # a batch that still has an unfinished task gets its email when a slot finishes that task
+        if Task.objects.filter(
+            user_id=task.user_id, send_email=True, timestamp=task.timestamp, finishtimestamp__isnull=True
+        ).exists():
+            continue
+
+        send_email_if_needed(task=task, logfunc=logfunc)
+        sent += 1
+
+    return sent
 
 
 def next_task(running_taskids: t.Iterable[int], running_userids: t.Iterable[int]) -> Task | None:
@@ -1480,7 +1546,7 @@ def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[]
     return removed
 
 
-def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
+def do_maintenance(heartbeat: t.Callable[[], None] | None = None, emailsince: dt.datetime | None = None):
     """Remove old tasks and associated files according to their type and age.
 
     `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
@@ -1518,6 +1584,11 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     removed = taskqueue.remove_old_usage_records()
     logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")
 
+    # after the sweeps, because a sweep can delete the last unfinished task of a batch
+    if emailsince is not None:
+        batches = send_pending_batch_emails(since=emailsince, logfunc=logfunc)
+        logfunc(f"Checked {batches} batches whose last unfinished task went before it finished")
+
 
 def main() -> None:
     """Run queued tasks and clean up on old tasks."""
@@ -1529,6 +1600,8 @@ def main() -> None:
         log_general(x)
 
     logfunc("Starting forcedphot task runner...")
+    # the start of this task runner; see send_pending_batch_emails
+    runnerstarted = dt.datetime.now(dt.UTC)
     mp.set_start_method("spawn")
     numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
@@ -1582,6 +1655,10 @@ def main() -> None:
         # so the latency to pick up a new task is unchanged whenever the server is actually busy.
         time.sleep(IDLE_POLL_INTERVAL_SECONDS if printedwaiting else POLL_INTERVAL_SECONDS)
 
+        # Before the first query of the pass. After a restart of the database, the queries below
+        # otherwise raise on each pass, and the first one outside a try block stops main().
+        replace_lost_connection()
+
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
             # the sweep blocks this loop, so it refreshes the status file itself; without that a
@@ -1591,7 +1668,7 @@ def main() -> None:
             # the interpreter then waits for every running worker, and the supervisor restarts
             # into the same sweep before any dispatch. A failed sweep is retried in an hour.
             try:
-                do_maintenance(heartbeat=maintenance_heartbeat)
+                do_maintenance(heartbeat=maintenance_heartbeat, emailsince=runnerstarted)
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
                 logfunc(f"ERROR: the maintenance sweep failed: {ex}")
             refresh_status()

@@ -4879,6 +4879,68 @@ class ResultPlotDataTests(TestCase):
         assert "/* stub */" not in content
 
 
+class LostConnectionTests(TestCase):
+    """The task runner has no request, so nothing else closes a connection that the database closed."""
+
+    def test_a_connection_outside_a_transaction_is_checked(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        outside = mock.Mock(in_atomic_block=False)
+        with (
+            mock.patch.object(taskrunner_main.transaction, "get_connection", return_value=outside),
+            mock.patch.object(taskrunner_main, "close_old_connections") as closer,
+        ):
+            taskrunner_main.replace_lost_connection()
+
+        closer.assert_called_once_with()
+
+    def test_a_connection_in_a_transaction_is_kept(self) -> None:
+        # the close would end the transaction of the caller
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with mock.patch.object(taskrunner_main, "close_old_connections") as closer:
+            taskrunner_main.replace_lost_connection()
+
+        closer.assert_not_called()
+
+    def test_the_poll_of_a_slot_checks_the_connection(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with mock.patch.object(taskrunner_main, "replace_lost_connection") as check:
+            assert taskrunner_main.task_exists(taskid=123456) is False
+
+        check.assert_called_once_with()
+
+
+class MpcNameCharacterTests(TestCase):
+    """The runner gives the name as one argument to a remote script that reads key=value options."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="mpcnamer", email="mpc@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def submit(self, name: str) -> t.Any:
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"mpc_name": name}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_option_text_and_expansions_are_refused(self) -> None:
+        for name in ("tdo=1", "a$(id)", "a`id`", "a\\b", "-h", "a\nb", "a\tb"):
+            with self.subTest(name=name):
+                response = self.submit(name)
+                assert response.status_code == 400, (name, response.status_code)
+                assert "mpc_name" in json.dumps(response.json()), response.content
+        assert not Task.objects.exists()
+
+    def test_real_designations_are_accepted(self) -> None:
+        for name in ("Hale-Bopp", "C/2020 F3 (NEOWISE)", "1P/Halley", "2023 AB12", "(433) Eros"):
+            with self.subTest(name=name):
+                assert self.submit(name).status_code == 201, name
+
+
 class TaskRunnerEmailTests(TestCase):
     """Tests for the batch result email.
 
@@ -4900,6 +4962,46 @@ class TaskRunnerEmailTests(TestCase):
             send_email=True,
             finishtimestamp=timezone.now() if finished else None,
         )
+
+    def test_a_batch_whose_last_task_was_cancelled_gets_its_email(self) -> None:
+        """A slot sends the email of a batch when it finishes the last unfinished task of the batch.
+
+        When the user cancels that task, no slot finishes the batch. The maintenance step finds the
+        batch and sends the email of the finished tasks.
+        """
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        since = timezone.now() - dt.timedelta(minutes=1)
+        self.make_batch_task(finished=True)
+        cancelled = self.make_batch_task(finished=False)
+        cancelled.delete()
+
+        first = taskrunner_main.send_pending_batch_emails(since=since, logfunc=lambda _msg: None)
+        second = taskrunner_main.send_pending_batch_emails(since=since, logfunc=lambda _msg: None)
+
+        assert len(django_mail.outbox) == 1, [message.subject for message in django_mail.outbox]
+        assert django_mail.outbox[0].to == ["m@example.com"]
+        assert (first, second) == (1, 0), (first, second)
+
+    def test_the_step_waits_for_a_batch_with_an_unfinished_task(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        self.make_batch_task(finished=False)
+
+        taskrunner_main.send_pending_batch_emails(since=timezone.now() - dt.timedelta(minutes=1), logfunc=print)
+
+        assert not django_mail.outbox
+
+    def test_the_step_ignores_tasks_that_finished_before_the_runner_started(self) -> None:
+        # such a row can have email_sent False for a batch that got its email
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+
+        taskrunner_main.send_pending_batch_emails(since=timezone.now() + dt.timedelta(seconds=1), logfunc=print)
+
+        assert not django_mail.outbox
 
     def test_email_waits_for_the_rest_of_the_batch(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
