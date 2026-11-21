@@ -6473,11 +6473,34 @@ class WebserverStopTests(SimpleTestCase):
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
                 mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
-                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=False),
+                mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.NoSuchProcess(4242)),
             ):
                 assert atlaswebserver.get_httpd_pid() is None
 
             assert not pidfile.exists(), "a pid file whose process is gone should not be kept"
+
+    def test_a_pid_file_of_a_reused_pid_is_removed(self) -> None:
+        """The httpd command reads the same file, and for a live process of this user it starts nothing.
+
+        `httpd -k start` then reports "already running" for the unrelated process, so each start
+        and restart fails until somebody removes the file.
+        """
+        atlaswebserver = import_atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("4242\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
+                mock.patch.object(atlaswebserver.psutil, "Process") as process,
+                # the pid is live: a process of this user that is not this server
+                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
+            ):
+                process.return_value.cmdline.return_value = ["/usr/bin/ssh", "atlas"]
+                assert atlaswebserver.get_httpd_pid() is None
+
+            assert not pidfile.exists(), "a pid file of a process that is not this server was kept"
 
     def test_a_live_process_that_cannot_be_inspected_keeps_its_pid_file(self) -> None:
         """Deleting it would throw away the only pointer to a running server.
@@ -6494,7 +6517,6 @@ class WebserverStopTests(SimpleTestCase):
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
                 mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.AccessDenied(4242)),
-                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
             ):
                 assert atlaswebserver.get_httpd_pid() is None
 
@@ -6506,10 +6528,14 @@ class WebserverStopTests(SimpleTestCase):
         atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir, "httpd.pid").write_text("", encoding="utf-8")  # truncated by an unclean exit
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("", encoding="utf-8")  # truncated by an unclean exit
 
             with mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)):
                 assert atlaswebserver.get_httpd_pid() is None
+
+            # httpd refuses to start while the file is corrupt
+            assert not pidfile.exists(), "the unreadable pid file was kept"
 
     def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
         atlaswebserver = import_atlaswebserver()
