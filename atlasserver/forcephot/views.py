@@ -25,6 +25,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.hashers import check_password
 from django.contrib.auth.views import PasswordResetView
 from django.contrib.gis.geoip2 import GeoIP2
 from django.contrib.gis.geoip2 import GeoIP2Exception
@@ -76,6 +77,7 @@ from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.forms import ResendVerificationForm
+from atlasserver.forcephot.forms import unverified_accounts_at
 from atlasserver.forcephot.locks import try_lock
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
@@ -97,7 +99,10 @@ from atlasserver.forcephot.queue import user_usage_seconds
 from atlasserver.forcephot.queue import utcnow
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
+from atlasserver.forcephot.throttles import ACCOUNT_GUESS_LIMIT_MESSAGE
+from atlasserver.forcephot.throttles import account_password_failures_exceeded
 from atlasserver.forcephot.throttles import count_in_window
+from atlasserver.forcephot.throttles import note_account_password_failure
 from atlasserver.forcephot.throttles import take_send_permit
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
@@ -119,6 +124,12 @@ RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 
 # The same, for the address-change confirmations one account can ask for. See change_email.
 EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
+
+# Submissions of the address change form allowed from one account per window, valid or not. The
+# answer "an account with that address exists" comes only from a form that is not valid, so the
+# send interval above does not meter it. See change_email.
+EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS: t.Final = 600
+EMAIL_CHANGE_ATTEMPT_LIMIT: t.Final = 10
 
 # None of the limiters below is a mutual exclusion. The production cache is file-based, where
 # add() is has_key() followed by set() and a read-modify-write is not atomic either, so two
@@ -1651,6 +1662,11 @@ def register(request):
             # (nothing was sent) or recover (password reset skips inactive users).
             try:
                 with transaction.atomic():
+                    # An account that waits for the confirmation of this address gives way to
+                    # this one; see RegistrationForm.clean_email. Its verification link then
+                    # stops working, because the link names an account that does not exist.
+                    unverified_accounts_at(form.cleaned_data["email"]).delete()
+
                     user = form.save(commit=False)
                     user.is_active = False
                     user.save()
@@ -1714,13 +1730,7 @@ def awaiting_verification(user) -> bool:
 
 def unverified_account_for(email: str):
     """Return the account awaiting verification at this address, or None."""
-    return (
-        # the queryset spelling of awaiting_verification()
-        get_user_model()
-        .objects.filter(email__iexact=email, is_active=False, pending_verification__isnull=False)
-        .order_by("pk")
-        .first()
-    )
+    return unverified_accounts_at(email).order_by("pk").first()
 
 
 @origin_only_referrer
@@ -1748,11 +1758,37 @@ def verify_email(request, uidb64: str, token: str):
             status=400,
         )
 
+    confirmpage = {"name": "Confirm your email address", "email": user.email}
+
     if request.method != "POST":
+        return render(request, "registration/verify_email_confirm.html", confirmpage)
+
+    # The password that the registrant chose. The link proves that the person has the mailbox, but
+    # it does not prove that the same person made the account: anyone can register with the
+    # address of someone else and choose the password. Without this check, the owner of the
+    # address activates an account whose password a different person knows.
+    #
+    # hashers.check_password and not User.check_password: the method of the model saves a new hash
+    # when the hasher settings changed, and the token hashes the password, so the save makes the
+    # link invalid before the locked check below.
+    if account_password_failures_exceeded(user.pk):
         return render(
             request,
             "registration/verify_email_confirm.html",
-            {"name": "Confirm your email address", "email": user.email},
+            {**confirmpage, "error": ACCOUNT_GUESS_LIMIT_MESSAGE},
+            status=429,
+        )
+
+    if not check_password(request.POST.get("password", ""), user.password):
+        note_account_password_failure(user.pk)
+        return render(
+            request,
+            "registration/verify_email_confirm.html",
+            {
+                **confirmpage,
+                "error": "The password is not correct. Enter the password that you chose when you registered.",
+            },
+            status=400,
         )
 
     # The checks above are repeated here against a locked row, because on their own they only make
@@ -1845,9 +1881,36 @@ def resend_verification(request):
 
 @login_required
 def change_email(request):
+    status = 200
+
     if request.method == "POST":
+        # Counted before the form is bound, so that a form that is not valid uses the budget too:
+        # the answer "an account with that address exists" comes only from such a form. Keyed on
+        # the account, because the person who asks has a session for it.
+        attempts = count_in_window(f"emailchange-attempt-{request.user.pk}", EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS)
+
+        if attempts > EMAIL_CHANGE_ATTEMPT_LIMIT:
+            # an unbound form, for the reason that register() gives
+            response = render(
+                request,
+                "registration/email_change_form.html",
+                {
+                    "form": EmailChangeForm(request.user, initial={"new_email": request.POST.get("new_email", "")}),
+                    "name": "Email address change",
+                    "limitmessage": "Too many address changes from this account. Wait 10 minutes, then try again.",
+                },
+                status=429,
+            )
+            response["Retry-After"] = str(int(EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS))
+            return response
+
         form = EmailChangeForm(request.user, request.POST)
-        if form.is_valid():
+        if not form.is_valid() and any(
+            error.code == "throttled" for error in form.errors.as_data().get("password", [])
+        ):
+            # 429 like each other limit of the site
+            status = 429
+        elif form.is_valid():
             # not saved here. The new address has to be confirmed at the new address, or the
             # verification done at registration could be undone just by changing the address
             # afterwards.
@@ -1897,6 +1960,7 @@ def change_email(request):
         request,
         "registration/email_change_form.html",
         {"form": form, "name": "Email address change"},
+        status=status,
     )
 
 

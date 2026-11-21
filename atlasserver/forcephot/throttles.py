@@ -7,6 +7,7 @@ from django.core.cache import caches
 from django.views.decorators.debug import sensitive_variables
 from rest_framework import exceptions
 from rest_framework.authentication import BasicAuthentication
+from rest_framework.authentication import get_authorization_header
 
 # the same tuple ForcePhotPermission branches on, so the two cannot drift on what counts as a read.
 # Safe methods are throttled far more loosely than writes, but not exempt: the queue page polls the
@@ -79,14 +80,18 @@ def take_send_permit(cachekey: str, interval_seconds: float) -> bool:
         return caches["throttle"].add(cachekey, True, timeout=interval_seconds)
 
 
-# Failed password checks allowed from one address per window, on every path that takes a
-# password: the token endpoint, a Basic header on any API view, the login page and the admin's
-# (see login). Failures rather than attempts, so a busy shared address is not locked out by its
-# successful logins.
+# Failed password checks allowed from one address per window, at each door that signs a person
+# in: the token endpoint, a Basic header on any API view, the login page and the admin login (see
+# login). The budget counts failures and not attempts. Thus the successful logins of a busy shared
+# address do not lock it out. A check of the password of one known account uses the budget of
+# that account (see account_password_failures_exceeded).
 LOGIN_FAILURE_WINDOW_SECONDS: t.Final = 600
 LOGIN_FAILURE_LIMIT: t.Final = 10
 
 LOGIN_LIMIT_MESSAGE: t.Final = "Too many failed login attempts from this address. Please wait a few minutes."
+
+# The text for a refused check of the password of one account.
+ACCOUNT_GUESS_LIMIT_MESSAGE: t.Final = "Too many incorrect passwords for this account. Wait 10 minutes, then try again."
 
 
 def login_failures_key(request: t.Any) -> str:
@@ -105,6 +110,29 @@ def login_failures_exceeded(request: t.Any) -> bool:
 def note_login_failure(request: t.Any) -> int:
     """Record one failed password check for this address, and return the window's count."""
     return count_in_window(login_failures_key(request), LOGIN_FAILURE_WINDOW_SECONDS)
+
+
+def account_password_failures_key(userpk: object) -> str:
+    """Return the cache key of the failed-password budget of one account."""
+    return f"account-password-failures-{userpk}"
+
+
+def account_password_failures_exceeded(userpk: object) -> bool:
+    """Return whether the checks of the password of this account failed more times than the window allows.
+
+    These checks are on the activation page and on the pages of a signed-in account. There, the
+    person who guesses has a link or a session for one account, and can send the guesses from many
+    addresses. Thus this budget is for the account and not for the client address.
+    """
+    return (
+        count_in_window(account_password_failures_key(userpk), LOGIN_FAILURE_WINDOW_SECONDS, increment=False)
+        >= LOGIN_FAILURE_LIMIT
+    )
+
+
+def note_account_password_failure(userpk: object) -> int:
+    """Record one failed check of the password of this account, and return the count of the window."""
+    return count_in_window(account_password_failures_key(userpk), LOGIN_FAILURE_WINDOW_SECONDS)
 
 
 @sensitive_variables("password")
@@ -147,6 +175,23 @@ class ThrottledBasicAuthentication(BasicAuthentication):
     Authentication runs before the throttles in APIView.initial(), so this is the only place a
     Basic-header guess can be counted. A refusal is a 429, like every other limit on the site.
     """
+
+    @override
+    def authenticate_header(self, request: Request) -> str:
+        """Return the Basic challenge only to a request that sent Basic credentials.
+
+        DRF puts the challenge of the first authenticator in each 401. A browser that gets a
+        Basic challenge for a fetch shows its own dialog for a username and a password. The queue
+        page polls with the session, so without this rule each poll after the end of the session
+        opens that dialog. A client that sent a Basic header still gets the Basic challenge. The
+        other 401 responses name the token scheme, for which a browser shows no dialog.
+        """
+        scheme = get_authorization_header(request).split()[:1]
+        if scheme and scheme[0].lower() == b"basic":
+            # the challenge of BasicAuthentication.authenticate_header
+            return f'Basic realm="{self.www_authenticate_realm}"'
+
+        return "Token"
 
     @override
     @sensitive_variables("password")

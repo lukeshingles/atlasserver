@@ -81,7 +81,14 @@
           <li class="nav-item"><a class="nav-link" href="{% url 'register' %}">Register</a></li>
           {# was DRF's {% optional_login %} tag, which is one of the things that tied this #}
           {# layout to the browsable API #}
+          {# No "next" on the pages whose URL holds a token: the login page runs analytics, and #}
+          {# gtag reports its URL with the query string. The two URL names are the views that #}
+          {# origin_only_referrer guards. #}
+          {% if request.resolver_match.url_name == "verify_email" or request.resolver_match.url_name == "email_change_confirm" %}
+          <li class="nav-item"><a class="nav-link" href="{% url 'login' %}">Log in</a></li>
+          {% else %}
           <li class="nav-item"><a class="nav-link" href="{% url 'login' %}?next={{ request.get_full_path|urlencode }}">Log in</a></li>
+          {% endif %}
         {% endif %}
 
         {# Light/dark mode. Hidden until theme.js removes the d-none, so a visitor without #}

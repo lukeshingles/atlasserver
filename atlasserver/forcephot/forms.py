@@ -1,19 +1,40 @@
+from typing import override
+
 from django import forms
 from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 from django.utils.translation import gettext_lazy as _
 
+from atlasserver.forcephot.throttles import ACCOUNT_GUESS_LIMIT_MESSAGE
+from atlasserver.forcephot.throttles import account_password_failures_exceeded
+from atlasserver.forcephot.throttles import note_account_password_failure
 
-def email_is_taken(email: str, exclude_user=None) -> bool:
+
+def unverified_accounts_at(email: str):
+    """Return the accounts at this address that wait for the confirmation of the address.
+
+    The queryset form of views.awaiting_verification: inactive, and with a PendingEmailVerification
+    row.
+    """
+    return get_user_model().objects.filter(email__iexact=email, is_active=False, pending_verification__isnull=False)
+
+
+def email_is_taken(email: str, exclude_user=None, *, ignore_unverified: bool = False) -> bool:
     """Return True if another account already uses this email address.
 
     Django does not enforce uniqueness on User.email, but duplicates make the password reset flow
     ambiguous (it emails a reset link for every matching account), so reject them here.
+
+    With `ignore_unverified`, an account that waits for the confirmation of the address does not
+    count; see RegistrationForm.clean_email.
     """
     others = get_user_model().objects.filter(email__iexact=email)
     if exclude_user is not None and exclude_user.pk is not None:
         others = others.exclude(pk=exclude_user.pk)
+    if ignore_unverified:
+        others = others.exclude(pk__in=unverified_accounts_at(email).values("pk"))
 
     return others.exists()
 
@@ -42,7 +63,15 @@ class EmailChangeForm(forms.Form):
 
     def clean_password(self):
         password = self.cleaned_data["password"]
+
+        # The person who guesses here has a session for this account, so the budget is for the
+        # account; see throttles.account_password_failures_exceeded. This code refuses the check
+        # before it reads the password. Thus a guess over the budget gets no answer.
+        if account_password_failures_exceeded(self.user.pk):
+            raise forms.ValidationError(ACCOUNT_GUESS_LIMIT_MESSAGE, code="throttled")
+
         if not self.user.check_password(password):
+            note_account_password_failure(self.user.pk)
             raise forms.ValidationError(self.error_messages["password_incorrect"], code="password_incorrect")
         return password
 
@@ -89,7 +118,12 @@ class RegistrationForm(UserCreationForm[User]):
 
     def clean_email(self):
         email = self.cleaned_data["email"]
-        if email_is_taken(email):
+
+        # An account that waits for the confirmation of this address does not block a new
+        # registration, and views.register replaces that account. Nobody proved the address for
+        # either account. Without this rule, a person who registers first with the address of
+        # someone else holds that address, and a resend every few days keeps the account.
+        if email_is_taken(email, ignore_unverified=True):
             raise forms.ValidationError(self.error_messages["email_taken"], code="email_taken")
         return email
 
@@ -102,3 +136,22 @@ class RegistrationForm(UserCreationForm[User]):
             "password1",
             "password2",
         )
+
+
+class ThrottledPasswordChangeForm(PasswordChangeForm):
+    """Django's form to change the password, with the failed-password budget of the account.
+
+    The person who guesses the old password here has a session for this account; see
+    throttles.account_password_failures_exceeded.
+    """
+
+    @override
+    def clean_old_password(self):
+        if account_password_failures_exceeded(self.user.pk):
+            raise forms.ValidationError(ACCOUNT_GUESS_LIMIT_MESSAGE, code="throttled")
+
+        try:
+            return super().clean_old_password()
+        except forms.ValidationError:
+            note_account_password_failure(self.user.pk)
+            raise

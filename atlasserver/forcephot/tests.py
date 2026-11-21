@@ -1756,6 +1756,87 @@ class EmailChangeTests(TestCase):
     def request_email_change(self, new_email: str = "new@example.com") -> t.Any:
         return self.client.post(reverse("email_change"), {"password": "testpassword123", "new_email": new_email})
 
+    def test_the_taken_address_answer_is_rate_limited(self) -> None:
+        """The answer "an account with that address exists" comes only from a form that is not valid.
+
+        The send interval meters only the valid forms, so one account with its own password could
+        ask the question for each address on a list.
+        """
+        User.objects.create_user(username="holder", email="taken@example.com", password=None)
+        self.client.force_login(self.user)
+
+        with mock.patch.object(views, "EMAIL_CHANGE_ATTEMPT_LIMIT", 3):
+            for attempt in range(3):
+                assert "already exists" in self.request_email_change("taken@example.com").content.decode(), attempt
+            blocked = self.request_email_change("taken@example.com")
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(views.EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS))
+        page = blocked.content.decode()
+        assert "already exists" not in page, "the rate-limited page still answers the probe"
+        assert "Too many address changes" in page
+
+    def test_the_current_password_has_a_budget(self) -> None:
+        # a stolen session must not give guesses of the password without a limit
+        self.client.force_login(self.user)
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                wrong = self.client.post(reverse("email_change"), {"password": "guess", "new_email": "new@example.com"})
+                assert wrong.status_code == 200, wrong.status_code
+            blocked = self.request_email_change()
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert not django_mail.outbox, "the right password worked over the budget"
+
+    def test_the_password_change_page_has_a_budget(self) -> None:
+        self.client.force_login(self.user)
+        newpassword = "a-new-password-for-the-test"
+
+        def change(oldpassword: str) -> t.Any:
+            return self.client.post(
+                reverse("password_change"),
+                {"old_password": oldpassword, "new_password1": newpassword, "new_password2": newpassword},
+            )
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert change("guess").status_code == 200
+            blocked = change("testpassword123")
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        self.user.refresh_from_db()
+        assert self.user.check_password("testpassword123"), "the password changed over the budget"
+
+    def test_the_password_change_page_still_changes_the_password(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("password_change"),
+            {
+                "old_password": "testpassword123",
+                "new_password1": "a-new-password-ok",
+                "new_password2": "a-new-password-ok",
+            },
+        )
+
+        assert response.status_code == 302, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.check_password("a-new-password-ok")
+
+    def test_the_login_link_of_the_confirmation_page_does_not_carry_the_token(self) -> None:
+        # opened on a second device, where the reader is signed out
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+        self.client.logout()
+
+        body = self.client.get(link).content.decode()
+
+        assert link.rstrip("/").rsplit("/", 1)[-1] not in body, "the page puts the token in a link"
+        assert "next=" not in body
+
     def confirmation_link(self, index: int = 0) -> str:
         """Return the confirmation URL from a sent email, like RegistrationVerificationTests.verification_link."""
         match = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[index].body))
@@ -7351,6 +7432,10 @@ class RegistrationVerificationTests(TestCase):
     def register(self, email: str = "newcomer@example.com") -> t.Any:
         return self.client.post(reverse("register"), {**self.credentials, "email": email})
 
+    def password(self) -> dict[str, str]:
+        """Return the form data of the activation: the password that the registrant chose."""
+        return {"password": self.credentials["password1"]}
+
     def verification_link(self) -> str:
         assert len(django_mail.outbox) == 1, django_mail.outbox
         match = re.search(r"https?://\S+/verify/\S+", str(django_mail.outbox[0].body))
@@ -7379,7 +7464,7 @@ class RegistrationVerificationTests(TestCase):
     def test_following_the_link_activates_and_logs_in(self) -> None:
         self.register()
 
-        response = self.client.post(self.verification_link())
+        response = self.client.post(self.verification_link(), self.password())
 
         assert response.status_code == 302, response.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -7389,10 +7474,10 @@ class RegistrationVerificationTests(TestCase):
         # is_active is part of the token hash, so activation invalidates the link with no state kept
         self.register()
         link = self.verification_link()
-        self.client.post(link)
+        self.client.post(link, self.password())
         self.client.logout()
 
-        response = self.client.post(link)
+        response = self.client.post(link, self.password())
 
         assert response.status_code == 400, response.status_code
 
@@ -7430,7 +7515,7 @@ class RegistrationVerificationTests(TestCase):
 
         assert response.status_code == 200
         assert len(django_mail.outbox) == 1
-        assert self.client.post(self.verification_link()).status_code == 302
+        assert self.client.post(self.verification_link(), self.password()).status_code == 302
 
     def test_resend_says_the_same_thing_whether_or_not_the_account_exists(self) -> None:
         # whether an address has an account here is not something a stranger should be able to probe
@@ -7717,7 +7802,7 @@ class RegistrationVerificationTests(TestCase):
         link = self.verification_link()
 
         self.client.get(link)
-        response = self.client.post(link)
+        response = self.client.post(link, self.password())
 
         assert response.status_code == 302, response.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -7800,7 +7885,7 @@ class RegistrationVerificationTests(TestCase):
         # leaving it behind would let a later resend issue links for an account that is already
         # active and verified
         self.register()
-        self.client.post(self.verification_link())
+        self.client.post(self.verification_link(), self.password())
 
         user = User.objects.get(username="newcomer")
         assert user.is_active is True
@@ -7831,12 +7916,12 @@ class RegistrationVerificationTests(TestCase):
         assert offered.status_code == 200, offered.status_code
         assert offered["Referrer-Policy"] == "strict-origin"
 
-        confirmed = self.client.post(link)
+        confirmed = self.client.post(link, self.password())
         assert confirmed.status_code == 302, confirmed.status_code
         assert confirmed["Referrer-Policy"] == "strict-origin"
 
         # and the invalid-link page, which is served at the same URL once the link is spent
-        spent = self.client.post(link)
+        spent = self.client.post(link, self.password())
         assert spent.status_code == 400, spent.status_code
         assert spent["Referrer-Policy"] == "strict-origin"
 
@@ -7864,7 +7949,9 @@ class RegistrationVerificationTests(TestCase):
         csrfinput = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', offered.content)
         assert csrfinput is not None, offered.content
 
-        confirmed = browser.post(link, {"csrfmiddlewaretoken": csrfinput.group(1).decode()}, HTTP_ORIGIN=origin)
+        confirmed = browser.post(
+            link, {"csrfmiddlewaretoken": csrfinput.group(1).decode(), **self.password()}, HTTP_ORIGIN=origin
+        )
 
         assert confirmed.status_code == 302, confirmed.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -7896,7 +7983,7 @@ class RegistrationVerificationTests(TestCase):
             return pending
 
         with mock.patch.object(views, "awaiting_verification", side_effect=consumed_after_the_first_check):
-            response = self.client.post(link)
+            response = self.client.post(link, self.password())
 
         assert response.status_code == 400, response.status_code
         assert "_auth_user_id" not in self.client.session
@@ -7911,10 +7998,96 @@ class RegistrationVerificationTests(TestCase):
         user.last_login = timezone.now()
         user.save()
 
-        response = self.client.post(link)
+        response = self.client.post(link, self.password())
 
         assert response.status_code == 400, response.status_code
         assert User.objects.get(pk=user.pk).is_active is False
+
+    def test_activation_with_a_wrong_password_is_refused(self) -> None:
+        """The link proves the mailbox, and the password proves that the same person made the account.
+
+        A different person can register with this address and choose the password. Without the
+        password check, the owner of the address activates that account and is signed in to it,
+        and the other person also knows its password.
+        """
+        self.register()
+        link = self.verification_link()
+
+        response = self.client.post(link, {"password": "a-different-password"})
+
+        assert response.status_code == 400, response.status_code
+        assert User.objects.get(username="newcomer").is_active is False, "a wrong password activated the account"
+        assert "_auth_user_id" not in self.client.session
+        assert "password is not correct" in response.content.decode()
+
+    def test_the_activation_password_has_a_budget(self) -> None:
+        # the check of a password of one account, so the budget is for that account
+        self.register()
+        link = self.verification_link()
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert self.client.post(link, {"password": "a-different-password"}).status_code == 400
+            blocked = self.client.post(link, self.password())
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert User.objects.get(username="newcomer").is_active is False, "the right password worked over the budget"
+
+    def test_a_new_registration_replaces_an_unverified_account_at_the_address(self) -> None:
+        """An address that waits for its confirmation does not stay with the first registrant.
+
+        Without this rule, a person who registers with the address of someone else holds it, and a
+        resend every few days stops the sweep of unverified accounts from removing it.
+        """
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "squatter",
+                "password1": "squatter-password",
+                "password2": "squatter-password",
+                "email": "newcomer@example.com",
+            },
+        )
+        squatterlink = self.verification_link()
+        django_mail.outbox.clear()
+
+        response = self.register()
+
+        assert response.status_code == 200, response.status_code
+        assert "already exists" not in response.content.decode()
+        assert not User.objects.filter(username="squatter").exists(), "the unverified account stayed"
+        assert self.client.post(squatterlink, {"password": "squatter-password"}).status_code == 400
+        assert self.client.post(self.verification_link(), self.password()).status_code == 302
+        assert User.objects.get(username="newcomer").is_active is True
+
+    def test_a_verified_account_still_blocks_the_address(self) -> None:
+        User.objects.create_user(username="incumbent", email="newcomer@example.com", password=None)
+
+        response = self.register()
+
+        assert "already exists" in response.content.decode()
+        assert User.objects.filter(username="incumbent").exists()
+        assert not User.objects.filter(username="newcomer").exists()
+
+    def test_the_login_link_of_a_token_page_does_not_carry_the_token(self) -> None:
+        """The login page runs analytics, and gtag reports the URL with its query string.
+
+        A "next" that names the verification URL thus hands the token to Google Analytics, although
+        the token page itself does not run analytics.
+        """
+        self.register()
+        link = self.verification_link()
+        token = link.rstrip("/").rsplit("/", 1)[-1]
+
+        for response, description in (
+            (self.client.get(link), "the confirmation page"),
+            (self.client.post(link, {"password": "a-different-password"}), "the page of a wrong password"),
+            (self.client.get(link[:-4] + "beef/"), "the invalid-link page"),
+        ):
+            body = response.content.decode()
+            assert 'href="/login/"' in body or 'href="/forcedphot/login/"' in body, description
+            assert token not in body, f"{description} puts the token in a link"
+            assert "next=" not in body, f"{description} has a login link with next"
 
 
 class EmailUniquenessConstraintTests(TransactionTestCase):
@@ -8420,6 +8593,25 @@ class FailedLoginBudgetTests(TestCase):
 
         counted = throttles.count_in_window("test-window", 60, increment=False)
         assert counted == threads * each, f"{counted} of {threads * each} concurrent failures were counted"
+
+    def test_a_401_without_basic_credentials_sends_no_basic_challenge(self) -> None:
+        """A browser opens its own password dialog for a fetch that gets a Basic challenge.
+
+        The queue page polls queuepositions.json with the session. Without the rule, each poll after
+        the end of the session opens that dialog.
+        """
+        response = self.client.get(reverse("queuepositions"), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 401, response.status_code
+        assert response["WWW-Authenticate"] == "Token", response["WWW-Authenticate"]
+
+    def test_a_401_for_basic_credentials_keeps_the_basic_challenge(self) -> None:
+        response = self.client.get(
+            reverse("queuepositions"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("wrong")
+        )
+
+        assert response.status_code == 401, response.status_code
+        assert response["WWW-Authenticate"].startswith("Basic"), response["WWW-Authenticate"]
 
     def test_a_basic_header_on_any_api_view_is_metered(self) -> None:
         with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):

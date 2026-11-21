@@ -32,6 +32,7 @@ from atlasserver.forcephot import views
 from atlasserver.forcephot.login import ObtainAuthTokenThrottled
 from atlasserver.forcephot.login import ThrottledAdminAuthenticationForm
 from atlasserver.forcephot.login import ThrottledLoginView
+from atlasserver.forcephot.login import ThrottledPasswordChangeView
 from atlasserver.taskrunner import status as runnerstatus
 
 # Routers provide an easy way of automatically determining the URL conf.
@@ -66,6 +67,7 @@ urlpatterns = [
     path("password_reset/", views.SiteOriginPasswordResetView.as_view(), name="password_reset"),
     # likewise before django.contrib.auth.urls: the stock view has no limit on password guesses
     path("login/", ThrottledLoginView.as_view(), name="login"),
+    path("password_change/", ThrottledPasswordChangeView.as_view(), name="password_change"),
     path("emailchange/", views.change_email, name="email_change"),
     path("apitoken/", views.api_token, name="apitoken"),
     path("verify/<uidb64>/<token>/", views.verify_email, name="verify_email"),

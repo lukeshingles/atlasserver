@@ -2,7 +2,8 @@
 
 Each applies the failed-login budget of throttles, which counts wrong passwords per client address
 and refuses the check itself once the address is over budget. A Basic header on any API view is
-metered there too, by ThrottledBasicAuthentication.
+metered there too, by ThrottledBasicAuthentication. The page that changes the password of a
+signed-in account uses the budget of that account (ThrottledPasswordChangeView).
 """
 
 import typing as t
@@ -12,6 +13,7 @@ from django import forms
 from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.views import LoginView
+from django.contrib.auth.views import PasswordChangeView
 from django.http import HttpResponse
 from django.views.decorators.debug import sensitive_variables
 from rest_framework import serializers
@@ -20,6 +22,7 @@ from rest_framework.exceptions import Throttled
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from atlasserver.forcephot.forms import ThrottledPasswordChangeForm
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
 from atlasserver.forcephot.throttles import login_failures_exceeded
@@ -75,6 +78,24 @@ class ThrottledLoginView(LoginView):
     @override
     def form_invalid(self, form: AuthenticationForm) -> HttpResponse:
         refused = any(error.code == "throttled" for error in form.non_field_errors().as_data())
+        response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
+        if refused:
+            response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+
+        return response
+
+
+class ThrottledPasswordChangeView(PasswordChangeView):
+    """Django's page to change the password, with the failed-password budget of the account.
+
+    A refused check is a 429 with a Retry-After, as on the login page.
+    """
+
+    form_class = ThrottledPasswordChangeForm
+
+    @override
+    def form_invalid(self, form: forms.Form) -> HttpResponse:
+        refused = any(error.code == "throttled" for error in form.errors.as_data().get("old_password", []))
         response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
         if refused:
             response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
