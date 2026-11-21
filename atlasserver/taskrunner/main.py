@@ -617,29 +617,36 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
-    proc = subprocess.Popen(
-        ["ssh", *sshoptions, f"{REMOTE_SERVER}", atlascommand],
-        shell=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        # replace, not the default strict: one byte of non-UTF-8 in the remote output
-        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
-        # UnicodeDecodeError out of the worker, which then died before mark_finished.
-        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
-        # pass, forever, with no error_msg to say why.
-        errors="replace",
-        bufsize=1,
-        universal_newlines=True,
-    )
-
-    starttime = time.perf_counter()
-    lastlogtime = 0.0
-    lastcancelcheck = 0.0
-    cancelled = False
-    timed_out = False
-    stopping = False
+    # From here, a stop signal waits for the poll loop below, which stops the remote command before
+    # the slot ends. The deferral starts before the launch: a signal between the launch and the
+    # loop would otherwise end the slot and leave the remote command running.
     with stop_signals_deferred():
+        if _stop_requested:
+            # the signal came before the launch, so no remote command runs
+            return None, None
+
+        proc = subprocess.Popen(
+            ["ssh", *sshoptions, f"{REMOTE_SERVER}", atlascommand],
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            # replace, not the default strict: one byte of non-UTF-8 in the remote output
+            # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
+            # UnicodeDecodeError out of the worker, which then died before mark_finished.
+            # The row keeps finishtimestamp NULL, so the task is dispatched again on every
+            # pass, forever, with no error_msg to say why.
+            errors="replace",
+            bufsize=1,
+            universal_newlines=True,
+        )
+
+        starttime = time.perf_counter()
+        lastlogtime = 0.0
+        lastcancelcheck = 0.0
+        cancelled = False
+        timed_out = False
+        stopping = False
         while not cancelled and not timed_out and not stopping:
             try:
                 proc.communicate(timeout=1)
@@ -966,28 +973,7 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
-# The migration that added Task.email_sent; see email_sent_reliable_since.
-EMAIL_SENT_MIGRATION: t.Final = ("forcephot", "0011_usage_day")
-
-
-def email_sent_reliable_since() -> dt.datetime | None:
-    """Return the time from which the email_sent field of a finished task is reliable, or None if no record says.
-
-    Migration 0011 added the field and gave each existing row False, also the rows of a batch
-    that had its email already. django_migrations records when the migration ran. A task that
-    finished after that time has the value that send_email_if_needed wrote. A runner of the old
-    code can finish tasks between the migration and the restart of the runner, which the README
-    puts directly after the migration.
-    """
-    from django.db.migrations.recorder import MigrationRecorder
-
-    app, name = EMAIL_SENT_MIGRATION
-    return MigrationRecorder.Migration.objects.filter(app=app, name=name).values_list("applied", flat=True).first()
-
-
-def send_pending_batch_emails(
-    since: dt.datetime, logfunc=log_general, heartbeat: t.Callable[[], None] | None = None
-) -> int:
+def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], None] | None = None) -> int:
     """Send the email of each batch whose last unfinished task went away before it finished, and return their number.
 
     A slot sends the email of a batch when it finishes the last unfinished task of the batch; see
@@ -997,10 +983,9 @@ def send_pending_batch_emails(
     unfinished task, and sends their email. The email_sent marker of send_email_if_needed makes
     sure that one batch gets one email, also when a slot finishes a task of it at the same time.
 
-    Only the tasks that finished after `since`, which is the time when the email_sent field
-    became reliable (email_sent_reliable_since). A task that finished before that time can have
-    email_sent False for a batch that got its email: the field did not exist when that email
-    went. The time is fixed, so a restart of the task runner does not drop a batch.
+    A task from before the email_sent field can have email_sent False for a batch that got its
+    email. Migration 0013 marked the finished tasks of each complete batch, so such a task does
+    not get a second email.
 
     `heartbeat` is called before each send, as in remove_old_tasks: each send waits for the mail
     server, and this runs in the main loop.
@@ -1011,7 +996,7 @@ def send_pending_batch_emails(
             send_email=True,
             from_api=False,
             email_sent=False,
-            finishtimestamp__gt=since,
+            finishtimestamp__isnull=False,
             user__is_active=True,
         )
         .exclude(user__email="")
@@ -1714,7 +1699,7 @@ def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[]
     return removed
 
 
-def do_maintenance(heartbeat: t.Callable[[], None] | None = None, emailsince: dt.datetime | None = None):
+def do_maintenance(heartbeat: t.Callable[[], None] | None = None, send_batch_emails: bool = False):
     """Remove old tasks and associated files according to their type and age.
 
     `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
@@ -1753,8 +1738,8 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None, emailsince: dt
     logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")
 
     # after the sweeps, because a sweep can delete the last unfinished task of a batch
-    if emailsince is not None:
-        batches = send_pending_batch_emails(since=emailsince, logfunc=logfunc, heartbeat=heartbeat)
+    if send_batch_emails:
+        batches = send_pending_batch_emails(logfunc=logfunc, heartbeat=heartbeat)
         logfunc(f"Checked {batches} batches whose last unfinished task went before it finished")
 
 
@@ -1768,10 +1753,6 @@ def main() -> None:
         log_general(x)
 
     logfunc("Starting forcedphot task runner...")
-    # read once, because the time of a migration does not change; see send_pending_batch_emails
-    emailsince = email_sent_reliable_since()
-    if emailsince is None:
-        logfunc("ERROR: no record of migration 0011, so the maintenance sends no pending batch email")
     mp.set_start_method("spawn")
     numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
@@ -1838,7 +1819,7 @@ def main() -> None:
             # the interpreter then waits for every running worker, and the supervisor restarts
             # into the same sweep before any dispatch. A failed sweep is retried in an hour.
             try:
-                do_maintenance(heartbeat=maintenance_heartbeat, emailsince=emailsince)
+                do_maintenance(heartbeat=maintenance_heartbeat, send_batch_emails=True)
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
                 logfunc(f"ERROR: the maintenance sweep failed: {ex}")
             refresh_status()

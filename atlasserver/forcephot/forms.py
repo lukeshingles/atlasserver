@@ -116,6 +116,46 @@ class RegistrationForm(UserCreationForm[User]):
     }
     email = forms.EmailField(max_length=254, help_text="Required. Give a valid email address.")
 
+    def username_is_replaced(self, username: str) -> bool:
+        """Return whether each account with this username is an account that this registration replaces.
+
+        views.register deletes the unverified accounts at the submitted address before it saves
+        the new account; see clean_email. A person who registers again with the username of such
+        an account, for example after the loss of the password, can thus use that username. The
+        address is the raw value, because clean_username runs before clean_email. If the account
+        becomes active at the same time, register does not delete it, and the unique index of the
+        username then refuses the new account.
+        """
+        email = str(self.data.get("email") or "").strip()
+        holders = get_user_model().objects.filter(username__iexact=username)
+        return (
+            bool(email)
+            and holders.exists()
+            and not holders.exclude(pk__in=unverified_accounts_at(email).values("pk")).exists()
+        )
+
+    @override
+    def clean_username(self):
+        username = self.cleaned_data.get("username")
+        if username and self.username_is_replaced(username):
+            return username
+
+        return super().clean_username()
+
+    @override
+    def validate_unique(self):
+        # The model check of the unique username, with the same exception as clean_username. The
+        # username passed its field checks, because it is in cleaned_data. Thus the only error that
+        # the model check adds to it is the error for a username that exists.
+        username = self.cleaned_data.get("username")
+        replaced = bool(username) and self.username_is_replaced(username)
+
+        super().validate_unique()
+
+        if replaced and "username" in self.errors:
+            del self.errors["username"]
+            self.cleaned_data["username"] = username
+
     def clean_email(self):
         email = self.cleaned_data["email"]
 

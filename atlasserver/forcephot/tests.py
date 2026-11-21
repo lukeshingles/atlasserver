@@ -52,6 +52,7 @@ from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
+from django.urls import resolve
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
@@ -4971,6 +4972,21 @@ class RemoteStopTests(TestCase):
         assert any("The next task runner starts the task again" in line for line in logged), logged
         assert not any("before the next attempt" in line for line in logged), logged
 
+    def test_a_stop_signal_before_the_launch_starts_no_remote_command(self) -> None:
+        # the deferral starts before the launch, so a signal there is noted and not an exit
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+            mock.patch.object(taskrunner_main, "_stop_requested", True),
+            mock.patch("subprocess.Popen") as popen,
+        ):
+            result = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+
+        assert result == (None, None), result
+        popen.assert_not_called()
+
     def test_the_stop_command_stops_only_a_session_with_the_token(self) -> None:
         token = "0" * 31 + "a"
         with mock.patch.object(
@@ -5126,13 +5142,12 @@ class TaskRunnerEmailTests(TestCase):
         """
         from atlasserver.taskrunner import main as taskrunner_main
 
-        since = timezone.now() - dt.timedelta(minutes=1)
         self.make_batch_task(finished=True)
         cancelled = self.make_batch_task(finished=False)
         cancelled.delete()
 
-        first = taskrunner_main.send_pending_batch_emails(since=since, logfunc=lambda _msg: None)
-        second = taskrunner_main.send_pending_batch_emails(since=since, logfunc=lambda _msg: None)
+        first = taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        second = taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
 
         assert len(django_mail.outbox) == 1, [message.subject for message in django_mail.outbox]
         assert django_mail.outbox[0].to == ["m@example.com"]
@@ -5145,11 +5160,7 @@ class TaskRunnerEmailTests(TestCase):
         self.make_batch_task(finished=True)
         beats: list[None] = []
 
-        taskrunner_main.send_pending_batch_emails(
-            since=timezone.now() - dt.timedelta(minutes=1),
-            logfunc=lambda _msg: None,
-            heartbeat=lambda: beats.append(None),
-        )
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None, heartbeat=lambda: beats.append(None))
 
         assert len(beats) == 1, beats
         assert len(django_mail.outbox) == 1
@@ -5160,36 +5171,41 @@ class TaskRunnerEmailTests(TestCase):
         self.make_batch_task(finished=True)
         self.make_batch_task(finished=False)
 
-        taskrunner_main.send_pending_batch_emails(since=timezone.now() - dt.timedelta(minutes=1), logfunc=print)
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
 
         assert not django_mail.outbox
 
-    def test_the_step_ignores_tasks_that_finished_before_the_cutoff(self) -> None:
-        # such a row can have email_sent False for a batch that got its email
-        from atlasserver.taskrunner import main as taskrunner_main
+    def test_migration_0013_marks_only_the_complete_batches(self) -> None:
+        """A task from before email_sent can have False for a batch that got its email.
 
-        self.make_batch_task(finished=True)
-
-        taskrunner_main.send_pending_batch_emails(since=timezone.now() + dt.timedelta(seconds=1), logfunc=print)
-
-        assert not django_mail.outbox
-
-    def test_the_cutoff_is_the_migration_of_email_sent_and_not_the_start_of_the_runner(self) -> None:
-        """A cutoff at the start of the runner drops a batch at each restart.
-
-        The finished tasks of a batch can finish before a restart, and its last task can go after
-        it. The migration that added email_sent ran at one fixed time, and after it the field is
-        reliable.
+        The migration marks the finished tasks of each complete batch, so that the step sends no
+        second email for such a batch. A batch with an unfinished task never got its email, so
+        its finished tasks stay unmarked, and a cancel of its last task still gets the email.
         """
-        from django.db.migrations.recorder import MigrationRecorder
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
 
         from atlasserver.taskrunner import main as taskrunner_main
 
-        app, name = taskrunner_main.EMAIL_SENT_MIGRATION
-        applied = MigrationRecorder.Migration.objects.get(app=app, name=name).applied
+        migration = import_module("atlasserver.forcephot.migrations.0013_mark_complete_batches_emailed")
+        complete = self.make_batch_task(finished=True)
+        self.stamp = self.stamp - dt.timedelta(minutes=5)
+        openfinished = self.make_batch_task(finished=True)
+        openunfinished = self.make_batch_task(finished=False)
 
-        assert taskrunner_main.email_sent_reliable_since() == applied
-        assert applied <= timezone.now()
+        migration.mark_complete_batches(django_apps, None)
+
+        assert Task.objects.get(pk=complete.pk).email_sent is True
+        assert Task.objects.get(pk=openfinished.pk).email_sent is False
+        assert Task.objects.get(pk=openunfinished.pk).email_sent is False
+
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        assert not django_mail.outbox, "a batch got a second email"
+
+        openunfinished.delete()
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        assert len(django_mail.outbox) == 1, "the open batch whose last task went got no email"
 
     def test_email_waits_for_the_rest_of_the_batch(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
@@ -8518,6 +8534,59 @@ class RegistrationVerificationTests(TestCase):
         assert any("FOR UPDATE" in query["sql"] and "auth_user" in query["sql"] for query in queries), [
             query["sql"] for query in queries
         ]
+
+    def test_a_new_registration_can_reuse_the_username_of_the_replaced_account(self) -> None:
+        # for example after the loss of the password that the first registration chose
+        self.register()
+        first = User.objects.get(username="newcomer")
+        django_mail.outbox.clear()
+
+        response = self.client.post(
+            reverse("register"),
+            {
+                "username": "newcomer",
+                "password1": "a-second-password",
+                "password2": "a-second-password",
+                "email": "newcomer@example.com",
+            },
+        )
+
+        assert response.status_code == 200, response.status_code
+        assert "already exists" not in response.content.decode()
+        replacement = User.objects.get(username="newcomer")
+        assert replacement.pk != first.pk
+        assert replacement.check_password("a-second-password")
+
+    def test_the_username_of_an_account_at_a_different_address_still_blocks(self) -> None:
+        self.register(email="first@example.com")
+
+        response = self.register(email="second@example.com")
+
+        assert "already exists" in response.content.decode()
+        assert User.objects.get(username="newcomer").email == "first@example.com"
+
+    def test_the_activation_password_is_hidden_in_error_reports(self) -> None:
+        from importlib import import_module
+
+        from django.views.debug import SafeExceptionReporterFilter
+
+        self.register()
+        link = self.verification_link()
+        request = RequestFactory().post(link, self.password())
+        request.session = import_module("django.contrib.sessions.backends.db").SessionStore()
+        captured: dict[str, t.Any] = {}
+        original = views.account_password_failures_exceeded
+
+        def capture(userpk: object) -> bool:
+            captured["post"] = SafeExceptionReporterFilter().get_post_parameters(request)
+            return original(userpk)
+
+        match = resolve(urllib.parse.urlsplit(link).path)
+        with mock.patch.object(views, "account_password_failures_exceeded", side_effect=capture):
+            match.func(request, *match.args, **match.kwargs)
+
+        assert captured["post"]["password"] != self.credentials["password1"], captured
+        assert set(captured["post"]["password"]) == {"*"}, captured
 
     def test_a_verified_account_still_blocks_the_address(self) -> None:
         User.objects.create_user(username="incumbent", email="newcomer@example.com", password=None)

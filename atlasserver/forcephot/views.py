@@ -50,6 +50,7 @@ from django.utils.cache import get_conditional_response
 from django.views.decorators.cache import cache_control
 from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
+from django.views.decorators.debug import sensitive_post_parameters
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import OpenApiParameter
@@ -1760,6 +1761,8 @@ def unverified_account_for(email: str):
 
 
 @origin_only_referrer
+# the activation form posts the password of the account; Django's error reports then hide it
+@sensitive_post_parameters("password")
 def verify_email(request, uidb64: str, token: str):
     """Activate an account from the link in its verification email, once its owner confirms.
 
@@ -1906,6 +1909,8 @@ def resend_verification(request):
 
 
 @login_required
+# the form posts the current password; Django's error reports then hide it
+@sensitive_post_parameters("password")
 def change_email(request):
     status = 200
 
