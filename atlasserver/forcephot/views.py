@@ -1677,7 +1677,21 @@ def register(request):
                     # An account that waits for the confirmation of this address gives way to
                     # this one; see RegistrationForm.clean_email. Its verification link then
                     # stops working, because the link names an account that does not exist.
-                    unverified_accounts_at(form.cleaned_data["email"]).delete()
+                    #
+                    # The rows of the accounts are locked first, and is_active is read again
+                    # under the lock. verify_email locks the same row before it activates the
+                    # account. Without the lock, the delete can read the id of an inactive
+                    # account, wait for the activation, and then delete an account whose owner
+                    # verified it. Only the rows of auth_user are locked, in the order that
+                    # verify_email also uses.
+                    candidates = list(unverified_accounts_at(form.cleaned_data["email"]).values_list("pk", flat=True))
+                    replaced = list(
+                        get_user_model()
+                        .objects.select_for_update()
+                        .filter(pk__in=candidates, is_active=False)
+                        .values_list("pk", flat=True)
+                    )
+                    get_user_model().objects.filter(pk__in=replaced).delete()
 
                     user = form.save(commit=False)
                     user.is_active = False

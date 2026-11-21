@@ -5164,7 +5164,7 @@ class TaskRunnerEmailTests(TestCase):
 
         assert not django_mail.outbox
 
-    def test_the_step_ignores_tasks_that_finished_before_the_runner_started(self) -> None:
+    def test_the_step_ignores_tasks_that_finished_before_the_cutoff(self) -> None:
         # such a row can have email_sent False for a batch that got its email
         from atlasserver.taskrunner import main as taskrunner_main
 
@@ -5173,6 +5173,23 @@ class TaskRunnerEmailTests(TestCase):
         taskrunner_main.send_pending_batch_emails(since=timezone.now() + dt.timedelta(seconds=1), logfunc=print)
 
         assert not django_mail.outbox
+
+    def test_the_cutoff_is_the_migration_of_email_sent_and_not_the_start_of_the_runner(self) -> None:
+        """A cutoff at the start of the runner drops a batch at each restart.
+
+        The finished tasks of a batch can finish before a restart, and its last task can go after
+        it. The migration that added email_sent ran at one fixed time, and after it the field is
+        reliable.
+        """
+        from django.db.migrations.recorder import MigrationRecorder
+
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        app, name = taskrunner_main.EMAIL_SENT_MIGRATION
+        applied = MigrationRecorder.Migration.objects.get(app=app, name=name).applied
+
+        assert taskrunner_main.email_sent_reliable_since() == applied
+        assert applied <= timezone.now()
 
     def test_email_waits_for_the_rest_of_the_batch(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
@@ -8445,6 +8462,62 @@ class RegistrationVerificationTests(TestCase):
         assert self.client.post(squatterlink, {"password": "squatter-password"}).status_code == 400
         assert self.client.post(self.verification_link(), self.password()).status_code == 302
         assert User.objects.get(username="newcomer").is_active is True
+
+    def test_an_account_activated_during_the_replacement_stays(self) -> None:
+        """The replacement reads is_active again under the row lock that verify_email also takes.
+
+        Here the activation lands between the read of the candidates and the lock, as a
+        concurrent verify_email can on MySQL. The account of the owner must stay.
+        """
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "firstcomer",
+                "password1": "first-password-ok",
+                "password2": "first-password-ok",
+                "email": "newcomer@example.com",
+            },
+        )
+        django_mail.outbox.clear()
+        real = views.unverified_accounts_at
+
+        def activated_after_the_read(email: str) -> t.Any:
+            candidates = list(real(email))
+            User.objects.filter(username="firstcomer").update(is_active=True)
+            return User.objects.filter(pk__in=[user.pk for user in candidates])
+
+        with mock.patch.object(views, "unverified_accounts_at", side_effect=activated_after_the_read):
+            self.register()
+
+        # The activation ran inside the transaction of the registration, and the address index
+        # then refused the new account, so the rollback also undid the activation. What counts
+        # is that the replacement did not delete the account.
+        assert User.objects.filter(username="firstcomer").exists(), "the replacement deleted an activated account"
+        assert not User.objects.filter(username="newcomer").exists()
+
+    def test_the_replaced_accounts_are_locked(self) -> None:
+        # SQLite has no row locks and Django emits nothing for it there; MySQL, which CI and
+        # production use, does
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "firstcomer",
+                "password1": "first-password-ok",
+                "password2": "first-password-ok",
+                "email": "newcomer@example.com",
+            },
+        )
+        django_mail.outbox.clear()
+
+        with CaptureQueriesContext(connection) as queries:
+            self.register()
+
+        assert any("FOR UPDATE" in query["sql"] and "auth_user" in query["sql"] for query in queries), [
+            query["sql"] for query in queries
+        ]
 
     def test_a_verified_account_still_blocks_the_address(self) -> None:
         User.objects.create_user(username="incumbent", email="newcomer@example.com", password=None)

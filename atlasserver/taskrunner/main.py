@@ -966,6 +966,25 @@ def send_email_if_needed(task, logfunc) -> None:
         )
 
 
+# The migration that added Task.email_sent; see email_sent_reliable_since.
+EMAIL_SENT_MIGRATION: t.Final = ("forcephot", "0011_usage_day")
+
+
+def email_sent_reliable_since() -> dt.datetime | None:
+    """Return the time from which the email_sent field of a finished task is reliable, or None if no record says.
+
+    Migration 0011 added the field and gave each existing row False, also the rows of a batch
+    that had its email already. django_migrations records when the migration ran. A task that
+    finished after that time has the value that send_email_if_needed wrote. A runner of the old
+    code can finish tasks between the migration and the restart of the runner, which the README
+    puts directly after the migration.
+    """
+    from django.db.migrations.recorder import MigrationRecorder
+
+    app, name = EMAIL_SENT_MIGRATION
+    return MigrationRecorder.Migration.objects.filter(app=app, name=name).values_list("applied", flat=True).first()
+
+
 def send_pending_batch_emails(
     since: dt.datetime, logfunc=log_general, heartbeat: t.Callable[[], None] | None = None
 ) -> int:
@@ -978,9 +997,10 @@ def send_pending_batch_emails(
     unfinished task, and sends their email. The email_sent marker of send_email_if_needed makes
     sure that one batch gets one email, also when a slot finishes a task of it at the same time.
 
-    Only the tasks that finished after `since`, which is the start of this task runner. A task that
-    finished before that time can have email_sent False for a batch that got its email: the field
-    did not exist when that email went.
+    Only the tasks that finished after `since`, which is the time when the email_sent field
+    became reliable (email_sent_reliable_since). A task that finished before that time can have
+    email_sent False for a batch that got its email: the field did not exist when that email
+    went. The time is fixed, so a restart of the task runner does not drop a batch.
 
     `heartbeat` is called before each send, as in remove_old_tasks: each send waits for the mail
     server, and this runs in the main loop.
@@ -1748,8 +1768,10 @@ def main() -> None:
         log_general(x)
 
     logfunc("Starting forcedphot task runner...")
-    # the start of this task runner; see send_pending_batch_emails
-    runnerstarted = dt.datetime.now(dt.UTC)
+    # read once, because the time of a migration does not change; see send_pending_batch_emails
+    emailsince = email_sent_reliable_since()
+    if emailsince is None:
+        logfunc("ERROR: no record of migration 0011, so the maintenance sends no pending batch email")
     mp.set_start_method("spawn")
     numslots: int = runnerstatus.NUMSLOTS
     procs: list[mp.Process | None] = [None for _ in range(numslots)]
@@ -1816,7 +1838,7 @@ def main() -> None:
             # the interpreter then waits for every running worker, and the supervisor restarts
             # into the same sweep before any dispatch. A failed sweep is retried in an hour.
             try:
-                do_maintenance(heartbeat=maintenance_heartbeat, emailsince=runnerstarted)
+                do_maintenance(heartbeat=maintenance_heartbeat, emailsince=emailsince)
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
                 logfunc(f"ERROR: the maintenance sweep failed: {ex}")
             refresh_status()
