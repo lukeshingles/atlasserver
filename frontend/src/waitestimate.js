@@ -102,14 +102,11 @@ export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = [], runn
     // throughout, but a user who asked for images and then submitted a light curve waits through
     // the image request, and a quarter of an hour of that is not a minute of it. A pass has the
     // mean price of the own tasks ahead.
-    let owntotal = 0;
-    for (const task of ownahead) {
-        const median = runtimes?.[task.requesttype];
-        if (!(median > 0)) {
-            // one of this user's own tasks ahead cannot be priced, and it is directly in the way
-            return null;
-        }
-        owntotal += median;
+    //
+    // A task of this user ahead that cannot be priced is directly in the way, so it gives no value.
+    const owntotal = sumOfMedians(ownahead.map((task) => task.requesttype), runtimes);
+    if (owntotal == null) {
+        return null;
     }
     // The user's tasks that have started use slots of the user also. With eight slots and eight
     // tasks in them, the task at the front waits for one of the eight to finish: that is one
@@ -120,14 +117,11 @@ export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = [], runn
     if (ownpasses > 0) {
         // A pass has the mean price of the started tasks and the own tasks ahead together. Eight
         // image requests in the slots and one light curve ahead are passes of image requests.
-        let startedtotal = 0;
-        for (const requesttype of ownstarted) {
-            const median = runtimes?.[requesttype];
-            if (!(median > 0)) {
-                // a started task of this user cannot be priced, and it has a slot of the user
-                return null;
-            }
-            startedtotal += median;
+        // A started task of this user that cannot be priced has a slot of the user, so it gives
+        // no value.
+        const startedtotal = sumOfMedians(ownstarted, runtimes);
+        if (startedtotal == null) {
+            return null;
         }
         ownseconds = ownpasses * (owntotal + startedtotal) / (ownahead.length + ownstarted.length);
     }
@@ -160,6 +154,21 @@ export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = [], runn
     // the own tasks and the tasks of the other users are worked through at the same time, so the
     // wait is the longer of them
     return Math.max(ownseconds, otherseconds);
+}
+
+/**
+ * The sum of the median run times of the given request types, or null if one of them has no median.
+ */
+function sumOfMedians(requesttypes, runtimes) {
+    let total = 0;
+    for (const requesttype of requesttypes) {
+        const median = runtimes?.[requesttype];
+        if (!(median > 0)) {
+            return null;
+        }
+        total += median;
+    }
+    return total;
 }
 
 /**

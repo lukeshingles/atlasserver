@@ -82,7 +82,6 @@ from atlasserver.forcephot.forms import unverified_accounts_at
 from atlasserver.forcephot.locks import try_lock
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
-from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
 from atlasserver.forcephot.misc import pdfplot_failed_cachekey
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
@@ -2311,7 +2310,6 @@ def resultplotdatajs(request, taskid):
                         + "]);\n",
                     )
                 )
-            mjd_today = datetime_to_mjd(dt.datetime.now(dt.UTC))
             xmin = dfforcedphot["#MJD"].min()
             xmax = dfforcedphot["#MJD"].max()
             ymin, ymax = flux_axis_limits(dfforcedphot.uJy.min(), dfforcedphot.uJy.max())
@@ -2320,8 +2318,6 @@ def resultplotdatajs(request, taskid):
                 (
                     "var jslclimits = {",
                     f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},',
-                    f'"discoveryDate": {xmin},',
-                    f'"today": {mjd_today},',
                     "};\n",
                     f'jslimitsglobal["#{divid}"] = jslclimits;\n',
                     f'jslcdataglobal["#{divid}"] = jslcdata;\n',

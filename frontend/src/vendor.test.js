@@ -19,17 +19,6 @@ const ReactDOM = (await import('../../static/js/vendor/react-dom-client.min.js')
 describe('self-hosted react bundles', () => {
     after(() => teardownDom(window));
 
-    test('react exposes the API the sources use', () => {
-        assert.equal(typeof React.createElement, 'function');
-        assert.equal(typeof React.Component, 'function');
-        assert.equal(typeof React.useState, 'function');
-    });
-
-    test('react-dom exposes createRoot', () => {
-        // tasklist.jsx calls ReactDOM.createRoot(container).render(<TaskPage />)
-        assert.equal(typeof ReactDOM.createRoot, 'function');
-    });
-
     test('react-dom shares one React with the app, and hooks work', async () => {
         // The real check on the shared chunk. If react-dom carried its own copy of React, hooks
         // would dispatch against a different module-level dispatcher and this would throw

@@ -1,7 +1,3 @@
-.collapsible {
-  cursor: pointer;
-}
-
 body {
   font-size: 17px;
   margin-bottom: 3em;
@@ -191,13 +187,6 @@ size.
   fill: #a1aed4;
 }
 
-/* bootstrap 3 floated navbar items, so the links needed a padding-top to sit at the foot of the
-   118px logo. Bootstrap 5's navbar is flexbox and centres them against the brand on its own. */
-
-/* div#content {
-  margin-top: 0em;
-} */
-
 /* The one box above the content, on every page. It holds the note about the data, and the status
    of the task runner from /taskrunnerstatus.json. It is a box, and not a line of small grey text.
    The note gives a limit of the measurements, which is of more importance than the smallest type
@@ -338,10 +327,8 @@ input::placeholder {
 
 div.newrequest {
   float: right;
-  /* width: 50%; */
   width: 28em;
   padding-left: 2em;
-  /* padding-right: 2em; */
 }
 
 h2 {
@@ -413,10 +400,8 @@ form#newrequest button[type=submit] {
 }
 
 div#tasklist {
-  /* width: 50%; */
   width: calc(100% - 28em);
   padding-right: 2em;
-  /* float: right; */
 }
 
 div#tasklist.singletaskdetail {
@@ -731,8 +716,6 @@ li.task.taskskeleton:hover {
 }
 
 ul.tasks div.rightside {
-  /* background-color: #ff4e19; */
-  /* border-color: #e59400; */
   float: right;
   text-align: right;
 }
@@ -1274,10 +1257,6 @@ flow -- text-sized, and so above the text baseline without the nudge.
   }
 }
 
-span.helptext {
-  display: block;
-}
-
 /* account forms (change email, change/reset password). These pages used to pull in the Django
    admin stylesheet, which shrank the text to 13px, uppercased the submit button and depended on
    CSS variables from an admin stylesheet that is not loaded here. */
@@ -1409,7 +1388,6 @@ ul#taskfilters>* {
 }
 
 table.countrystats {
-  /* font-size: smaller; */
   margin-bottom: 2em;
   margin-top: 0;
 }

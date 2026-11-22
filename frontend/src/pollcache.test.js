@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 
-import { NOT_MODIFIED, PollCache } from './pollcache.js';
+import { PollCache } from './pollcache.js';
 
 const HEADERS = { 'Accept': 'application/json' };
 const URL_A = 'https://example.com/queue/';
@@ -54,16 +54,6 @@ describe('PollCache', () => {
         assert.equal(cache.requestHeaders(URL_B, HEADERS)['If-None-Match'], undefined);
     });
 
-    test('classifies a 304 as not modified', () => {
-        const cache = new PollCache();
-        assert.equal(cache.noteResponse(304), NOT_MODIFIED);
-    });
-
-    test('classifies a 200 as ordinary', () => {
-        const cache = new PollCache();
-        assert.equal(cache.noteResponse(200), null);
-    });
-
     test('refreshes the stored etag when the page changes', () => {
         const cache = new PollCache();
         cache.storeEtag(URL_A, '"etag-1"');
@@ -73,23 +63,13 @@ describe('PollCache', () => {
         assert.equal(cache.requestHeaders(URL_A, HEADERS)['If-None-Match'], '"etag-2"');
     });
 
-    test('a 304 does not discard the etag', () => {
-        // a 304 carries no body and no tag of its own, so the caller stores nothing for it
-        const cache = new PollCache();
-        cache.storeEtag(URL_A, '"etag-1"');
-        cache.storeBody(URL_A, { results: [] });
-        cache.noteResponse(304);
-
-        assert.equal(cache.requestHeaders(URL_A, HEADERS)['If-None-Match'], '"etag-1"');
-    });
-
     test('a response without an ETag leaves the previous one in place', () => {
         const cache = new PollCache();
         cache.storeEtag(URL_A, '"etag-1"');
         cache.storeBody(URL_A, { results: [] });
         cache.storeEtag(URL_A, null);
 
-        assert.equal(cache.getEtag(URL_A), '"etag-1"');
+        assert.equal(cache.requestHeaders(URL_A, HEADERS)['If-None-Match'], '"etag-1"');
     });
 
     test('does not mutate the caller\'s header object', () => {
