@@ -122,9 +122,9 @@ seconds, and it also stops the remote command and deletes the remote files of th
 To stop the use of the server by an account, clear the "Active" box of the account in the admin
 site. The account and its finished tasks stay in the database. The tasks of an inactive account
 lose their queue positions in a maximum of 30 seconds, and a task with no position cannot start.
-The hourly maintenance of the task runner then deletes the unfinished tasks of the account. A
-task of the account that is in a slot stops in a maximum of 15 seconds, as a task that its user
-deletes.
+The hourly maintenance of the task runner then deletes the unfinished tasks of the account. This
+can occur up to one hour after the change. A task of the account that is in a slot stops in a
+maximum of 15 seconds after this deletion, as a task that its user deletes.
 
 The list of users in the admin site (`/admin/auth/user/`) has two columns for the usage. "Run
 time (7 days)" is the run time with no decay, and a click on its header sorts the list. "Usage in

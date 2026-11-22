@@ -195,3 +195,14 @@ class ThrottledPasswordChangeForm(PasswordChangeForm):
         except forms.ValidationError:
             note_account_password_failure(self.user.pk)
             raise
+
+
+class ThrottledAdminPasswordChangeForm(ThrottledPasswordChangeForm):
+    """The form of the admin page that changes the password of the signed-in account.
+
+    AdminSite.password_change reads site.password_change_form at request time. Its default form
+    checks the old password with no budget.
+    """
+
+    # the same as django.contrib.admin.forms.AdminPasswordChangeForm
+    required_css_class = "required"

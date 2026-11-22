@@ -12,6 +12,7 @@ from rest_framework import routers
 
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import views
+from atlasserver.forcephot.forms import ThrottledAdminPasswordChangeForm
 from atlasserver.forcephot.login import ObtainAuthTokenThrottled
 from atlasserver.forcephot.login import ThrottledAdminAuthenticationForm
 from atlasserver.forcephot.login import ThrottledLoginView
@@ -24,6 +25,8 @@ router.register(r"queue", views.ForcePhotTaskViewSet)
 admin.site.site_url = f"{settings.PATHPREFIX}/"
 # read at request time by AdminSite.login, so the admin's password check shares the budget
 admin.site.login_form = ThrottledAdminAuthenticationForm
+# likewise read at request time by AdminSite.password_change
+admin.site.password_change_form = ThrottledAdminPasswordChangeForm
 admin.site.site_header = "ATLAS Forced Photometry Admin"
 admin.site.site_title = "ATLAS Forced Photometry"
 

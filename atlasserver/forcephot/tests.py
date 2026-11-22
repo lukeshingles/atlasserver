@@ -45,6 +45,7 @@ from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.db import IntegrityError
 from django.db import models
+from django.db import OperationalError
 from django.db.migrations import RunPython
 from django.test import Client
 from django.test import override_settings
@@ -1807,6 +1808,28 @@ class EmailChangeTests(TestCase):
 
         assert blocked.status_code == 429, blocked.status_code
         assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        self.user.refresh_from_db()
+        assert self.user.check_password("testpassword123"), "the password changed over the budget"
+
+    def test_the_admin_password_change_page_has_the_same_budget(self) -> None:
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+        newpassword = "a-new-password-for-the-test"
+
+        def change(oldpassword: str) -> t.Any:
+            return self.client.post(
+                reverse("admin:password_change"),
+                {"old_password": oldpassword, "new_password1": newpassword, "new_password2": newpassword},
+            )
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert change("guess").status_code == 200
+            blocked = change("testpassword123")
+
+        assert blocked.status_code == 200, blocked.status_code
+        assert throttles.ACCOUNT_GUESS_LIMIT_MESSAGE in blocked.content.decode()
         self.user.refresh_from_db()
         assert self.user.check_password("testpassword123"), "the password changed over the budget"
 
@@ -4859,12 +4882,16 @@ class RemoteStopTests(TestCase):
         self.task = Task.objects.create(user=user, ra=1.0, dec=2.0)
         self.sshoptions = ["-oControlPath=~/x/atlas-0"]
 
+    def tearDown(self) -> None:
+        taskrunner_main._stop_requested = False  # noqa: SLF001
+        taskrunner_main._defer_stop = False  # noqa: SLF001
+
     def run_attempt(
-        self, *, cancelled: bool = False, stopping: bool = False, returncode: int = 0
+        self, *, cancelled: bool = False, stopping: bool = False, timed_out: bool = False, returncode: int = 0
     ) -> tuple[list[str], mock.Mock]:
         """Run runtask with a remote command that does not end, and return the ssh command and the stop mock."""
         proc = mock.MagicMock()
-        if cancelled or stopping:
+        if cancelled or stopping or timed_out:
             proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=1)
         else:
             proc.communicate.return_value = ("", "")
@@ -4881,11 +4908,13 @@ class RemoteStopTests(TestCase):
             mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=stopping),
             mock.patch.object(taskrunner_main.os, "kill") as kill,
             mock.patch.object(taskrunner_main, "stop_remote_job") as stop,
+            # the local deadline is TASK_MAXTIME_SECONDS + 30, so this deadline is in the past
+            mock.patch.object(taskrunner_main, "TASK_MAXTIME_SECONDS", -31.0 if timed_out else 3600.0),
         ):
             result = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
 
         assert result == (None, None), result
-        if cancelled or stopping:
+        if cancelled or stopping or timed_out:
             kill.assert_called_once_with(proc.pid, signal.SIGTERM)
         return popen.call_args.args[0], stop
 
@@ -4894,7 +4923,10 @@ class RemoteStopTests(TestCase):
 
         remote = command[-1]
         match = re.match(
-            r"echo \$\$ > (~/atlasserver/results/job\d+\.([0-9a-f]{32})\.pid); nice -n 19 timeout ", remote
+            r"echo \$\$ > (~/atlasserver/results/job\d+\.([0-9a-f]{32})\.pid); "
+            r"if \[ -e (~/atlasserver/results/job\d+\.\2\.stop) \]; then rm -f \1 \3; exit 143; fi; "
+            r"nice -n 19 timeout ",
+            remote,
         )
         assert match is not None, remote
         assert remote.endswith(f"; status=$?; rm -f {match.group(1)}; exit $status"), remote
@@ -4916,6 +4948,39 @@ class RemoteStopTests(TestCase):
 
         stop.assert_called_once()
         assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_local_timeout_stops_the_remote_command_and_keeps_the_files(self) -> None:
+        # the remote timeout stops only the first command, and the preview script can still run
+        _command, stop = self.run_attempt(timed_out=True)
+
+        stop.assert_called_once()
+        assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_database_error_in_the_cancel_check_keeps_the_supervision(self) -> None:
+        # an exception there would end the slot, and the remote command would run on
+        proc = mock.MagicMock()
+        proc.communicate.side_effect = [subprocess.TimeoutExpired(cmd="ssh", timeout=1), ("", ""), ("", "")]
+        proc.returncode = 0
+        logged: list[str] = []
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
+            mock.patch("subprocess.Popen", return_value=proc),
+            mock.patch.object(taskrunner_main, "CANCEL_CHECK_SECONDS", 0.0),
+            mock.patch.object(taskrunner_main, "task_exists", side_effect=[OperationalError("gone away"), True]),
+            mock.patch.object(taskrunner_main.os, "kill") as kill,
+            mock.patch.object(taskrunner_main, "stop_remote_job") as stop,
+        ):
+            result = taskrunner_main.runtask(self.task, logfunc=logged.append, slotid=0)
+
+        assert result == (None, None), result
+        kill.assert_not_called()
+        stop.assert_not_called()
+        assert proc.communicate.call_count == 3, "the slot did not wait for the end of the remote command"
+        assert any("could not check if the task exists: gone away" in line for line in logged), logged
 
     def test_a_dropped_connection_stops_the_remote_command_and_keeps_the_files(self) -> None:
         # the remote command continues without its connection, and the retry writes the same files
@@ -4955,6 +5020,29 @@ class RemoteStopTests(TestCase):
 
         finish.assert_called_once()
         assert finish.call_args.kwargs["error_msg"] is None, finish.call_args
+
+    def test_a_stop_signal_after_the_collection_waits_for_the_record(self) -> None:
+        # The signal comes after runtask, and before do_task records the result. If the slot ended
+        # there, the next task runner would run the whole task again.
+        def collect(**_kwargs: t.Any) -> tuple[Path, None]:
+            taskrunner_main.request_stop(signal.SIGTERM, None)
+            return resultfile, None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultfile = Path(tmpdir, "job.txt")
+            resultfile.write_text("###MJD uJy\n", encoding="utf-8")
+            with (
+                mock.patch.object(taskrunner_main, "signal"),
+                mock.patch.object(taskrunner_main, "runtask", side_effect=collect),
+                mock.patch.object(taskrunner_main, "log_general"),
+                mock.patch.object(taskrunner_main, "mark_finished", return_value=True) as finish,
+                mock.patch.object(taskrunner_main, "notify_finished"),
+            ):
+                taskrunner_main.run_slot(self.task, slotid=0)
+
+        finish.assert_called_once()
+        assert taskrunner_main._stop_requested  # noqa: SLF001
+        assert not taskrunner_main._defer_stop, "the deferral outlived the attempt"  # noqa: SLF001
 
     def test_the_stop_log_says_whether_a_remote_command_ran(self) -> None:
         logged: list[str] = []
@@ -4997,6 +5085,8 @@ class RemoteStopTests(TestCase):
         assert kept[:3] == ["ssh", *self.sshoptions, taskrunner_main.REMOTE_SERVER], kept
         assert f"grep -q -F {token}; then pkill -TERM -s" in kept[-1], kept[-1]
         assert taskrunner_main.remote_pidfile(self.task.id, token) in kept[-1]
+        # the stop file comes before the read of the pid file; see stop_remote_job
+        assert kept[-1].startswith(f"touch {taskrunner_main.remote_stopfile(self.task.id, token)}; p="), kept[-1]
         assert "rm -rf" not in kept[-1], "the files of the next attempt must stay"
         jobname = taskrunner_main.jobfilename(self.task.id)
         assert f"rm -rf ~/atlasserver/results/{jobname}.* ~/atlasserver/results/task{self.task.id:05d}" in deleted[-1]
@@ -5022,6 +5112,14 @@ class SlotStopSignalTests(SimpleTestCase):
         with taskrunner_main.stop_signals_deferred():
             taskrunner_main.request_stop(signal.SIGINT, None)
             assert taskrunner_main.attempt_must_stop()
+
+    def test_a_nested_deferral_keeps_the_outer_deferral(self) -> None:
+        with taskrunner_main.stop_signals_deferred():
+            with taskrunner_main.stop_signals_deferred():
+                pass
+            taskrunner_main.request_stop(signal.SIGINT, None)
+            assert taskrunner_main.attempt_must_stop()
+        assert not taskrunner_main._defer_stop  # noqa: SLF001
 
     def test_a_signal_outside_the_poll_loop_ends_the_slot(self) -> None:
         # as the default action of the signal does: the slot has no remote command to stop there
@@ -5149,6 +5247,18 @@ class TaskRunnerEmailTests(TestCase):
         assert len(django_mail.outbox) == 1, [message.subject for message in django_mail.outbox]
         assert django_mail.outbox[0].to == ["m@example.com"]
         assert (first, second) == (1, 0), (first, second)
+
+    def test_a_refused_batch_email_is_not_counted(self) -> None:
+        # the mail server refused the message, so the log must not report it as sent
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        self.make_batch_task(finished=False).delete()
+
+        with mock.patch.object(taskrunner_main.EmailMessage, "send", side_effect=OSError("refused")):
+            count = taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+
+        assert count == 0, count
 
     def test_the_step_keeps_the_status_file_fresh_before_each_send(self) -> None:
         # each send waits for the mail server, and the maintenance blocks the main loop

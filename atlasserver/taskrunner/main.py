@@ -24,6 +24,8 @@ import django
 from django.conf import settings
 from django.core.mail import EmailMessage
 from django.db import close_old_connections
+from django.db import DatabaseError
+from django.db import InterfaceError
 from django.db import models
 from django.db import transaction
 from django.db.models import prefetch_related_objects
@@ -91,8 +93,8 @@ STOP_MARKER: t.Final = "atlasserver-stopped"
 REMOTE_RESULT_DIR: t.Final = "~/atlasserver/results"
 
 # The state of a slot process for its stop signals; see request_stop. _stop_requested is True
-# after a stop signal. _defer_stop is True while the poll loop of runtask runs, where a stop
-# signal waits for the loop: the loop then stops the remote command before the slot ends.
+# after a stop signal. _defer_stop is True while the slot runs its attempt. A stop signal then
+# waits: the poll loop of runtask stops the remote command, and do_task records a collected result.
 _stop_requested = False
 _defer_stop = False
 
@@ -308,6 +310,11 @@ def remote_pidfile(taskid: int, token: str) -> str:
     return f"{REMOTE_RESULT_DIR}/{jobfilename(taskid, f'.{token}.pid')}"
 
 
+def remote_stopfile(taskid: int, token: str) -> str:
+    """Return the remote file that tells the remote command of one attempt not to start; see stop_remote_job."""
+    return f"{REMOTE_RESULT_DIR}/{jobfilename(taskid, f'.{token}.stop')}"
+
+
 def stop_remote_job(
     taskid: int, token: str, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, delete_files: bool
 ) -> None:
@@ -320,6 +327,13 @@ def stop_remote_job(
     must have a process whose arguments hold the token. Thus a session id that a different
     command uses now is not stopped.
 
+    The stop can come before the remote command writes its pid file, and sshd can start the
+    command after the stop. Thus this function first writes the stop file of the attempt (see
+    remote_stopfile), and the remote command ends at once if it finds this file after it writes
+    its pid file. Because of this order, either the remote command finds the stop file, or this
+    function finds the pid file. The stop file stays, because the remote command can start after
+    this function ends.
+
     With delete_files, the remote files of the task go also: the task has no row, and nothing
     collects them. Without it, only the pid file goes, because the next attempt of the task
     writes the same file names.
@@ -328,6 +342,7 @@ def stop_remote_job(
     # The command prints STOP_MARKER only when it sends the signal. Its exit code is the code of
     # the last rm, so the code does not tell if a remote command ran.
     command = (
+        f"touch {remote_stopfile(taskid, token)}; "
         f'p={pidfile}; if [ -s "$p" ]; then s=$(cat "$p"); '
         f'if ps -s "$s" -o args= 2>/dev/null | grep -q -F {token}; then pkill -TERM -s "$s" && echo {STOP_MARKER}; '
         'fi; fi; rm -f "$p"'
@@ -358,9 +373,10 @@ def stop_remote_job(
 def request_stop(signum: int, frame: object) -> None:
     """Handle a stop signal in a slot process.
 
-    In the poll loop of runtask, the signal only sets _stop_requested. The loop then stops the
-    remote command and ends the attempt; see attempt_must_stop. Outside the loop, the slot ends at
-    once, as with the default action of the signal.
+    In an attempt, the signal only sets _stop_requested. The poll loop of runtask then stops the
+    remote command and ends the attempt; see attempt_must_stop. After the remote command ended, the
+    slot records the result that it collected, and then it ends. Outside an attempt, the slot ends
+    at once, as with the default action of the signal.
     """
     global _stop_requested  # noqa: PLW0603
     _stop_requested = True
@@ -370,13 +386,17 @@ def request_stop(signum: int, frame: object) -> None:
 
 @contextlib.contextmanager
 def stop_signals_deferred() -> t.Generator[None]:
-    """Make a stop signal wait for the poll loop of runtask, for the duration of the block; see request_stop."""
+    """Make a stop signal wait for the end of the block; see request_stop.
+
+    A nested block keeps the deferral of the outer block.
+    """
     global _defer_stop  # noqa: PLW0603
+    outer = _defer_stop
     _defer_stop = True
     try:
         yield
     finally:
-        _defer_stop = False
+        _defer_stop = outer
 
 
 def attempt_must_stop() -> bool:
@@ -558,11 +578,16 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     localresultfile = Path(settings.RESULTS_DIR, filename)
     settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # The remote command writes the id of its session first, so that a cancel can stop it; see
-    # stop_remote_job. sshd makes the remote shell the leader of a new session, so $$ is that id.
+    # The remote command writes the id of its session first, so that a cancel can stop it. Then it
+    # ends if a stop came before it started. See stop_remote_job. sshd makes the remote shell the
+    # leader of a new session, so $$ is that id.
     token = uuid.uuid4().hex
     pidfile = remote_pidfile(task.id, token)
-    atlascommand = f"echo $$ > {pidfile}; nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
+    stopfile = remote_stopfile(task.id, token)
+    atlascommand = (
+        f"echo $$ > {pidfile}; if [ -e {stopfile} ]; then rm -f {pidfile} {stopfile}; exit 143; fi; "
+        f"nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
+    )
     if task.request_type == "FP":
         atlascommand += build_fp_command(task, remoteresultfile=remoteresultfile)
 
@@ -637,7 +662,13 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
                 # a task that has already been running for minutes is not more urgent than this.
                 if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
                     lastcancelcheck = now
-                    cancelled = not task_exists(taskid=task.id)
+                    try:
+                        cancelled = not task_exists(taskid=task.id)
+                    except (DatabaseError, InterfaceError) as ex:
+                        # The slot continues to supervise the remote command, and it checks again
+                        # after the interval. If the slot ended here, the remote command would run
+                        # on, and a retry would start a second command that writes the same files.
+                        logfunc(f"ERROR: could not check if the task exists: {ex}")
                 # no query: a flag and a pipe of the parent process
                 stopping = attempt_must_stop()
                 timed_out = (now - starttime) >= (
@@ -661,9 +692,9 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
                 proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
 
             # The kill above stops only the local ssh client. At a timeout, the remote timeout
-            # stopped the command already. A cancelled task has no row, so its files go too.
-            if cancelled or stopping:
-                stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=cancelled)
+            # stopped only the first command, and the commands after it can still run. A
+            # cancelled task has no row, so its files go too.
+            stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=cancelled)
             return None, None  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = proc.communicate()
@@ -839,19 +870,22 @@ def notify_finished(task, logfunc) -> None:
     send_email_if_needed(task=task, logfunc=logfunc)
 
 
-def send_email_if_needed(task, logfunc) -> None:
-    """Send an email to the user if requested and all tasks in the batch are finished."""
+def send_email_if_needed(task, logfunc) -> bool:
+    """Send an email to the user if requested and all tasks in the batch are finished.
+
+    Return True if this call sent the email.
+    """
     if not task.send_email:
         logfunc(f"Completed successfully ({task.user.username} did not request an email)")
-        return
+        return False
 
     if task.from_api:
         logfunc("Requested email for an API-originated task (not sending email)")
-        return
+        return False
 
     if not task.user.email:
         logfunc(f"Tasked completed ok, but user {task.user.username} has no email address!")
-        return
+        return False
 
     # if we find an unfinished task in the same batch, hold off sending the email.
     # same batch here is defined as being queued by the same user with identical timestamps
@@ -886,7 +920,7 @@ def send_email_if_needed(task, logfunc) -> None:
         # and thus only that slot sends the email.
         if not batchtasks.filter(email_sent=False).update(email_sent=True):
             logfunc("A different slot sends the email for this batch")
-            return
+            return False
 
         logfunc(f"Sending email to {task.user.email} containing {batchtaskcount} tasks")
 
@@ -913,15 +947,17 @@ def send_email_if_needed(task, logfunc) -> None:
             # a refused recipient or an unreachable mail server must not propagate: it would kill
             # the worker before the task is marked finished, and the task would be re-run forever
             logfunc(f"ERROR: could not send email to {task.user.email}: {ex}")
-    else:
-        logfunc(
-            f"Waiting to send email until remaining {batchtasks_unfinished} "
-            f"of {batchtaskcount} batched tasks are finished."
-        )
+            return False
+        return True
+
+    logfunc(
+        f"Waiting to send email until remaining {batchtasks_unfinished} of {batchtaskcount} batched tasks are finished."
+    )
+    return False
 
 
 def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], None] | None = None) -> int:
-    """Send the email of each batch whose last unfinished task went away before it finished, and return their number.
+    """Send the email of each batch whose last task went before it finished. Return the number of emails sent.
 
     A slot sends the email of a batch when it finishes the last unfinished task of the batch; see
     send_email_if_needed. When that task goes before it finishes (its user cancels it, or the
@@ -970,8 +1006,8 @@ def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], Non
 
         if heartbeat is not None:
             heartbeat()
-        send_email_if_needed(task=task, logfunc=logfunc)
-        sent += 1
+        if send_email_if_needed(task=task, logfunc=logfunc):
+            sent += 1
 
     return sent
 
@@ -1356,7 +1392,8 @@ def run_slot(task, slotid: int, endedwall: t.Any = None) -> None:
         signal(stopsignal, request_stop)
 
     try:
-        do_task(task, slotid)
+        with stop_signals_deferred():
+            do_task(task, slotid)
     finally:
         if endedwall is not None:
             endedwall.value = time.time()
