@@ -1,11 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.8"
+# requires-python = ">=3.14"
 # dependencies = ["pandas"]
 # ///
 """Input a job data file and produce a zip of FITS images. This script is to be run on sc01.
 
-The python3 command on sc01 is Python 3.8. Use only the features of Python 3.8 in this script.
+The task runner starts this script on sc01 with "uv run --script". uv reads the Python version
+and the packages from the block above.
 """
 
 import shutil
@@ -54,9 +55,7 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     dfimages = dfforcedphot[:1000]
     imgfolder = "red" if reduced else "diff"
     fitsext = "fits" if reduced else "diff"
-    # The three columns come from one DataFrame, so they have the same length. zip() has no
-    # strict argument in Python 3.8, which is the version that runs this script on sc01.
-    for index, (obs, ra, dec) in enumerate(zip(dfimages["Obs"], dfimages["RA"], dfimages["Dec"])):
+    for index, (obs, ra, dec) in enumerate(zip(dfimages["Obs"], dfimages["RA"], dfimages["Dec"], strict=True)):
         # obs looks like '01a59309o0235c'
         fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
         fitsoutpath = Path(tmpfolder / (f"{obs}.fits" if reduced else f"{obs}_diff.fits"))

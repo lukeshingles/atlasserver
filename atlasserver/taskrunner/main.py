@@ -33,6 +33,10 @@ from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.taskrunner import status as runnerstatus
 
 REMOTE_SERVER = "atlas"
+# starts an atlas_*.py script on REMOTE_SERVER. uv reads the Python version and the packages from
+# the inline metadata block of the script. The env on sc01 has no -S option, so the shebang line of
+# the script cannot start uv there.
+REMOTE_SCRIPT_RUNNER: t.Final = "uv run --quiet --script"
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
@@ -464,7 +468,7 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
 
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}; "
-    atlascommand += f"~/atlas_gettaskimage.py {remoteresultfile}"
+    atlascommand += f"{REMOTE_SCRIPT_RUNNER} ~/atlas_gettaskimage.py {remoteresultfile}"
     atlascommand += " red" if task.use_reduced else " diff"
 
     return atlascommand
@@ -485,7 +489,7 @@ def build_ssostack_command(task, remoteresultfile: Path, remotedatafile: Path, r
         atlascommand += " sites='hko mlo chl sth tdo'"
     atlascommand += f" | tee {remotedatafile}; "
     atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
-    atlascommand += f"~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
+    atlascommand += f"{REMOTE_SCRIPT_RUNNER} ~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
     atlascommand += f" rm -rf {remotetaskdir}"
 
     return atlascommand
@@ -581,7 +585,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             # instead of burning a remote run that is certain to fail
             return None, None
 
-        atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
+        atlascommand += f"{REMOTE_SCRIPT_RUNNER} ~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"
 
     elif task.request_type == "SSOSTACK":

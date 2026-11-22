@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import typing as t
 import urllib.error
 import urllib.parse
@@ -6850,6 +6851,15 @@ class AtlasCommandTests(TestCase):
         assert " sites='hko mlo chl sth tdo'" in command, command
         assert "\\'" not in command, command
 
+    def test_uv_starts_the_scripts(self) -> None:
+        # the python3 command of sc01 is too old for the scripts, and only uv reads their blocks
+        fp = self.fp_command(self.make_task(mjd_min=None))
+        assert "; uv run --quiet --script ~/atlas_gettaskimage.py " in fp, fp
+
+        task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.0, mjd_max=59100.0)
+        sso = self.ssostack_command(task)
+        assert "; uv run --quiet --script ~/atlas_gettaskimage_ssostack.py " in sso, sso
+
     def test_ssostack_cleans_up_the_remote_directory(self) -> None:
         task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.0, mjd_max=59100.0)
         command = self.ssostack_command(task)
@@ -10804,34 +10814,54 @@ class PasswordResetLimitPageTests(TestCase):
         assert "Too many password reset requests" in response.content.decode()
 
 
-class RemoteScriptPythonVersionTests(SimpleTestCase):
-    """The scripts that the task runner starts on sc01 must run on Python 3.8.
+class RemoteScriptMetadataTests(SimpleTestCase):
+    """The task runner starts the scripts on sc01 with uv, which reads the inline metadata block.
 
-    The python3 command on sc01 is Python 3.8. A script that fails there writes no result file, and
-    the task runner then starts the task again without a limit.
+    A script that fails there writes no result file, and the task runner then starts the task
+    again without a limit.
     """
 
     scripts: t.ClassVar[list[Path]] = sorted(Path(atlastaskrunner.__file__).parent.glob("taskrunner/atlas_*.py"))
 
+    @staticmethod
+    def metadata(script: Path) -> dict[str, t.Any]:
+        # the regular expression of the reference implementation in PEP 723
+        found = re.search(
+            r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$",
+            script.read_text(encoding="utf-8"),
+        )
+        assert found is not None, script.name
+        assert found["type"] == "script", script.name
+        content = "".join(line[2:] if line.startswith("# ") else line[1:] for line in found["content"].splitlines(True))
+        return tomllib.loads(content)
+
     def test_the_scripts_are_found(self) -> None:
         assert len(self.scripts) >= 3, self.scripts
 
-    def test_the_syntax_is_python_38(self) -> None:
+    def test_the_python_version_is_that_of_the_project(self) -> None:
+        project = tomllib.loads(Path(settings.BASE_DIR, "pyproject.toml").read_text(encoding="utf-8"))
         for script in self.scripts:
             with self.subTest(script=script.name):
-                ast.parse(script.read_text(encoding="utf-8"), filename=str(script), feature_version=(3, 8))
+                assert self.metadata(script)["requires-python"] == project["project"]["requires-python"]
 
-    def test_zip_has_no_strict_argument(self) -> None:
-        # zip() accepts the strict argument from Python 3.10
+    def test_the_block_lists_each_package_that_the_script_imports(self) -> None:
         for script in self.scripts:
             tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
-            strictcalls = [
-                node.lineno
+            imported = {
+                alias.name.partition(".")[0]
                 for node in ast.walk(tree)
-                if isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "zip"
-                and any(keyword.arg == "strict" for keyword in node.keywords)
-            ]
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            }
+            imported |= {
+                node.module.partition(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module and not node.level
+            }
+            packages = imported - sys.stdlib_module_names
+            listed = {
+                re.split(r"[^A-Za-z0-9._-]", dependency, maxsplit=1)[0]
+                for dependency in self.metadata(script)["dependencies"]
+            }
             with self.subTest(script=script.name):
-                assert not strictcalls, strictcalls
+                assert packages == listed, (packages, listed)

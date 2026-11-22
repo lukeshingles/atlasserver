@@ -1,15 +1,16 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.8"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """Convert the solar system stack FITS file to a JPEG. This script is to be run on sc01.
 
 This code depends on a new monsta script, which is not in standard ATLAS pipeline
 (tvjpeg_ssostack.pro). This script, and the new monsta script must be copied into the
-atlas user's home directory.
+home directory of the account on sc01.
 
-The python3 command on sc01 is Python 3.8. Use only the features of Python 3.8 in this script.
+The task runner starts this script on sc01 with "uv run --script". uv reads the Python version
+and the packages from the block above.
 """
 
 import contextlib
