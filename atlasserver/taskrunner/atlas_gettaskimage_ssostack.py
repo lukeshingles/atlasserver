@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = []
+# ///
 """Convert the solar system stack FITS file to a JPEG. This script is to be run on sc01.
 
 This code depends on a new monsta script, which is not in standard ATLAS pipeline

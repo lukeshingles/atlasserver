@@ -70,6 +70,14 @@ The scripts must use only the features of Python 3.8. The other code of atlasser
 and the task runner then starts the task again without a limit. The slot logs in
 `atlasserver/taskrunner/logs/` show the error from sc01 in the lines with `atlas STDERR:`.
 
+Each script gives its Python version and its packages in an inline metadata block (PEP 723). This
+command runs a script with Python 3.8 and the packages of the block:
+```sh
+uv run --python 3.8 atlasserver/taskrunner/atlas_gettaskimages.py
+```
+The task runner does not use uv. It starts each script through the `python3` command of sc01, and
+Python reads the block as comments.
+
 The task runner executes 24 tasks at one time (`NUMSLOTS` in `atlasserver/taskrunner/status.py`).
 When the tasks of other users wait, the tasks of one user use a maximum of 8 of these slots
 (`MAX_USER_SLOTS` in the same file). When no other task can start, a user gets more slots: a slot
