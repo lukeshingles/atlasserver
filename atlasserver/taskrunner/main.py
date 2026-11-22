@@ -123,7 +123,10 @@ def log_general(msg: str, suffix: str = "") -> None:
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
     if not suffix:
-        print(line)
+        # `atlastaskrunner stop` closes the terminal of the tmux session, and a write to it then
+        # raises OSError. A slot that stops still records its result, so the file log continues.
+        with contextlib.suppress(OSError):
+            print(line, flush=True)
 
     logfile_latest = Path(runnerstatus.LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
 

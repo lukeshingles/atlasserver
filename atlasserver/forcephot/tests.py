@@ -5130,6 +5130,18 @@ class SlotStopSignalTests(SimpleTestCase):
             code = ex.code
         assert code == 128 + signal.SIGHUP, f"a stop signal outside the poll loop gave {code}"
 
+    def test_a_closed_terminal_does_not_stop_the_file_log(self) -> None:
+        # after `atlastaskrunner stop`, the slot still logs and records its result
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.runnerstatus, "LOG_DIR", Path(tmpdir)),
+            mock.patch("builtins.print", side_effect=OSError(5, "Input/output error")),
+        ):
+            taskrunner_main.log_general("the terminal is gone")
+            written = Path(tmpdir, "fprunnerlog_latest.txt").read_text(encoding="utf-8")
+
+        assert written.endswith("  the terminal is gone\n"), written
+
     def test_a_slot_whose_task_runner_stopped_must_stop(self) -> None:
         dead = mock.Mock()
         dead.is_alive.return_value = False
