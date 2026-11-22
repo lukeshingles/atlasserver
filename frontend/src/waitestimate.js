@@ -103,7 +103,7 @@ export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = [], runn
     // the image request, and a quarter of an hour of that is not a minute of it. A pass has the
     // mean price of the own tasks ahead.
     //
-    // A task of this user ahead that cannot be priced is directly in the way, so it gives no value.
+    // A task of this user ahead that has no median is directly in the way, so it gives no value.
     const owntotal = sumOfMedians(ownahead.map((task) => task.requesttype), runtimes);
     if (owntotal == null) {
         return null;
@@ -117,8 +117,8 @@ export function estimateWaitSeconds({ queuepos, ownqueued, ownstarted = [], runn
     if (ownpasses > 0) {
         // A pass has the mean price of the started tasks and the own tasks ahead together. Eight
         // image requests in the slots and one light curve ahead are passes of image requests.
-        // A started task of this user that cannot be priced has a slot of the user, so it gives
-        // no value.
+        // A started task of this user that has no median has a slot of the user, so it gives no
+        // value.
         const startedtotal = sumOfMedians(ownstarted, runtimes);
         if (startedtotal == null) {
             return null;

@@ -80,6 +80,9 @@ CANCEL_CHECK_SECONDS: float = 15.0
 # How long the ssh command that stops a remote command can take; see stop_remote_job.
 REMOTE_STOP_TIMEOUT_SECONDS: float = 60.0
 
+# The text that the stop command of stop_remote_job prints when it stops a remote command.
+STOP_MARKER: t.Final = "atlasserver-stopped"
+
 # The directory on sc01 that holds the files of the tasks.
 REMOTE_RESULT_DIR: t.Final = "~/atlasserver/results"
 
@@ -318,9 +321,12 @@ def stop_remote_job(
     writes the same file names.
     """
     pidfile = remote_pidfile(taskid, token)
+    # The command prints STOP_MARKER only when it sends the signal. Its exit code is the code of
+    # the last rm, so the code does not tell if a remote command ran.
     command = (
         f'p={pidfile}; if [ -s "$p" ]; then s=$(cat "$p"); '
-        f'if ps -s "$s" -o args= 2>/dev/null | grep -q -F {token}; then pkill -TERM -s "$s"; fi; fi; rm -f "$p"'
+        f'if ps -s "$s" -o args= 2>/dev/null | grep -q -F {token}; then pkill -TERM -s "$s" && echo {STOP_MARKER}; '
+        'fi; fi; rm -f "$p"'
     )
     if delete_files:
         command += f"; rm -rf {REMOTE_RESULT_DIR}/{jobfilename(taskid)}.* {REMOTE_RESULT_DIR}/task{taskid:05d}"
@@ -339,7 +345,8 @@ def stop_remote_job(
         return
 
     if result.returncode == 0:
-        logfunc(f"Stopped the remote command{' and deleted the remote files' if delete_files else ''}")
+        stopped = "Stopped the remote command" if STOP_MARKER in result.stdout else "No remote command ran"
+        logfunc(f"{stopped}{', and deleted the remote files' if delete_files else ''}")
     else:
         logfunc(f"ERROR: could not stop the remote command (exit code {result.returncode}): {result.stderr.strip()}")
 
@@ -1377,7 +1384,9 @@ def do_task(task, slotid: int) -> None:
 
     runtask_duration = time.perf_counter() - runtask_starttime
 
-    if attempt_must_stop():
+    # Only an attempt with no result. A stop can come after the remote command ended, and then
+    # runtask collected a result that the code below records.
+    if localresultfile is None and error_msg is None and attempt_must_stop():
         # runtask stopped the attempt and its remote command. The task stays unfinished with no
         # retry wait, and the next task runner starts it again; see open_attempts.
         logfunc("The attempt stopped because the task runner stops. The next task runner starts the task again.")

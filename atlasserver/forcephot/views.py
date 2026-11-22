@@ -104,6 +104,7 @@ from atlasserver.forcephot.throttles import ACCOUNT_GUESS_LIMIT_MESSAGE
 from atlasserver.forcephot.throttles import account_password_failures_exceeded
 from atlasserver.forcephot.throttles import client_key
 from atlasserver.forcephot.throttles import count_in_window
+from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
 from atlasserver.forcephot.throttles import note_account_password_failure
 from atlasserver.forcephot.throttles import take_send_permit
 from atlasserver.forcephot.verification import load_email_change_token
@@ -1786,12 +1787,14 @@ def verify_email(request, uidb64: str, token: str):
     # when the hasher settings changed. The token hashes the password, so that save makes the link
     # invalid before the locked check below.
     if account_password_failures_exceeded(user.pk):
-        return render(
+        response = render(
             request,
             "registration/verify_email_confirm.html",
             {**confirmpage, "error": ACCOUNT_GUESS_LIMIT_MESSAGE},
             status=429,
         )
+        response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+        return response
 
     if not check_password(request.POST.get("password", ""), user.password):
         note_account_password_failure(user.pk)
@@ -1970,12 +1973,15 @@ def change_email(request):
     else:
         form = EmailChangeForm(request.user)
 
-    return render(
+    response = render(
         request,
         "registration/email_change_form.html",
         {"form": form, "name": "Email address change"},
         status=status,
     )
+    if status == 429:
+        response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+    return response
 
 
 @origin_only_referrer

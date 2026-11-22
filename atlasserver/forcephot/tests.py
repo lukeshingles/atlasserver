@@ -1786,6 +1786,7 @@ class EmailChangeTests(TestCase):
             blocked = self.request_email_change()
 
         assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
         assert not django_mail.outbox, "the right password worked over the budget"
 
     def test_the_password_change_page_has_a_budget(self) -> None:
@@ -4936,6 +4937,37 @@ class RemoteStopTests(TestCase):
         assert any("The next task runner starts the task again" in line for line in logged), logged
         assert not any("before the next attempt" in line for line in logged), logged
 
+    def test_a_stop_after_the_remote_command_ended_keeps_the_result(self) -> None:
+        # The stop came after runtask collected the result. A return without mark_finished would
+        # make the next task runner run the whole task again.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultfile = Path(tmpdir, "job.txt")
+            resultfile.write_text("###MJD uJy\n", encoding="utf-8")
+            with (
+                mock.patch.object(taskrunner_main, "runtask", return_value=(resultfile, None)),
+                mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=True),
+                mock.patch.object(taskrunner_main, "log_general"),
+                mock.patch.object(taskrunner_main, "mark_finished", return_value=False) as finish,
+                mock.patch.object(taskrunner_main, "remove_task_resultfiles"),
+            ):
+                taskrunner_main.do_task(self.task, slotid=0)
+
+        finish.assert_called_once()
+        assert finish.call_args.kwargs["error_msg"] is None, finish.call_args
+
+    def test_the_stop_log_says_whether_a_remote_command_ran(self) -> None:
+        logged: list[str] = []
+        for stdout in (f"{taskrunner_main.STOP_MARKER}\n", ""):
+            with mock.patch.object(
+                taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout, stderr="")
+            ):
+                taskrunner_main.stop_remote_job(self.task.id, "a" * 32, [], logged.append, delete_files=True)
+
+        assert logged == [
+            "Stopped the remote command, and deleted the remote files",
+            "No remote command ran, and deleted the remote files",
+        ], logged
+
     def test_a_stop_signal_before_the_launch_starts_no_remote_command(self) -> None:
         # the deferral starts before the launch, so a signal there is noted and not an exit
         with (
@@ -4954,7 +4986,7 @@ class RemoteStopTests(TestCase):
     def test_the_stop_command_stops_only_a_session_with_the_token(self) -> None:
         token = "0" * 31 + "a"
         with mock.patch.object(
-            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stderr="")
+            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
         ) as run:
             taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=False)
             kept = run.call_args.args[0]
@@ -7567,7 +7599,11 @@ class ProcessTimeoutTests(TestCase):
         with mock.patch.object(
             misc, "run_process_with_timeout", side_effect=lambda proc, _timeout: captured.append(proc)
         ):
-            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1)
+            misc.make_pdf_plot(
+                localresultfile=Path("/nonexistent/job00001.txt"),
+                taskid=1,
+                outputpath=Path("/nonexistent/job00001.pdf"),
+            )
 
         assert len(captured) == 1, captured
         # the class, not the constant: this is what was actually handed to the runner
@@ -8375,6 +8411,7 @@ class RegistrationVerificationTests(TestCase):
             blocked = self.client.post(link, self.password())
 
         assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
         assert User.objects.get(username="newcomer").is_active is False, "the right password worked over the budget"
 
     def test_a_new_registration_replaces_an_unverified_account_at_the_address(self) -> None:

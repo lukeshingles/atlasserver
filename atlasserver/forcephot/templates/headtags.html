@@ -13,7 +13,7 @@
 {# same origin. #}
 <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
 
-{# Who the page was rendered for, which is empty for a reader who is not signed in. #}
+{# The reader that the server rendered the page for. It is empty for a reader who is not signed in. #}
 {# runnerstatus.js keeps its last status for the page after this one, and that status #}
 {# holds a count of this reader's queued tasks. A tab that signs out, or signs in as #}
 {# somebody else, keeps its sessionStorage across the change. Thus the record names the #}

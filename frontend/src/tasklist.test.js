@@ -1297,6 +1297,33 @@ describe('TaskPage', () => {
         assert.ok(older.classList.contains('pagenext'), 'Older is not the item that gets pushed right');
     });
 
+    test('an empty page of a cursor goes back to the first page', async () => {
+        // fetchData calls updateCursor, which is declared after it in the component
+        window.history.replaceState({}, '', 'http://testserver/queue/?cursor=gone');
+        stubFetch([task(1)]);
+        const firstpage = global.fetch;
+        global.fetch = (url) => {
+            if (url.toString().includes('cursor=gone')) {
+                requested.push(url.toString());
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => null },
+                    json: () => Promise.resolve({ results: [], taskcount: 0, next: null, previous: null, pagefirsttaskposition: 0 }),
+                });
+            }
+            return firstpage(url);
+        };
+
+        const rendered = await render(ReactDOM, React, React.createElement(TaskPage));
+        mounted.push(rendered.root);
+        await flush(200);
+
+        assert.doesNotMatch(window.location.href, /cursor=/);
+        assert.ok(requested.some((url) => url.includes('cursor=gone')), requested);
+        assert.deepEqual(rowIds(rendered.container), ['task-1']);
+    });
+
     test('the queue is still polled when every row on screen has finished', async () => {
         // the case a single task view, the Running/Finished filter and an older page all produce: the
         // user still has tasks running, but nothing visible could change from the answer
