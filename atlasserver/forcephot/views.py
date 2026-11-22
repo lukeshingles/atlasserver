@@ -1936,12 +1936,7 @@ def change_email(request):
             return response
 
         form = EmailChangeForm(request.user, request.POST)
-        if not form.is_valid() and any(
-            error.code == "throttled" for error in form.errors.as_data().get("password", [])
-        ):
-            # 429 like each other limit of the site
-            status = 429
-        elif form.is_valid():
+        if form.is_valid():
             # not saved here. The new address has to be confirmed at the new address, or the
             # verification done at registration could be undone just by changing the address
             # afterwards.
@@ -1984,6 +1979,9 @@ def change_email(request):
                     None,
                     "A confirmation email was just sent. Please wait a minute before requesting another.",
                 )
+        elif form.has_error("password", code="throttled"):
+            # 429 like each other limit of the site
+            status = 429
     else:
         form = EmailChangeForm(request.user)
 

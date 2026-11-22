@@ -990,6 +990,13 @@ def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], Non
     `heartbeat` is called before each send, as in remove_old_tasks: each send waits for the mail
     server, and this runs in the main loop.
     """
+    # a batch that still has an unfinished task gets its email when a slot finishes that task
+    unfinished = Task.objects.filter(
+        user_id=models.OuterRef("user_id"),
+        timestamp=models.OuterRef("timestamp"),
+        send_email=True,
+        finishtimestamp__isnull=True,
+    )
     candidates = (
         Task.live()
         .filter(
@@ -1000,10 +1007,12 @@ def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], Non
             user__is_active=True,
         )
         .exclude(user__email="")
+        .exclude(models.Exists(unfinished))
         .select_related("user")
         .order_by("user_id", "timestamp", "id")
     )
 
+    # one email for each batch: MySQL has no DISTINCT ON, so the first task of each batch is kept here
     batches: set[tuple[int, dt.datetime]] = set()
     sent = 0
     for task in candidates:
@@ -1011,12 +1020,6 @@ def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], Non
         if batch in batches:
             continue
         batches.add(batch)
-
-        # a batch that still has an unfinished task gets its email when a slot finishes that task
-        if Task.objects.filter(
-            user_id=task.user_id, send_email=True, timestamp=task.timestamp, finishtimestamp__isnull=True
-        ).exists():
-            continue
 
         if heartbeat is not None:
             heartbeat()

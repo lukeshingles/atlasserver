@@ -14,6 +14,7 @@ from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.views import LoginView
 from django.contrib.auth.views import PasswordChangeView
+from django.core.exceptions import NON_FIELD_ERRORS
 from django.http import HttpResponse
 from django.views.decorators.debug import sensitive_variables
 from rest_framework import serializers
@@ -77,7 +78,7 @@ class ThrottledLoginView(LoginView):
 
     @override
     def form_invalid(self, form: AuthenticationForm) -> HttpResponse:
-        refused = any(error.code == "throttled" for error in form.non_field_errors().as_data())
+        refused = form.has_error(NON_FIELD_ERRORS, code="throttled")
         response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
         if refused:
             response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
@@ -95,7 +96,7 @@ class ThrottledPasswordChangeView(PasswordChangeView):
 
     @override
     def form_invalid(self, form: forms.Form) -> HttpResponse:
-        refused = any(error.code == "throttled" for error in form.errors.as_data().get("old_password", []))
+        refused = form.has_error("old_password", code="throttled")
         response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
         if refused:
             response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
