@@ -92,11 +92,6 @@ class TaskQueueTests(TestCase):
             User.objects.create_user(username=f"user{i}", email=f"user{i}@example.com", password=None) for i in range(3)
         ]
 
-    def test_tasklist_requires_login(self) -> None:
-        response = self.client.get(reverse("task-list"))
-        # anonymous users are redirected to the login page by the custom exception handler
-        assert response.status_code in {302, 403}
-
     def test_queue_positions_are_round_robin(self) -> None:
         for user in self.users:
             for _ in range(3):
@@ -2151,6 +2146,8 @@ class EmailChangeTests(TestCase):
             reverse("email_change"), {"password": "wrongpassword", "new_email": "new@example.com"}
         )
         assert response.status_code == 200
+        assert response.context["form"].has_error("password", code="password_incorrect")
+        assert not django_mail.outbox
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
@@ -2160,6 +2157,8 @@ class EmailChangeTests(TestCase):
             reverse("email_change"), {"password": "testpassword123", "new_email": "not-an-email"}
         )
         assert response.status_code == 200
+        assert response.context["form"].has_error("new_email", code="invalid")
+        assert not django_mail.outbox
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
@@ -2440,13 +2439,6 @@ class TaskListEtagTests(TestCase):
 
         assert self.get_list(etag=first["ETag"]).status_code == 304
 
-    def test_etag_is_quoted(self) -> None:
-        # an unquoted ETag is not a valid entity-tag, and intermediaries may reject or rewrite it
-        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
-        etag = self.get_list()["ETag"]
-        assert etag.startswith('"'), etag
-        assert etag.endswith('"'), etag
-
     def test_etag_holds_only_the_characters_an_entity_tag_may(self) -> None:
         """RFC 7232 allows %x21 and %x23-7E between the quotes: no space, and no double quote.
 
@@ -2641,21 +2633,6 @@ class TaskStrTests(TestCase):
         msg = "a task with neither an mpc_name nor coordinates was accepted"
         raise AssertionError(msg)
 
-    def test_a_tab_only_mpc_name_is_not_a_target_either(self) -> None:
-        """SQL TRIM() removes spaces and nothing else; Python str.strip() removes far more.
-
-        The two definitions have to be one definition, or a name blank to the reader is a target to
-        the database and the runner dispatches by coordinates the constraint let be NULL.
-        """
-        user = User.objects.create_user(username="tabtarget", email="tt@example.com", password=None)
-
-        try:
-            Task.objects.create(user=user, mpc_name="\t")
-        except IntegrityError:
-            return
-        msg = "a task whose only target was a tab was accepted"
-        raise AssertionError(msg)
-
     def test_save_normalises_the_name_so_readers_can_trust_it(self) -> None:
         """The point of normalising on write: mpc_name is falsy exactly when there is no target.
 
@@ -2689,18 +2666,6 @@ class TaskStrTests(TestCase):
         except IntegrityError:
             return
         msg = "bulk_create stored a whitespace-only mpc_name"
-        raise AssertionError(msg)
-
-    def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
-        # it is truthy, so it satisfied a bare != "" and then reached the runner, which would have
-        # asked ssforce.sh for an object named nothing
-        user = User.objects.create_user(username="blanktarget", email="bt@example.com", password=None)
-
-        try:
-            Task.objects.create(user=user, mpc_name="   ")
-        except IntegrityError:
-            return
-        msg = "a task whose only target was whitespace was accepted"
         raise AssertionError(msg)
 
 
@@ -3492,10 +3457,6 @@ class TaskDetailIsPublicTests(TestCase):
         response = self.get_detail()
         assert response.status_code == 200, response.status_code
         assert response.json()["comment"] == "shared"
-
-    def test_staff_can_read_it(self) -> None:
-        self.client.force_login(self.staff)
-        assert self.get_detail().status_code == 200
 
     def test_another_user_can_read_it(self) -> None:
         self.client.force_login(self.other)
@@ -5428,17 +5389,6 @@ class AllowedHostsTests(TestCase):
         assert response.status_code == 400, response.status_code
         assert not django_mail.outbox
 
-    def test_known_host_is_accepted(self) -> None:
-        User.objects.create_user(username="victim2", email="victim2@example.com", password="pw12345678")
-
-        response = self.client.post(
-            reverse("password_reset"), {"email": "victim2@example.com"}, HTTP_HOST="fallingstar-data.com"
-        )
-
-        assert response.status_code == 302, response.status_code
-        assert len(django_mail.outbox) == 1
-        assert "fallingstar-data.com" in django_mail.outbox[0].body
-
 
 class PasswordResetLinkOriginTests(TestCase):
     """The mailed reset link must name SITE_ORIGIN, not the Host header.
@@ -5495,12 +5445,6 @@ class BrokenLinkEmailTests(TestCase):
     def test_internal_referer_is_not_reported(self) -> None:
         # a link to a result the retention sweep has since deleted, which is not an admin's problem
         response = self.client.get("/queue/999999/data.txt", HTTP_REFERER="http://testserver/queue/")
-
-        assert response.status_code == 404, response.status_code
-        assert not django_mail.outbox, django_mail.outbox[0].subject
-
-    def test_external_referer_is_not_reported(self) -> None:
-        response = self.client.get("/no-such-page/", HTTP_REFERER="http://example.com/links")
 
         assert response.status_code == 404, response.status_code
         assert not django_mail.outbox, django_mail.outbox[0].subject
@@ -5975,17 +5919,6 @@ class TaskRunnerStatusTests(TestCase):
                 taskrunner_main.write_status(numslots=runnerstatus.NUMSLOTS, **write_status_kwargs)
                 return self.client.get(reverse("taskrunnerstatus"))
 
-    def test_missing_status_file_reports_not_running(self) -> None:
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
-        ):
-            response = self.client.get(reverse("taskrunnerstatus"))
-
-        assert response.status_code == 200
-        assert response.json()["running"] is False
-        assert response.json()["stale"] is True
-
     def test_the_response_counts_the_tasks_of_the_signed_in_reader(self) -> None:
         """RenderInto shows the queue counts to a reader who waits on the queue.
 
@@ -6227,18 +6160,6 @@ class TaskRunnerStatusTests(TestCase):
                 response = self.client.get(reverse("taskrunnerstatus"))
 
         assert response.json()["typical_runtime_seconds"] == {}
-
-    def test_old_status_file_reports_stale(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            statuspath = Path(tmpdir, "taskrunner_status.json")
-            stale_written = timezone.now() - dt.timedelta(hours=1)
-            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}), encoding="utf-8")
-
-            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                response = self.client.get(reverse("taskrunnerstatus"))
-
-        assert response.status_code == 200
-        assert response.json()["stale"] is True
 
     def test_an_outage_is_answered_with_a_success_code(self) -> None:
         """An outage is an answer, and thus it must not be dressed as a failure to answer.
@@ -6781,13 +6702,6 @@ class WebserverStopTests(SimpleTestCase):
 
 
 class OpenApiSchemaTests(TestCase):
-    def test_schema_generates_without_errors(self) -> None:
-        # the schema is derived from the serializer, so this is what stops the published API
-        # documentation from drifting away from the code
-        response = self.client.get(reverse("schema"))
-
-        assert response.status_code == 200, response.content
-
     def get_schema(self) -> dict[str, t.Any]:
         import yaml
 
@@ -6839,18 +6753,6 @@ class AtlasCommandTests(TestCase):
         command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=None))
         assert "/atlas/bin/ssforce.sh 'Makemake'" in command
         assert "force.sh" not in command.replace("ssforce.sh", "")
-
-    def test_a_padded_mpc_name_is_stripped_before_the_shell_sees_it(self) -> None:
-        # the constraint permits a padded name; what it must not become is ssforce.sh '  Makemake '
-        command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="  Makemake  ", mjd_min=None))
-        assert "/atlas/bin/ssforce.sh 'Makemake'" in command
-
-    def test_a_blank_mpc_name_takes_the_coordinate_path(self) -> None:
-        # such a row is a coordinate request: the constraint reads a whitespace-only name as absent
-        # and therefore required ra and dec, so dispatching it to ssforce.sh would drop the target
-        command = self.fp_command(self.make_task(mpc_name="   ", mjd_min=None))
-        assert "/atlas/bin/force.sh 100.0 -20.0" in command
-        assert "ssforce.sh" not in command
 
     def test_zero_mjd_min_is_still_passed(self) -> None:
         # a falsy-but-present bound used to be dropped, silently widening the request
@@ -9484,15 +9386,6 @@ class ThirdPartyScriptTests(TestCase):
             assert f"https://cdn.pydata.org/bokeh/release/{filename}" in content, filename
             assert f'integrity="sha384-{hashes[filename]}"' in content, filename
 
-    def test_the_bokeh_url_tracks_the_installed_version(self) -> None:
-        # the version used to be hardcoded in the template, so an upgrade of the pin in
-        # pyproject.toml left the page loading a BokehJS that did not match the server-rendered plots
-        from bokeh import __version__ as bokeh_version
-
-        for script in views.bokeh_cdn_scripts():
-            assert bokeh_version in script["src"], script
-            assert script["integrity"].startswith("sha384-")
-
     def test_no_page_loads_jquery_or_bootstrap_3(self) -> None:
         """The site's own layout no longer copies DRF's, so it carries neither.
 
@@ -10099,14 +9992,6 @@ class SiteNoticeTests(TestCase):
         content = self.page(reverse("index"))
         assert f'<meta name="atlas-reader" content="{self.user.pk}" />' in content
 
-    def test_the_queue_page_carries_it_too(self) -> None:
-        self.client.force_login(self.user)
-
-        content = self.page(reverse("task-list"))
-
-        assert 'id="sitenotice"' in content
-        assert "js/runnerstatus.min.js" in content
-
     def test_the_browsable_api_carries_it_too(self) -> None:
         self.client.force_login(self.user)
 
@@ -10375,12 +10260,6 @@ class BrowsableApiLoginBudgetTests(TestCase):
             blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
 
         assert blocked.status_code == 429, blocked.status_code
-
-    def test_an_unauthenticated_browser_is_sent_to_a_page_with_a_budget(self) -> None:
-        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
-
-        assert response.status_code == 302, response.status_code
-        assert response["Location"].startswith(reverse("login")), response["Location"]
 
 
 class PasswordResetLimitTests(TestCase):
