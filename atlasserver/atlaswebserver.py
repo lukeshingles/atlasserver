@@ -119,7 +119,7 @@ def get_httpd_pid() -> int | None:
 START_ATTEMPTS = 30
 
 
-def run_command(commands: list[str], print_output: bool = True) -> int:
+def run_command(commands: list[str]) -> int:
     """Run a command and print the output."""
     proc = subprocess.Popen(
         commands,
@@ -131,12 +131,12 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
         universal_newlines=True,
     )
 
-    if print_output and proc.stdout is not None:
+    if proc.stdout is not None:
         for line in iter(proc.stdout.readline, ""):
             print(line, end="")
 
     stdout, _stderr = proc.communicate()
-    if print_output and stdout:
+    if stdout:
         print(stdout, end="")
     assert proc.returncode is not None
     return proc.returncode

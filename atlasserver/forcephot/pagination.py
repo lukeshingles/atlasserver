@@ -1,5 +1,4 @@
 import typing as t
-from collections import OrderedDict
 from typing import override
 
 from django.core.exceptions import ValidationError
@@ -74,7 +73,6 @@ class TaskPagination(CursorPagination):
             queryset = queryset.order_by(*self.ordering)
 
         self.previous_is_top = False
-        self.pagefirsttaskposition = 0
 
         order = self.ordering[0]
         is_reversed = order.startswith("-")
@@ -213,14 +211,12 @@ class TaskPagination(CursorPagination):
     @override
     def get_paginated_response(self, data: t.Any, headers: dict[str, str] | None = None) -> Response:
         return Response(
-            OrderedDict(
-                [
-                    ("next", self.get_next_link()),
-                    ("previous", self.get_previous_link()),
-                    ("pagefirsttaskposition", self.pagefirsttaskposition),
-                    ("taskcount", self.querysetcount),
-                    ("results", data),
-                ]
-            ),
+            {
+                "next": self.get_next_link(),
+                "previous": self.get_previous_link(),
+                "pagefirsttaskposition": self.pagefirsttaskposition,
+                "taskcount": self.querysetcount,
+                "results": data,
+            },
             headers=headers,
         )

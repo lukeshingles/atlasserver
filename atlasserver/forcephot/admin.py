@@ -42,8 +42,6 @@ from atlasserver.forcephot.queue import USAGE_RETENTION_DAYS
 from atlasserver.forcephot.queue import usage_weight
 from atlasserver.forcephot.queue import utcnow
 
-# Register your models here.
-
 
 # pyrefly: ignore [implicit-any-type-argument]
 # ModelAdmin is generic only in django-stubs; at runtime it has no __class_getitem__, so

@@ -100,7 +100,6 @@ SITE_NOTICE = " ".join(os.environ.get("ATLASSERVER_SITE_NOTICE", "").split())
 ADMINS = [
     ("Luke Shingles", "luke.shingles@gmail.com"),
 ]  # send server error notifications to this person
-MANAGERS = ADMINS
 
 
 INSTALLED_APPS = [
@@ -312,13 +311,9 @@ USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
 
 if not DEBUG:
-    # httpconf.txt sets this header unconditionally (so a client cannot spoof it). The previous
-    # value keyed off SERVER_SOFTWARE, which Apache always populates with its own banner, so
-    # request.scheme was a constant that depended on the ServerTokens setting rather than on the
-    # protocol the request actually arrived over.
+    # httpconf.txt sets this header on each request, so a client cannot spoof it
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-if not DEBUG:
     # the four warnings `manage.py check --deploy` raised, guarded because development runs over
     # plain http and would never send secure-only cookies. SECURE_SSL_REDIRECT never fires today
     # (httpconf.txt always sets X-Forwarded-Proto) and is a backstop for a deployment that stops.
@@ -364,7 +359,6 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "atlasserver.forcephot.pagination.TaskPagination",
     "PAGE_SIZE": 6,
     "DEFAULT_THROTTLE_CLASSES": [
-        # 'rest_framework.throttling.ScopedRateThrottle',
         "atlasserver.forcephot.throttles.ForcedPhotRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
@@ -471,7 +465,8 @@ LOGGING = {
         "mail_admins": {
             "level": "ERROR",
             "filters": ["require_debug_false"],
-            "class": "atlasserver.forcephot.misc.AdminEmailHandlerNo404",
+            # Django logs a 404 at WARNING, so this handler at ERROR sends no mail for one
+            "class": "django.utils.log.AdminEmailHandler",
             "include_html": True,
         },
         "file": {

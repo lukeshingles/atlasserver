@@ -14,11 +14,17 @@ records: is_active alone cannot tell "not yet verified" from "switched off by an
 import hashlib
 import typing as t
 from typing import override
+from urllib.parse import urljoin
+from urllib.parse import urlsplit
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.core import signing
 from django.core.mail import EmailMessage
 from django.http import HttpRequest
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_decode
 from django.utils.http import urlsafe_base64_encode
@@ -60,10 +66,6 @@ def absolute_url(request: HttpRequest, path: str) -> str:
     Falls back to the request when SITE_ORIGIN is unset, which is what development and the tests
     want; production sets it.
     """
-    from urllib.parse import urljoin
-
-    from django.conf import settings
-
     if settings.SITE_ORIGIN:
         return urljoin(settings.SITE_ORIGIN, path)
 
@@ -72,17 +74,11 @@ def absolute_url(request: HttpRequest, path: str) -> str:
 
 def site_name(request: HttpRequest) -> str:
     """Return the host to name in email, from the same source the links come from."""
-    from urllib.parse import urlsplit
-
-    from django.conf import settings
-
     return urlsplit(settings.SITE_ORIGIN).netloc if settings.SITE_ORIGIN else request.get_host()
 
 
 def verification_url(request: HttpRequest, user: t.Any) -> str:
     """Return the absolute URL that verifies this user's current email address."""
-    from django.urls import reverse
-
     path = reverse(
         "verify_email",
         kwargs={"uidb64": urlsafe_base64_encode(force_bytes(user.pk)), "token": token_generator.make_token(user)},
@@ -131,9 +127,6 @@ def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email:
     trivially undone -- otherwise an account could verify a real address and then move to someone
     else's unchallenged.
     """
-    from django.core import signing
-    from django.urls import reverse
-
     # from_email makes the link single-use: applying it moves the address, so a replay no longer
     # matches -- and copies of an old link outlive the mailbox it was sent to. The credential state
     # kills a pending change when the account is recovered, so temporary access cannot be parked
@@ -158,9 +151,6 @@ def send_email_change_confirmation(request: HttpRequest, user: t.Any, new_email:
 
 def load_email_change_token(token: str, max_age: int) -> tuple[t.Any, str] | None:
     """Return (user, new_email) for a valid email-change token, or None."""
-    from django.contrib.auth import get_user_model
-    from django.core import signing
-
     try:
         payload = signing.loads(token, salt=EMAIL_CHANGE_SALT, max_age=max_age)
     except signing.BadSignature:
@@ -189,8 +179,6 @@ def load_email_change_token(token: str, max_age: int) -> tuple[t.Any, str] | Non
 
 def user_from_uidb64(uidb64: str) -> t.Any:
     """Return the user a verification link refers to, or None if the id is unusable."""
-    from django.contrib.auth import get_user_model
-
     # int() inside the guard, not just the decode: "YWJj" is valid base64 and decodes cleanly to
     # "abc", and it is the *lookup* that then rejects it -- raising ValueError from a queryset
     # rather than from anything this had caught, so a malformed link answered 500 instead of the

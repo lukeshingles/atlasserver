@@ -10857,6 +10857,18 @@ class SuspiciousRequestMailTests(TestCase):
     """
 
     @override_settings(ADMINS=[("Admin", "admin@example.com")])
+    def test_a_404_sends_no_admin_mail(self) -> None:
+        # Django logs a 404 at WARNING, and mail_admins handles only ERROR, so the stock handler
+        # sends nothing for one
+        django_mail.outbox.clear()
+
+        missingpage = self.client.get("/no-such-page/")
+        missingtask = self.client.get(reverse("task-detail", args=[999999]), HTTP_ACCEPT="application/json")
+
+        assert (missingpage.status_code, missingtask.status_code) == (404, 404)
+        assert not django_mail.outbox, [message.subject for message in django_mail.outbox]
+
+    @override_settings(ADMINS=[("Admin", "admin@example.com")])
     def test_too_many_fields_send_no_admin_mail(self) -> None:
         django_mail.outbox.clear()
 

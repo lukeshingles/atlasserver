@@ -103,6 +103,7 @@ from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
 from atlasserver.forcephot.throttles import ACCOUNT_GUESS_LIMIT_MESSAGE
 from atlasserver.forcephot.throttles import account_password_failures_exceeded
+from atlasserver.forcephot.throttles import client_key
 from atlasserver.forcephot.throttles import count_in_window
 from atlasserver.forcephot.throttles import note_account_password_failure
 from atlasserver.forcephot.throttles import take_send_permit
@@ -495,9 +496,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
     @override
     def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int) -> None:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        """Create new task(s). create() passes the count of queued tasks it has made for its limit."""
-        usertaskcount_before = usertaskcount
-
+        """Create new task(s). create() passes the count of unfinished tasks that it made for its limit."""
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
             "timestamp": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
@@ -528,7 +527,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             # set on the instances as well as written, so that the response serialises the values
             # without a reload per task: a radeclist can hold 100 targets
             for i, task in enumerate(newtasks):
-                task.userqueuedtasks_on_submit = usertaskcount_before + i
+                task.userqueuedtasks_on_submit = usertaskcount + i
                 task.queuepos_relative = nextqueuepos + i
                 # a row inserted a moment ago has no image requests, so the response need not ask
                 task.prefetched_imagerequests = []
@@ -537,13 +536,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             Task.objects.bulk_update(newtasks, ["userqueuedtasks_on_submit", "queuepos_relative"])
 
         request_queue_recalc()
-
-    @override
-    def perform_update(self, serializer: BaseSerializer[Task]) -> None:
-        """Update a task."""
-        # don't pass user=request.user here: a staff user editing someone else's task would
-        # otherwise take ownership of it
-        serializer.save()
 
     @override
     def perform_destroy(self, instance: Task) -> None:
@@ -560,11 +552,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
     # through.
     def list(self, request: Request, *args: t.Any, **kwargs: t.Any):
         """List tasks belonging to the current user."""
-        if request.user.is_authenticated:
-            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user=request.user))
-        else:
-            listqueryset = Task.objects.none()
+        # an int after this check, which get_tasklist_etag needs
+        userpk = request.user.pk if request.user.is_authenticated else None
+        if userpk is None:
             raise PermissionDenied
+
+        # get_queryset is Task.live(), so the archived tasks are not in it
+        listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=userpk))
 
         if request.accepted_renderer.format == "html":
             # only what the template reads: it builds its URLs and its user id itself. A COUNT
@@ -576,12 +570,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
         # answer a conditional request before paginating: an unchanged page then costs one
         # aggregate instead of a count, a page fetch, a prefetch and a full serialisation.
-        # the anonymous case raised PermissionDenied above, so this is set -- stated as a check
-        # rather than a comment, because get_tasklist_etag would otherwise take an Optional
-        userpk = request.user.pk
-        if userpk is None:
-            raise PermissionDenied
-
         # one aggregate for the entity-tag and the serializer both
         queueoffset = Task.min_queuepos_relative()
         etag = get_tasklist_etag(request, userpk, min_queuepos_relative=queueoffset)
@@ -664,8 +652,6 @@ class RequestImages(APIView):
         """
         # ForcePhotPermission refuses an anonymous POST before this runs; the object check below
         # applies the ownership rule
-        redirurl = reverse("task-list")
-
         # The parent row is locked for the whole transaction: two overlapping requests cannot both
         # find no live image request, and Task.delete takes the same lock, so a delete of the
         # parent waits for the copy of its data file rather than reclaiming the file under it.
@@ -1582,7 +1568,7 @@ class SiteOriginPasswordResetView(PasswordResetView):
 
         Counted before the form is bound, so that a rejected submission spends it too.
         """
-        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+        clientkey = client_key(request)
         attempts = count_in_window(f"passwordreset-{clientkey}", PASSWORD_RESET_WINDOW_SECONDS)
 
         if attempts > PASSWORD_RESET_WINDOW_LIMIT:
@@ -1619,7 +1605,7 @@ class SiteOriginPasswordResetView(PasswordResetView):
 
 def register(request):
     if request.method == "POST":
-        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+        clientkey = client_key(request)
 
         # Counted before the form is bound, so that a rejected submission spends it too; see
         # REGISTRATION_ATTEMPT_LIMIT for why the answer to a rejected one has to be metered.
@@ -2194,14 +2180,8 @@ def flux_axis_limits(fluxmin: t.Any, fluxmax: t.Any) -> tuple[t.Any, t.Any]:
 
 
 def resultplotdatajs(request, taskid):
-    if not taskid:
-        return HttpResponseNotFound("Page not found")
-
-    try:
-        task = Task.live().get(id=taskid)
-    except ObjectDoesNotExist:
-        return HttpResponseNotFound("Page not found")
-    if not task.finishtimestamp:
+    task = Task.live().filter(id=taskid, finishtimestamp__isnull=False).first()
+    if task is None:
         return HttpResponseNotFound("Page not found")
 
     # Two things vary in this response and the tag has to cover both: the generated plot data,
@@ -2442,12 +2422,8 @@ def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpRes
 
 
 def taskpdfplot(request, taskid):
-    if not taskid:
-        return HttpResponseNotFound("Page not found")
-
-    try:
-        item = Task.live().get(id=taskid)
-    except ObjectDoesNotExist:
+    item = Task.live().filter(id=taskid).first()
+    if item is None:
         return HttpResponseNotFound("Page not found")
     # the same rule as the serializer's pdfplot_url: a task that finished with an error has a data
     # file with no points, and a render of it makes no PDF, so nothing is cached and every request
@@ -2492,7 +2468,7 @@ def _taskresultfile_response(
     taskid: int, getfile: Callable[[Task], str | Path | None]
 ) -> FileResponse | HttpResponseNotFound:
     """Serve one of a task's result files, or 404 when the task or the file does not exist."""
-    task = Task.live().filter(id=taskid).first() if taskid else None
+    task = Task.live().filter(id=taskid).first()
     resultfile = getfile(task) if task is not None else None
     if resultfile:
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)
