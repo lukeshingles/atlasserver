@@ -22,7 +22,6 @@ from signal import SIGTERM
 
 import django
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.db import close_old_connections
 from django.db import models
@@ -109,18 +108,13 @@ def mjdnow() -> float:
     return datetime_to_mjd(dt.datetime.now(dt.UTC))
 
 
-def localresultfileprefix(taskid: int) -> str:
-    """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / jobfilename(taskid)))
-
-
-def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
+def log_general(msg: str, suffix: str = "") -> None:
     """Log a message to the console and to a log file (with given filename suffix)."""
     dtnow = dt.datetime.now(dt.UTC)
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
     if not suffix:
-        print(line, *args, **kwargs)
+        print(line)
 
     logfile_latest = Path(runnerstatus.LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
 
@@ -253,44 +247,34 @@ def run_rsync(
 
     logfunc(" ".join(copycommand))
 
-    proc = subprocess.Popen(
-        copycommand,
-        shell=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        # replace, not the default strict: one byte of non-UTF-8 in the remote output
-        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
-        # UnicodeDecodeError out of the worker, which then died before mark_finished.
-        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
-        # pass, forever, with no error_msg to say why.
-        errors="replace",
-        bufsize=1,
-        universal_newlines=True,
-    )
-
     try:
-        # without a timeout an rsync against a wedged host blocks the worker slot indefinitely
-        stdout, stderr = proc.communicate(timeout=TASK_MAXTIME_SECONDS)
+        # Without a timeout, an rsync against a wedged host holds the slot without a limit. At the
+        # timeout, subprocess.run kills the process and reaps it.
+        result = subprocess.run(
+            copycommand,
+            capture_output=True,
+            encoding="utf-8",
+            # replace, not the default strict: one byte that is not UTF-8 in the remote output
+            # (a Latin-1 filename, a binary fragment on stderr) raises UnicodeDecodeError. The
+            # slot then ends before mark_finished, and the task has no error_msg to say why.
+            errors="replace",
+            timeout=TASK_MAXTIME_SECONDS,
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         logfunc(f"ERROR: rsync timed out after {TASK_MAXTIME_SECONDS:.0f} seconds")
-        proc.kill()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
         return None
 
-    if stdout:
-        for line in stdout.split("\n"):
-            logfunc(f"STDOUT: {line}")
+    for line in result.stdout.split("\n") if result.stdout else []:
+        logfunc(f"STDOUT: {line}")
 
-    if stderr:
-        for line in stderr.split("\n"):
-            logfunc(f"STDERR: {line}")
+    for line in result.stderr.split("\n") if result.stderr else []:
+        logfunc(f"STDERR: {line}")
 
-    if proc.returncode != 0:
-        logfunc(f"ERROR: rsync exited with code {proc.returncode}")
+    if result.returncode != 0:
+        logfunc(f"ERROR: rsync exited with code {result.returncode}")
 
-    return proc.returncode
+    return result.returncode
 
 
 def replace_lost_connection() -> None:
@@ -403,12 +387,7 @@ def task_exists(taskid: int) -> bool:
     # a slot polls this during an attempt that can last hours, so it is the place where a slot
     # finds a connection that the database closed
     replace_lost_connection()
-    try:
-        Task.objects.all().get(id=taskid)
-    except (ObjectDoesNotExist, IndexError):
-        return False
-
-    return True
+    return Task.objects.filter(id=taskid).exists()
 
 
 def remove_task_resultfiles(taskid: int, logfunc: t.Callable[[t.Any], None] = log_general) -> None:
@@ -436,16 +415,10 @@ def remote_result_filename(task) -> str | None:
 
     A task can produce several files, but this is the one that has to exist.
     """
-    if task.request_type == "FP":
-        return jobfilename(task.id, ".txt")
-    if task.request_type == "IMGZIP":
-        # the remote script names the zip after the data file it is given, which is uploaded under
-        # this task's own name below
-        return jobfilename(task.id, ".zip")
-    if task.request_type == "SSOSTACK":
-        return jobfilename(task.id, ".fits")
-
-    return None
+    # IMGZIP: the remote script names the zip after the data file that it gets, which runtask
+    # uploads under the name of this task
+    suffix = {"FP": ".txt", "IMGZIP": ".zip", "SSOSTACK": ".fits"}.get(task.request_type)
+    return None if suffix is None else jobfilename(task.id, suffix)
 
 
 def build_fp_command(task, remoteresultfile: Path) -> str:
@@ -565,7 +538,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     if slotid is not None and sshoptions:
         open_ssh_master(slotid, sshoptions, logfunc)
 
-    remoteresultdir = Path("~/atlasserver/results/")
+    remoteresultdir = Path(REMOTE_RESULT_DIR)
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
     remoteresultfile = Path(remoteresultdir, filename)
     # the IMGZIP and SSOSTACK tasks use this file. The FP tasks do not use it.
@@ -631,14 +604,8 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             encoding="utf-8",
-            # replace, not the default strict: one byte of non-UTF-8 in the remote output
-            # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
-            # UnicodeDecodeError out of the worker, which then died before mark_finished.
-            # The row keeps finishtimestamp NULL, so the task is dispatched again on every
-            # pass, forever, with no error_msg to say why.
+            # replace, for the reason in run_rsync
             errors="replace",
-            bufsize=1,
-            universal_newlines=True,
         )
 
         starttime = time.perf_counter()
@@ -715,50 +682,27 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=True)
         return None, None
 
-    # copy files from sc01 to local machine, deleting the remote files after successful copy
+    # Move the files of the task from sc01: pairs of the remote file and the local destination.
+    # rsync deletes each remote file after its copy.
     if task.request_type == "FP":
-        copycommands = [
-            # move the jpg task image from sc01 (deleting the remote file)
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(localresultfile)],
-            [
-                "rsync",
-                "--remove-source-files",
-                f"{REMOTE_SERVER}:{Path(remoteresultdir / filename).with_suffix('.jpg')}",
-                str(settings.RESULTS_DIR),
-            ],
-        ]
+        copies = [(remoteresultfile, localresultfile), (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR)]
     elif task.request_type == "SSOSTACK":
-        # move the stack *.fits, *.jpg and *.txt data from sc01 (deleting the remote files)
-        copycommands = [
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)],
-            [
-                "rsync",
-                "--remove-source-files",
-                f"{REMOTE_SERVER}:{Path(remoteresultfile).with_suffix('.jpg')}",
-                str(settings.RESULTS_DIR),
-            ],
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotedatafile}", str(settings.RESULTS_DIR)],
+        copies = [
+            (remoteresultfile, settings.RESULTS_DIR),
+            (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR),
+            (remotedatafile, settings.RESULTS_DIR),
         ]
     else:  # IMGZIP
-        # move the image zip from sc01 (deleting the remote file)
-        copycommands = [
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
-        ]
-        # the data file is collected from the remote host too, so it does not accumulate there.
-        # Into the private input directory, never the results directory: the web server serves
-        # that one, and this file is a copy of a data file the parent may since have deleted.
+        # The data file comes back too, so it does not stay on the remote host. It goes into the
+        # private input directory, never the results directory: the web server serves that one,
+        # and this file is a copy of a data file that the parent may have deleted.
         settings.TASK_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
-        copycommands.append(
-            [
-                "rsync",
-                "--remove-source-files",
-                f"{REMOTE_SERVER}:{remotedatafile}",
-                str(task.inputfile()),
-            ]
-        )
+        copies = [(remoteresultfile, settings.RESULTS_DIR), (remotedatafile, task.inputfile())]
 
-    for copycommand in copycommands:
-        run_rsync(copycommand, logfunc, sshoptions)
+    for remotefile, destination in copies:
+        run_rsync(
+            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)], logfunc, sshoptions
+        )
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
@@ -912,7 +856,7 @@ def send_email_if_needed(task, logfunc) -> None:
         if not batchtask.finishtimestamp and batchtask.id != task.id:
             batchtasks_unfinished += 1
         else:
-            localresultfile = localresultfileprefix(batchtask.id) + ".txt"
+            localresultfile = Path(settings.RESULTS_DIR, jobfilename(batchtask.id, ".txt"))
             strtask = (
                 f"Task {batchtask.id}: {batchtask.describe_target()} "
                 f"{'img_reduced' if batchtask.use_reduced else 'img_difference'} "
@@ -942,22 +886,14 @@ def send_email_if_needed(task, logfunc) -> None:
             to=[task.user.email],
         )
 
+        # all the data files first, then the plots, while the total stays below 22 MB
         attach_size_mb = 0.0
-
-        for localresultfile in localresultfilelist:
-            if Path(localresultfile).exists():
-                filesize_mb = Path(localresultfile).stat().st_size / 1024.0 / 1024.0
+        for attachment in [*localresultfilelist, *(path.with_suffix(".pdf") for path in localresultfilelist)]:
+            if attachment.exists():
+                filesize_mb = attachment.stat().st_size / 1024.0 / 1024.0
                 if (attach_size_mb + filesize_mb) < 22:
                     attach_size_mb += filesize_mb
-                    message.attach_file(localresultfile)
-
-        for localresultfile in localresultfilelist:
-            pdfpath = Path(localresultfile).with_suffix(".pdf")
-            if pdfpath.exists():
-                filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
-                if (attach_size_mb + filesize_mb) < 22:
-                    attach_size_mb += filesize_mb
-                    message.attach_file(str(pdfpath))
+                    message.attach_file(str(attachment))
 
         try:
             message.send()
@@ -1409,29 +1345,25 @@ def run_slot(task, slotid: int, endedwall: t.Any = None) -> None:
         signal(stopsignal, request_stop)
 
     try:
-        do_task(task, slotid, started=True)
+        do_task(task, slotid)
     finally:
         if endedwall is not None:
             endedwall.value = time.time()
 
 
-def do_task(task, slotid: int, started: bool = False) -> None:
+def do_task(task, slotid: int) -> None:
     """Run a task in a particular slot and send a result email if requested.
 
-    `started` is true when the caller has recorded the start of this attempt; see start_in_slot.
+    The caller recorded the start of this attempt; see start_in_slot.
     """
 
     def logfunc_slotonly(x) -> None:
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
     def logfunc(x) -> None:
-        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
-
+        logfunc_slotonly(x)
         # also log to the main process
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
-
-    if not started:
-        mark_started(task)
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
@@ -1702,7 +1634,7 @@ def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[]
     return removed
 
 
-def do_maintenance(heartbeat: t.Callable[[], None] | None = None, send_batch_emails: bool = False):
+def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     """Remove old tasks and associated files according to their type and age.
 
     `heartbeat` is called between sweeps and periodically within them. This runs in the main loop
@@ -1741,9 +1673,8 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None, send_batch_ema
     logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")
 
     # after the sweeps, because a sweep can delete the last unfinished task of a batch
-    if send_batch_emails:
-        batches = send_pending_batch_emails(logfunc=logfunc, heartbeat=heartbeat)
-        logfunc(f"Checked {batches} batches whose last unfinished task went before it finished")
+    batches = send_pending_batch_emails(logfunc=logfunc, heartbeat=heartbeat)
+    logfunc(f"Sent the email of {batches} batches whose last unfinished task went before it finished")
 
 
 def main() -> None:
@@ -1752,8 +1683,7 @@ def main() -> None:
 
     runnerstatus.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    def logfunc(x):
-        log_general(x)
+    logfunc = log_general
 
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
@@ -1822,7 +1752,7 @@ def main() -> None:
             # the interpreter then waits for every running worker, and the supervisor restarts
             # into the same sweep before any dispatch. A failed sweep is retried in an hour.
             try:
-                do_maintenance(heartbeat=maintenance_heartbeat, send_batch_emails=True)
+                do_maintenance(heartbeat=maintenance_heartbeat)
             except Exception as ex:  # noqa: BLE001 (this loop dispatches every task)
                 logfunc(f"ERROR: the maintenance sweep failed: {ex}")
             refresh_status()
@@ -1851,7 +1781,7 @@ def main() -> None:
                 if dispatch_waits_since is None:
                     dispatch_waits_since = time.perf_counter()
 
-                numslotsfree = sum(1 if p is None else 0 for p in procs)
+                numslotsfree = procs.count(None)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
         # Renumbering belongs here rather than in the submitting request: this loop is the only
@@ -1924,11 +1854,10 @@ def main() -> None:
             logfunc("WARNING: the queue positions are old, and the task runner starts tasks with them")
             dispatch_waits_since = None
 
-        slotid = procs.index(None) if None in procs else -1
-
-        if slotid < 0:
+        if None not in procs:
             # every slot is busy, so there is nothing to dispatch and no reason to look at the queue
             continue
+        slotid = procs.index(None)
 
         # one query rather than a count() followed by a first(): the count was only used for a log
         # line, and is fetched below only when a task is actually dispatched

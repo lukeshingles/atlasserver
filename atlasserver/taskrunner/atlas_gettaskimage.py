@@ -52,8 +52,7 @@ def main() -> None:
     )
 
     # delete the .fits (but keep the .jpeg)
-    if fitsoutpath.exists():
-        fitsoutpath.unlink()
+    fitsoutpath.unlink(missing_ok=True)
 
     # jobxxxxx.fits.jpg to jobxxxx.jpg
     jpgpath = fitsoutpath.with_suffix(".fits.jpg")

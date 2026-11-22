@@ -3,9 +3,8 @@
 Where the runner writes its status snapshot, how often, and how many tasks it runs at once.
 
 Split out of `main` so that the web server can read these without importing the runner. Importing
-`atlasserver.taskrunner.main` runs `django.setup()` and pulls in pandas and multiprocessing, so the
-first request to /taskrunnerstatus.json used to load all of that into every mod_wsgi worker, and
-keep it there, to read these few values.
+`atlasserver.taskrunner.main` runs `django.setup()` and imports multiprocessing. Each mod_wsgi
+worker would then load all of that and keep it, only to read these few values.
 
 Anything the two processes must agree on belongs here rather than in `main`, which the web app
 cannot reach: a value defined in both places can drift, and NUMSLOTS below is one the queue page

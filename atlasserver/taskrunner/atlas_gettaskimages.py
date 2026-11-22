@@ -48,12 +48,12 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     commands = []
 
     dfimages = dfforcedphot[:1000]
+    imgfolder = "red" if reduced else "diff"
+    fitsext = "fits" if reduced else "diff"
     # The three columns come from one DataFrame, so they have the same length. zip() has no
     # strict argument in Python 3.8, which is the version that runs this script on sc01.
     for index, (obs, ra, dec) in enumerate(zip(dfimages["Obs"], dfimages["RA"], dfimages["Dec"])):
         # obs looks like '01a59309o0235c'
-        imgfolder = "red" if reduced else "diff"
-        fitsext = "fits" if reduced else "diff"
         fitsinput = f"/atlas/{imgfolder}/{obs[:3]}/{obs[3:8]}/{obs}.{fitsext}.fz"
         fitsoutpath = Path(tmpfolder / (f"{obs}.fits" if reduced else f"{obs}_diff.fits"))
 
@@ -101,8 +101,7 @@ def gather_images(datafile: str, reduced: bool, tmpfolder: Path) -> None:
     zipoutpath = Path(datafile).with_suffix(".zip").resolve()
 
     # make sure the zip file doesn't somehow exist already
-    if zipoutpath.exists():
-        zipoutpath.unlink()
+    zipoutpath.unlink(missing_ok=True)
 
     cmd = ["zip", "--junk-paths", "-r", str(zipoutpath), str(tmpfolder)]
     print(" ".join(cmd))

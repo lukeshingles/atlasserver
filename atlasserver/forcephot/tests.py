@@ -510,7 +510,10 @@ class FairShareQueueTests(TestCase):
             mock.patch.object(taskrunner_main, "log_general"),
             mock.patch.object(taskrunner_main, "notify_finished"),
         ):
-            taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=0)
+            # the start of the attempt, as start_in_slot records it before the slot runs do_task
+            started = Task.objects.get(pk=task.pk)
+            taskrunner_main.mark_started(started)
+            taskrunner_main.do_task(started, slotid=0)
 
         finished = Task.objects.get(pk=task.pk)
         assert finished.finishtimestamp is not None
@@ -6936,41 +6939,38 @@ class AtlasCommandTests(TestCase):
 
 
 class RunRsyncTests(TestCase):
-    def test_timeout_kills_the_process_and_reports_no_exit_code(self) -> None:
-        # without a timeout an rsync against a wedged host holds the worker slot forever
-        proc = mock.MagicMock()
-        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="rsync", timeout=1)
+    def test_a_timeout_reports_no_exit_code(self) -> None:
+        # without a timeout an rsync against a wedged host holds the worker slot forever;
+        # subprocess.run kills and reaps the process at the timeout
         logged: list[str] = []
 
-        with mock.patch("subprocess.Popen", return_value=proc):
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="rsync", timeout=1)
+        ) as run:
             result = taskrunner_main.run_rsync(["rsync", "a", "b"], logged.append)
 
         assert result is None
-        proc.kill.assert_called_once()
-        proc.wait.assert_called_once()  # reaped, so no zombie is left behind
+        assert run.call_args.kwargs["timeout"] == taskrunner_main.TASK_MAXTIME_SECONDS
         assert any("timed out" in line for line in logged), logged
 
     def test_nonzero_exit_is_reported(self) -> None:
-        proc = mock.MagicMock()
-        proc.communicate.return_value = ("", "rsync: connection unexpectedly closed")
-        proc.returncode = 12
+        finished = subprocess.CompletedProcess(args=[], returncode=12, stdout="", stderr="connection closed")
         logged: list[str] = []
 
-        with mock.patch("subprocess.Popen", return_value=proc):
+        with mock.patch.object(taskrunner_main.subprocess, "run", return_value=finished):
             result = taskrunner_main.run_rsync(["rsync", "a", "b"], logged.append)
 
         assert result == 12
         assert any("exited with code 12" in line for line in logged), logged
+        assert "STDERR: connection closed" in logged, logged
 
     def test_the_ssh_options_go_to_rsync_as_one_argument(self) -> None:
-        proc = mock.MagicMock()
-        proc.communicate.return_value = ("", "")
-        proc.returncode = 0
+        finished = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        with mock.patch("subprocess.Popen", return_value=proc) as popen:
+        with mock.patch.object(taskrunner_main.subprocess, "run", return_value=finished) as run:
             taskrunner_main.run_rsync(["rsync", "a", "b"], lambda _msg: None, ["-oX=1", "-oY=2"])
 
-        assert popen.call_args.args[0] == ["rsync", "-e", "ssh -oX=1 -oY=2", "a", "b"], popen.call_args
+        assert run.call_args.args[0] == ["rsync", "-e", "ssh -oX=1 -oY=2", "a", "b"], run.call_args
 
 
 class SshOptionsTests(TestCase):
