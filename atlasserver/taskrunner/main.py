@@ -314,8 +314,12 @@ def remote_pidfile(taskid: int, token: str) -> str:
 
 
 def remote_stopfile(taskid: int, token: str) -> str:
-    """Return the remote file that tells the remote command of one attempt not to start; see stop_remote_job."""
-    return f"{REMOTE_RESULT_DIR}/{jobfilename(taskid, f'.{token}.stop')}"
+    """Return the remote file that tells the remote command of one attempt not to start; see stop_remote_job.
+
+    The name does not start with the name of the job. Thus the removal of the files of a cancelled
+    task in stop_remote_job does not remove this file.
+    """
+    return f"{REMOTE_RESULT_DIR}/stop.{jobfilename(taskid, f'.{token}')}"
 
 
 def stop_remote_job(

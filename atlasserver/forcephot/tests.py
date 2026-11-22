@@ -4924,7 +4924,7 @@ class RemoteStopTests(TestCase):
         remote = command[-1]
         match = re.match(
             r"echo \$\$ > (~/atlasserver/results/job\d+\.([0-9a-f]{32})\.pid); "
-            r"if \[ -e (~/atlasserver/results/job\d+\.\2\.stop) \]; then rm -f \1 \3; exit 143; fi; "
+            r"if \[ -e (~/atlasserver/results/stop\.job\d+\.\2) \]; then rm -f \1 \3; exit 143; fi; "
             r"nice -n 19 timeout ",
             remote,
         )
@@ -4948,6 +4948,31 @@ class RemoteStopTests(TestCase):
 
         stop.assert_called_once()
         assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_cancel_before_the_remote_command_starts_keeps_it_from_starting(self) -> None:
+        # sshd can start the remote command after the stop. The real commands run here in that
+        # order, with HOME in a temporary directory.
+        command, _stop = self.run_attempt()
+        remote = command[-1]
+        found = re.search(r"\.([0-9a-f]{32})\.pid", remote)
+        assert found is not None, remote
+
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+        ) as run:
+            taskrunner_main.stop_remote_job(self.task.id, found.group(1), [], lambda _msg: None, delete_files=True)
+        stopcommand = run.call_args.args[0][-1]
+
+        with tempfile.TemporaryDirectory() as home:
+            Path(home, "atlasserver", "results").mkdir(parents=True)
+            env = {**os.environ, "HOME": home}
+            stopped = subprocess.run(["bash", "-c", stopcommand], env=env, capture_output=True, text=True, check=False)
+            late = subprocess.run(["bash", "-c", remote], env=env, capture_output=True, text=True, check=False)
+            left = sorted(path.name for path in Path(home, "atlasserver", "results").iterdir())
+
+        assert stopped.returncode == 0, stopped.stderr
+        assert late.returncode == 143, (late.returncode, late.stderr)
+        assert left == [], left
 
     def test_a_local_timeout_stops_the_remote_command_and_keeps_the_files(self) -> None:
         # the remote timeout stops only the first command, and the preview script can still run
