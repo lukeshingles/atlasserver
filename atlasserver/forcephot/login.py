@@ -15,13 +15,10 @@ from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.views import LoginView
 from django.contrib.auth.views import PasswordChangeView
 from django.core.exceptions import NON_FIELD_ERRORS
-from django.http import HttpResponse
 from django.views.decorators.debug import sensitive_variables
 from rest_framework import serializers
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.exceptions import Throttled
-from rest_framework.request import Request
-from rest_framework.response import Response
 
 from atlasserver.forcephot.forms import ThrottledPasswordChangeForm
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
@@ -32,9 +29,12 @@ from atlasserver.forcephot.throttles import note_login_failure
 from atlasserver.forcephot.throttles import password_was_wrong
 
 if t.TYPE_CHECKING:
-    # only for an annotation, which is a string: FormView has no __class_getitem__, and Python
-    # 3.13 evaluates the annotations when it runs the def
+    # only for the annotations. FormView has no __class_getitem__, so FormView[t.Any] is correct
+    # only because Python evaluates an annotation when a program reads it, and no code reads it.
+    from django.http import HttpResponse
     from django.views.generic.edit import FormView
+    from rest_framework.request import Request
+    from rest_framework.response import Response
 
 
 class LoginFailureLimitMixin(AuthenticationForm):
@@ -76,7 +76,7 @@ class ThrottledAdminAuthenticationForm(LoginFailureLimitMixin, AdminAuthenticati
     """The admin login's form; the admin reads site.login_form at request time."""
 
 
-def throttled_form_invalid(view: "FormView[t.Any]", form: forms.BaseForm, field: str) -> HttpResponse:
+def throttled_form_invalid(view: FormView[t.Any], form: forms.BaseForm, field: str) -> HttpResponse:
     """Render the invalid form of a view. Answer a form that a budget refused with 429 and a Retry-After.
 
     `field` is the field that carries the error with the code "throttled". A 429 with a Retry-After

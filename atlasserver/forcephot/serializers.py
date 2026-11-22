@@ -1,6 +1,5 @@
 import math
 import typing as t
-from collections.abc import Mapping
 from typing import override
 
 from django.conf import settings
@@ -14,6 +13,9 @@ from atlasserver.forcephot.models import MPC_NAME_WHITESPACE
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import validate_callback_url
+
+if t.TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def stack_requests_allowed(context: Mapping[str, t.Any]) -> bool:
@@ -34,7 +36,7 @@ def is_finite_float(val):
         return False
     try:
         f_val = float(val)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         # TypeError as well as ValueError: a JSON body can put a list or an object where a number
         # belongs, and float() raises TypeError for those, which would surface as a 500
         return False
@@ -442,7 +444,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
             try:
                 Task.objects.all().get(id=parent_task_id, request_type="FP")
-            except (ObjectDoesNotExist, IndexError):
+            except ObjectDoesNotExist, IndexError:
                 msg = "An IMGZIP task must keep its parent_task_id set to an FP task id."
                 raise serializers.ValidationError(msg) from None
 

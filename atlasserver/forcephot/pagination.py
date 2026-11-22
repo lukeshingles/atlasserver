@@ -2,15 +2,17 @@ import typing as t
 from typing import override
 
 from django.core.exceptions import ValidationError
-from django.db.models import QuerySet
 from rest_framework.exceptions import NotFound
 from rest_framework.pagination import _reverse_ordering
 from rest_framework.pagination import CursorPagination
-from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.utils.urls import remove_query_param
 
-from atlasserver.forcephot.models import Task
+if t.TYPE_CHECKING:
+    from django.db.models import QuerySet
+    from rest_framework.request import Request
+
+    from atlasserver.forcephot.models import Task
 
 
 class TaskPagination(CursorPagination):

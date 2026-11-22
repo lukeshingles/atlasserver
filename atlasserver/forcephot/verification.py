@@ -22,12 +22,14 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core import signing
 from django.core.mail import EmailMessage
-from django.http import HttpRequest
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_decode
 from django.utils.http import urlsafe_base64_encode
+
+if t.TYPE_CHECKING:
+    from django.http import HttpRequest
 
 
 class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
@@ -185,7 +187,7 @@ def user_from_uidb64(uidb64: str) -> t.Any:
     # invalid-link page.
     try:
         pk = int(urlsafe_base64_decode(uidb64).decode())
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         return None
 
     return get_user_model().objects.filter(pk=pk).first()

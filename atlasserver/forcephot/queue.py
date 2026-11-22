@@ -224,7 +224,7 @@ def usage_weight(agedays: int) -> float:
     return 0.5 ** (agedays / USAGE_HALF_LIFE_DAYS)
 
 
-def decayed_usage(rows: "Iterable[tuple[int, dt.date, float, int]]", today: dt.date) -> dict[int, Usage]:
+def decayed_usage(rows: Iterable[tuple[int, dt.date, float, int]], today: dt.date) -> dict[int, Usage]:
     """Return the usage of each user from usage records (user id, day, seconds, tasks); see usage_weight."""
     totals: dict[int, list[float]] = {}
     for userid, day, seconds, tasks in rows:
@@ -235,7 +235,7 @@ def decayed_usage(rows: "Iterable[tuple[int, dt.date, float, int]]", today: dt.d
     return {userid: Usage(seconds, tasks) for userid, (seconds, tasks) in totals.items()}
 
 
-def usage_records() -> "models.QuerySet[UsageDay]":
+def usage_records() -> models.QuerySet[UsageDay]:
     """Return the usage records that the usage of a user includes."""
     firstday = utcnow().date() - dt.timedelta(days=USAGE_RETENTION_DAYS)
     return UsageDay.objects.filter(day__gte=firstday)
@@ -269,7 +269,7 @@ def new_account_userids() -> set[int]:
     return set(get_user_model().objects.filter(date_joined__gt=joinedafter).values_list("pk", flat=True))
 
 
-def new_account_usage(usage: "Mapping[int, Usage]") -> float:
+def new_account_usage(usage: Mapping[int, Usage]) -> float:
     """Return the lowest usage that a new account has in the queue order, in seconds.
 
     This is the median usage of the users who have a usage record. A new account is thus before
@@ -280,7 +280,7 @@ def new_account_usage(usage: "Mapping[int, Usage]") -> float:
     return statistics.median(own.seconds for own in usage.values()) if usage else 0.0
 
 
-def expected_task_seconds(usage: "Mapping[int, Usage]") -> "Callable[[int], float]":
+def expected_task_seconds(usage: Mapping[int, Usage]) -> Callable[[int], float]:
     """Return the function that gives the expected run time of one task of a user, in seconds.
 
     The queue order charges a user this time for each task of the user in a slot, and it puts
@@ -430,7 +430,7 @@ def clear_typical_runtime_memo() -> None:
 
 
 def calculate_queue_positions(
-    usage: "Mapping[int, Usage] | None" = None, running_taskids: "Collection[int] | None" = None
+    usage: Mapping[int, Usage] | None = None, running_taskids: Collection[int] | None = None
 ) -> None:
     """Assign each task that waits its position, which is the order in which the task runner starts the tasks.
 

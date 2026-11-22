@@ -2552,7 +2552,7 @@ class SiteOriginSettingTests(SimpleTestCase):
     """The links in security email are built from this, so an unset value is the exposure."""
 
     @staticmethod
-    def load_settings(module: str, **env: str) -> "subprocess.CompletedProcess[str]":
+    def load_settings(module: str, **env: str) -> subprocess.CompletedProcess[str]:
         """Import a settings module in a fresh interpreter with the given environment."""
         # cleared from the inherited environment before the overrides, not after: a developer's
         # own .env would otherwise decide the result of these tests
@@ -7592,7 +7592,7 @@ class ProcessTimeoutTests(TestCase):
         fork() there copies only the calling thread but all of the memory, so a lock another
         thread held at that instant is held forever in the child -- which then deadlocks on first
         touching whatever it guards, and for an import-heavy child that is the import machinery.
-        The platform default hid this: macOS spawns, Linux forks on 3.13 and forkserver on 3.14+.
+        The platform default hid this: macOS spawns and Linux uses forkserver.
         """
         captured = []
 

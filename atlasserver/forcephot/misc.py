@@ -1,14 +1,16 @@
 import contextlib
-import datetime as dt
 import multiprocessing
 import typing as t
-from multiprocessing.process import BaseProcess
 from pathlib import Path
 
 import fundamentals.logs
 import julian
 import pycountry
 from astrocalc.coords.unit_conversion import unit_conversion
+
+if t.TYPE_CHECKING:
+    import datetime as dt
+    from multiprocessing.process import BaseProcess
 
 # How long a forked PDF render may run before it is killed. Generous: a large result file
 # legitimately takes a while, and the point is to bound a hang, not to police slow plots.

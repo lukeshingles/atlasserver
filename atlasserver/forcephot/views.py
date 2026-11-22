@@ -66,10 +66,8 @@ from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.renderers import JSONRenderer
-from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from rest_framework.serializers import BaseSerializer
 from rest_framework.utils.urls import replace_query_param
 from rest_framework.views import APIView
 
@@ -118,6 +116,10 @@ from atlasserver.forcephot.webhooks import callback_urls_validated_once
 # not atlasserver.taskrunner.main: importing that module runs django.setup() and pulls pandas and
 # multiprocessing into every web worker, permanently, to read two constants
 from atlasserver.taskrunner import status as runnerstatus
+
+if t.TYPE_CHECKING:
+    from rest_framework.request import Request
+    from rest_framework.serializers import BaseSerializer
 
 MAX_USER_IMGZIP_TASKS = 5
 MAX_USER_TASKS = 500
@@ -374,7 +376,7 @@ def client_location_fields(request) -> dict[str, str | None]:
         # or most IPv6). Routine, and silent for that reason: logging it would put a line in the
         # log for a share of perfectly ordinary submissions and bury the failures below in them
         return fields
-    except (GeoIP2Exception, GeoIP2Error, InvalidDatabaseError, OSError):
+    except GeoIP2Exception, GeoIP2Error, InvalidDatabaseError, OSError:
         # the database is missing, unreadable or corrupt (OSError covers the stat in geoip_reader,
         # which is where a deleted file surfaces). Unlike the case above this is a real fault, so
         # it is reported at error level, where the "atlasserver" logger writes it to the log file.

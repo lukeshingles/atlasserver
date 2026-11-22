@@ -1,9 +1,11 @@
 import typing as t
 
 from django.contrib.auth.views import redirect_to_login
-from django.http import HttpResponseRedirect
-from rest_framework.response import Response
 from rest_framework.views import exception_handler
+
+if t.TYPE_CHECKING:
+    from django.http import HttpResponseRedirect
+    from rest_framework.response import Response
 
 # renderers that produce a page for a person to look at, rather than a body for a program to parse.
 # TemplateHTMLRenderer.format is "html" and BrowsableAPIRenderer.format is "api".

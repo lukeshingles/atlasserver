@@ -3,11 +3,13 @@
 import typing as t
 
 from django.conf import settings
-from django.http import HttpRequest
 from django.utils.functional import SimpleLazyObject
 
 from atlasserver.forcephot.models import Task
 from atlasserver.taskrunner import status as runnerstatus
+
+if t.TYPE_CHECKING:
+    from django.http import HttpRequest
 
 
 def static_version(request: HttpRequest) -> dict[str, t.Any]:

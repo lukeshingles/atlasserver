@@ -75,7 +75,7 @@ def runner_is_stale() -> bool:
     """
     try:
         _status, age_seconds = read_status()
-    except (OSError, KeyError, TypeError, ValueError):
+    except OSError, KeyError, TypeError, ValueError:
         return True
 
     return age_seconds > STALE_AFTER_SECONDS

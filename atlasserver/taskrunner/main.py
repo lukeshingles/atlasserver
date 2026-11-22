@@ -1195,7 +1195,7 @@ def open_attempts(logfunc=log_general) -> list[EndedAttempt]:
     laststatus: dt.datetime | None = None
     try:
         laststatus = now - dt.timedelta(seconds=runnerstatus.read_status()[1])
-    except (OSError, KeyError, TypeError, ValueError):
+    except OSError, KeyError, TypeError, ValueError:
         logfunc("There is no status file of a task runner. An attempt with no end gets a record with no run time.")
 
     attempts: list[EndedAttempt] = []

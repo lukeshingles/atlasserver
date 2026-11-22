@@ -11,10 +11,13 @@ a lock nobody else can see.
 import contextlib
 import fcntl
 import os
-from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from django.conf import settings
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 
 def _lockpath(name: str) -> Path:

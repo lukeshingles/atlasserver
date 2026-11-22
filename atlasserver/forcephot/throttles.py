@@ -15,7 +15,6 @@ from rest_framework.authentication import get_authorization_header
 # previously unlimited -- an unauthenticated caller could poll a task detail as fast as the server
 # would answer.
 from rest_framework.permissions import SAFE_METHODS
-from rest_framework.request import Request
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.throttling import SimpleRateThrottle
 
@@ -27,6 +26,7 @@ if t.TYPE_CHECKING:
     # still being imported, so importing APIView here at run time is a circular import that leaves
     # the whole app unable to start. rest_framework.permissions above is safe: views.py already
     # imports it at module scope.
+    from rest_framework.request import Request
     from rest_framework.views import APIView
 
 # Scope used for safe methods, in place of whatever the view declares for writes. Separate so that
@@ -238,7 +238,7 @@ class ForcedPhotRateThrottle(ScopedRateThrottle):
     duration: int | None
 
     @override
-    def allow_request(self, request: Request, view: "APIView") -> bool:
+    def allow_request(self, request: Request, view: APIView) -> bool:
         writescope = getattr(view, self.scope_attr, None)
 
         # a view with no `throttle_scope` is not throttled
