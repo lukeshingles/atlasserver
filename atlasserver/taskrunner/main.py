@@ -155,7 +155,7 @@ def log_general(msg: str, suffix: str = "") -> None:
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     # A message can hold the stderr of ssh, which has more than one line. Each line gets the
     # time, so that a search of the log by time finds each line.
-    line = "\n".join(f"{strtime}  {part}" for part in str(msg).splitlines() or [""])
+    line = "\n".join(f"{strtime}  {part}" for part in msg.splitlines() or [""])
     if not suffix:
         # `atlastaskrunner stop` closes the terminal of the tmux session, and a write to it then
         # raises OSError. A slot that stops still records its result, so the file log continues.
