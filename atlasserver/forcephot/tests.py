@@ -5204,7 +5204,7 @@ class RemoteStopTests(TestCase):
 
         self.run_attempt_with_real_options(opened, started)
 
-        assert events == ["task connection", "stop connection", "remote command"], events
+        assert events == ["task connection", "stop connection", "stop connection", "remote command"], events
 
     def test_an_image_task_opens_the_stop_connection_after_its_upload(self) -> None:
         # The upload can take a long time. The idle time of the stop connection then starts at the
@@ -5237,9 +5237,15 @@ class RemoteStopTests(TestCase):
             self.task.inputfile().write_text("MJD uJy\n", encoding="utf-8")
             self.run_attempt_with_real_options(opened, started, rsync=None)
 
-        assert events == ["task connection", "upload", "stop connection", "remote command", "download", "download"], (
-            events
-        )
+        assert events == [
+            "task connection",
+            "stop connection",
+            "upload",
+            "stop connection",
+            "remote command",
+            "download",
+            "download",
+        ], events
 
     def test_a_copy_whose_ssh_session_failed_starts_again(self) -> None:
         # sshd can refuse the session on a full connection, and the remote file then stays.
@@ -5258,6 +5264,30 @@ class RemoteStopTests(TestCase):
         assert sources == [".txt", ".txt", ".txt", ".jpg"], sources
         assert sleep.call_args_list == [mock.call(taskrunner_main.RSYNC_RETRY_WAIT_SECONDS)] * 2
         assert not taskrunner_main.connection_failed
+
+    def test_a_copy_opens_the_task_connection_again_before_each_new_try(self) -> None:
+        # The connection can close after the remote command ended. Each try is a client, and a
+        # client opens no connection of its own.
+        events: list[str] = []
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+
+        def opened(*_args: object, stop: bool = False) -> bool:
+            events.append("stop connection" if stop else "task connection")
+            return True
+
+        def copied(command: list[str], *_args: object) -> int:
+            events.append(f"copy {Path(command[-2]).suffix}")
+            return 255 if events.count("copy .txt") == 1 else 0
+
+        with (
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied),
+            mock.patch.object(taskrunner_main.time, "sleep"),
+        ):
+            self.run_attempt_with_real_options(opened, mock.Mock(return_value=proc), rsync=None)
+
+        assert events[-4:] == ["copy .txt", "task connection", "copy .txt", "copy .jpg"], events
 
     def test_a_copy_whose_ssh_session_fails_each_time_pauses_the_slot(self) -> None:
         # without the pause, the slot takes the next task at once and fails it in about a second

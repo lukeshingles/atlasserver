@@ -625,12 +625,13 @@ def note_connection_failure() -> None:
 
 
 def copy_with_rsync(
-    copycommand: list[str], logfunc: t.Callable[[t.Any], None], sshoptions: t.Sequence[str]
+    copycommand: list[str], logfunc: t.Callable[[t.Any], None], sshoptions: t.Sequence[str], slotid: int | None
 ) -> int | None:
     """Run run_rsync, and run it again when its ssh session fails. Return the last exit code.
 
-    sshd can refuse the session on a full connection; see SSH_NO_OWN_CONNECTION. After the last
-    try, a failed session is a failed connection of the attempt.
+    sshd can refuse the session on a full connection; see SSH_NO_OWN_CONNECTION. The connection
+    can also close, and then each new try opens it again first. After the last try, a failed
+    session is a failed connection of the attempt.
     """
     code = None
     for trynumber in range(1, RSYNC_CONNECTION_TRIES + 1):
@@ -638,8 +639,12 @@ def copy_with_rsync(
         if code not in RSYNC_CONNECTION_FAILED_CODES:
             return code
         if trynumber < RSYNC_CONNECTION_TRIES:
-            logfunc(f"The ssh session of the copy failed. The copy starts again in {RSYNC_RETRY_WAIT_SECONDS:.0f}s.")
+            logfunc(
+                f"The ssh session of the copy failed. The copy starts again in {RSYNC_RETRY_WAIT_SECONDS:.0f} seconds."
+            )
             time.sleep(RSYNC_RETRY_WAIT_SECONDS)
+            if slotid is not None:
+                open_ssh_master(slotid, sshoptions, logfunc)
 
     note_connection_failure()
     return code
@@ -669,7 +674,13 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         note_connection_failure()
         return None, None
 
-    if slotid is not None and not (sshoptions and stopoptions and open_ssh_master(slotid, sshoptions, logfunc)):
+    if slotid is not None and not (
+        sshoptions
+        and stopoptions
+        and open_ssh_master(slotid, sshoptions, logfunc)
+        # also checked again just before the launch; here, an IMGZIP attempt then uploads nothing
+        and open_ssh_master(slotid, stopoptions, logfunc, stop=True)
+    ):
         return connections_missing()
 
     remoteresultdir = Path(REMOTE_RESULT_DIR)
@@ -709,7 +720,9 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
         if (
-            copy_with_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc, sshoptions)
+            copy_with_rsync(
+                ["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc, sshoptions, slotid
+            )
             != 0
         ):
             # without the data file the remote script cannot select any images, so retry later
@@ -730,8 +743,8 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     # the exit status of the command of the task, and not of the removal of the pid file
     atlascommand = f"{atlascommand.rstrip().rstrip(';')}; status=$?; rm -f {pidfile}; exit $status"
 
-    # The stop connection opens now: after the upload of an IMGZIP task, which can take a long
-    # time, and before the remote command. Then SSH_STOP_CONTROL_PERSIST starts at the launch. For
+    # The stop connection opens again now: after the upload of an IMGZIP task, which can take a
+    # long time, and before the remote command. Then SSH_STOP_CONTROL_PERSIST starts at the launch. For
     # an open connection, the check of open_ssh_master starts that time again, because the master
     # counts the idle time from its last client. The connection does not open at the stop. At a
     # restart, all the slots stop at the same time, and sc01 resets many new connections then.
@@ -858,7 +871,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
     for remotefile, destination in copies:
         copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)]
-        if copy_with_rsync(copycommand, logfunc, sshoptions) in RSYNC_CONNECTION_FAILED_CODES:
+        if copy_with_rsync(copycommand, logfunc, sshoptions, slotid) in RSYNC_CONNECTION_FAILED_CODES:
             # the next copies use the same connection
             break
 
