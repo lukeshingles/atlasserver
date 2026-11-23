@@ -131,7 +131,26 @@ jobs:
             - name: Install atlasserver
               run: uv pip install -e .
 
+            # MaxMind permits a limited number of downloads each day, and each run of this job
+            # starts one download of each edition. Thus the job keeps the databases in a cache,
+            # and the key changes at the start of each month. A run downloads the databases only
+            # when the cache of the month has no entry.
+            - name: Get the month of the geoip cache
+              id: geoipmonth
+              run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+            - name: Restore the geoip databases
+              id: geoipcache
+              uses: actions/cache/restore@v6
+              with:
+                  path: |
+                      atlasserver/GeoLite2-ASN.mmdb
+                      atlasserver/GeoLite2-City.mmdb
+                  key: geoip-${{ steps.geoipmonth.outputs.month }}
+
             - name: Install geoip databases
+              id: geoipdownload
+              if: steps.geoipcache.outputs.cache-hit != 'true'
               # the script now exits non-zero when a download fails (so cron notices a stale
               # database), but CI may have no MaxMind key and the Django tests don't need the
               # databases (test requests come from 127.0.0.1, which skips the GeoIP lookup)
@@ -139,6 +158,16 @@ jobs:
               env:
                   MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
               run: ./deploy/update_geoipdatabase.sh
+
+            - name: Save the geoip databases
+              # only after a download of the two editions: the cache keeps no partial set
+              if: steps.geoipdownload.outcome == 'success'
+              uses: actions/cache/save@v6
+              with:
+                  path: |
+                      atlasserver/GeoLite2-ASN.mmdb
+                      atlasserver/GeoLite2-City.mmdb
+                  key: geoip-${{ steps.geoipmonth.outputs.month }}
 
             - name: Set up database
               # the mysql service container has already created the database and passed its
