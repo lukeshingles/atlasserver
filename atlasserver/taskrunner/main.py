@@ -641,13 +641,14 @@ def copy_with_rsync(
         code = run_rsync(copycommand, logfunc, sshoptions)
         if code not in RSYNC_CONNECTION_FAILED_CODES:
             return code
-        if trynumber < RSYNC_CONNECTION_TRIES:
-            logfunc(
-                f"The ssh session of the copy failed. The copy starts again in {RSYNC_RETRY_WAIT_SECONDS:.0f} seconds."
-            )
-            time.sleep(RSYNC_RETRY_WAIT_SECONDS)
-            if slotid is not None:
-                open_ssh_master(slotid, sshoptions, logfunc)
+        # After a stop of the task runner, the next task runner can start the task again. A new
+        # try can then find the remote files of the new attempt, or find them gone.
+        if trynumber == RSYNC_CONNECTION_TRIES or attempt_must_stop():
+            break
+        logfunc(f"The ssh session of the copy failed. The copy starts again in {RSYNC_RETRY_WAIT_SECONDS:.0f} seconds.")
+        time.sleep(RSYNC_RETRY_WAIT_SECONDS)
+        if slotid is not None:
+            open_ssh_master(slotid, sshoptions, logfunc)
 
     note_connection_failure()
     return code

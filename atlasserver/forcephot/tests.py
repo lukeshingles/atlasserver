@@ -5331,6 +5331,23 @@ class RemoteStopTests(TestCase):
         # the result file of the next attempt has the same name
         assert resultfiles == {}, resultfiles
 
+    def test_a_stopping_slot_does_not_try_a_failed_copy_again(self) -> None:
+        # After the stop, the next task runner can start the task again. A new try can then
+        # find the image of the new attempt gone, and publish a mix of the two attempts.
+        self.addCleanup(setattr, taskrunner_main, "connection_failed", False)
+        taskrunner_main._stop_requested = True  # noqa: SLF001
+        with (
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=255) as rsync,
+            mock.patch.object(taskrunner_main.time, "sleep") as sleep,
+            mock.patch.object(taskrunner_main, "open_ssh_master") as opened,
+        ):
+            code = taskrunner_main.copy_with_rsync(["rsync", "a", "b"], lambda _msg: None, self.sshoptions, 0)
+
+        assert code == 255, code
+        assert rsync.call_count == 1, rsync.call_args_list
+        sleep.assert_not_called()
+        opened.assert_not_called()
+
     def test_a_failed_attempt_leaves_the_result_of_a_newer_attempt(self) -> None:
         # After a restart, a new slot can finish the task while the old slot waits to copy the
         # image again. The two attempts use the same local paths.
