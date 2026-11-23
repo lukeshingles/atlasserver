@@ -71,6 +71,13 @@ SSH_FAILURE_PAUSE_SECONDS: float = 30.0
 # that command.
 SSH_SLOTS_PER_CONNECTION: int = 8
 
+# The option that stops a client of a shared connection from a connection of its own. Without it,
+# ssh connects to sc01 again when sshd refuses the session on the shared connection. Many slots do
+# this at the same time, and sc01 then resets all new connections, also an "ssh atlas" of a person.
+# With it, ssh starts this command in place of the connection, and the command fails. ssh then
+# exits with SSH_CONNECTION_FAILED, and the task gets a new attempt.
+SSH_NO_OWN_CONNECTION: t.Final = "-oProxyCommand=false"
+
 # the time that an ssh connection with no session stays open for the next task
 SSH_CONTROL_PERSIST: str = "1h"
 
@@ -166,8 +173,21 @@ def ssh_control_dir() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
 
 
-def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = None) -> list[str]:
-    """Return the ssh options that give a slot the connection of its group of slots.
+def ssh_connection_name(slotid: int, *, stop: bool = False) -> str:
+    """Return the name of the control socket of the connection of a group of slots.
+
+    Each group has two connections. The commands of the tasks use the first. The stop commands of
+    stop_remote_job use the second. sshd keeps the session of a remote command until the command
+    ends, also after its client went. Thus remote commands that a stop did not reach can use all
+    the sessions of the first connection, and sshd then refuses the next stop on it too.
+    """
+    return f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}{'-stop' if stop else ''}"
+
+
+def ssh_options(
+    slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = None, *, stop: bool = False
+) -> list[str]:
+    """Return the ssh options that give a slot a connection of its group of slots; see ssh_connection_name.
 
     Each option is one argument with no space, because rsync divides its -e value at the spaces.
     Without a slot there are no options, and ssh uses only the configuration of the account.
@@ -194,10 +214,9 @@ def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = 
             logfunc(f"ERROR: {controldir} is not a private directory of this account, so ssh uses no shared connection")
         return []
 
-    group = slotid // SSH_SLOTS_PER_CONNECTION
     return [
         "-oControlMaster=auto",
-        f"-oControlPath=~/{SSH_CONTROL_DIR}/{REMOTE_SERVER}-{group}",
+        f"-oControlPath=~/{SSH_CONTROL_DIR}/{ssh_connection_name(slotid, stop=stop)}",
         # ControlPersist puts the master into a background process. The ssh process of a slot is
         # then a client, and the SIGTERM of a cancelled task does not close the sessions of the
         # other slots.
@@ -206,20 +225,27 @@ def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = 
         # new session waits on a dead connection.
         "-oServerAliveInterval=30",
         "-oServerAliveCountMax=3",
+        SSH_NO_OWN_CONNECTION,
     ]
 
 
-def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None]) -> None:
-    """Open the ssh connection of the group of a slot, if it is not open.
+def open_ssh_master(
+    slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, stop: bool = False
+) -> None:
+    """Open the ssh connection of the group of a slot, if it is not open; see ssh_connection_name.
 
     ControlMaster=auto does not wait for a master that a different process starts. Each ssh that
     finds no socket opens a connection of its own, and many new connections at the same time make
     the remote server reset some of them. With a lock for each socket, one slot opens the
     connection, and the other slots of the group wait and then find the socket.
 
-    A failure here does not stop the task. The commands of the task then connect without a master.
+    Only this function opens a connection. The other commands of the task are clients of the
+    connection, and they make no connection of their own; see SSH_NO_OWN_CONNECTION. If this
+    function cannot open the connection, the commands of the task fail, and the task gets a new
+    attempt.
     """
-    lockfile = ssh_control_dir() / f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}.lock"
+    masteroptions = [option for option in sshoptions if option != SSH_NO_OWN_CONNECTION]
+    lockfile = ssh_control_dir() / f"{ssh_connection_name(slotid, stop=stop)}.lock"
     try:
         # O_NOFOLLOW gives an error for a link, and the open does not change the content of the
         # file. The lock ends when the file closes, and also when this process ends.
@@ -241,7 +267,7 @@ def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callabl
             # this ssh finds no socket, so it starts the master and then runs the command as a
             # client of that master
             start = subprocess.run(
-                ["ssh", *sshoptions, f"-oConnectTimeout={SSH_MASTER_CONNECT_SECONDS}", REMOTE_SERVER, "true"],
+                ["ssh", *masteroptions, f"-oConnectTimeout={SSH_MASTER_CONNECT_SECONDS}", REMOTE_SERVER, "true"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 encoding="utf-8",
@@ -331,7 +357,7 @@ def remote_stopfile(taskid: int, token: str) -> str:
 
 
 def stop_remote_job(
-    taskid: int, token: str, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, delete_files: bool
+    taskid: int, token: str, slotid: int | None, logfunc: t.Callable[[t.Any], None], *, delete_files: bool
 ) -> None:
     """Stop the remote command of one attempt on sc01 if it still runs.
 
@@ -352,7 +378,13 @@ def stop_remote_job(
     With delete_files, the remote files of the task go also: the task has no row, and nothing
     collects them. Without it, only the pid file goes, because the next attempt of the task
     writes the same file names.
+
+    The stop uses the stop connection of the group of the slot; see ssh_connection_name.
     """
+    sshoptions = ssh_options(slotid, logfunc, stop=True)
+    if slotid is not None and sshoptions:
+        open_ssh_master(slotid, sshoptions, logfunc, stop=True)
+
     pidfile = remote_pidfile(taskid, token)
     # The command prints STOP_MARKER only when it sends the signal. Its exit code is the code of
     # the last rm, so the code does not tell if a remote command ran.
@@ -583,6 +615,9 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     sshoptions = ssh_options(slotid, logfunc)
     if slotid is not None and sshoptions:
         open_ssh_master(slotid, sshoptions, logfunc)
+        # The stop connection opens now, and not at the stop. At a restart, all the slots stop at
+        # the same time, and sc01 resets many new connections at the same time.
+        open_ssh_master(slotid, ssh_options(slotid, logfunc, stop=True), logfunc, stop=True)
 
     remoteresultdir = Path(REMOTE_RESULT_DIR)
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
@@ -709,7 +744,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             # The kill above stops only the local ssh client. At a timeout, the remote timeout
             # stopped only the first command, and the commands after it can still run. A
             # cancelled task has no row, so its files go too.
-            stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=cancelled)
+            stop_remote_job(task.id, token, slotid, logfunc, delete_files=cancelled)
             return None, None  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = proc.communicate()
@@ -725,7 +760,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         # The remote command has no tty, so it continues without its connection. The retry would
         # then run a second remote command that writes the same files. The stop fails while sc01
         # is not reachable, and then the remote command runs to its end.
-        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=False)
+        stop_remote_job(task.id, token, slotid, logfunc, delete_files=False)
         return None, None
 
     if stdout:
@@ -738,7 +773,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
     if not task_exists(taskid=task.id):  # check if the task was cancelled
         # the remote command ended, and nothing collects its files
-        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=True)
+        stop_remote_job(task.id, token, slotid, logfunc, delete_files=True)
         return None, None
 
     # Move the files of the task from sc01: pairs of the remote file and the local destination.

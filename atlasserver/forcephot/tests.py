@@ -11,6 +11,7 @@ import itertools
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -4983,7 +4984,7 @@ class RemoteStopTests(TestCase):
         assert found is not None, command[-1]
         token = found.group(1)
         stop.assert_called_once()
-        assert stop.call_args.args[:3] == (self.task.id, token, self.sshoptions), stop.call_args
+        assert stop.call_args.args[:3] == (self.task.id, token, 0), stop.call_args
         assert stop.call_args.kwargs == {"delete_files": True}, stop.call_args
 
     def test_a_stopping_slot_stops_the_remote_command_and_keeps_the_files(self) -> None:
@@ -5004,7 +5005,7 @@ class RemoteStopTests(TestCase):
         with mock.patch.object(
             taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
         ) as run:
-            taskrunner_main.stop_remote_job(self.task.id, found.group(1), [], lambda _msg: None, delete_files=True)
+            taskrunner_main.stop_remote_job(self.task.id, found.group(1), None, lambda _msg: None, delete_files=True)
         stopcommand = run.call_args.args[0][-1]
 
         with tempfile.TemporaryDirectory() as home:
@@ -5122,7 +5123,7 @@ class RemoteStopTests(TestCase):
             with mock.patch.object(
                 taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout, stderr="")
             ):
-                taskrunner_main.stop_remote_job(self.task.id, "a" * 32, [], logged.append, delete_files=True)
+                taskrunner_main.stop_remote_job(self.task.id, "a" * 32, None, logged.append, delete_files=True)
 
         assert logged == [
             "Stopped the remote command, and deleted the remote files",
@@ -5146,12 +5147,16 @@ class RemoteStopTests(TestCase):
 
     def test_the_stop_command_stops_only_a_session_with_the_token(self) -> None:
         token = "0" * 31 + "a"
-        with mock.patch.object(
-            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
-        ) as run:
-            taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=False)
+        with (
+            mock.patch.object(
+                taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+            ) as run,
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+        ):
+            taskrunner_main.stop_remote_job(self.task.id, token, 0, lambda _msg: None, delete_files=False)
             kept = run.call_args.args[0]
-            taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=True)
+            taskrunner_main.stop_remote_job(self.task.id, token, 0, lambda _msg: None, delete_files=True)
             deleted = run.call_args.args[0]
 
         assert kept[:3] == ["ssh", *self.sshoptions, taskrunner_main.REMOTE_SERVER], kept
@@ -5163,12 +5168,54 @@ class RemoteStopTests(TestCase):
         jobname = taskrunner_main.jobfilename(self.task.id)
         assert f"rm -rf ~/atlasserver/results/{jobname}.* ~/atlasserver/results/task{self.task.id:05d}" in deleted[-1]
 
+    def test_the_stop_uses_the_stop_connection_of_the_group(self) -> None:
+        # Remote commands that a stop did not reach keep their sessions on the connection of the
+        # tasks. sshd then refused each stop on it, and each restart left more of them.
+        with (
+            tempfile.TemporaryDirectory() as homedir,
+            mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+            mock.patch.object(
+                taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+            ) as run,
+            mock.patch.object(taskrunner_main, "open_ssh_master") as opened,
+        ):
+            slotid = taskrunner_main.SSH_SLOTS_PER_CONNECTION + 1
+            taskrunner_main.stop_remote_job(self.task.id, "a" * 32, slotid, lambda _msg: None, delete_files=False)
+
+        stopoptions = run.call_args.args[0][1:-2]
+        assert "-oControlPath=~/.ssh/atlasserver/atlas-1-stop" in stopoptions, stopoptions
+        assert opened.call_args.args[:2] == (slotid, stopoptions), opened.call_args
+        assert opened.call_args.kwargs == {"stop": True}, opened.call_args
+
+    def test_an_attempt_opens_the_stop_connection_before_its_remote_command(self) -> None:
+        # at a restart, all the slots stop at the same time, and sc01 resets many new connections
+        with mock.patch.object(taskrunner_main, "open_ssh_master") as opened:
+            self.run_attempt_with_real_options()
+
+        assert [call.kwargs.get("stop", False) for call in opened.call_args_list] == [False, True], (
+            opened.call_args_list
+        )
+
+    def run_attempt_with_real_options(self) -> None:
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        with (
+            tempfile.TemporaryDirectory() as homedir,
+            mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(homedir, "results")),
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
+            mock.patch("subprocess.Popen", return_value=proc),
+            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+        ):
+            taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+
     def test_a_stop_command_that_fails_is_reported_and_not_raised(self) -> None:
         logged: list[str] = []
         with mock.patch.object(
             taskrunner_main.subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=60)
         ):
-            taskrunner_main.stop_remote_job(self.task.id, "a" * 32, [], logged.append, delete_files=True)
+            taskrunner_main.stop_remote_job(self.task.id, "a" * 32, None, logged.append, delete_files=True)
 
         assert any("took more than" in line for line in logged), logged
 
@@ -7133,6 +7180,51 @@ class SshOptionsTests(TestCase):
         assert paths[persocket - 1] != paths[persocket], paths
         assert max(paths.count(path) for path in paths) <= persocket, paths
 
+    def test_each_group_has_a_different_socket_for_the_stops(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as homedir,
+            mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
+        ):
+            tasks = taskrunner_main.ssh_options(0)
+            stops = taskrunner_main.ssh_options(0, stop=True)
+            nextgroup = taskrunner_main.ssh_options(taskrunner_main.SSH_SLOTS_PER_CONNECTION, stop=True)
+
+        assert "-oControlPath=~/.ssh/atlasserver/atlas-0" in tasks, tasks
+        assert "-oControlPath=~/.ssh/atlasserver/atlas-0-stop" in stops, stops
+        assert "-oControlPath=~/.ssh/atlasserver/atlas-1-stop" in nextgroup, nextgroup
+        assert [x for x in tasks if "ControlPath" not in x] == [x for x in stops if "ControlPath" not in x]
+
+    def test_a_client_makes_no_connection_of_its_own(self) -> None:
+        # sshd refused the sessions on the shared connections, and each ssh then connected to sc01
+        # again. sc01 then reset all new connections, also an "ssh atlas" of a person.
+        with tempfile.TemporaryDirectory() as homedir:
+            for stop in (False, True):
+                options = self.options_for(0, homedir, stop=stop)
+                assert taskrunner_main.SSH_NO_OWN_CONNECTION in options, options
+
+    @skipUnless(shutil.which("ssh"), "needs the ssh command")
+    def test_a_client_with_no_master_fails_at_once_and_does_not_connect(self) -> None:
+        with tempfile.TemporaryDirectory() as homedir:
+            options = [
+                f"-oControlPath={homedir}/atlas-0" if option.startswith("-oControlPath=") else option
+                for option in self.options_for(0, homedir)
+            ]
+            started = time.perf_counter()
+            done = subprocess.run(
+                ["ssh", "-F", "/dev/null", "-oBatchMode=yes", *options, "atlas.invalid", "true"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+        assert done.returncode == taskrunner_main.SSH_CONNECTION_FAILED, (done.returncode, done.stderr)
+        assert time.perf_counter() - started < 10, "ssh waited for a connection"
+
+    def options_for(self, slotid: int, homedir: str, *, stop: bool = False) -> list[str]:
+        with mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)):
+            return taskrunner_main.ssh_options(slotid, stop=stop)
+
     def test_the_directory_of_the_sockets_is_made_and_is_private(self) -> None:
         # ssh exits with status 255 when the directory of the socket does not exist
         with tempfile.TemporaryDirectory() as homedir:
@@ -7229,7 +7321,14 @@ class OpenSshMasterTests(TestCase):
 
     OPTIONS: t.ClassVar[list[str]] = ["-oControlMaster=auto", "-oControlPath=~/x/atlas-0"]
 
-    def open_master(self, returncodes: list[int | Exception], slotid: int = 0) -> tuple[list[list[str]], list[str]]:
+    def open_master(
+        self,
+        returncodes: list[int | Exception],
+        slotid: int = 0,
+        *,
+        stop: bool = False,
+        options: list[str] | None = None,
+    ) -> tuple[list[list[str]], list[str]]:
         """Run open_ssh_master with an ssh that gives `returncodes`. Return the commands and the log."""
         commands: list[list[str]] = []
         logged: list[str] = []
@@ -7240,7 +7339,7 @@ class OpenSshMasterTests(TestCase):
             commands.append(command)
             # flock gives an error to a second open file of the same process, as it does to a
             # different process
-            lockfile = Path(self.homedir, taskrunner_main.SSH_CONTROL_DIR, f"atlas-{self.group}.lock")
+            lockfile = Path(self.homedir, taskrunner_main.SSH_CONTROL_DIR, f"{self.lockname}.lock")
             with lockfile.open("w", encoding="utf-8") as second:
                 try:
                     fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -7253,7 +7352,8 @@ class OpenSshMasterTests(TestCase):
                 raise result
             return mock.Mock(returncode=result, stderr="Connection reset by peer\n")
 
-        self.group = slotid // taskrunner_main.SSH_SLOTS_PER_CONNECTION
+        if not stop:
+            self.lockname = f"atlas-{slotid // taskrunner_main.SSH_SLOTS_PER_CONNECTION}"
         with tempfile.TemporaryDirectory() as homedir:
             self.homedir = homedir
             Path(homedir, taskrunner_main.SSH_CONTROL_DIR).mkdir(parents=True)
@@ -7261,7 +7361,7 @@ class OpenSshMasterTests(TestCase):
                 mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
                 mock.patch.object(taskrunner_main.subprocess, "run", side_effect=fake_run),
             ):
-                taskrunner_main.open_ssh_master(slotid, self.OPTIONS, logged.append)
+                taskrunner_main.open_ssh_master(slotid, options or self.OPTIONS, logged.append, stop=stop)
 
         return commands, logged
 
@@ -7279,9 +7379,25 @@ class OpenSshMasterTests(TestCase):
         assert commands[1][-2:] == ["atlas", "true"], commands[1]
         assert logged == []
 
+    def test_only_the_master_makes_a_connection(self) -> None:
+        # the clients have SSH_NO_OWN_CONNECTION, and the master needs a connection
+        options = [*self.OPTIONS, taskrunner_main.SSH_NO_OWN_CONNECTION]
+        commands, _logged = self.open_master([255, 0], options=options)
+
+        assert taskrunner_main.SSH_NO_OWN_CONNECTION in commands[0], commands[0]
+        assert taskrunner_main.SSH_NO_OWN_CONNECTION not in commands[1], commands[1]
+        assert commands[1][-2:] == ["atlas", "true"], commands[1]
+
     def test_the_lock_of_the_group_is_held_for_the_check_and_for_the_connection(self) -> None:
         # without the lock, each slot that finds no socket opens a connection of its own
         self.open_master([255, 0], slotid=taskrunner_main.SSH_SLOTS_PER_CONNECTION)
+
+        assert self.locked == [True, True], self.locked
+
+    def test_the_stop_connection_has_a_lock_of_its_own(self) -> None:
+        # a slot that opens the connection of the tasks does not make a stop wait
+        self.lockname = "atlas-0-stop"
+        self.open_master([255, 0], stop=True)
 
         assert self.locked == [True, True], self.locked
 
