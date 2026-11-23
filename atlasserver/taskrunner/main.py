@@ -153,7 +153,9 @@ def log_general(msg: str, suffix: str = "") -> None:
     """Log a message to the console and to a log file (with given filename suffix)."""
     dtnow = dt.datetime.now(dt.UTC)
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
-    line = f"{strtime}  {msg}"
+    # A message can hold the stderr of ssh, which has more than one line. Each line gets the
+    # time, so that a search of the log by time finds each line.
+    line = "\n".join(f"{strtime}  {part}" for part in msg.splitlines() or [""])
     if not suffix:
         # `atlastaskrunner stop` closes the terminal of the tmux session, and a write to it then
         # raises OSError. A slot that stops still records its result, so the file log continues.
@@ -1608,13 +1610,17 @@ def do_task(task, slotid: int) -> None:
     The caller recorded the start of this attempt; see start_in_slot.
     """
 
+    def slotlines(x) -> str:
+        # the main log holds the lines of all the slots, so each line names its slot
+        return "\n".join(f"slot {slotid:2d} task {task.id:05d}: {part}" for part in str(x).splitlines() or [""])
+
     def logfunc_slotonly(x) -> None:
-        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
+        log_general(slotlines(x), suffix=f"_slot{slotid:02d}")
 
     def logfunc(x) -> None:
         logfunc_slotonly(x)
         # also log to the main process
-        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
+        log_general(slotlines(x))
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():

@@ -5538,6 +5538,35 @@ class SlotStopSignalTests(SimpleTestCase):
 
         assert written.endswith("  the terminal is gone\n"), written
 
+    def test_each_line_of_a_message_has_the_time_and_the_slot(self) -> None:
+        # The stderr of ssh has more than one line. A line with no time is not found by a search
+        # of the log by time, and a line with no slot in the main log has no known slot.
+        stderr = "kex_exchange_identification: read: Connection reset by peer\r\nConnection reset by 192.0.2.1 port 22"
+        # not saved: the attempt below makes no query of the database
+        task = Task(id=7, user=User(username="logger", email="log@example.com"), ra=1.0, dec=2.0)
+
+        def failed(**kwargs: t.Any) -> tuple[None, None]:
+            kwargs["logfunc"](f"ERROR: ssh did not open the connection of the slot group: {stderr}")
+            return None, None
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.runnerstatus, "LOG_DIR", Path(tmpdir)),
+            mock.patch("builtins.print"),
+            mock.patch.object(taskrunner_main, "runtask", side_effect=failed),
+            mock.patch.object(taskrunner_main, "task_exists", return_value=False),
+            mock.patch.object(taskrunner_main, "remove_task_resultfiles"),
+        ):
+            taskrunner_main.do_task(task, slotid=3)
+            slotlog = Path(tmpdir, "fprunnerlog_latest_slot03.txt").read_text(encoding="utf-8").splitlines()
+            mainlog = Path(tmpdir, "fprunnerlog_latest.txt").read_text(encoding="utf-8").splitlines()
+
+        stamp = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d  "
+        prefix = "slot  3 task 00007: "
+        for log in (slotlog, mainlog):
+            assert all(re.match(stamp + re.escape(prefix), line) for line in log), log
+        assert any(line.endswith(prefix + "Connection reset by 192.0.2.1 port 22") for line in slotlog), slotlog
+
     def test_a_slot_whose_task_runner_stopped_must_stop(self) -> None:
         dead = mock.Mock()
         dead.is_alive.return_value = False
