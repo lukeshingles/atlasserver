@@ -5189,25 +5189,53 @@ class RemoteStopTests(TestCase):
 
     def test_an_attempt_opens_the_stop_connection_before_its_remote_command(self) -> None:
         # at a restart, all the slots stop at the same time, and sc01 resets many new connections
-        with mock.patch.object(taskrunner_main, "open_ssh_master") as opened:
-            self.run_attempt_with_real_options()
+        events: list[str] = []
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
 
-        assert [call.kwargs.get("stop", False) for call in opened.call_args_list] == [False, True], (
-            opened.call_args_list
-        )
+        def opened(*_args: object, stop: bool = False) -> None:
+            events.append("stop connection" if stop else "task connection")
 
-    def run_attempt_with_real_options(self) -> None:
+        def started(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            events.append("remote command")
+            return proc
+
+        self.run_attempt_with_real_options(opened, started)
+
+        assert events == ["task connection", "stop connection", "remote command"], events
+
+    def test_a_copy_whose_ssh_session_failed_starts_again(self) -> None:
+        # sshd can refuse the session on a full connection, and the remote file then stays.
+        # Without a copy, the task runs again in full.
         proc = mock.MagicMock()
         proc.communicate.return_value = ("", "")
         proc.returncode = 0
         with (
-            tempfile.TemporaryDirectory() as homedir,
-            mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir)),
-            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(homedir, "results")),
-            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
-            mock.patch("subprocess.Popen", return_value=proc),
-            mock.patch.object(taskrunner_main, "task_exists", return_value=True),
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=[255, 12, 0, 23]) as rsync,
+            mock.patch.object(taskrunner_main.time, "sleep") as sleep,
         ):
+            self.run_attempt_with_real_options(mock.Mock(), mock.Mock(return_value=proc), rsync=None)
+
+        sources = [Path(call.args[0][-2]).suffix for call in rsync.call_args_list]
+        # the code 23 of the image is a missing file, and not a failed session
+        assert sources == [".txt", ".txt", ".txt", ".jpg"], sources
+        assert sleep.call_args_list == [mock.call(taskrunner_main.RSYNC_RETRY_WAIT_SECONDS)] * 2
+
+    def run_attempt_with_real_options(
+        self, opened: t.Callable[..., None], started: t.Callable[..., t.Any], rsync: int | None = 0
+    ) -> None:
+        with contextlib.ExitStack() as stack:
+            homedir = stack.enter_context(tempfile.TemporaryDirectory())
+            stack.enter_context(
+                mock.patch.object(taskrunner_main.pwd, "getpwuid", return_value=mock.Mock(pw_dir=homedir))
+            )
+            stack.enter_context(mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(homedir, "results")))
+            stack.enter_context(mock.patch.object(taskrunner_main, "open_ssh_master", side_effect=opened))
+            stack.enter_context(mock.patch("subprocess.Popen", side_effect=started))
+            stack.enter_context(mock.patch.object(taskrunner_main, "task_exists", return_value=True))
+            if rsync is not None:
+                stack.enter_context(mock.patch.object(taskrunner_main, "run_rsync", return_value=rsync))
             taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
 
     def test_a_stop_command_that_fails_is_reported_and_not_raised(self) -> None:
@@ -7192,7 +7220,10 @@ class SshOptionsTests(TestCase):
         assert "-oControlPath=~/.ssh/atlasserver/atlas-0" in tasks, tasks
         assert "-oControlPath=~/.ssh/atlasserver/atlas-0-stop" in stops, stops
         assert "-oControlPath=~/.ssh/atlasserver/atlas-1-stop" in nextgroup, nextgroup
-        assert [x for x in tasks if "ControlPath" not in x] == [x for x in stops if "ControlPath" not in x]
+        # only the stops use the stop connection, so it stays open for longer than the longest task
+        assert f"-oControlPersist={taskrunner_main.SSH_CONTROL_PERSIST}" in tasks, tasks
+        assert "-oControlPersist=5h" in stops, stops
+        assert [x for x in tasks if "Control" not in x] == [x for x in stops if "Control" not in x]
 
     def test_a_client_makes_no_connection_of_its_own(self) -> None:
         # sshd refused the sessions on the shared connections, and each ssh then connected to sc01
@@ -7352,8 +7383,7 @@ class OpenSshMasterTests(TestCase):
                 raise result
             return mock.Mock(returncode=result, stderr="Connection reset by peer\n")
 
-        if not stop:
-            self.lockname = f"atlas-{slotid // taskrunner_main.SSH_SLOTS_PER_CONNECTION}"
+        self.lockname = taskrunner_main.ssh_connection_name(slotid, stop=stop)
         with tempfile.TemporaryDirectory() as homedir:
             self.homedir = homedir
             Path(homedir, taskrunner_main.SSH_CONTROL_DIR).mkdir(parents=True)
@@ -7396,9 +7426,9 @@ class OpenSshMasterTests(TestCase):
 
     def test_the_stop_connection_has_a_lock_of_its_own(self) -> None:
         # a slot that opens the connection of the tasks does not make a stop wait
-        self.lockname = "atlas-0-stop"
         self.open_master([255, 0], stop=True)
 
+        assert self.lockname == "atlas-0-stop", self.lockname
         assert self.locked == [True, True], self.locked
 
     def test_a_failed_connection_is_logged_and_does_not_stop_the_task(self) -> None:

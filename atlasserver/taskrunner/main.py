@@ -81,6 +81,18 @@ SSH_NO_OWN_CONNECTION: t.Final = "-oProxyCommand=false"
 # the time that an ssh connection with no session stays open for the next task
 SSH_CONTROL_PERSIST: str = "1h"
 
+# The same time for the stop connection; see ssh_connection_name. Only the stops use it, so it is
+# longer than the longest task. Then a restart finds it open.
+SSH_STOP_CONTROL_PERSIST: str = f"{TASK_MAXTIME_SECONDS // 3600 + 1}h"
+
+# The tries of one copy with rsync when its ssh session fails, and the wait between them. The
+# remote file stays until a copy succeeds, and without a copy the task runs again in full.
+RSYNC_CONNECTION_TRIES: int = 3
+RSYNC_RETRY_WAIT_SECONDS: float = 10.0
+
+# The exit codes of rsync for a failed ssh session: 255 from ssh, and 12 for a closed connection.
+RSYNC_CONNECTION_FAILED_CODES: frozenset[int] = frozenset({12, 255})
+
 # the directory of the control sockets, relative to the home directory. ssh fails if the path of
 # a socket is longer than about 100 characters, so the names are short.
 SSH_CONTROL_DIR: str = ".ssh/atlasserver"
@@ -178,8 +190,8 @@ def ssh_connection_name(slotid: int, *, stop: bool = False) -> str:
 
     Each group has two connections. The commands of the tasks use the first. The stop commands of
     stop_remote_job use the second. sshd keeps the session of a remote command until the command
-    ends, also after its client went. Thus remote commands that a stop did not reach can use all
-    the sessions of the first connection, and sshd then refuses the next stop on it too.
+    ends, also after its client went. Remote commands that a stop did not reach can thus use all
+    the sessions of the first connection. sshd then refuses the next stop on it too.
     """
     return f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}{'-stop' if stop else ''}"
 
@@ -220,7 +232,7 @@ def ssh_options(
         # ControlPersist puts the master into a background process. The ssh process of a slot is
         # then a client, and the SIGTERM of a cancelled task does not close the sessions of the
         # other slots.
-        f"-oControlPersist={SSH_CONTROL_PERSIST}",
+        f"-oControlPersist={SSH_STOP_CONTROL_PERSIST if stop else SSH_CONTROL_PERSIST}",
         # the master exits when the remote server does not reply. Without these options, each
         # new session waits on a dead connection.
         "-oServerAliveInterval=30",
@@ -617,7 +629,8 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         open_ssh_master(slotid, sshoptions, logfunc)
         # The stop connection opens now, and not at the stop. At a restart, all the slots stop at
         # the same time, and sc01 resets many new connections at the same time.
-        open_ssh_master(slotid, ssh_options(slotid, logfunc, stop=True), logfunc, stop=True)
+        if stopoptions := ssh_options(slotid, logfunc, stop=True):
+            open_ssh_master(slotid, stopoptions, logfunc, stop=True)
 
     remoteresultdir = Path(REMOTE_RESULT_DIR)
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
@@ -794,9 +807,14 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         copies = [(remoteresultfile, settings.RESULTS_DIR), (remotedatafile, task.inputfile())]
 
     for remotefile, destination in copies:
-        run_rsync(
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)], logfunc, sshoptions
-        )
+        copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)]
+        for trynumber in range(1, RSYNC_CONNECTION_TRIES + 1):
+            code = run_rsync(copycommand, logfunc, sshoptions)
+            if code not in RSYNC_CONNECTION_FAILED_CODES or trynumber == RSYNC_CONNECTION_TRIES:
+                break
+            # sshd can refuse the session on a full connection; see SSH_NO_OWN_CONNECTION
+            logfunc(f"The ssh session of the copy failed. The copy starts again in {RSYNC_RETRY_WAIT_SECONDS:.0f}s.")
+            time.sleep(RSYNC_RETRY_WAIT_SECONDS)
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
