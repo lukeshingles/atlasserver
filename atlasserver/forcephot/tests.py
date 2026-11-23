@@ -5305,9 +5305,40 @@ class RemoteStopTests(TestCase):
         assert sources == [".txt"] * taskrunner_main.RSYNC_CONNECTION_TRIES, sources
         assert taskrunner_main.connection_failed
 
+    def test_a_task_whose_image_copy_fails_is_not_finished(self) -> None:
+        # The result came, but the image stays on sc01, and nothing copies it later. A finish then
+        # gives a task with no image.
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+
+        def copied(command: list[str], *_args: object) -> int:
+            if Path(command[-2]).suffix == ".txt":
+                Path(command[-1]).write_text("MJD uJy\n", encoding="utf-8")
+                return 0
+            return 255
+
+        with (
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied),
+            mock.patch.object(taskrunner_main.time, "sleep"),
+        ):
+            result = self.run_attempt_with_real_options(
+                mock.Mock(return_value=True), mock.Mock(return_value=proc), rsync=None, keep_results=True
+            )
+
+        outcome, resultfiles = result
+        assert outcome == (None, None), outcome
+        # the result file of the next attempt has the same name
+        assert resultfiles == [], resultfiles
+
     def run_attempt_with_real_options(
-        self, opened: t.Callable[..., bool], started: t.Callable[..., t.Any], rsync: int | None = 0
-    ) -> None:
+        self,
+        opened: t.Callable[..., bool],
+        started: t.Callable[..., t.Any],
+        rsync: int | None = 0,
+        *,
+        keep_results: bool = False,
+    ) -> t.Any:
         taskrunner_main.connection_failed = False
         with contextlib.ExitStack() as stack:
             homedir = stack.enter_context(tempfile.TemporaryDirectory())
@@ -5320,7 +5351,10 @@ class RemoteStopTests(TestCase):
             stack.enter_context(mock.patch.object(taskrunner_main, "task_exists", return_value=True))
             if rsync is not None:
                 stack.enter_context(mock.patch.object(taskrunner_main, "run_rsync", return_value=rsync))
-            taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+            outcome = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+            if keep_results:
+                return outcome, sorted(path.name for path in Path(homedir, "results").iterdir())
+            return outcome
 
     def test_a_slot_with_no_stop_connection_sends_no_stop(self) -> None:
         # an ssh with no options can open a connection of its own; see SSH_NO_OWN_CONNECTION
@@ -7331,19 +7365,36 @@ class SshOptionsTests(TestCase):
 
     @skipUnless(shutil.which("ssh"), "needs the ssh command")
     def test_a_client_with_no_master_fails_at_once_and_does_not_connect(self) -> None:
-        with tempfile.TemporaryDirectory() as homedir:
+        # A listener on the loopback address takes the place of sc01. A name that does not resolve
+        # is not sufficient: ssh then also exits with 255 at once, with or without the option.
+        with tempfile.TemporaryDirectory() as homedir, socket.create_server(("127.0.0.1", 0)) as listener:
             options = [
                 f"-oControlPath={homedir}/atlas-0" if option.startswith("-oControlPath=") else option
                 for option in self.options_for(0, homedir)
             ]
+            port = listener.getsockname()[1]
             started = time.perf_counter()
             done = subprocess.run(
-                ["ssh", "-F", "/dev/null", "-oBatchMode=yes", *options, "atlas.invalid", "true"],
+                [
+                    "ssh",
+                    "-F",
+                    "/dev/null",
+                    "-oBatchMode=yes",
+                    "-oConnectTimeout=5",
+                    f"-p{port}",
+                    *options,
+                    "127.0.0.1",
+                    "true",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=30,
                 check=False,
             )
+            listener.setblocking(False)
+            with contextlib.suppress(BlockingIOError):
+                listener.accept()[0].close()
+                self.fail("ssh made a connection of its own")
 
         assert done.returncode == taskrunner_main.SSH_CONNECTION_FAILED, (done.returncode, done.stderr)
         assert time.perf_counter() - started < 10, "ssh waited for a connection"

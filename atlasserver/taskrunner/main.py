@@ -872,8 +872,12 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     for remotefile, destination in copies:
         copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)]
         if copy_with_rsync(copycommand, logfunc, sshoptions, slotid) in RSYNC_CONNECTION_FAILED_CODES:
-            # the next copies use the same connection
-            break
+            # The next copies use the same connection, so they do not start. A finish now gives a
+            # task with no image or no error text, and nothing copies these files later. Thus the
+            # task gets a new attempt, and the new remote command writes the same file names.
+            logfunc("ERROR: a copy from sc01 failed, so the task will be retried")
+            localresultfile.unlink(missing_ok=True)
+            return None, None
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
