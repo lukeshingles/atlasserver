@@ -131,15 +131,9 @@ jobs:
             - name: Install atlasserver
               run: uv pip install -e .
 
-            - name: Install geoip databases
-              # the script now exits non-zero when a download fails (so cron notices a stale
-              # database), but CI may have no MaxMind key and the Django tests don't need the
-              # databases (test requests come from 127.0.0.1, which skips the GeoIP lookup)
-              continue-on-error: true
-              env:
-                  MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
-              run: ./deploy/update_geoipdatabase.sh
-
+            # The job does not download the GeoLite databases. MaxMind permits a limited number of
+            # downloads each day. No test reads the databases, and the server opens the city
+            # database only for a request.
             - name: Set up database
               # the mysql service container has already created the database and passed its
               # health check by the time steps run

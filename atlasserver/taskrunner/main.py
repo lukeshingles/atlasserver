@@ -9,6 +9,7 @@ import json
 import multiprocessing as mp
 import os
 import pwd
+import shutil
 import stat
 import subprocess
 import time
@@ -71,8 +72,31 @@ SSH_FAILURE_PAUSE_SECONDS: float = 30.0
 # that command.
 SSH_SLOTS_PER_CONNECTION: int = 8
 
+# The option that stops a client of a shared connection from a connection of its own. Without it,
+# ssh connects to sc01 again when sshd refuses the session on the shared connection. Many slots do
+# this at the same time, and sc01 then resets all new connections, also an "ssh atlas" of a person.
+# With it, ssh starts this command in place of the connection, and the command fails. ssh then
+# exits with SSH_CONNECTION_FAILED, and the task gets a new attempt.
+SSH_NO_OWN_CONNECTION: t.Final = "-oProxyCommand=false"
+
 # the time that an ssh connection with no session stays open for the next task
 SSH_CONTROL_PERSIST: str = "1h"
+
+# The same time for the stop connection; see ssh_connection_name. Only the stops use it, so it is
+# longer than the longest task. Then a restart finds it open.
+SSH_STOP_CONTROL_PERSIST: str = f"{TASK_MAXTIME_SECONDS // 3600 + 1}h"
+
+# The tries of one copy with rsync when its ssh session fails, and the wait between them. The
+# remote file stays until a copy succeeds, and without a copy the task runs again in full.
+RSYNC_CONNECTION_TRIES: int = 3
+RSYNC_RETRY_WAIT_SECONDS: float = 10.0
+
+# The exit codes of rsync for a failed ssh session: 255 from ssh, and 12 for a closed connection.
+RSYNC_CONNECTION_FAILED_CODES: frozenset[int] = frozenset({12, 255})
+
+# The exit code of rsync for a remote file that is not there, e.g. the image of a task with no
+# observations. The checks of the result after the copies find a missing result file.
+RSYNC_ABSENT_FILE_CODE: int = 23
 
 # the directory of the control sockets, relative to the home directory. ssh fails if the path of
 # a socket is longer than about 100 characters, so the names are short.
@@ -144,8 +168,6 @@ def log_general(msg: str, suffix: str = "") -> None:
     if logfile_latest.exists():
         lastwrite = dt.datetime.fromtimestamp(logfile_latest.stat().st_mtime, tz=dt.UTC)
         if lastwrite.date() < dtnow.date():
-            import shutil
-
             logfile_archive = Path(
                 runnerstatus.LOG_DIR,
                 f"fprunnerlog_{lastwrite.year:4d}-{lastwrite.month:02d}-{lastwrite.day:02d}{suffix}.txt",
@@ -166,8 +188,21 @@ def ssh_control_dir() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir, SSH_CONTROL_DIR)
 
 
-def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = None) -> list[str]:
-    """Return the ssh options that give a slot the connection of its group of slots.
+def ssh_connection_name(slotid: int, *, stop: bool = False) -> str:
+    """Return the name of the control socket of the connection of a group of slots.
+
+    Each group has two connections. The commands of the tasks use the first. The stop commands of
+    stop_remote_job use the second. sshd keeps the session of a remote command until the command
+    ends, also after its client went. Remote commands that a stop did not reach can thus use all
+    the sessions of the first connection. sshd then refuses the next stop on it too.
+    """
+    return f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}{'-stop' if stop else ''}"
+
+
+def ssh_options(
+    slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = None, *, stop: bool = False
+) -> list[str]:
+    """Return the ssh options that give a slot a connection of its group of slots; see ssh_connection_name.
 
     Each option is one argument with no space, because rsync divides its -e value at the spaces.
     Without a slot there are no options, and ssh uses only the configuration of the account.
@@ -194,32 +229,39 @@ def ssh_options(slotid: int | None, logfunc: t.Callable[[t.Any], None] | None = 
             logfunc(f"ERROR: {controldir} is not a private directory of this account, so ssh uses no shared connection")
         return []
 
-    group = slotid // SSH_SLOTS_PER_CONNECTION
     return [
         "-oControlMaster=auto",
-        f"-oControlPath=~/{SSH_CONTROL_DIR}/{REMOTE_SERVER}-{group}",
+        f"-oControlPath=~/{SSH_CONTROL_DIR}/{ssh_connection_name(slotid, stop=stop)}",
         # ControlPersist puts the master into a background process. The ssh process of a slot is
         # then a client, and the SIGTERM of a cancelled task does not close the sessions of the
         # other slots.
-        f"-oControlPersist={SSH_CONTROL_PERSIST}",
+        f"-oControlPersist={SSH_STOP_CONTROL_PERSIST if stop else SSH_CONTROL_PERSIST}",
         # the master exits when the remote server does not reply. Without these options, each
         # new session waits on a dead connection.
         "-oServerAliveInterval=30",
         "-oServerAliveCountMax=3",
+        SSH_NO_OWN_CONNECTION,
     ]
 
 
-def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None]) -> None:
-    """Open the ssh connection of the group of a slot, if it is not open.
+def open_ssh_master(
+    slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, stop: bool = False
+) -> bool:
+    """Open the ssh connection of the group of a slot, if it is not open. Return whether it is open.
+
+    See ssh_connection_name for the two connections of a group.
 
     ControlMaster=auto does not wait for a master that a different process starts. Each ssh that
     finds no socket opens a connection of its own, and many new connections at the same time make
     the remote server reset some of them. With a lock for each socket, one slot opens the
     connection, and the other slots of the group wait and then find the socket.
 
-    A failure here does not stop the task. The commands of the task then connect without a master.
+    Only this function opens a connection. The other commands of the task are clients of the
+    connection, and they make no connection of their own; see SSH_NO_OWN_CONNECTION. If this
+    function cannot open the connection, the attempt starts no remote command; see runtask.
     """
-    lockfile = ssh_control_dir() / f"{REMOTE_SERVER}-{slotid // SSH_SLOTS_PER_CONNECTION}.lock"
+    masteroptions = [option for option in sshoptions if option != SSH_NO_OWN_CONNECTION]
+    lockfile = ssh_control_dir() / f"{ssh_connection_name(slotid, stop=stop)}.lock"
     try:
         # O_NOFOLLOW gives an error for a link, and the open does not change the content of the
         # file. The lock ends when the file closes, and also when this process ends.
@@ -236,12 +278,12 @@ def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callabl
                 check=False,
             )
             if check.returncode == 0:
-                return
+                return True
 
             # this ssh finds no socket, so it starts the master and then runs the command as a
             # client of that master
             start = subprocess.run(
-                ["ssh", *sshoptions, f"-oConnectTimeout={SSH_MASTER_CONNECT_SECONDS}", REMOTE_SERVER, "true"],
+                ["ssh", *masteroptions, f"-oConnectTimeout={SSH_MASTER_CONNECT_SECONDS}", REMOTE_SERVER, "true"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 encoding="utf-8",
@@ -251,8 +293,10 @@ def open_ssh_master(slotid: int, sshoptions: t.Sequence[str], logfunc: t.Callabl
             )
             if start.returncode != 0:
                 logfunc(f"ERROR: ssh did not open the connection of the slot group: {start.stderr.strip()}")
+            return start.returncode == 0
     except (OSError, subprocess.TimeoutExpired) as ex:
         logfunc(f"ERROR: ssh did not open the connection of the slot group: {ex}")
+        return False
 
 
 def run_rsync(
@@ -331,7 +375,7 @@ def remote_stopfile(taskid: int, token: str) -> str:
 
 
 def stop_remote_job(
-    taskid: int, token: str, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, delete_files: bool
+    taskid: int, token: str, slotid: int | None, logfunc: t.Callable[[t.Any], None], *, delete_files: bool
 ) -> None:
     """Stop the remote command of one attempt on sc01 if it still runs.
 
@@ -352,7 +396,17 @@ def stop_remote_job(
     With delete_files, the remote files of the task go also: the task has no row, and nothing
     collects them. Without it, only the pid file goes, because the next attempt of the task
     writes the same file names.
+
+    The stop uses the stop connection of the group of the slot; see ssh_connection_name.
     """
+    sshoptions = ssh_options(slotid, logfunc, stop=True)
+    if slotid is not None:
+        if not sshoptions:
+            # An ssh with no options can open a connection of its own; see SSH_NO_OWN_CONNECTION.
+            logfunc("ERROR: the slot has no stop connection, so the remote command was not stopped")
+            return
+        open_ssh_master(slotid, sshoptions, logfunc, stop=True)
+
     pidfile = remote_pidfile(taskid, token)
     # The command prints STOP_MARKER only when it sends the signal. Its exit code is the code of
     # the last rm, so the code does not tell if a remote command ran.
@@ -567,6 +621,94 @@ def result_file_problem(localresultfile: Path) -> str | None:
     return None
 
 
+def note_connection_failure() -> None:
+    """Make run_slot keep the slot busy after this attempt; see pause_after_connection_failure."""
+    global connection_failed  # noqa: PLW0603
+    connection_failed = True
+
+
+def copy_with_rsync(
+    copycommand: list[str], logfunc: t.Callable[[t.Any], None], sshoptions: t.Sequence[str], slotid: int | None
+) -> int | None:
+    """Run run_rsync, and run it again when its ssh session fails. Return the last exit code.
+
+    sshd can refuse the session on a full connection; see SSH_NO_OWN_CONNECTION. The connection
+    can also close, and then each new try opens it again first. After the last try, a failed
+    session is a failed connection of the attempt.
+    """
+    code = None
+    for trynumber in range(1, RSYNC_CONNECTION_TRIES + 1):
+        code = run_rsync(copycommand, logfunc, sshoptions)
+        if code not in RSYNC_CONNECTION_FAILED_CODES:
+            return code
+        # After a stop of the task runner, the next task runner can start the task again. A new
+        # try can then find the remote files of the new attempt, or find them gone.
+        if trynumber == RSYNC_CONNECTION_TRIES or attempt_must_stop():
+            break
+        logfunc(f"The ssh session of the copy failed. The copy starts again in {RSYNC_RETRY_WAIT_SECONDS:.0f} seconds.")
+        time.sleep(RSYNC_RETRY_WAIT_SECONDS)
+        if slotid is not None:
+            open_ssh_master(slotid, sshoptions, logfunc)
+
+    note_connection_failure()
+    return code
+
+
+def download_task_files(
+    copies: t.Sequence[tuple[Path, Path]],
+    token: str,
+    logfunc: t.Callable[[t.Any], None],
+    sshoptions: t.Sequence[str],
+    slotid: int | None,
+) -> bool:
+    """Move each remote file to its local path. Return whether all the copies succeeded.
+
+    Each pair is a remote file and its local path, and the first pair is the result file. rsync
+    deletes each remote file after its copy. The copies go to a staging directory of the attempt,
+    next to each local path. The local paths change only after the last copy succeeded.
+
+    After a restart, the old slot can continue its copies while a new attempt runs the same task.
+    The two attempts use the same local paths. The staging directories keep the files of a failed
+    attempt away from the result of the other attempt.
+    """
+    stagingdirs: dict[Path, Path] = {}
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for remotefile, localpath in copies:
+            if localpath.parent not in stagingdirs:
+                localpath.parent.mkdir(parents=True, exist_ok=True)
+                # the pattern of remove_task_resultfiles does not match this name, and the token
+                # is not known outside the attempt
+                stagingdir = localpath.parent / f".attempt_{token}"
+                stagingdir.mkdir()
+                stagingdirs[localpath.parent] = stagingdir
+
+            stagedfile = stagingdirs[localpath.parent] / localpath.name
+            copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(stagedfile)]
+            code = copy_with_rsync(copycommand, logfunc, sshoptions, slotid)
+            if code not in {0, RSYNC_ABSENT_FILE_CODE}:
+                # A failed session also stops the next copies, because they use the same
+                # connection. A finish now gives a task with no image or no error text, and
+                # nothing copies the remote files later. Thus the task gets a new attempt.
+                logfunc("ERROR: a copy from sc01 failed, so the task will be retried")
+                return False
+            if code == RSYNC_ABSENT_FILE_CODE and attempt_must_stop():
+                # After a stop, the next task runner can run the task again, and its copies remove
+                # the remote files. The file can then be absent because the new attempt has it.
+                logfunc("ERROR: a remote file is absent after a stop of the task runner, so the task will be retried")
+                return False
+            staged.append((stagedfile, localpath))
+
+        # The result file goes last. A file that it finds is then a file of the same attempt.
+        for stagedfile, localpath in reversed(staged):
+            if stagedfile.exists():
+                stagedfile.replace(localpath)
+        return True
+    finally:
+        for stagingdir in stagingdirs.values():
+            shutil.rmtree(stagingdir, ignore_errors=True)
+
+
 def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
 
@@ -581,8 +723,24 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         return None, None
 
     sshoptions = ssh_options(slotid, logfunc)
-    if slotid is not None and sshoptions:
-        open_ssh_master(slotid, sshoptions, logfunc)
+    # A slot uses only its two shared connections. Without them, the attempt starts no command:
+    # an ssh with no options can open a connection of its own, and many slots then make sc01 reset
+    # all new connections. A remote command that no stop can reach keeps its session until it ends.
+    stopoptions = ssh_options(slotid, logfunc, stop=True) if slotid is not None and sshoptions else []
+
+    def connections_missing() -> tuple[None, None]:
+        logfunc("ERROR: the shared ssh connections of the slot are not open, so the attempt starts no command")
+        note_connection_failure()
+        return None, None
+
+    if slotid is not None and not (
+        sshoptions
+        and stopoptions
+        and open_ssh_master(slotid, sshoptions, logfunc)
+        # also checked again just before the launch; here, an IMGZIP attempt then uploads nothing
+        and open_ssh_master(slotid, stopoptions, logfunc, stop=True)
+    ):
+        return connections_missing()
 
     remoteresultdir = Path(REMOTE_RESULT_DIR)
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
@@ -620,7 +778,12 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             return None, "The forced photometry data file for the parent task is no longer available."
 
         # copy out the FP data file first, so that it's available on sc01 for the image gathering script
-        if run_rsync(["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc, sshoptions) != 0:
+        if (
+            copy_with_rsync(
+                ["rsync", str(localdatafile), f"{REMOTE_SERVER}:{remotedatafile}"], logfunc, sshoptions, slotid
+            )
+            != 0
+        ):
             # without the data file the remote script cannot select any images, so retry later
             # instead of burning a remote run that is certain to fail
             return None, None
@@ -638,6 +801,14 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
     # the exit status of the command of the task, and not of the removal of the pid file
     atlascommand = f"{atlascommand.rstrip().rstrip(';')}; status=$?; rm -f {pidfile}; exit $status"
+
+    # The stop connection opens again now: after the upload of an IMGZIP task, which can take a
+    # long time, and before the remote command. Then SSH_STOP_CONTROL_PERSIST starts at the launch. For
+    # an open connection, the check of open_ssh_master starts that time again, because the master
+    # counts the idle time from its last client. The connection does not open at the stop. At a
+    # restart, all the slots stop at the same time, and sc01 resets many new connections then.
+    if slotid is not None and not open_ssh_master(slotid, stopoptions, logfunc, stop=True):
+        return connections_missing()
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
@@ -709,7 +880,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             # The kill above stops only the local ssh client. At a timeout, the remote timeout
             # stopped only the first command, and the commands after it can still run. A
             # cancelled task has no row, so its files go too.
-            stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=cancelled)
+            stop_remote_job(task.id, token, slotid, logfunc, delete_files=cancelled)
             return None, None  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = proc.communicate()
@@ -720,12 +891,11 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         # already, empty, and collecting it would finish the task with "No data returned" for a
         # target that has data; a retry runs the command again
         logfunc("ERROR: the ssh connection failed, so the task will be retried")
-        global connection_failed  # noqa: PLW0603
-        connection_failed = True
+        note_connection_failure()
         # The remote command has no tty, so it continues without its connection. The retry would
         # then run a second remote command that writes the same files. The stop fails while sc01
         # is not reachable, and then the remote command runs to its end.
-        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=False)
+        stop_remote_job(task.id, token, slotid, logfunc, delete_files=False)
         return None, None
 
     if stdout:
@@ -738,30 +908,30 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
     if not task_exists(taskid=task.id):  # check if the task was cancelled
         # the remote command ended, and nothing collects its files
-        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=True)
+        stop_remote_job(task.id, token, slotid, logfunc, delete_files=True)
         return None, None
 
-    # Move the files of the task from sc01: pairs of the remote file and the local destination.
-    # rsync deletes each remote file after its copy.
+    # Move the files of the task from sc01: pairs of the remote file and its local path. The
+    # result file is first; see download_task_files.
     if task.request_type == "FP":
-        copies = [(remoteresultfile, localresultfile), (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR)]
+        copies = [
+            (remoteresultfile, localresultfile),
+            (remoteresultfile.with_suffix(".jpg"), localresultfile.with_suffix(".jpg")),
+        ]
     elif task.request_type == "SSOSTACK":
         copies = [
-            (remoteresultfile, settings.RESULTS_DIR),
-            (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR),
-            (remotedatafile, settings.RESULTS_DIR),
+            (remoteresultfile, localresultfile),
+            (remoteresultfile.with_suffix(".jpg"), localresultfile.with_suffix(".jpg")),
+            (remotedatafile, Path(settings.RESULTS_DIR, remotedatafile.name)),
         ]
     else:  # IMGZIP
         # The data file comes back too, so it does not stay on the remote host. It goes into the
         # private input directory, never the results directory: the web server serves that one,
         # and this file is a copy of a data file that the parent may have deleted.
-        settings.TASK_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
-        copies = [(remoteresultfile, settings.RESULTS_DIR), (remotedatafile, task.inputfile())]
+        copies = [(remoteresultfile, localresultfile), (remotedatafile, task.inputfile())]
 
-    for remotefile, destination in copies:
-        run_rsync(
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)], logfunc, sshoptions
-        )
+    if not download_task_files(copies, token, logfunc, sshoptions, slotid):
+        return None, None
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (

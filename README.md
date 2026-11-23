@@ -54,7 +54,15 @@ The task runner gives its own multiplexing options to each `ssh` and `rsync` com
 needs no `ControlMaster`, `ControlPath`, or `ControlPersist` option. The sshd of sc01 permits a
 limited number of sessions for one connection. Thus each group of 8 slots uses a different
 connection, and the task runner keeps the sockets in `~/.ssh/atlasserver/`. The constant
-`SSH_SLOTS_PER_CONNECTION` in `atlasserver/taskrunner/main.py` sets the size of a group. This
+`SSH_SLOTS_PER_CONNECTION` in `atlasserver/taskrunner/main.py` sets the size of a group. Each
+group also has a second connection (for example `atlas-0-stop`) for the commands that stop a
+remote command. sshd keeps the session of a remote command until the command ends, also after the
+task runner stopped. Thus a full connection of the tasks does not stop the stop commands.
+
+The task runner opens no other connection to sc01. When sshd refuses a session on a shared
+connection, the command fails, and the task gets a new attempt. A slot whose two connections are
+not open starts no command, and the slot then waits 30 seconds. Without this rule, each refused
+command connected again, and sc01 then reset all new connections, also `ssh atlas`. This
 command shows if the connection of the first group is open:
 ```sh
 ssh -O check -S ~/.ssh/atlasserver/atlas-0 atlas
