@@ -9,6 +9,7 @@ import json
 import multiprocessing as mp
 import os
 import pwd
+import shutil
 import stat
 import subprocess
 import time
@@ -93,6 +94,10 @@ RSYNC_RETRY_WAIT_SECONDS: float = 10.0
 # The exit codes of rsync for a failed ssh session: 255 from ssh, and 12 for a closed connection.
 RSYNC_CONNECTION_FAILED_CODES: frozenset[int] = frozenset({12, 255})
 
+# The exit code of rsync for a remote file that is not there, e.g. the image of a task with no
+# observations. The checks of the result after the copies find a missing result file.
+RSYNC_ABSENT_FILE_CODE: int = 23
+
 # the directory of the control sockets, relative to the home directory. ssh fails if the path of
 # a socket is longer than about 100 characters, so the names are short.
 SSH_CONTROL_DIR: str = ".ssh/atlasserver"
@@ -163,8 +168,6 @@ def log_general(msg: str, suffix: str = "") -> None:
     if logfile_latest.exists():
         lastwrite = dt.datetime.fromtimestamp(logfile_latest.stat().st_mtime, tz=dt.UTC)
         if lastwrite.date() < dtnow.date():
-            import shutil
-
             logfile_archive = Path(
                 runnerstatus.LOG_DIR,
                 f"fprunnerlog_{lastwrite.year:4d}-{lastwrite.month:02d}-{lastwrite.day:02d}{suffix}.txt",
@@ -650,6 +653,55 @@ def copy_with_rsync(
     return code
 
 
+def download_task_files(
+    copies: t.Sequence[tuple[Path, Path]],
+    token: str,
+    logfunc: t.Callable[[t.Any], None],
+    sshoptions: t.Sequence[str],
+    slotid: int | None,
+) -> bool:
+    """Move each remote file to its local path. Return whether all the copies succeeded.
+
+    Each pair is a remote file and its local path, and the first pair is the result file. rsync
+    deletes each remote file after its copy. The copies go to a staging directory of the attempt,
+    next to each local path. The local paths change only after the last copy succeeded.
+
+    After a restart, the old slot can continue its copies while a new attempt runs the same task.
+    The two attempts use the same local paths. The staging directories keep the files of a failed
+    attempt away from the result of the other attempt.
+    """
+    stagingdirs: dict[Path, Path] = {}
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for remotefile, localpath in copies:
+            if localpath.parent not in stagingdirs:
+                localpath.parent.mkdir(parents=True, exist_ok=True)
+                # the pattern of remove_task_resultfiles does not match this name, and the token
+                # is not known outside the attempt
+                stagingdir = localpath.parent / f".attempt_{token}"
+                stagingdir.mkdir()
+                stagingdirs[localpath.parent] = stagingdir
+
+            stagedfile = stagingdirs[localpath.parent] / localpath.name
+            copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(stagedfile)]
+            if copy_with_rsync(copycommand, logfunc, sshoptions, slotid) not in {0, RSYNC_ABSENT_FILE_CODE}:
+                # A failed session also stops the next copies, because they use the same
+                # connection. A finish now gives a task with no image or no error text, and
+                # nothing copies the remote files later. Thus the task gets a new attempt.
+                logfunc("ERROR: a copy from sc01 failed, so the task will be retried")
+                return False
+            staged.append((stagedfile, localpath))
+
+        # The result file goes last. A file that it finds is then a file of the same attempt.
+        for stagedfile, localpath in reversed(staged):
+            if stagedfile.exists():
+                stagedfile.replace(localpath)
+        return True
+    finally:
+        for stagingdir in stagingdirs.values():
+            shutil.rmtree(stagingdir, ignore_errors=True)
+
+
 def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str | None]:
     """Run the forced photometry on atlas sc01 and retrieve the result.
 
@@ -852,32 +904,27 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         stop_remote_job(task.id, token, slotid, logfunc, delete_files=True)
         return None, None
 
-    # Move the files of the task from sc01: pairs of the remote file and the local destination.
-    # rsync deletes each remote file after its copy.
+    # Move the files of the task from sc01: pairs of the remote file and its local path. The
+    # result file is first; see download_task_files.
     if task.request_type == "FP":
-        copies = [(remoteresultfile, localresultfile), (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR)]
+        copies = [
+            (remoteresultfile, localresultfile),
+            (remoteresultfile.with_suffix(".jpg"), localresultfile.with_suffix(".jpg")),
+        ]
     elif task.request_type == "SSOSTACK":
         copies = [
-            (remoteresultfile, settings.RESULTS_DIR),
-            (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR),
-            (remotedatafile, settings.RESULTS_DIR),
+            (remoteresultfile, localresultfile),
+            (remoteresultfile.with_suffix(".jpg"), localresultfile.with_suffix(".jpg")),
+            (remotedatafile, Path(settings.RESULTS_DIR, remotedatafile.name)),
         ]
     else:  # IMGZIP
         # The data file comes back too, so it does not stay on the remote host. It goes into the
         # private input directory, never the results directory: the web server serves that one,
         # and this file is a copy of a data file that the parent may have deleted.
-        settings.TASK_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
-        copies = [(remoteresultfile, settings.RESULTS_DIR), (remotedatafile, task.inputfile())]
+        copies = [(remoteresultfile, localresultfile), (remotedatafile, task.inputfile())]
 
-    for remotefile, destination in copies:
-        copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)]
-        if copy_with_rsync(copycommand, logfunc, sshoptions, slotid) in RSYNC_CONNECTION_FAILED_CODES:
-            # The next copies use the same connection, so they do not start. A finish now gives a
-            # task with no image or no error text, and nothing copies these files later. Thus the
-            # task gets a new attempt, and the new remote command writes the same file names.
-            logfunc("ERROR: a copy from sc01 failed, so the task will be retried")
-            localresultfile.unlink(missing_ok=True)
-            return None, None
+    if not download_task_files(copies, token, logfunc, sshoptions, slotid):
+        return None, None
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (

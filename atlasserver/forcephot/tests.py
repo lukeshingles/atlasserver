@@ -5329,7 +5329,82 @@ class RemoteStopTests(TestCase):
         outcome, resultfiles = result
         assert outcome == (None, None), outcome
         # the result file of the next attempt has the same name
-        assert resultfiles == [], resultfiles
+        assert resultfiles == {}, resultfiles
+
+    def test_a_failed_attempt_leaves_the_result_of_a_newer_attempt(self) -> None:
+        # After a restart, a new slot can finish the task while the old slot waits to copy the
+        # image again. The two attempts use the same local paths.
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        resultname = taskrunner_main.jobfilename(self.task.id, ".txt")
+
+        def copied(command: list[str], *_args: object) -> int:
+            if Path(command[-2]).suffix == ".txt":
+                Path(command[-1]).write_text("old attempt\n", encoding="utf-8")
+                return 0
+            Path(taskrunner_main.settings.RESULTS_DIR, resultname).write_text("new attempt\n", encoding="utf-8")
+            return 255
+
+        with (
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied),
+            mock.patch.object(taskrunner_main.time, "sleep"),
+        ):
+            outcome, resultfiles = self.run_attempt_with_real_options(
+                mock.Mock(return_value=True), mock.Mock(return_value=proc), rsync=None, keep_results=True
+            )
+
+        assert outcome == (None, None), outcome
+        assert resultfiles == {resultname: "new attempt\n"}, resultfiles
+
+    def test_a_timeout_or_a_file_error_of_the_image_copy_fails_the_attempt(self) -> None:
+        # rsync gives None at its timeout and 11 for a file error. The image stays on sc01 or is
+        # incomplete, and nothing copies it later.
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        for code in (None, 11):
+            with self.subTest(code=code):
+
+                def copied(command: list[str], *_args: object, code: int | None = code) -> int | None:
+                    if Path(command[-2]).suffix == ".txt":
+                        Path(command[-1]).write_text("MJD uJy\n1.0 2.0\n", encoding="utf-8")
+                        return 0
+                    return code
+
+                with mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied) as rsync:
+                    outcome, resultfiles = self.run_attempt_with_real_options(
+                        mock.Mock(return_value=True), mock.Mock(return_value=proc), rsync=None, keep_results=True
+                    )
+
+                assert outcome == (None, None), outcome
+                assert resultfiles == {}, resultfiles
+                # only a failed ssh session gets the tries again, and the pause of the slot
+                assert rsync.call_count == 2, rsync.call_args_list
+                assert not taskrunner_main.connection_failed
+
+    def test_a_task_with_no_image_on_sc01_is_finished(self) -> None:
+        # rsync gives 23 for a remote file that is not there
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        resultname = taskrunner_main.jobfilename(self.task.id, ".txt")
+
+        def copied(command: list[str], *_args: object) -> int:
+            if Path(command[-2]).suffix == ".txt":
+                Path(command[-1]).write_text("MJD uJy\n1.0 2.0\n", encoding="utf-8")
+                return 0
+            return taskrunner_main.RSYNC_ABSENT_FILE_CODE
+
+        with mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied):
+            (resultfile, error), resultfiles = self.run_attempt_with_real_options(
+                mock.Mock(return_value=True), mock.Mock(return_value=proc), rsync=None, keep_results=True
+            )
+
+        assert resultfile is not None, resultfile
+        assert resultfile.name == resultname, resultfile
+        assert error is None, error
+        assert resultfiles == {resultname: "MJD uJy\n1.0 2.0\n"}, resultfiles
 
     def run_attempt_with_real_options(
         self,
@@ -5353,7 +5428,12 @@ class RemoteStopTests(TestCase):
                 stack.enter_context(mock.patch.object(taskrunner_main, "run_rsync", return_value=rsync))
             outcome = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
             if keep_results:
-                return outcome, sorted(path.name for path in Path(homedir, "results").iterdir())
+                # also a staging directory that the attempt did not remove
+                resultfiles = {
+                    path.name: path.read_text(encoding="utf-8") if path.is_file() else "<directory>"
+                    for path in Path(homedir, "results").iterdir()
+                }
+                return outcome, resultfiles
             return outcome
 
     def test_a_slot_with_no_stop_connection_sends_no_stop(self) -> None:
