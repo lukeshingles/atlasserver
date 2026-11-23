@@ -662,19 +662,15 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     # A slot uses only its two shared connections. Without them, the attempt starts no command:
     # an ssh with no options can open a connection of its own, and many slots then make sc01 reset
     # all new connections. A remote command that no stop can reach keeps its session until it ends.
-    # The stop connection opens now and not at the stop. At a restart, all the slots stop at the
-    # same time, and sc01 resets many new connections at the same time.
-    if slotid is not None:
-        stopoptions = ssh_options(slotid, logfunc, stop=True) if sshoptions else []
-        if not (
-            sshoptions
-            and stopoptions
-            and open_ssh_master(slotid, sshoptions, logfunc)
-            and open_ssh_master(slotid, stopoptions, logfunc, stop=True)
-        ):
-            logfunc("ERROR: the shared ssh connections of the slot are not open, so the attempt starts no command")
-            note_connection_failure()
-            return None, None
+    stopoptions = ssh_options(slotid, logfunc, stop=True) if slotid is not None and sshoptions else []
+
+    def connections_missing() -> tuple[None, None]:
+        logfunc("ERROR: the shared ssh connections of the slot are not open, so the attempt starts no command")
+        note_connection_failure()
+        return None, None
+
+    if slotid is not None and not (sshoptions and stopoptions and open_ssh_master(slotid, sshoptions, logfunc)):
+        return connections_missing()
 
     remoteresultdir = Path(REMOTE_RESULT_DIR)
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
@@ -733,6 +729,14 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
 
     # the exit status of the command of the task, and not of the removal of the pid file
     atlascommand = f"{atlascommand.rstrip().rstrip(';')}; status=$?; rm -f {pidfile}; exit $status"
+
+    # The stop connection opens now: after the upload of an IMGZIP task, which can take a long
+    # time, and before the remote command. Then SSH_STOP_CONTROL_PERSIST starts at the launch. For
+    # an open connection, the check of open_ssh_master starts that time again, because the master
+    # counts the idle time from its last client. The connection does not open at the stop. At a
+    # restart, all the slots stop at the same time, and sc01 resets many new connections then.
+    if slotid is not None and not open_ssh_master(slotid, stopoptions, logfunc, stop=True):
+        return connections_missing()
 
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 

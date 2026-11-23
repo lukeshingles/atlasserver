@@ -5206,6 +5206,41 @@ class RemoteStopTests(TestCase):
 
         assert events == ["task connection", "stop connection", "remote command"], events
 
+    def test_an_image_task_opens_the_stop_connection_after_its_upload(self) -> None:
+        # The upload can take a long time. The idle time of the stop connection then starts at the
+        # launch of the remote command, and the connection stays open for the full command.
+        events: list[str] = []
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+        self.task = Task.objects.create(
+            user=self.task.user, ra=1.0, dec=2.0, request_type="IMGZIP", parent_task=self.task
+        )
+
+        def opened(*_args: object, stop: bool = False) -> bool:
+            events.append("stop connection" if stop else "task connection")
+            return True
+
+        def copied(command: list[str], *_args: object) -> int:
+            events.append("download" if command[-2].startswith("atlas:") else "upload")
+            return 0
+
+        def started(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            events.append("remote command")
+            return proc
+
+        with (
+            tempfile.TemporaryDirectory() as inputsdir,
+            mock.patch.object(taskrunner_main.settings, "TASK_INPUTS_DIR", Path(inputsdir)),
+            mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied),
+        ):
+            self.task.inputfile().write_text("MJD uJy\n", encoding="utf-8")
+            self.run_attempt_with_real_options(opened, started, rsync=None)
+
+        assert events == ["task connection", "upload", "stop connection", "remote command", "download", "download"], (
+            events
+        )
+
     def test_a_copy_whose_ssh_session_failed_starts_again(self) -> None:
         # sshd can refuse the session on a full connection, and the remote file then stays.
         # Without a copy, the task runs again in full.
@@ -7535,7 +7570,7 @@ class OpenSshMasterTests(TestCase):
     def run_slot_attempt(self, *, options: list[str], opened: list[bool]) -> tuple[t.Any, mock.Mock, mock.Mock]:
         """Run runtask in slot 3. Return the result, the Popen mock, and the run_rsync mock."""
         user, _ = User.objects.get_or_create(username="nomaster", email="nomaster@example.com")
-        task = Task.objects.create(user=user, ra=1.0, dec=2.0, request_type="IMGZIP")
+        task = Task.objects.create(user=user, ra=1.0, dec=2.0)
         taskrunner_main.connection_failed = False
         with (
             tempfile.TemporaryDirectory() as tmpdir,
