@@ -11,14 +11,12 @@ the request is sent.
 """
 
 import contextlib
-import email.message
 import json
 import socket
 import threading
 import typing as t
 import urllib.error
 import urllib.request
-from collections.abc import Generator
 from contextvars import ContextVar
 from typing import override
 from urllib.parse import urlparse
@@ -30,6 +28,9 @@ from atlasserver.forcephot.netaddr import address_is_public
 if t.TYPE_CHECKING:
     # only for the annotation: importing models here at run time would pull Django's app registry
     # into a module the task runner imports before django.setup()
+    import email.message
+    from collections.abc import Generator
+
     from atlasserver.forcephot.models import Task
 
 # a callback is a courtesy, not part of finishing the task: keep it short so that a slow or
@@ -215,7 +216,7 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def send_task_callback(task: "Task", logfunc: t.Callable[[t.Any], None]) -> bool:
+def send_task_callback(task: Task, logfunc: t.Callable[[t.Any], None]) -> bool:
     """POST a completion notification for a finished task. Return whether it was accepted.
 
     Never raises: a callback that fails is logged and dropped. Retrying is deliberately not

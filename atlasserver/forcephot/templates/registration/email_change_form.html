@@ -22,6 +22,9 @@
 {% if form.non_field_errors %}
 <div class="form-row">{{ form.non_field_errors }}</div>
 {% endif %}
+{% if limitmessage %}
+<div class="form-row"><ul class="errorlist nonfield"><li>{{ limitmessage }}</li></ul></div>
+{% endif %}
 
 <p>{% translate 'Your current email address is' %} <b>{{ request.user.email }}</b>.</p>
 <p>{% translate 'Please enter your password, for security’s sake, and then enter your new email address.' %}</p>

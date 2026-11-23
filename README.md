@@ -60,15 +60,21 @@ command shows if the connection of the first group is open:
 ssh -O check -S ~/.ssh/atlasserver/atlas-0 atlas
 ```
 
-The `python3` command of the account on sc01 runs these scripts. For the production account, this
-is Python 3.8.5. This command shows the version:
+The task runner starts each script on sc01 with `uv run --script`. Each script gives its Python
+version and its packages in an inline metadata block (PEP 723), and uv reads this block. Thus the
+account on sc01 needs uv on the `PATH` of a non-interactive ssh session. The production account is
+`yoda`, and this command shows the version of uv and the Python versions that uv has:
 ```sh
-ssh atlas python3 --version
+ssh atlas 'uv --version; uv python list --only-installed'
 ```
-The scripts must use only the features of Python 3.8. The other code of atlasserver needs Python
-3.13 or later, and it does not have this limit. A script that fails on sc01 writes no result file,
-and the task runner then starts the task again without a limit. The slot logs in
+The `python3` command of sc01 is too old for the scripts. The `env` command of sc01 has no `-S`
+option, so the shebang line of a script cannot start uv there. On the first run of a script, uv
+gets its packages from PyPI and keeps them in its cache. A script that fails on sc01 writes no
+result file, and the task runner then starts the task again without a limit. The slot logs in
 `atlasserver/taskrunner/logs/` show the error from sc01 in the lines with `atlas STDERR:`.
+
+Install the new scripts on sc01 when you deploy a task runner that starts them in a new way. An
+old task runner cannot start a new script. A new task runner starts an old script with no packages.
 
 The task runner executes 24 tasks at one time (`NUMSLOTS` in `atlasserver/taskrunner/status.py`).
 When the tasks of other users wait, the tasks of one user use a maximum of 8 of these slots
@@ -108,11 +114,17 @@ those attempts when it starts, and their tasks start again with no wait. For a t
 finished, the record has the run time to the last write of the status file, which is a maximum of
 15 seconds before the stop.
 
+A slot that gets a stop signal, or whose task runner stopped, first stops the remote command of
+its task on sc01. The kill of the local `ssh` alone does not stop that command, because the
+session has no tty. When a user deletes a running task, its slot stops in a maximum of 15
+seconds, and it also stops the remote command and deletes the remote files of the task.
+
 To stop the use of the server by an account, clear the "Active" box of the account in the admin
 site. The account and its finished tasks stay in the database. The tasks of an inactive account
 lose their queue positions in a maximum of 30 seconds, and a task with no position cannot start.
-The hourly maintenance of the task runner then deletes the unfinished tasks of the account. A
-task of the account that is in a slot keeps the slot until the end of its attempt.
+The hourly maintenance of the task runner then deletes the unfinished tasks of the account. This
+can occur up to one hour after the change. A task of the account that is in a slot stops in a
+maximum of 15 seconds after this deletion, as a task that its user deletes.
 
 The list of users in the admin site (`/admin/auth/user/`) has two columns for the usage. "Run
 time (7 days)" is the run time with no decay, and a click on its header sorts the list. "Usage in

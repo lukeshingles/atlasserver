@@ -88,6 +88,15 @@ function unfinishedIds(data) {
     return Object.keys(data.queuepositions).concat((data.startedids ?? []).map(String));
 }
 
+/** Fetch the queue positions. Resolve to the body, or to null for a status other than 200. */
+function fetchQueuePositionsData() {
+    return fetch(queuepositions_url, {
+        credentials: "same-origin",
+        headers: { 'Accept': 'application/json' },
+        cache: "no-store",
+    }).then(response => response.status == 200 ? response.json() : null);
+}
+
 /**
  * Whether the queuepositions response can be expected to say anything about this task.
  *
@@ -374,7 +383,6 @@ function useTimeElapsed(taskdata) {
         const interval = setInterval(() => setTimeelapsed(secondsSinceStart()), 1000);
 
         return () => clearInterval(interval);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [running, taskdata.starttimestamp]);
 
     return running ? timeelapsed : -1;
@@ -421,7 +429,6 @@ export const Task = React.memo(function Task(props) {
             newtaskids = newtaskids.filter(item => item !== props.taskdata.id);
         }
         // mount only: this animates a row that has just appeared
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     function deleteTask() {
@@ -531,6 +538,10 @@ export const Task = React.memo(function Task(props) {
     // then on; everything derived from that file — the download links, the plot, and the
     // image request that reads it to know which observations to fetch — turns on this.
     const hasresultfile = task.result_url != null;
+    // the state of the task, which selects the class, the badge, the button and the status block
+    const phase = task.finishtimestamp != null ? 'finished'
+        : task.queuepos == null && task.starttimestamp != null ? (props.attempted ? 'attempted' : 'running')
+            : 'queued';
     let statusclass = 'none';
     let buttontext = 'none';
     // the word in the badge beside the task number, and the modifier that colours it and the row's
@@ -538,14 +549,14 @@ export const Task = React.memo(function Task(props) {
     // was only visible as red text further down, and a finished task only by not saying anything.
     let statuslabel = '';
     let statusbadge = '';
-    if (task.finishtimestamp != null) {
+    if (phase === 'finished') {
         // "errored" as well as "finished", so the row's left edge can disagree with the plain
         // finished colour without the stylesheet having to look inside the row for the badge
         statusclass = task.error_msg != null ? "finished errored" : "finished";
         buttontext = 'Delete';
         statuslabel = task.error_msg != null ? 'Error' : 'Finished';
         statusbadge = task.error_msg != null ? 'taskbadge-error' : 'taskbadge-finished';
-    } else if (task.queuepos == null && task.starttimestamp != null && props.attempted) {
+    } else if (phase === 'attempted') {
         // started once and given back: the runner will try it again, and until then nothing runs.
         // The task has no queue position while it waits for the time of its next attempt. After
         // that time it has a position again, and it is a queued task as each other one.
@@ -553,7 +564,7 @@ export const Task = React.memo(function Task(props) {
         buttontext = 'Cancel';
         statuslabel = 'Attempted';
         statusbadge = 'taskbadge-queued';
-    } else if (task.queuepos == null && task.starttimestamp != null) {
+    } else if (phase === 'running') {
         statusclass = "queued started";
         buttontext = 'Cancel';
         statuslabel = 'Running';
@@ -706,7 +717,7 @@ export const Task = React.memo(function Task(props) {
             ])}
         </dl>);
 
-    if (task.finishtimestamp != null) {
+    if (phase === 'finished') {
         if (task.error_msg != null) {
             taskbox.push(<p key="error_msg" className="taskerror">Error: {task.error_msg}</p>);
         } else {
@@ -750,7 +761,7 @@ export const Task = React.memo(function Task(props) {
                 taskbox.push(<button key="imgrequest" className="btn btn-info" onClick={() => requestImages()} title="Download FITS and JPEG images for up to the first 1000 observations.">Request {task.use_reduced ? 'reduced' : 'diff'} images</button>);
             }
         }
-    } else if (task.queuepos == null && task.starttimestamp != null && props.attempted) {
+    } else if (phase === 'attempted') {
         // The runner started this task and released it without a result, so the attempt will be
         // made again; the bar is still because nothing is running for it now. A task with a
         // queue position is not in this state: it is past its wait for a new attempt, and the
@@ -764,7 +775,7 @@ export const Task = React.memo(function Task(props) {
                 </div>
             </div>
         );
-    } else if (task.queuepos == null && task.starttimestamp != null) {
+    } else if (phase === 'running') {
         // An indeterminate bar, striped and moving: the server reports that a task has started and
         // how long ago, and nothing about how far through it is, so there is no fraction to draw.
         // Bootstrap reads a role="progressbar" with no aria-valuenow as exactly that, and the label
@@ -1104,13 +1115,7 @@ export function TaskPage() {
         const isCurrent = startRequest(queueposRequestRef);
         queueposInFlightRef.current = Date.now();
 
-        fetch(queuepositions_url,
-            {
-                credentials: "same-origin",
-                headers: { 'Accept': 'application/json' },
-                cache: "no-store",
-            })
-            .then(response => response.status == 200 ? response.json() : null)
+        fetchQueuePositionsData()
             .then(data => {
                 // A newer request has been made since this one started, so this answer is already
                 // out of date and every write below it would be a rewind. Dropped rather than
@@ -1184,13 +1189,12 @@ export function TaskPage() {
                 // tasklist_last_fetch_time and tasklist_api_error are deliberately NOT touched
                 // here: this endpoint says nothing about whether the task list is reachable, and
                 // stamping them would report a stale page as current.
-                // sorted so that the elementwise comparison below is meaningful -- the estimate
-                // itself counts positions below a given one and does not care about the order
-                // sorted so that the elementwise comparison below is meaningful; the estimate
-                // itself filters on position and does not care about the order
+                //
                 // undefined for a task whose type the answer does not give: the estimate then
                 // has no price for the task, and it gives no value
                 const ownstarted = (data.startedids ?? []).map(taskid => data.startedtypes?.[String(taskid)]);
+                // sorted so that the elementwise comparison below is meaningful; the estimate
+                // itself filters on position and does not care about the order
                 const ownqueued = Object.entries(data.queuepositions)
                     .map(([taskid, position]) => ({ position, requesttype: data.queuedtypes?.[taskid] }))
                     .sort((a, b) => a.position - b.position);
@@ -1288,13 +1292,7 @@ export function TaskPage() {
 
         const isCurrent = startRequest(awayRequestRef);
 
-        fetch(queuepositions_url,
-            {
-                credentials: "same-origin",
-                headers: { 'Accept': 'application/json' },
-                cache: "no-store",
-            })
-            .then(response => response.status == 200 ? response.json() : null)
+        fetchQueuePositionsData()
             .then(data => {
                 // overtaken by a later away poll, so this is the older of two answers about the same
                 // queue; see awayRequestRef
@@ -1412,9 +1410,9 @@ export function TaskPage() {
                     return null;
                 }
 
-                // held until the body is applied below, and stored beside it; see PollCache.noteResponse
+                // held until the body is applied below, and stored beside it; see PollCache.storeEtag
                 responseetag = response.headers.get('ETag');
-                if (tasklist_pollcache.noteResponse(response.status) === NOT_MODIFIED) {
+                if (response.status === 304) {
                     debug_log('Task list unchanged (304)', get_url);
                     setState({ tasklist_api_error: '' });
                     return NOT_MODIFIED;
@@ -1517,7 +1515,7 @@ export function TaskPage() {
                 if (data != null && data.hasOwnProperty('results')) {
                     if (data.results.length == 0 && new URL(window.location.href).searchParams.get('cursor') != null) {
                         // page is empty. redirect to main page
-                        updateCursorRef.current(null);
+                        updateCursor(null);
                     } else {
                         statechanges = data;
                     }
@@ -1600,11 +1598,9 @@ export function TaskPage() {
     /*
      * fetchData and updateCursor call each other. Both are useCallbacks whose only dependency is
      * the stable setState, so each has one identity for the component's lifetime and can simply be
-     * named -- fetchData names itself, and updateCursor below names fetchData, because a reference
-     * inside a function body resolves when it is called rather than when it is defined.
-     *
-     * The one exception is the other direction: fetchData reaches updateCursor, which is declared
-     * after it, so that call goes through a ref.
+     * named -- fetchData names itself and updateCursor, and updateCursor below names fetchData.
+     * A reference inside a function body resolves when it is called rather than when it is
+     * defined, so fetchData can name updateCursor, which is declared after it.
      */
     const updateCursor = React.useCallback((new_cursor) => {
         if (new_cursor == new URL(window.location.href).searchParams.get('cursor')) {
@@ -1627,9 +1623,6 @@ export function TaskPage() {
         setState({ scrollToTopAfterUpdate: true });
         fetchData(true);
     }, [setState]);
-
-    const updateCursorRef = React.useRef(updateCursor);
-    updateCursorRef.current = updateCursor;
 
     function setFilter(filtername) {
         debug_log('changed filter to', filtername);
@@ -1737,7 +1730,6 @@ export function TaskPage() {
         };
         // mount only, like the componentDidMount this replaces: the callbacks are reached through
         // refs, so this does not need to re-run when they change
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // was componentDidUpdate
@@ -1832,7 +1824,7 @@ export function TaskPage() {
                 No tasks yet. Request a position on the sky and its light curve will appear here.
             </p>);
     } else {
-        const pagetaskcount = (state.results != null) ? state.results.length : null;
+        const pagetaskcount = state.results.length;
 
         // Computed here rather than in the row, which cannot see the user's other queued tasks: the
         // estimate depends on the whole queued set, and a row only knows about itself. Handed down

@@ -31,9 +31,11 @@ if not SECRET_KEY:
 TEST_USERS = [int(x) for x in os.environ.get("ATLASSERVER_TEST_USERS", "").split(",") if x]
 
 # How many reverse proxies in front of this server append to X-Forwarded-For. Zero ignores the
-# header, which is right for the current deployment: nothing sets it, so any value is whatever the
-# client chose to claim. Set it only for a proxy that overwrites the header, and count the hops
-# exactly -- one too far left reads the attacker's value again. Validated rather than passed to
+# header, which is right with no proxy: any value is then whatever the client chose to claim. The
+# production server has one proxy, the Apache of the host, which forwards to port 8086 with
+# ProxyPass and appends the header, so its .env sets 1. With 0 there, each request has the
+# address of that proxy. Each budget for one address is then one budget for the whole site.
+# Count the hops exactly -- one too far left reads the attacker's value again. Validated rather than passed to
 # int(), so a typo names the variable instead of failing the whole import with a bare ValueError.
 _proxycount_env = os.environ.get("ATLASSERVER_TRUSTED_PROXY_COUNT", "0").strip() or "0"
 # isdecimal, not isdigit: isdigit also accepts superscripts, and "²" would pass the check and
@@ -98,7 +100,6 @@ SITE_NOTICE = " ".join(os.environ.get("ATLASSERVER_SITE_NOTICE", "").split())
 ADMINS = [
     ("Luke Shingles", "luke.shingles@gmail.com"),
 ]  # send server error notifications to this person
-MANAGERS = ADMINS
 
 
 INSTALLED_APPS = [
@@ -310,13 +311,9 @@ USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
 
 if not DEBUG:
-    # httpconf.txt sets this header unconditionally (so a client cannot spoof it). The previous
-    # value keyed off SERVER_SOFTWARE, which Apache always populates with its own banner, so
-    # request.scheme was a constant that depended on the ServerTokens setting rather than on the
-    # protocol the request actually arrived over.
+    # httpconf.txt sets this header on each request, so a client cannot spoof it
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-if not DEBUG:
     # the four warnings `manage.py check --deploy` raised, guarded because development runs over
     # plain http and would never send secure-only cookies. SECURE_SSL_REDIRECT never fires today
     # (httpconf.txt always sets X-Forwarded-Proto) and is a backstop for a deployment that stops.
@@ -362,7 +359,6 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "atlasserver.forcephot.pagination.TaskPagination",
     "PAGE_SIZE": 6,
     "DEFAULT_THROTTLE_CLASSES": [
-        # 'rest_framework.throttling.ScopedRateThrottle',
         "atlasserver.forcephot.throttles.ForcedPhotRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
@@ -469,7 +465,8 @@ LOGGING = {
         "mail_admins": {
             "level": "ERROR",
             "filters": ["require_debug_false"],
-            "class": "atlasserver.forcephot.misc.AdminEmailHandlerNo404",
+            # Django logs a 404 at WARNING, so this handler at ERROR sends no mail for one
+            "class": "django.utils.log.AdminEmailHandler",
             "include_html": True,
         },
         "file": {
@@ -500,6 +497,16 @@ LOGGING = {
         # the test outbox and real inboxes alike.
         "django.security.DisallowedHost": {
             "handlers": cast("list[str]", []),
+            "propagate": False,
+        },
+        # Each SuspiciousOperation that Django answers with a 400 logs an ERROR here, for example
+        # a query string with more than DATA_UPLOAD_MAX_NUMBER_FIELDS fields. An anonymous client
+        # can send such a request in a loop. Through the "django" logger, each one sends a mail to
+        # ADMINS with the mail account of the site, which the verification and the result mails
+        # also use. This entry keeps the records in the file and sends no mail.
+        "django.security": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
             "propagate": False,
         },
         "django.server": {

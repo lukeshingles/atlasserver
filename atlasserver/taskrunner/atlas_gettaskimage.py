@@ -1,7 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["pandas"]
+# ///
 """Input a job data file and produce the first (or brightest) image in JPEG. This script is to be run on sc01.
 
-The python3 command on sc01 is Python 3.8. Use only the features of Python 3.8 in this script.
+The task runner starts this script on sc01 with "uv run --script". uv reads the Python version
+and the packages from the block above.
 """
 
 import subprocess
@@ -52,8 +57,7 @@ def main() -> None:
     )
 
     # delete the .fits (but keep the .jpeg)
-    if fitsoutpath.exists():
-        fitsoutpath.unlink()
+    fitsoutpath.unlink(missing_ok=True)
 
     # jobxxxxx.fits.jpg to jobxxxx.jpg
     jpgpath = fitsoutpath.with_suffix(".fits.jpg")

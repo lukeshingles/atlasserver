@@ -13,16 +13,19 @@ import stat
 import subprocess
 import time
 import typing as t
+import uuid
 from pathlib import Path
+from signal import SIGHUP
 from signal import SIGINT
 from signal import signal
 from signal import SIGTERM
 
 import django
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.db import close_old_connections
+from django.db import DatabaseError
+from django.db import InterfaceError
 from django.db import models
 from django.db import transaction
 from django.db.models import prefetch_related_objects
@@ -32,6 +35,10 @@ from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.taskrunner import status as runnerstatus
 
 REMOTE_SERVER = "atlas"
+# starts an atlas_*.py script on REMOTE_SERVER. uv reads the Python version and the packages from
+# the inline metadata block of the script. The env on sc01 has no -S option, so the shebang line of
+# the script cannot start uv there.
+REMOTE_SCRIPT_RUNNER: t.Final = "uv run --quiet --script"
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atlasserver.settings")
 
@@ -76,6 +83,21 @@ RESULT_REQUIRED_COLUMNS: tuple[str, ...] = ("MJD", "uJy")
 # how often a running task asks the database whether it has been cancelled
 CANCEL_CHECK_SECONDS: float = 15.0
 
+# How long the ssh command that stops a remote command can take; see stop_remote_job.
+REMOTE_STOP_TIMEOUT_SECONDS: float = 60.0
+
+# The text that the stop command of stop_remote_job prints when it stops a remote command.
+STOP_MARKER: t.Final = "atlasserver-stopped"
+
+# The directory on sc01 that holds the files of the tasks.
+REMOTE_RESULT_DIR: t.Final = "~/atlasserver/results"
+
+# The state of a slot process for its stop signals; see request_stop. _stop_requested is True
+# after a stop signal. _defer_stop is True while the slot runs its attempt. A stop signal then
+# waits: the poll loop of runtask stops the remote command, and do_task records a collected result.
+_stop_requested = False
+_defer_stop = False
+
 # how long the main loop waits between polls of the queue. The longer interval applies once the
 # queue has been seen to be empty, so that an idle server is not querying twice a second all night.
 POLL_INTERVAL_SECONDS: float = 0.5
@@ -95,18 +117,16 @@ def mjdnow() -> float:
     return datetime_to_mjd(dt.datetime.now(dt.UTC))
 
 
-def localresultfileprefix(taskid: int) -> str:
-    """Return the absolute path to the job file (with no extension) for a given task id."""
-    return str(Path(settings.RESULTS_DIR / jobfilename(taskid)))
-
-
-def log_general(msg: str, suffix: str = "", *args, **kwargs) -> None:
+def log_general(msg: str, suffix: str = "") -> None:
     """Log a message to the console and to a log file (with given filename suffix)."""
     dtnow = dt.datetime.now(dt.UTC)
     strtime = dtnow.strftime("%Y-%m-%d %H:%M:%S")
     line = f"{strtime}  {msg}"
     if not suffix:
-        print(line, *args, **kwargs)
+        # `atlastaskrunner stop` closes the terminal of the tmux session, and a write to it then
+        # raises OSError. A slot that stops still records its result, so the file log continues.
+        with contextlib.suppress(OSError):
+            print(line, flush=True)
 
     logfile_latest = Path(runnerstatus.LOG_DIR, f"fprunnerlog_latest{suffix}.txt")
 
@@ -239,54 +259,173 @@ def run_rsync(
 
     logfunc(" ".join(copycommand))
 
-    proc = subprocess.Popen(
-        copycommand,
-        shell=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        # replace, not the default strict: one byte of non-UTF-8 in the remote output
-        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
-        # UnicodeDecodeError out of the worker, which then died before mark_finished.
-        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
-        # pass, forever, with no error_msg to say why.
-        errors="replace",
-        bufsize=1,
-        universal_newlines=True,
-    )
-
     try:
-        # without a timeout an rsync against a wedged host blocks the worker slot indefinitely
-        stdout, stderr = proc.communicate(timeout=TASK_MAXTIME_SECONDS)
+        # Without a timeout, an rsync against a wedged host holds the slot without a limit. At the
+        # timeout, subprocess.run kills the process and reaps it.
+        result = subprocess.run(
+            copycommand,
+            capture_output=True,
+            encoding="utf-8",
+            # replace, not the default strict: one byte that is not UTF-8 in the remote output
+            # (a Latin-1 filename, a binary fragment on stderr) raises UnicodeDecodeError. The
+            # slot then ends before mark_finished, and the task has no error_msg to say why.
+            errors="replace",
+            timeout=TASK_MAXTIME_SECONDS,
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         logfunc(f"ERROR: rsync timed out after {TASK_MAXTIME_SECONDS:.0f} seconds")
-        proc.kill()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
         return None
 
-    if stdout:
-        for line in stdout.split("\n"):
-            logfunc(f"STDOUT: {line}")
+    for line in result.stdout.split("\n") if result.stdout else []:
+        logfunc(f"STDOUT: {line}")
 
-    if stderr:
-        for line in stderr.split("\n"):
-            logfunc(f"STDERR: {line}")
+    for line in result.stderr.split("\n") if result.stderr else []:
+        logfunc(f"STDERR: {line}")
 
-    if proc.returncode != 0:
-        logfunc(f"ERROR: rsync exited with code {proc.returncode}")
+    if result.returncode != 0:
+        logfunc(f"ERROR: rsync exited with code {result.returncode}")
 
-    return proc.returncode
+    return result.returncode
+
+
+def replace_lost_connection() -> None:
+    """Close the database connection of this process if it is not usable, so that the next query opens a new one.
+
+    Django does this at the start and at the end of each request, and the task runner has no
+    request. Without it, a connection that the server closed (for example at a restart of the
+    database) stays in the process, and each later query raises OperationalError.
+
+    Not inside a transaction: there, the close would end the transaction of the caller. The main
+    loop and the polls of a slot call this outside a transaction, and a test that runs in a
+    transaction keeps its connection.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        close_old_connections()
+
+
+def remote_pidfile(taskid: int, token: str) -> str:
+    """Return the remote file of one attempt that holds the session id of its remote command; see stop_remote_job.
+
+    The token is new for each attempt. Thus the file of an attempt is not the file of a different
+    attempt of the same task, which a new task runner can start while the old slot still stops.
+    """
+    return f"{REMOTE_RESULT_DIR}/{jobfilename(taskid, f'.{token}.pid')}"
+
+
+def remote_stopfile(taskid: int, token: str) -> str:
+    """Return the remote file that tells the remote command of one attempt not to start; see stop_remote_job.
+
+    The name does not start with the name of the job. Thus the removal of the files of a cancelled
+    task in stop_remote_job does not remove this file.
+    """
+    return f"{REMOTE_RESULT_DIR}/stop.{jobfilename(taskid, f'.{token}')}"
+
+
+def stop_remote_job(
+    taskid: int, token: str, sshoptions: t.Sequence[str], logfunc: t.Callable[[t.Any], None], *, delete_files: bool
+) -> None:
+    """Stop the remote command of one attempt on sc01 if it still runs.
+
+    A kill of the local ssh client does not stop the remote command. The session has no tty, so
+    sshd sends no signal to its processes when the client goes, and they run to their end or to
+    the time limit of timeout. The remote command writes the id of its session to its pid file
+    (see remote_pidfile), and this function stops each process of that session. The session
+    must have a process whose arguments hold the token. Thus a session id that a different
+    command uses now is not stopped.
+
+    The stop can come before the remote command writes its pid file, and sshd can start the
+    command after the stop. Thus this function first writes the stop file of the attempt (see
+    remote_stopfile), and the remote command ends at once if it finds this file after it writes
+    its pid file. Because of this order, either the remote command finds the stop file, or this
+    function finds the pid file. The stop file stays, because the remote command can start after
+    this function ends.
+
+    With delete_files, the remote files of the task go also: the task has no row, and nothing
+    collects them. Without it, only the pid file goes, because the next attempt of the task
+    writes the same file names.
+    """
+    pidfile = remote_pidfile(taskid, token)
+    # The command prints STOP_MARKER only when it sends the signal. Its exit code is the code of
+    # the last rm, so the code does not tell if a remote command ran.
+    command = (
+        f"touch {remote_stopfile(taskid, token)}; "
+        f'p={pidfile}; if [ -s "$p" ]; then s=$(cat "$p"); '
+        f'if ps -s "$s" -o args= 2>/dev/null | grep -q -F {token}; then pkill -TERM -s "$s" && echo {STOP_MARKER}; '
+        'fi; fi; rm -f "$p"'
+    )
+    if delete_files:
+        command += f"; rm -rf {REMOTE_RESULT_DIR}/{jobfilename(taskid)}.* {REMOTE_RESULT_DIR}/task{taskid:05d}"
+
+    try:
+        result = subprocess.run(
+            ["ssh", *sshoptions, REMOTE_SERVER, command],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=REMOTE_STOP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logfunc(f"ERROR: the stop of the remote command took more than {REMOTE_STOP_TIMEOUT_SECONDS:.0f}s")
+        return
+
+    if result.returncode == 0:
+        stopped = "Stopped the remote command" if STOP_MARKER in result.stdout else "No remote command ran"
+        logfunc(f"{stopped}{', and deleted the remote files' if delete_files else ''}")
+    else:
+        logfunc(f"ERROR: could not stop the remote command (exit code {result.returncode}): {result.stderr.strip()}")
+
+
+def request_stop(signum: int, frame: object) -> None:
+    """Handle a stop signal in a slot process.
+
+    In an attempt, the signal only sets _stop_requested. The poll loop of runtask then stops the
+    remote command and ends the attempt; see attempt_must_stop. After the remote command ended, the
+    slot records the result that it collected, and then it ends. Outside an attempt, the slot ends
+    at once, as with the default action of the signal.
+    """
+    global _stop_requested  # noqa: PLW0603
+    _stop_requested = True
+    if not _defer_stop:
+        raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def stop_signals_deferred() -> t.Generator[None]:
+    """Make a stop signal wait for the end of the block; see request_stop.
+
+    A nested block keeps the deferral of the outer block.
+    """
+    global _defer_stop  # noqa: PLW0603
+    outer = _defer_stop
+    _defer_stop = True
+    try:
+        yield
+    finally:
+        _defer_stop = outer
+
+
+def attempt_must_stop() -> bool:
+    """Return whether this slot must stop its attempt, after a stop signal or the end of the main process.
+
+    A slot process outlives a kill of the main process alone. The next task runner then finds
+    the attempt open, and it starts the task again. Without this check, the old slot also
+    continues, and two remote commands of the task write the same files.
+    """
+    if _stop_requested:
+        return True
+
+    parent = mp.parent_process()
+    return parent is not None and not parent.is_alive()
 
 
 def task_exists(taskid: int) -> bool:
     """Return true if the task exists in the database."""
-    try:
-        Task.objects.all().get(id=taskid)
-    except (ObjectDoesNotExist, IndexError):
-        return False
-
-    return True
+    # a slot polls this during an attempt that can last hours, so it is the place where a slot
+    # finds a connection that the database closed
+    replace_lost_connection()
+    return Task.objects.filter(id=taskid).exists()
 
 
 def remove_task_resultfiles(taskid: int, logfunc: t.Callable[[t.Any], None] = log_general) -> None:
@@ -314,16 +453,10 @@ def remote_result_filename(task) -> str | None:
 
     A task can produce several files, but this is the one that has to exist.
     """
-    if task.request_type == "FP":
-        return jobfilename(task.id, ".txt")
-    if task.request_type == "IMGZIP":
-        # the remote script names the zip after the data file it is given, which is uploaded under
-        # this task's own name below
-        return jobfilename(task.id, ".zip")
-    if task.request_type == "SSOSTACK":
-        return jobfilename(task.id, ".fits")
-
-    return None
+    # IMGZIP: the remote script names the zip after the data file that it gets, which runtask
+    # uploads under the name of this task
+    suffix = {"FP": ".txt", "IMGZIP": ".zip", "SSOSTACK": ".fits"}.get(task.request_type)
+    return None if suffix is None else jobfilename(task.id, suffix)
 
 
 def build_fp_command(task, remoteresultfile: Path) -> str:
@@ -362,7 +495,7 @@ def build_fp_command(task, remoteresultfile: Path) -> str:
 
     atlascommand += " | sort -n"
     atlascommand += f" | tee {remoteresultfile}; "
-    atlascommand += f"~/atlas_gettaskimage.py {remoteresultfile}"
+    atlascommand += f"{REMOTE_SCRIPT_RUNNER} ~/atlas_gettaskimage.py {remoteresultfile}"
     atlascommand += " red" if task.use_reduced else " diff"
 
     return atlascommand
@@ -383,7 +516,7 @@ def build_ssostack_command(task, remoteresultfile: Path, remotedatafile: Path, r
         atlascommand += " sites='hko mlo chl sth tdo'"
     atlascommand += f" | tee {remotedatafile}; "
     atlascommand += f" mv {remotetaskdir}/*.fits {remoteresultfile}; "
-    atlascommand += f"~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
+    atlascommand += f"{REMOTE_SCRIPT_RUNNER} ~/atlas_gettaskimage_ssostack.py {remoteresultfile}; "
     atlascommand += f" rm -rf {remotetaskdir}"
 
     return atlascommand
@@ -443,7 +576,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     if slotid is not None and sshoptions:
         open_ssh_master(slotid, sshoptions, logfunc)
 
-    remoteresultdir = Path("~/atlasserver/results/")
+    remoteresultdir = Path(REMOTE_RESULT_DIR)
     remotetaskdir = remoteresultdir / f"task{task.id:05d}"
     remoteresultfile = Path(remoteresultdir, filename)
     # the IMGZIP and SSOSTACK tasks use this file. The FP tasks do not use it.
@@ -452,7 +585,16 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
     localresultfile = Path(settings.RESULTS_DIR, filename)
     settings.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    atlascommand = f"nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
+    # The remote command writes the id of its session first, so that a cancel can stop it. Then it
+    # ends if a stop came before it started. See stop_remote_job. sshd makes the remote shell the
+    # leader of a new session, so $$ is that id.
+    token = uuid.uuid4().hex
+    pidfile = remote_pidfile(task.id, token)
+    stopfile = remote_stopfile(task.id, token)
+    atlascommand = (
+        f"echo $$ > {pidfile}; if [ -e {stopfile} ]; then rm -f {pidfile} {stopfile}; exit 143; fi; "
+        f"nice -n 19 timeout {TASK_MAXTIME_SECONDS:.1f}s "
+    )
     if task.request_type == "FP":
         atlascommand += build_fp_command(task, remoteresultfile=remoteresultfile)
 
@@ -475,7 +617,7 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             # instead of burning a remote run that is certain to fail
             return None, None
 
-        atlascommand += f"~/atlas_gettaskimages.py {remotedatafile}"
+        atlascommand += f"{REMOTE_SCRIPT_RUNNER} ~/atlas_gettaskimages.py {remotedatafile}"
         atlascommand += " red" if task.use_reduced else " diff"
 
     elif task.request_type == "SSOSTACK":
@@ -486,58 +628,81 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             remotetaskdir=remotetaskdir,
         )
 
+    # the exit status of the command of the task, and not of the removal of the pid file
+    atlascommand = f"{atlascommand.rstrip().rstrip(';')}; status=$?; rm -f {pidfile}; exit $status"
+
     logfunc(f"Executing on {REMOTE_SERVER}: {atlascommand}")
 
-    proc = subprocess.Popen(
-        ["ssh", *sshoptions, f"{REMOTE_SERVER}", atlascommand],
-        shell=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        encoding="utf-8",
-        # replace, not the default strict: one byte of non-UTF-8 in the remote output
-        # (a Latin-1 filename, a binary fragment on stderr) made communicate() raise
-        # UnicodeDecodeError out of the worker, which then died before mark_finished.
-        # The row keeps finishtimestamp NULL, so the task is dispatched again on every
-        # pass, forever, with no error_msg to say why.
-        errors="replace",
-        bufsize=1,
-        universal_newlines=True,
-    )
+    # From here, a stop signal waits for the poll loop below, which stops the remote command before
+    # the slot ends. The deferral starts before the launch: a signal between the launch and the
+    # loop would otherwise end the slot and leave the remote command running.
+    with stop_signals_deferred():
+        if _stop_requested:
+            # the signal came before the launch, so no remote command runs
+            return None, None
 
-    starttime = time.perf_counter()
-    lastlogtime = 0.0
-    lastcancelcheck = 0.0
-    cancelled = False
-    timed_out = False
-    while not cancelled and not timed_out:
-        try:
-            proc.communicate(timeout=1)
+        proc = subprocess.Popen(
+            ["ssh", *sshoptions, f"{REMOTE_SERVER}", atlascommand],
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            # replace, for the reason in run_rsync
+            errors="replace",
+        )
 
-        except subprocess.TimeoutExpired:
-            now = time.perf_counter()
-            # the cancellation check is a database query, and the 1s communicate() timeout used to
-            # run one per second per slot. Across 16 slots that was ~16 queries/sec forever, and a
-            # single task at the 4 hour limit issued over ten thousand of them. Cancelling a task
-            # that has already been running for minutes is not more urgent than this.
-            if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
-                lastcancelcheck = now
-                cancelled = not task_exists(taskid=task.id)
-            timed_out = (now - starttime) >= (
-                TASK_MAXTIME_SECONDS + 30
-            )  # give a little extra time for cleanup after timeout
-            if (now - lastlogtime) >= 10:
-                logfunc(f"ssh has been running for {now - starttime:.0f} seconds        ")
-                lastlogtime = now
-        else:
-            break
+        starttime = time.perf_counter()
+        lastlogtime = 0.0
+        lastcancelcheck = 0.0
+        cancelled = False
+        timed_out = False
+        stopping = False
+        while not cancelled and not timed_out and not stopping:
+            try:
+                proc.communicate(timeout=1)
 
-    if cancelled or timed_out:
-        if timed_out:
-            logfunc(f"ERROR: ssh was killed after exceeding TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds")
-        os.kill(proc.pid, SIGTERM)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
-        return None, None  # don't finish with an error message, because we'll retry it later
+            except subprocess.TimeoutExpired:
+                now = time.perf_counter()
+                # the cancellation check is a database query, and the 1s communicate() timeout used
+                # to run one per second per slot. Across 16 slots that was ~16 queries/sec forever,
+                # and a single task at the 4 hour limit issued over ten thousand of them. Cancelling
+                # a task that has already been running for minutes is not more urgent than this.
+                if (now - lastcancelcheck) >= CANCEL_CHECK_SECONDS:
+                    lastcancelcheck = now
+                    try:
+                        cancelled = not task_exists(taskid=task.id)
+                    except (DatabaseError, InterfaceError) as ex:
+                        # The slot continues to supervise the remote command, and it checks again
+                        # after the interval. If the slot ended here, the remote command would run
+                        # on, and a retry would start a second command that writes the same files.
+                        logfunc(f"ERROR: could not check if the task exists: {ex}")
+                # no query: a flag and a pipe of the parent process
+                stopping = attempt_must_stop()
+                timed_out = (now - starttime) >= (
+                    TASK_MAXTIME_SECONDS + 30
+                )  # give a little extra time for cleanup after timeout
+                if (now - lastlogtime) >= 10:
+                    logfunc(f"ssh has been running for {now - starttime:.0f} seconds        ")
+                    lastlogtime = now
+            else:
+                break
+
+        if cancelled or timed_out or stopping:
+            if timed_out:
+                logfunc(
+                    f"ERROR: ssh was killed after exceeding TASKMAXTIME limit of {TASK_MAXTIME_SECONDS:.0f} seconds"
+                )
+            elif stopping:
+                logfunc("The task runner stops, so this slot stops its attempt")
+            os.kill(proc.pid, SIGTERM)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=10)  # reap the process to avoid leaving a zombie
+
+            # The kill above stops only the local ssh client. At a timeout, the remote timeout
+            # stopped only the first command, and the commands after it can still run. A
+            # cancelled task has no row, so its files go too.
+            stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=cancelled)
+            return None, None  # don't finish with an error message, because we'll retry it later
 
     stdout, stderr = proc.communicate()
     logfunc(f"ssh finished after running for {time.perf_counter() - starttime:.1f} seconds")
@@ -547,6 +712,10 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         # already, empty, and collecting it would finish the task with "No data returned" for a
         # target that has data; a retry runs the command again
         logfunc("ERROR: the ssh connection failed, so the task will be retried")
+        # The remote command has no tty, so it continues without its connection. The retry would
+        # then run a second remote command that writes the same files. The stop fails while sc01
+        # is not reachable, and then the remote command runs to its end.
+        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=False)
         return None, None
 
     if stdout:
@@ -558,52 +727,31 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
             logfunc(f"{REMOTE_SERVER} STDERR: {line}")
 
     if not task_exists(taskid=task.id):  # check if the task was cancelled
+        # the remote command ended, and nothing collects its files
+        stop_remote_job(task.id, token, sshoptions, logfunc, delete_files=True)
         return None, None
 
-    # copy files from sc01 to local machine, deleting the remote files after successful copy
+    # Move the files of the task from sc01: pairs of the remote file and the local destination.
+    # rsync deletes each remote file after its copy.
     if task.request_type == "FP":
-        copycommands = [
-            # move the jpg task image from sc01 (deleting the remote file)
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(localresultfile)],
-            [
-                "rsync",
-                "--remove-source-files",
-                f"{REMOTE_SERVER}:{Path(remoteresultdir / filename).with_suffix('.jpg')}",
-                str(settings.RESULTS_DIR),
-            ],
-        ]
+        copies = [(remoteresultfile, localresultfile), (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR)]
     elif task.request_type == "SSOSTACK":
-        # move the stack *.fits, *.jpg and *.txt data from sc01 (deleting the remote files)
-        copycommands = [
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)],
-            [
-                "rsync",
-                "--remove-source-files",
-                f"{REMOTE_SERVER}:{Path(remoteresultfile).with_suffix('.jpg')}",
-                str(settings.RESULTS_DIR),
-            ],
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotedatafile}", str(settings.RESULTS_DIR)],
+        copies = [
+            (remoteresultfile, settings.RESULTS_DIR),
+            (remoteresultfile.with_suffix(".jpg"), settings.RESULTS_DIR),
+            (remotedatafile, settings.RESULTS_DIR),
         ]
     else:  # IMGZIP
-        # move the image zip from sc01 (deleting the remote file)
-        copycommands = [
-            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remoteresultfile}", str(settings.RESULTS_DIR)]
-        ]
-        # the data file is collected from the remote host too, so it does not accumulate there.
-        # Into the private input directory, never the results directory: the web server serves
-        # that one, and this file is a copy of a data file the parent may since have deleted.
+        # The data file comes back too, so it does not stay on the remote host. It goes into the
+        # private input directory, never the results directory: the web server serves that one,
+        # and this file is a copy of a data file that the parent may have deleted.
         settings.TASK_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
-        copycommands.append(
-            [
-                "rsync",
-                "--remove-source-files",
-                f"{REMOTE_SERVER}:{remotedatafile}",
-                str(task.inputfile()),
-            ]
-        )
+        copies = [(remoteresultfile, settings.RESULTS_DIR), (remotedatafile, task.inputfile())]
 
-    for copycommand in copycommands:
-        run_rsync(copycommand, logfunc, sshoptions)
+    for remotefile, destination in copies:
+        run_rsync(
+            ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(destination)], logfunc, sshoptions
+        )
 
     # got an error message (probably no observations in time range) and no fits file, but task is completed
     if task.request_type == "SSOSTACK" and (
@@ -729,19 +877,22 @@ def notify_finished(task, logfunc) -> None:
     send_email_if_needed(task=task, logfunc=logfunc)
 
 
-def send_email_if_needed(task, logfunc) -> None:
-    """Send an email to the user if requested and all tasks in the batch are finished."""
+def send_email_if_needed(task, logfunc) -> bool:
+    """Send an email to the user if requested and all tasks in the batch are finished.
+
+    Return True if this call sent the email.
+    """
     if not task.send_email:
         logfunc(f"Completed successfully ({task.user.username} did not request an email)")
-        return
+        return False
 
     if task.from_api:
         logfunc("Requested email for an API-originated task (not sending email)")
-        return
+        return False
 
     if not task.user.email:
         logfunc(f"Tasked completed ok, but user {task.user.username} has no email address!")
-        return
+        return False
 
     # if we find an unfinished task in the same batch, hold off sending the email.
     # same batch here is defined as being queued by the same user with identical timestamps
@@ -757,7 +908,7 @@ def send_email_if_needed(task, logfunc) -> None:
         if not batchtask.finishtimestamp and batchtask.id != task.id:
             batchtasks_unfinished += 1
         else:
-            localresultfile = localresultfileprefix(batchtask.id) + ".txt"
+            localresultfile = Path(settings.RESULTS_DIR, jobfilename(batchtask.id, ".txt"))
             strtask = (
                 f"Task {batchtask.id}: {batchtask.describe_target()} "
                 f"{'img_reduced' if batchtask.use_reduced else 'img_difference'} "
@@ -776,7 +927,7 @@ def send_email_if_needed(task, logfunc) -> None:
         # and thus only that slot sends the email.
         if not batchtasks.filter(email_sent=False).update(email_sent=True):
             logfunc("A different slot sends the email for this batch")
-            return
+            return False
 
         logfunc(f"Sending email to {task.user.email} containing {batchtaskcount} tasks")
 
@@ -787,22 +938,14 @@ def send_email_if_needed(task, logfunc) -> None:
             to=[task.user.email],
         )
 
+        # all the data files first, then the plots, while the total stays below 22 MB
         attach_size_mb = 0.0
-
-        for localresultfile in localresultfilelist:
-            if Path(localresultfile).exists():
-                filesize_mb = Path(localresultfile).stat().st_size / 1024.0 / 1024.0
+        for attachment in [*localresultfilelist, *(path.with_suffix(".pdf") for path in localresultfilelist)]:
+            if attachment.exists():
+                filesize_mb = attachment.stat().st_size / 1024.0 / 1024.0
                 if (attach_size_mb + filesize_mb) < 22:
                     attach_size_mb += filesize_mb
-                    message.attach_file(localresultfile)
-
-        for localresultfile in localresultfilelist:
-            pdfpath = Path(localresultfile).with_suffix(".pdf")
-            if pdfpath.exists():
-                filesize_mb = Path(pdfpath).stat().st_size / 1024.0 / 1024.0
-                if (attach_size_mb + filesize_mb) < 22:
-                    attach_size_mb += filesize_mb
-                    message.attach_file(str(pdfpath))
+                    message.attach_file(str(attachment))
 
         try:
             message.send()
@@ -811,11 +954,69 @@ def send_email_if_needed(task, logfunc) -> None:
             # a refused recipient or an unreachable mail server must not propagate: it would kill
             # the worker before the task is marked finished, and the task would be re-run forever
             logfunc(f"ERROR: could not send email to {task.user.email}: {ex}")
-    else:
-        logfunc(
-            f"Waiting to send email until remaining {batchtasks_unfinished} "
-            f"of {batchtaskcount} batched tasks are finished."
+            return False
+        return True
+
+    logfunc(
+        f"Waiting to send email until remaining {batchtasks_unfinished} of {batchtaskcount} batched tasks are finished."
+    )
+    return False
+
+
+def send_pending_batch_emails(logfunc=log_general, heartbeat: t.Callable[[], None] | None = None) -> int:
+    """Send the email of each batch whose last task went before it finished. Return the number of emails sent.
+
+    A slot sends the email of a batch when it finishes the last unfinished task of the batch; see
+    send_email_if_needed. When that task goes before it finishes (its user cancels it, or the
+    maintenance deletes it), no slot finishes the batch, and the email of the finished tasks does
+    not go. This step finds the batches with a finished task that has no email and with no
+    unfinished task, and sends their email. The email_sent marker of send_email_if_needed makes
+    sure that one batch gets one email, also when a slot finishes a task of it at the same time.
+
+    A task from before the email_sent field can have email_sent False for a batch that got its
+    email. Migration 0013 marked the finished tasks of each complete batch, so such a task does
+    not get a second email.
+
+    `heartbeat` is called before each send, as in remove_old_tasks: each send waits for the mail
+    server, and this runs in the main loop.
+    """
+    # a batch that still has an unfinished task gets its email when a slot finishes that task
+    unfinished = Task.objects.filter(
+        user_id=models.OuterRef("user_id"),
+        timestamp=models.OuterRef("timestamp"),
+        send_email=True,
+        finishtimestamp__isnull=True,
+    )
+    candidates = (
+        Task.live()
+        .filter(
+            send_email=True,
+            from_api=False,
+            email_sent=False,
+            finishtimestamp__isnull=False,
+            user__is_active=True,
         )
+        .exclude(user__email="")
+        .exclude(models.Exists(unfinished))
+        .select_related("user")
+        .order_by("user_id", "timestamp", "id")
+    )
+
+    # one email for each batch: MySQL has no DISTINCT ON, so the first task of each batch is kept here
+    batches: set[tuple[int, dt.datetime]] = set()
+    sent = 0
+    for task in candidates:
+        batch = (task.user_id, task.timestamp)
+        if batch in batches:
+            continue
+        batches.add(batch)
+
+        if heartbeat is not None:
+            heartbeat()
+        if send_email_if_needed(task=task, logfunc=logfunc):
+            sent += 1
+
+    return sent
 
 
 def next_task(running_taskids: t.Iterable[int], running_userids: t.Iterable[int]) -> Task | None:
@@ -1041,7 +1242,7 @@ def open_attempts(logfunc=log_general) -> list[EndedAttempt]:
     laststatus: dt.datetime | None = None
     try:
         laststatus = now - dt.timedelta(seconds=runnerstatus.read_status()[1])
-    except (OSError, KeyError, TypeError, ValueError):
+    except OSError, KeyError, TypeError, ValueError:
         logfunc("There is no status file of a task runner. An attempt with no end gets a record with no run time.")
 
     attempts: list[EndedAttempt] = []
@@ -1192,30 +1393,32 @@ def run_slot(task, slotid: int, endedwall: t.Any = None) -> None:
     The main loop recorded the start; see start_in_slot. The time of the end goes to the main
     loop through the shared double, also when the attempt stops with an exception; see SlotClock.
     """
+    # SIGINT and SIGHUP come from `atlastaskrunner stop` and `restart`, to each process of the
+    # session of the task runner. A slot that ends at once leaves its remote command running.
+    for stopsignal in (SIGHUP, SIGINT, SIGTERM):
+        signal(stopsignal, request_stop)
+
     try:
-        do_task(task, slotid, started=True)
+        with stop_signals_deferred():
+            do_task(task, slotid)
     finally:
         if endedwall is not None:
             endedwall.value = time.time()
 
 
-def do_task(task, slotid: int, started: bool = False) -> None:
+def do_task(task, slotid: int) -> None:
     """Run a task in a particular slot and send a result email if requested.
 
-    `started` is true when the caller has recorded the start of this attempt; see start_in_slot.
+    The caller recorded the start of this attempt; see start_in_slot.
     """
 
     def logfunc_slotonly(x) -> None:
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
 
     def logfunc(x) -> None:
-        log_general(f"slot {slotid:2d} task {task.id:05d}: {x}", suffix=f"_slot{slotid:02d}")
-
+        logfunc_slotonly(x)
         # also log to the main process
         log_general(f"slot {slotid:2d} task {task.id:05d}: {x}")
-
-    if not started:
-        mark_started(task)
 
     logfunc(f"Starting {'API' if task.from_api else 'web'} task for {task.user.username} ({task.user.email}):")
     for key, value in model_to_dict(task).items():
@@ -1228,6 +1431,14 @@ def do_task(task, slotid: int, started: bool = False) -> None:
     localresultfile, error_msg = runtask(task=task, logfunc=logfunc_slotonly, slotid=slotid)
 
     runtask_duration = time.perf_counter() - runtask_starttime
+
+    # Only an attempt with no result. A stop can come after the remote command ended, and then
+    # runtask collected a result that the code below records.
+    if localresultfile is None and error_msg is None and attempt_must_stop():
+        # runtask stopped the attempt and its remote command. The task stays unfinished with no
+        # retry wait, and the next task runner starts it again; see open_attempts.
+        logfunc("The attempt stopped because the task runner stops. The next task runner starts the task again.")
+        return
 
     if not task_exists(taskid=task.id):  # task was cancelled
         logfunc("Task was cancelled during execution (no longer in database)")
@@ -1434,9 +1645,9 @@ def remove_tasks_of_inactive_users(logfunc=log_general, heartbeat: t.Callable[[]
     The account stays in the database, and without this function its tasks stay in the queue.
     The queue order gives no position to a task of an inactive account, and thus the task runner
     does not start it (forcephot.queue.calculate_queue_positions). This function deletes those
-    tasks. The row of a task in a slot goes also. Its slot process keeps the slot until the end
-    of the attempt. It then finds no row, as for a task that its user deleted, and it removes
-    its result file.
+    tasks. The row of a task in a slot goes also. Its slot process finds no row in a maximum of
+    CANCEL_CHECK_SECONDS, as for a task that its user deleted. It then stops the remote command
+    and removes the result files.
 
     The finished tasks of the account stay. The other sweeps of the maintenance remove them at
     their usual age.
@@ -1518,6 +1729,10 @@ def do_maintenance(heartbeat: t.Callable[[], None] | None = None):
     removed = taskqueue.remove_old_usage_records()
     logfunc(f"Removed {removed} usage records that are older than {taskqueue.USAGE_RETENTION_DAYS} days")
 
+    # after the sweeps, because a sweep can delete the last unfinished task of a batch
+    batches = send_pending_batch_emails(logfunc=logfunc, heartbeat=heartbeat)
+    logfunc(f"Sent the email of {batches} batches whose last unfinished task went before it finished")
+
 
 def main() -> None:
     """Run queued tasks and clean up on old tasks."""
@@ -1525,8 +1740,7 @@ def main() -> None:
 
     runnerstatus.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    def logfunc(x):
-        log_general(x)
+    logfunc = log_general
 
     logfunc("Starting forcedphot task runner...")
     mp.set_start_method("spawn")
@@ -1582,6 +1796,10 @@ def main() -> None:
         # so the latency to pick up a new task is unchanged whenever the server is actually busy.
         time.sleep(IDLE_POLL_INTERVAL_SECONDS if printedwaiting else POLL_INTERVAL_SECONDS)
 
+        # Before the first query of the pass. After a restart of the database, the queries below
+        # otherwise raise on each pass, and the first one outside a try block stops main().
+        replace_lost_connection()
+
         if (time.perf_counter() - last_maintenancetime) > 60 * 60:  # once per hour
             last_maintenancetime = time.perf_counter()
             # the sweep blocks this loop, so it refreshes the status file itself; without that a
@@ -1620,7 +1838,7 @@ def main() -> None:
                 if dispatch_waits_since is None:
                     dispatch_waits_since = time.perf_counter()
 
-                numslotsfree = sum(1 if p is None else 0 for p in procs)
+                numslotsfree = procs.count(None)
                 logfunc(f"slot {slotid} is now free. {numslotsfree} of {numslots} slots are available")
 
         # Renumbering belongs here rather than in the submitting request: this loop is the only
@@ -1693,11 +1911,10 @@ def main() -> None:
             logfunc("WARNING: the queue positions are old, and the task runner starts tasks with them")
             dispatch_waits_since = None
 
-        slotid = procs.index(None) if None in procs else -1
-
-        if slotid < 0:
+        if None not in procs:
             # every slot is busy, so there is nothing to dispatch and no reason to look at the queue
             continue
+        slotid = procs.index(None)
 
         # one query rather than a count() followed by a first(): the count was only used for a log
         # line, and is fetched below only when a task is actually dispatched

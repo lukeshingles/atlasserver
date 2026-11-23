@@ -1,21 +1,4 @@
-"""atlasserver URL Configuration.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.1/topics/http/urls/
-
-Examples
---------
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-
-"""
+"""The URL configuration of the forcephot app: the task API, the account pages, and the stats and result views."""
 
 from django.conf import settings
 from django.contrib import admin
@@ -29,23 +12,24 @@ from rest_framework import routers
 
 from atlasserver.forcephot import queue as taskqueue
 from atlasserver.forcephot import views
+from atlasserver.forcephot.forms import ThrottledAdminPasswordChangeForm
 from atlasserver.forcephot.login import ObtainAuthTokenThrottled
 from atlasserver.forcephot.login import ThrottledAdminAuthenticationForm
 from atlasserver.forcephot.login import ThrottledLoginView
+from atlasserver.forcephot.login import ThrottledPasswordChangeView
 from atlasserver.taskrunner import status as runnerstatus
 
-# Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
 router.register(r"queue", views.ForcePhotTaskViewSet)
 
 admin.site.site_url = f"{settings.PATHPREFIX}/"
 # read at request time by AdminSite.login, so the admin's password check shares the budget
 admin.site.login_form = ThrottledAdminAuthenticationForm
+# likewise read at request time by AdminSite.password_change
+admin.site.password_change_form = ThrottledAdminPasswordChangeForm
 admin.site.site_header = "ATLAS Forced Photometry Admin"
 admin.site.site_title = "ATLAS Forced Photometry"
 
-# Wire up our API using automatic URL routing.
-# Additionally, we include login URLs for the browsable API.
 # The numbers in the text about the queue on the FAQ page and in the API guide, from the constants
 # that the queue uses.
 QUEUE_CONTEXT = {
@@ -66,6 +50,7 @@ urlpatterns = [
     path("password_reset/", views.SiteOriginPasswordResetView.as_view(), name="password_reset"),
     # likewise before django.contrib.auth.urls: the stock view has no limit on password guesses
     path("login/", ThrottledLoginView.as_view(), name="login"),
+    path("password_change/", ThrottledPasswordChangeView.as_view(), name="password_change"),
     path("emailchange/", views.change_email, name="email_change"),
     path("apitoken/", views.api_token, name="apitoken"),
     path("verify/<uidb64>/<token>/", views.verify_email, name="verify_email"),

@@ -1,17 +1,18 @@
 import typing as t
-from collections import OrderedDict
 from typing import override
 
 from django.core.exceptions import ValidationError
-from django.db.models import QuerySet
 from rest_framework.exceptions import NotFound
 from rest_framework.pagination import _reverse_ordering
 from rest_framework.pagination import CursorPagination
-from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.utils.urls import remove_query_param
 
-from atlasserver.forcephot.models import Task
+if t.TYPE_CHECKING:
+    from django.db.models import QuerySet
+    from rest_framework.request import Request
+
+    from atlasserver.forcephot.models import Task
 
 
 class TaskPagination(CursorPagination):
@@ -74,7 +75,6 @@ class TaskPagination(CursorPagination):
             queryset = queryset.order_by(*self.ordering)
 
         self.previous_is_top = False
-        self.pagefirsttaskposition = 0
 
         order = self.ordering[0]
         is_reversed = order.startswith("-")
@@ -213,14 +213,12 @@ class TaskPagination(CursorPagination):
     @override
     def get_paginated_response(self, data: t.Any, headers: dict[str, str] | None = None) -> Response:
         return Response(
-            OrderedDict(
-                [
-                    ("next", self.get_next_link()),
-                    ("previous", self.get_previous_link()),
-                    ("pagefirsttaskposition", self.pagefirsttaskposition),
-                    ("taskcount", self.querysetcount),
-                    ("results", data),
-                ]
-            ),
+            {
+                "next": self.get_next_link(),
+                "previous": self.get_previous_link(),
+                "pagefirsttaskposition": self.pagefirsttaskposition,
+                "taskcount": self.querysetcount,
+                "results": data,
+            },
             headers=headers,
         )

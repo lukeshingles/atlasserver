@@ -1,17 +1,16 @@
-import datetime as dt
-import logging
+import contextlib
 import multiprocessing
 import typing as t
-from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import override
 
 import fundamentals.logs
 import julian
 import pycountry
 from astrocalc.coords.unit_conversion import unit_conversion
-from django.http import Http404
-from django.utils.log import AdminEmailHandler
+
+if t.TYPE_CHECKING:
+    import datetime as dt
+    from multiprocessing.process import BaseProcess
 
 # How long a forked PDF render may run before it is killed. Generous: a large result file
 # legitimately takes a while, and the point is to bound a hang, not to police slow plots.
@@ -154,71 +153,35 @@ def resultplotdatajs_cachekey(taskid: int) -> str:
     return f"task{taskid}_resultplotdatajs_v3"
 
 
+def pdfplot_failed_cachekey(taskid: int) -> str:
+    """Return the cache key that records a PDF render of the task that made no file."""
+    return f"task{taskid}_pdfplot_failed_v1"
+
+
 def datetime_to_mjd(dtime: dt.datetime) -> float:
     return julian.to_jd(dtime) - 2400000.5
 
 
-def make_pdf_plot_worker(
-    localresultfile: Path,
-    taskid: int,
-    logprefix: str = "",
-    logfunc: t.Callable[[t.Any], t.Any] | None = None,
-    outputpath: Path | None = None,
-) -> Path | None:
+def make_pdf_plot_worker(localresultfile: Path, taskid: int, outputpath: Path) -> None:
+    """Render the PDF plot of a task's result file at outputpath, in the child process of make_pdf_plot.
+
+    The caller checks for the file, so a failed render only leaves no file there.
+    """
     # deferred: plot_atlas_fp imports matplotlib, and matplotlib imports numpy. This function only
-    # ever runs in the process forked by make_pdf_plot (or in the task runner's own per-task
-    # process), so a module-scope import would put both of them permanently in every web worker
-    # instead -- misc is imported by views for splitradeclist and the country helpers.
+    # runs in the process that make_pdf_plot starts. A module-scope import would put both of them
+    # in each web worker, because views imports misc for splitradeclist and the country helpers.
     from atlasserver import plot_atlas_fp
 
-    localresultdir = localresultfile.parent
-    pdftitle = f"Task {taskid}"
-
-    localresultfiles = [Path(localresultfile)]
-    # outputpath lets the caller render somewhere private and publish the result itself. The
-    # default -- the result file's own name with a .pdf suffix -- is what the task runner wants,
-    # since it is already the only writer for that task.
-    plotfilepaths_requested = (
-        [outputpath] if outputpath is not None else [f.with_suffix(".pdf") for f in localresultfiles]
-    )
-
-    plotfilepaths = None
-    try:
-        myplotter = plot_atlas_fp.plotter(
+    # plot_atlas_fp is vendored third-party code run against a user-supplied file: anything it
+    # raises has to become a failed render, not a failed request. The caller then finds no file.
+    with contextlib.suppress(Exception):
+        plot_atlas_fp.plotter(
             log=fundamentals.logs.emptyLogger(),
-            resultFilePaths=localresultfiles,
-            outputPlotPaths=plotfilepaths_requested,
-            objectName=pdftitle,
+            resultFilePaths=[Path(localresultfile)],
+            outputPlotPaths=[outputpath],
+            objectName=f"Task {taskid}",
             plotType="pdf",
-        )
-
-        plotfilepaths = myplotter.plot()
-
-    except Exception as ex:  # noqa: BLE001 (plot_atlas_fp is vendored third-party code run
-        # against a user-supplied file: anything it raises has to become a failed render, not
-        # a failed request)
-        if logfunc:
-            logfunc(f"{logprefix}ERROR: plot_atlas_fp caused exception: {ex}")
-        plotfilepaths = [None for _ in plotfilepaths_requested]
-
-    localresultfile, plotfilepath, plotfilepath_requested = (
-        localresultfiles[0],
-        plotfilepaths[0],
-        plotfilepaths_requested[0],
-    )
-
-    if plotfilepath_requested.exists():
-        if logfunc:
-            relplotpath = plotfilepath_requested.relative_to(localresultdir)
-            if plotfilepath == plotfilepath_requested:
-                logfunc(f"{logprefix}Created plot file {relplotpath}")
-            else:
-                logfunc(f"{logprefix}plot_atlas_fp returned an error but the PDF file {relplotpath} exists")
-        return plotfilepath_requested
-
-    if logfunc:
-        logfunc(f"{logprefix}Failed to create PDF plot from {Path(localresultfile).relative_to(localresultdir)}")
-    return None
+        ).plot()
 
 
 def run_process_with_timeout(proc: BaseProcess, timeout: float) -> bool:
@@ -248,8 +211,7 @@ def make_pdf_plot(*args, timeout: float = PDF_PLOT_TIMEOUT_SECONDS, **kwargs) ->
     user-supplied result file, and an unbounded join() here holds a mod_wsgi worker thread for as
     long as it takes, so enough slow plots exhaust the pool.
     """
-    # every argument is pickled to reach the spawned child, which is why no caller passes a logfunc
-    # on this path: a bound method or a closure would not survive the trip.
+    # every argument is pickled to reach the spawned child
     proc = PLOT_PROCESS_CONTEXT.Process(target=make_pdf_plot_worker, args=args, kwargs=kwargs)
     return run_process_with_timeout(proc, timeout)
 
@@ -291,21 +253,3 @@ def country_region_to_name(country_code, region_code):
             region_name = subdiv.name
 
     return f"{region_name}, {country_code_to_name(country_code)}"
-
-
-class AdminEmailHandlerNo404(AdminEmailHandler):
-    """Custom Handler that ignores 404 errors instead of sending them by email."""
-
-    @override
-    def handle(self, record: logging.LogRecord) -> bool:
-        """Return whether the record was emitted, as Handler.handle does.
-
-        The base returns a bool and callers may read it; returning None said "not emitted" even
-        when it had been.
-        """
-        if record.exc_info:
-            _exc_type, exc_value, _tb = record.exc_info
-            if isinstance(exc_value, Http404):
-                return False
-
-        return super().handle(record)

@@ -2,7 +2,8 @@
 
 Each applies the failed-login budget of throttles, which counts wrong passwords per client address
 and refuses the check itself once the address is over budget. A Basic header on any API view is
-metered there too, by ThrottledBasicAuthentication.
+metered there too, by ThrottledBasicAuthentication. The page that changes the password of a
+signed-in account uses the budget of that account (ThrottledPasswordChangeView).
 """
 
 import typing as t
@@ -12,20 +13,28 @@ from django import forms
 from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.views import LoginView
-from django.http import HttpResponse
+from django.contrib.auth.views import PasswordChangeView
+from django.core.exceptions import NON_FIELD_ERRORS
 from django.views.decorators.debug import sensitive_variables
 from rest_framework import serializers
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.exceptions import Throttled
-from rest_framework.request import Request
-from rest_framework.response import Response
 
+from atlasserver.forcephot.forms import ThrottledPasswordChangeForm
 from atlasserver.forcephot.throttles import ForcedPhotRateThrottle
 from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
 from atlasserver.forcephot.throttles import login_failures_exceeded
 from atlasserver.forcephot.throttles import LOGIN_LIMIT_MESSAGE
 from atlasserver.forcephot.throttles import note_login_failure
 from atlasserver.forcephot.throttles import password_was_wrong
+
+if t.TYPE_CHECKING:
+    # only for the annotations. FormView has no __class_getitem__, so FormView[t.Any] is correct
+    # only because Python evaluates an annotation when a program reads it, and no code reads it.
+    from django.http import HttpResponse
+    from django.views.generic.edit import FormView
+    from rest_framework.request import Request
+    from rest_framework.response import Response
 
 
 class LoginFailureLimitMixin(AuthenticationForm):
@@ -52,7 +61,7 @@ class LoginFailureLimitMixin(AuthenticationForm):
 
     def password_was_wrong(self) -> bool:
         """Return whether the refusal was for the password; see throttles.password_was_wrong."""
-        if getattr(self, "user_cache", None) is not None:
+        if self.user_cache is not None:
             # the password checked out, and the account was refused after that
             return False
 
@@ -67,19 +76,38 @@ class ThrottledAdminAuthenticationForm(LoginFailureLimitMixin, AdminAuthenticati
     """The admin login's form; the admin reads site.login_form at request time."""
 
 
+def throttled_form_invalid(view: FormView[t.Any], form: forms.BaseForm, field: str) -> HttpResponse:
+    """Render the invalid form of a view. Answer a form that a budget refused with 429 and a Retry-After.
+
+    `field` is the field that carries the error with the code "throttled". A 429 with a Retry-After
+    is the answer of each other limit too.
+    """
+    refused = form.has_error(field, code="throttled")
+    response = view.render_to_response(view.get_context_data(form=form), status=429 if refused else 200)
+    if refused:
+        response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+
+    return response
+
+
 class ThrottledLoginView(LoginView):
-    """Django's login page, answering a refused check with 429 and a Retry-After like every other limit."""
+    """Django's login page, with the failed-login budget of the client address."""
 
     authentication_form = ThrottledAuthenticationForm
 
     @override
     def form_invalid(self, form: AuthenticationForm) -> HttpResponse:
-        refused = any(error.code == "throttled" for error in form.non_field_errors().as_data())
-        response = self.render_to_response(self.get_context_data(form=form), status=429 if refused else 200)
-        if refused:
-            response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+        return throttled_form_invalid(self, form, NON_FIELD_ERRORS)
 
-        return response
+
+class ThrottledPasswordChangeView(PasswordChangeView):
+    """Django's page to change the password, with the failed-password budget of the account."""
+
+    form_class = ThrottledPasswordChangeForm
+
+    @override
+    def form_invalid(self, form: forms.Form) -> HttpResponse:
+        return throttled_form_invalid(self, form, "old_password")
 
 
 class ObtainAuthTokenThrottled(ObtainAuthToken):

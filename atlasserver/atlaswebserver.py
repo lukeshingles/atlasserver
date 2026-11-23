@@ -86,21 +86,31 @@ def get_httpd_pid() -> int | None:
     try:
         pid = int(pidfile.read_text(encoding="utf-8").strip())
     except ValueError:
-        # a file truncated by an unclean exit, which says nothing about what is running. Reported
+        # A file truncated by an unclean exit, which says nothing about what is running. Reported
         # rather than raised: every command here begins by asking whether the server is up, so an
-        # exception makes the whole tool unusable until the file is removed by hand.
-        print(f"Ignoring unreadable pid file {pidfile}")
+        # exception makes the whole tool unusable until the file is removed by hand. Removed, as
+        # below, because httpd itself refuses to start while the file is corrupt.
+        print(f"Removing unreadable pid file {pidfile}")
+        pidfile.unlink(missing_ok=True)
         return None
 
     if our_httpd_process(pid) is not None:
         return pid
 
-    # Removed only once nothing holds that number at all. A process that is there but could not be
-    # identified is either a reused pid, where a leftover file is harmless because nothing believes
-    # it, or a running server this user is not allowed to inspect -- and deleting the file in that
-    # case throws away the only pointer to a live process.
-    if not psutil.pid_exists(pid):
-        pidfile.unlink()
+    # The number names no process of this server, so the file goes. httpd reads the same file at
+    # `httpd -k start`. For a live process of this user, it reports "already running" and starts
+    # nothing, so a reused pid stops each later start. The file stays only when the process is
+    # there and this user cannot inspect it: that process can be a running server, and the file is
+    # then the only pointer to it.
+    try:
+        psutil.Process(pid).cmdline()
+    except psutil.AccessDenied:
+        return None
+    except psutil.Error:
+        # no such process, or a zombie: nothing that runs holds the number
+        pass
+
+    pidfile.unlink(missing_ok=True)
 
     return None
 
@@ -109,7 +119,7 @@ def get_httpd_pid() -> int | None:
 START_ATTEMPTS = 30
 
 
-def run_command(commands: list[str], print_output: bool = True) -> int:
+def run_command(commands: list[str]) -> int:
     """Run a command and print the output."""
     proc = subprocess.Popen(
         commands,
@@ -121,12 +131,12 @@ def run_command(commands: list[str], print_output: bool = True) -> int:
         universal_newlines=True,
     )
 
-    if print_output and proc.stdout is not None:
+    if proc.stdout is not None:
         for line in iter(proc.stdout.readline, ""):
             print(line, end="")
 
     stdout, _stderr = proc.communicate()
-    if print_output and stdout:
+    if stdout:
         print(stdout, end="")
     assert proc.returncode is not None
     return proc.returncode

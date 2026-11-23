@@ -21,12 +21,11 @@
 // * jslabels - an array of labels - the same length as the array of filters - e.g.
 //              jslabels.push("g");
 //
-// * jslclimits - a dictionary of limit values, currently xmin, xmax, ymin, ymax,
-//                discoveryDate and today.
+// * jslclimits - a dictionary of limit values: xmin, xmax, ymin and ymax.
 
 // First of all, setup some global variable based on data min and max to
-// setup the padding on the graph and the x2 axis. This is done here, rather
-// than in the calling page, because the padding, etc is presentation specific.
+// setup the padding on the graph. This is done here, rather than in the
+// calling page, because the padding, etc is presentation specific.
 
 // GLOBAL VARIABLES BEGIN
 
@@ -39,7 +38,6 @@
 
     // Need to set the div ID from the global data
     var locallcdivname = lcdivname;
-    //var lightcurve = $(locallcdivname);
 
     var divid = locallcdivname.replace('#', '');
     var plotdiv = document.getElementById(divid);
@@ -54,16 +52,11 @@
 
     var limits = jslimitsglobal[locallcdivname];
 
-    // Five percent of the plotted span on each side. The upper axis counts days since discovery
-    // and overlays the lower one, so the two ranges must cover the same span of time: the upper
-    // one used to run to today where the lower one ran to the last point, and its labels then
-    // stood against the wrong points.
+    // Five percent of the plotted span on each side.
     var pad = 20.0; // i.e. 5 percent
     var xpadding = (limits["xmax"] - limits["xmin"]) / pad;
     var xmin = limits["xmin"] - xpadding;
     var xmax = limits["xmax"] + xpadding;
-    var x2min = xmin - limits["discoveryDate"];
-    var x2max = xmax - limits["discoveryDate"];
     var ymin = jslimitsglobal[locallcdivname]["ymin"];
     var ymax = jslimitsglobal[locallcdivname]["ymax"];
 
@@ -105,14 +98,10 @@
     /*
     The unit the visitor has selected, which the queue page writes onto the plot div.
 
-    The name of the div is the default, so a page that does not offer the button plots what it
-    always plotted.
+    Flux is the default, so a plot that has no unit on its div plots in flux.
     */
     function selectedunit() {
-        if (plotdiv.dataset.unit === 'mag' || plotdiv.dataset.unit === 'flux') {
-            return plotdiv.dataset.unit;
-        }
-        return locallcdivname.includes("flux") ? 'flux' : 'mag';
+        return plotdiv.dataset.unit === 'mag' ? 'mag' : 'flux';
     }
 
     /*
@@ -364,19 +353,6 @@
             // labels, because the plot height is fixed and Plotly does not expand a set margin.
             margin: { l: 70, r: 0, b: 50, t: 30 },
             height: lcplotheight,
-        }
-
-        // 2018-10-11 KWS Add another x axis if not forced photometry
-        if (!(locallcdivname.includes("forced"))) {
-            layout["xaxis2"] = Object.assign({
-                tickformat: ".0f",
-                overlaying: "x",
-                zeroline: false,
-                side: "top",
-                hoverformat: ".5f",
-                range: [x2min, x2max],
-                title: { text: "days since earliest detection" }
-            }, theme.axis)
         }
 
         /*

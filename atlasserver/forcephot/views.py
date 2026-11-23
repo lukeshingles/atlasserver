@@ -25,6 +25,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.hashers import check_password
 from django.contrib.auth.views import PasswordResetView
 from django.contrib.gis.geoip2 import GeoIP2
 from django.contrib.gis.geoip2 import GeoIP2Exception
@@ -49,6 +50,7 @@ from django.utils.cache import get_conditional_response
 from django.views.decorators.cache import cache_control
 from django.views.decorators.cache import cache_page
 from django.views.decorators.cache import never_cache
+from django.views.decorators.debug import sensitive_post_parameters
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import OpenApiParameter
@@ -64,10 +66,8 @@ from rest_framework import viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.renderers import JSONRenderer
-from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from rest_framework.serializers import BaseSerializer
 from rest_framework.utils.urls import replace_query_param
 from rest_framework.views import APIView
 
@@ -76,11 +76,12 @@ from atlasserver.forcephot.forms import email_is_taken
 from atlasserver.forcephot.forms import EmailChangeForm
 from atlasserver.forcephot.forms import RegistrationForm
 from atlasserver.forcephot.forms import ResendVerificationForm
+from atlasserver.forcephot.forms import unverified_accounts_at
 from atlasserver.forcephot.locks import try_lock
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import country_region_to_name
-from atlasserver.forcephot.misc import datetime_to_mjd
 from atlasserver.forcephot.misc import make_pdf_plot
+from atlasserver.forcephot.misc import pdfplot_failed_cachekey
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
 from atlasserver.forcephot.misc import splitradeclist
 from atlasserver.forcephot.models import PendingEmailVerification
@@ -97,7 +98,12 @@ from atlasserver.forcephot.queue import user_usage_seconds
 from atlasserver.forcephot.queue import utcnow
 from atlasserver.forcephot.serializers import ForcePhotTaskSerializer
 from atlasserver.forcephot.serializers import stack_requests_allowed
+from atlasserver.forcephot.throttles import ACCOUNT_GUESS_LIMIT_MESSAGE
+from atlasserver.forcephot.throttles import account_password_failures_exceeded
+from atlasserver.forcephot.throttles import client_key
 from atlasserver.forcephot.throttles import count_in_window
+from atlasserver.forcephot.throttles import LOGIN_FAILURE_WINDOW_SECONDS
+from atlasserver.forcephot.throttles import note_account_password_failure
 from atlasserver.forcephot.throttles import take_send_permit
 from atlasserver.forcephot.verification import load_email_change_token
 from atlasserver.forcephot.verification import send_email_change_confirmation
@@ -111,6 +117,10 @@ from atlasserver.forcephot.webhooks import callback_urls_validated_once
 # multiprocessing into every web worker, permanently, to read two constants
 from atlasserver.taskrunner import status as runnerstatus
 
+if t.TYPE_CHECKING:
+    from rest_framework.request import Request
+    from rest_framework.serializers import BaseSerializer
+
 MAX_USER_IMGZIP_TASKS = 5
 MAX_USER_TASKS = 500
 
@@ -119,6 +129,12 @@ RESEND_VERIFICATION_INTERVAL_SECONDS: t.Final = 60
 
 # The same, for the address-change confirmations one account can ask for. See change_email.
 EMAIL_CHANGE_INTERVAL_SECONDS: t.Final = 60
+
+# Submissions of the address change form allowed from one account per window, valid or not. The
+# answer "an account with that address exists" comes only from a form that is not valid, so the
+# send interval above does not meter it. See change_email.
+EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS: t.Final = 600
+EMAIL_CHANGE_ATTEMPT_LIMIT: t.Final = 10
 
 # None of the limiters below is a mutual exclusion. The production cache is file-based, where
 # add() is has_key() followed by set() and a read-modify-write is not atomic either, so two
@@ -148,6 +164,11 @@ PASSWORD_RESET_INTERVAL_SECONDS: t.Final = 60
 # single-threaded workers: without a total, a few tasks with no .pdf yet could take every worker.
 # Named slots, each one lock (see forcephot.locks), rather than a counter.
 PDF_PLOT_RENDER_SLOTS: t.Final = 2
+
+# How long a render that made no PDF stops a new render of the same task. The view needs no
+# credentials, so without this time each request for such a task starts a new render. Limited and
+# not permanent, so that a change to plot_atlas_fp gets a new render in a maximum of one day.
+PDF_PLOT_FAILURE_SECONDS: t.Final = 60 * 60 * 24
 
 logger = logging.getLogger(__name__)
 
@@ -207,11 +228,11 @@ def origin_only_referrer(view):
 def path_only(view):
     """Redirect a request that carries a query string to the bare path, before the page cache.
 
-    For the chart endpoints, which read no parameter and cost a table scan and a bokeh figure to
-    build. cache_page keys its entries on the full URL, query string included, so every distinct
-    query string was a cache miss and a full rebuild, and a loop of them could occupy every worker
-    and cull the cache directory. The redirect costs nothing, and the bare path is what the stats
-    page requests.
+    For the stats endpoints: the two charts and the two fragments of the stats page. They read no
+    parameter, and each costs large queries to build. cache_page keys its entries on the full URL,
+    query string included. Without this redirect, each distinct query string is a cache miss and a
+    full rebuild, and a loop of them can occupy each worker and cull the cache directory. The
+    redirect costs nothing, and the bare path is what the stats page requests.
     """
 
     @functools.wraps(view)
@@ -355,7 +376,7 @@ def client_location_fields(request) -> dict[str, str | None]:
         # or most IPv6). Routine, and silent for that reason: logging it would put a line in the
         # log for a share of perfectly ordinary submissions and bury the failures below in them
         return fields
-    except (GeoIP2Exception, GeoIP2Error, InvalidDatabaseError, OSError):
+    except GeoIP2Exception, GeoIP2Error, InvalidDatabaseError, OSError:
         # the database is missing, unreadable or corrupt (OSError covers the stat in geoip_reader,
         # which is where a deleted file surfaces). Unlike the case above this is a real fault, so
         # it is reported at error level, where the "atlasserver" logger writes it to the log file.
@@ -440,7 +461,11 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
         if not request.user.is_authenticated or self.request.user.pk is None:
             raise PermissionDenied
 
-        usertaskcount = Task.live().filter(starttimestamp__isnull=True, user_id=self.request.user.pk).count()
+        # Each unfinished task of the user, and not only the tasks that did not start: a task in a
+        # slot and a task that waits for a new attempt both have a start time. During an outage of
+        # the remote host each attempt fails quickly, and a count of the tasks with no start then
+        # falls to near zero, so the limit stops nothing.
+        usertaskcount = Task.queued().filter(user_id=self.request.user.pk).count()
 
         # Each callback URL is resolved once for the whole submission: splitradeclist validates
         # every row, and the serializer validates the list again. See webhooks._validated_urls.
@@ -461,7 +486,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
             if usertaskcount + newtaskcount > MAX_USER_TASKS:
                 msg = (
-                    f"ERROR: You have too many queued tasks ({usertaskcount} queued"
+                    f"ERROR: You have too many unfinished tasks ({usertaskcount} unfinished"
                     f" + {newtaskcount} requested > {MAX_USER_TASKS})."
                 )
                 raise serializers.ValidationError({"non_field_errors": msg})
@@ -473,9 +498,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
     @override
     def perform_create(self, serializer: BaseSerializer[Task], usertaskcount: int) -> None:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        """Create new task(s). create() passes the count of queued tasks it has made for its limit."""
-        usertaskcount_before = usertaskcount
-
+        """Create new task(s). create() passes the count of unfinished tasks that it made for its limit."""
         extra_fields: dict[str, Any] = {
             "user": self.request.user,
             "timestamp": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
@@ -506,7 +529,7 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             # set on the instances as well as written, so that the response serialises the values
             # without a reload per task: a radeclist can hold 100 targets
             for i, task in enumerate(newtasks):
-                task.userqueuedtasks_on_submit = usertaskcount_before + i
+                task.userqueuedtasks_on_submit = usertaskcount + i
                 task.queuepos_relative = nextqueuepos + i
                 # a row inserted a moment ago has no image requests, so the response need not ask
                 task.prefetched_imagerequests = []
@@ -515,13 +538,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
             Task.objects.bulk_update(newtasks, ["userqueuedtasks_on_submit", "queuepos_relative"])
 
         request_queue_recalc()
-
-    @override
-    def perform_update(self, serializer: BaseSerializer[Task]) -> None:
-        """Update a task."""
-        # don't pass user=request.user here: a staff user editing someone else's task would
-        # otherwise take ownership of it
-        serializer.save()
 
     @override
     def perform_destroy(self, instance: Task) -> None:
@@ -538,11 +554,13 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
     # through.
     def list(self, request: Request, *args: t.Any, **kwargs: t.Any):
         """List tasks belonging to the current user."""
-        if request.user.is_authenticated:
-            listqueryset = self.filter_queryset(self.get_queryset().filter(is_archived=False, user=request.user))
-        else:
-            listqueryset = Task.objects.none()
+        # an int after this check, which get_tasklist_etag needs
+        userpk = request.user.pk if request.user.is_authenticated else None
+        if userpk is None:
             raise PermissionDenied
+
+        # get_queryset is Task.live(), so the archived tasks are not in it
+        listqueryset = self.filter_queryset(self.get_queryset().filter(user_id=userpk))
 
         if request.accepted_renderer.format == "html":
             # only what the template reads: it builds its URLs and its user id itself. A COUNT
@@ -554,12 +572,6 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
 
         # answer a conditional request before paginating: an unchanged page then costs one
         # aggregate instead of a count, a page fetch, a prefetch and a full serialisation.
-        # the anonymous case raised PermissionDenied above, so this is set -- stated as a check
-        # rather than a comment, because get_tasklist_etag would otherwise take an Optional
-        userpk = request.user.pk
-        if userpk is None:
-            raise PermissionDenied
-
         # one aggregate for the entity-tag and the serializer both
         queueoffset = Task.min_queuepos_relative()
         etag = get_tasklist_etag(request, userpk, min_queuepos_relative=queueoffset)
@@ -642,8 +654,6 @@ class RequestImages(APIView):
         """
         # ForcePhotPermission refuses an anonymous POST before this runs; the object check below
         # applies the ownership rule
-        redirurl = reverse("task-list")
-
         # The parent row is locked for the whole transaction: two overlapping requests cannot both
         # find no live image request, and Task.delete takes the same lock, so a delete of the
         # parent waits for the copy of its data file rather than reclaiming the file under it.
@@ -1092,6 +1102,7 @@ def statsusagechart(request):
     return JsonResponse({"item": json_item(plot)})
 
 
+@path_only
 @cache_page(60 * 60 * 4, cache="usagestats")
 def statslongterm(request):
     dictparams: dict[str, t.Any] = {}
@@ -1152,6 +1163,7 @@ def percentile(ordered: Sequence[float], fraction: float) -> float | None:
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
+@path_only
 @cache_page(60 * 15, cache="usagestats")
 def statsshortterm(request):
     now = utcnow()
@@ -1558,7 +1570,7 @@ class SiteOriginPasswordResetView(PasswordResetView):
 
         Counted before the form is bound, so that a rejected submission spends it too.
         """
-        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+        clientkey = client_key(request)
         attempts = count_in_window(f"passwordreset-{clientkey}", PASSWORD_RESET_WINDOW_SECONDS)
 
         if attempts > PASSWORD_RESET_WINDOW_LIMIT:
@@ -1595,7 +1607,7 @@ class SiteOriginPasswordResetView(PasswordResetView):
 
 def register(request):
     if request.method == "POST":
-        clientkey = hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
+        clientkey = client_key(request)
 
         # Counted before the form is bound, so that a rejected submission spends it too; see
         # REGISTRATION_ATTEMPT_LIMIT for why the answer to a rejected one has to be metered.
@@ -1651,6 +1663,25 @@ def register(request):
             # (nothing was sent) or recover (password reset skips inactive users).
             try:
                 with transaction.atomic():
+                    # An account that waits for the confirmation of this address gives way to
+                    # this one; see RegistrationForm.clean_email. Its verification link then
+                    # stops working, because the link names an account that does not exist.
+                    #
+                    # The rows of the accounts are locked first, and is_active is read again
+                    # under the lock. verify_email locks the same row before it activates the
+                    # account. Without the lock, the delete can read the id of an inactive
+                    # account, wait for the activation, and then delete an account whose owner
+                    # verified it. Only the rows of auth_user are locked, in the order that
+                    # verify_email also uses.
+                    candidates = list(unverified_accounts_at(form.cleaned_data["email"]).values_list("pk", flat=True))
+                    replaced = list(
+                        get_user_model()
+                        .objects.select_for_update()
+                        .filter(pk__in=candidates, is_active=False)
+                        .values_list("pk", flat=True)
+                    )
+                    get_user_model().objects.filter(pk__in=replaced).delete()
+
                     user = form.save(commit=False)
                     user.is_active = False
                     user.save()
@@ -1714,16 +1745,12 @@ def awaiting_verification(user) -> bool:
 
 def unverified_account_for(email: str):
     """Return the account awaiting verification at this address, or None."""
-    return (
-        # the queryset spelling of awaiting_verification()
-        get_user_model()
-        .objects.filter(email__iexact=email, is_active=False, pending_verification__isnull=False)
-        .order_by("pk")
-        .first()
-    )
+    return unverified_accounts_at(email).order_by("pk").first()
 
 
 @origin_only_referrer
+# the activation form posts the password of the account; Django's error reports then hide it
+@sensitive_post_parameters("password")
 def verify_email(request, uidb64: str, token: str):
     """Activate an account from the link in its verification email, once its owner confirms.
 
@@ -1748,11 +1775,39 @@ def verify_email(request, uidb64: str, token: str):
             status=400,
         )
 
+    confirmpage = {"name": "Confirm your email address", "email": user.email}
+
     if request.method != "POST":
+        return render(request, "registration/verify_email_confirm.html", confirmpage)
+
+    # The password that the registrant chose. The link proves that the person has the mailbox, but
+    # it does not prove that the same person made the account: anyone can register with the
+    # address of someone else and choose the password. Without this check, the owner of the
+    # address activates an account whose password a different person knows.
+    #
+    # hashers.check_password and not User.check_password. The method of the model saves a new hash
+    # when the hasher settings changed. The token hashes the password, so that save makes the link
+    # invalid before the locked check below.
+    if account_password_failures_exceeded(user.pk):
+        response = render(
+            request,
+            "registration/verify_email_confirm.html",
+            {**confirmpage, "error": ACCOUNT_GUESS_LIMIT_MESSAGE},
+            status=429,
+        )
+        response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+        return response
+
+    if not check_password(request.POST.get("password", ""), user.password):
+        note_account_password_failure(user.pk)
         return render(
             request,
             "registration/verify_email_confirm.html",
-            {"name": "Confirm your email address", "email": user.email},
+            {
+                **confirmpage,
+                "error": "The password is not correct. Enter the password that you chose when you registered.",
+            },
+            status=400,
         )
 
     # The checks above are repeated here against a locked row, because on their own they only make
@@ -1844,8 +1899,32 @@ def resend_verification(request):
 
 
 @login_required
+# the form posts the current password; Django's error reports then hide it
+@sensitive_post_parameters("password")
 def change_email(request):
+    status = 200
+
     if request.method == "POST":
+        # Counted before the form is bound, so that a form that is not valid uses the budget too:
+        # the answer "an account with that address exists" comes only from such a form. Keyed on
+        # the account, because the person who asks has a session for it.
+        attempts = count_in_window(f"emailchange-attempt-{request.user.pk}", EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS)
+
+        if attempts > EMAIL_CHANGE_ATTEMPT_LIMIT:
+            # an unbound form, for the reason that register() gives
+            response = render(
+                request,
+                "registration/email_change_form.html",
+                {
+                    "form": EmailChangeForm(request.user, initial={"new_email": request.POST.get("new_email", "")}),
+                    "name": "Email address change",
+                    "limitmessage": "Too many address changes from this account. Wait 10 minutes, then try again.",
+                },
+                status=429,
+            )
+            response["Retry-After"] = str(int(EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS))
+            return response
+
         form = EmailChangeForm(request.user, request.POST)
         if form.is_valid():
             # not saved here. The new address has to be confirmed at the new address, or the
@@ -1890,14 +1969,21 @@ def change_email(request):
                     None,
                     "A confirmation email was just sent. Please wait a minute before requesting another.",
                 )
+        elif form.has_error("password", code="throttled"):
+            # 429 like each other limit of the site
+            status = 429
     else:
         form = EmailChangeForm(request.user)
 
-    return render(
+    response = render(
         request,
         "registration/email_change_form.html",
         {"form": form, "name": "Email address change"},
+        status=status,
     )
+    if status == 429:
+        response["Retry-After"] = str(int(LOGIN_FAILURE_WINDOW_SECONDS))
+    return response
 
 
 @origin_only_referrer
@@ -2101,14 +2187,8 @@ def flux_axis_limits(fluxmin: t.Any, fluxmax: t.Any) -> tuple[t.Any, t.Any]:
 
 
 def resultplotdatajs(request, taskid):
-    if not taskid:
-        return HttpResponseNotFound("Page not found")
-
-    try:
-        task = Task.live().get(id=taskid)
-    except ObjectDoesNotExist:
-        return HttpResponseNotFound("Page not found")
-    if not task.finishtimestamp:
+    task = Task.live().filter(id=taskid, finishtimestamp__isnull=False).first()
+    if task is None:
         return HttpResponseNotFound("Page not found")
 
     # Two things vary in this response and the tag has to cover both: the generated plot data,
@@ -2238,7 +2318,6 @@ def resultplotdatajs(request, taskid):
                         + "]);\n",
                     )
                 )
-            mjd_today = datetime_to_mjd(dt.datetime.now(dt.UTC))
             xmin = dfforcedphot["#MJD"].min()
             xmax = dfforcedphot["#MJD"].max()
             ymin, ymax = flux_axis_limits(dfforcedphot.uJy.min(), dfforcedphot.uJy.max())
@@ -2247,8 +2326,6 @@ def resultplotdatajs(request, taskid):
                 (
                     "var jslclimits = {",
                     f'"xmin": {xmin}, "xmax": {xmax}, "ymin": {ymin}, "ymax": {ymax},',
-                    f'"discoveryDate": {xmin},',
-                    f'"today": {mjd_today},',
                     "};\n",
                     f'jslimitsglobal["#{divid}"] = jslclimits;\n',
                     f'jslcdataglobal["#{divid}"] = jslcdata;\n',
@@ -2333,6 +2410,11 @@ def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpRes
 
                 if completed and renderpath.is_file():
                     renderpath.replace(pdfpath)
+                elif completed:
+                    # The render ended and made no file, for example because the plotter refused
+                    # each row. The same file gives the same result, so the next request does not
+                    # start a new render; see taskpdfplot.
+                    caches["taskderived"].set(pdfplot_failed_cachekey(taskid), True, timeout=PDF_PLOT_FAILURE_SECONDS)
             finally:
                 renderpath.unlink(missing_ok=True)
 
@@ -2344,12 +2426,8 @@ def _render_pdfplot(taskid: int, resultfilepath: Path, pdfpath: Path) -> HttpRes
 
 
 def taskpdfplot(request, taskid):
-    if not taskid:
-        return HttpResponseNotFound("Page not found")
-
-    try:
-        item = Task.live().get(id=taskid)
-    except ObjectDoesNotExist:
+    item = Task.live().filter(id=taskid).first()
+    if item is None:
         return HttpResponseNotFound("Page not found")
     # the same rule as the serializer's pdfplot_url: a task that finished with an error has a data
     # file with no points, and a render of it makes no PDF, so nothing is cached and every request
@@ -2361,9 +2439,14 @@ def taskpdfplot(request, taskid):
         # deleting a task's .pdf forces it to be re-rendered on the next request, which is how to
         # refresh plots after a change to plot_atlas_fp. A plot that exists is served whatever the
         # task's error_msg says; only a render is refused for a task that finished with an error.
+        #
+        # Only a forced photometry task has a light curve to render. The data file of a stack
+        # request is the output of the stack script, and the plotter makes no PDF of it.
         if (
             not pdfpath.is_file()
+            and item.request_type == Task.RequestType.FP
             and not item.error_msg
+            and not caches["taskderived"].get(pdfplot_failed_cachekey(taskid))
             and (refusal := _render_pdfplot(taskid, resultfilepath, pdfpath)) is not None
         ):
             return refusal
@@ -2389,7 +2472,7 @@ def _taskresultfile_response(
     taskid: int, getfile: Callable[[Task], str | Path | None]
 ) -> FileResponse | HttpResponseNotFound:
     """Serve one of a task's result files, or 404 when the task or the file does not exist."""
-    task = Task.live().filter(id=taskid).first() if taskid else None
+    task = Task.live().filter(id=taskid).first()
     resultfile = getfile(task) if task is not None else None
     if resultfile:
         resultfilepath = Path(settings.STATIC_ROOT, resultfile)

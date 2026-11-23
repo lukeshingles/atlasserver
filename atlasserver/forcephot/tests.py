@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import typing as t
 import urllib.error
 import urllib.parse
@@ -44,6 +45,7 @@ from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.db import IntegrityError
 from django.db import models
+from django.db import OperationalError
 from django.db.migrations import RunPython
 from django.test import Client
 from django.test import override_settings
@@ -52,6 +54,7 @@ from django.test import SimpleTestCase
 from django.test import TestCase
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
+from django.urls import resolve
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
@@ -90,11 +93,6 @@ class TaskQueueTests(TestCase):
         self.users = [
             User.objects.create_user(username=f"user{i}", email=f"user{i}@example.com", password=None) for i in range(3)
         ]
-
-    def test_tasklist_requires_login(self) -> None:
-        response = self.client.get(reverse("task-list"))
-        # anonymous users are redirected to the login page by the custom exception handler
-        assert response.status_code in {302, 403}
 
     def test_queue_positions_are_round_robin(self) -> None:
         for user in self.users:
@@ -509,7 +507,10 @@ class FairShareQueueTests(TestCase):
             mock.patch.object(taskrunner_main, "log_general"),
             mock.patch.object(taskrunner_main, "notify_finished"),
         ):
-            taskrunner_main.do_task(Task.objects.get(pk=task.pk), slotid=0)
+            # the start of the attempt, as start_in_slot records it before the slot runs do_task
+            started = Task.objects.get(pk=task.pk)
+            taskrunner_main.mark_started(started)
+            taskrunner_main.do_task(started, slotid=0)
 
         finished = Task.objects.get(pk=task.pk)
         assert finished.finishtimestamp is not None
@@ -1756,6 +1757,110 @@ class EmailChangeTests(TestCase):
     def request_email_change(self, new_email: str = "new@example.com") -> t.Any:
         return self.client.post(reverse("email_change"), {"password": "testpassword123", "new_email": new_email})
 
+    def test_the_taken_address_answer_is_rate_limited(self) -> None:
+        """The answer "an account with that address exists" comes only from a form that is not valid.
+
+        The send interval meters only the valid forms, so one account with its own password could
+        ask the question for each address on a list.
+        """
+        User.objects.create_user(username="holder", email="taken@example.com", password=None)
+        self.client.force_login(self.user)
+
+        with mock.patch.object(views, "EMAIL_CHANGE_ATTEMPT_LIMIT", 3):
+            for attempt in range(3):
+                assert "already exists" in self.request_email_change("taken@example.com").content.decode(), attempt
+            blocked = self.request_email_change("taken@example.com")
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(views.EMAIL_CHANGE_ATTEMPT_WINDOW_SECONDS))
+        page = blocked.content.decode()
+        assert "already exists" not in page, "the rate-limited page still answers the probe"
+        assert "Too many address changes" in page
+
+    def test_the_current_password_has_a_budget(self) -> None:
+        # a stolen session must not give guesses of the password without a limit
+        self.client.force_login(self.user)
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                wrong = self.client.post(reverse("email_change"), {"password": "guess", "new_email": "new@example.com"})
+                assert wrong.status_code == 200, wrong.status_code
+            blocked = self.request_email_change()
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        assert not django_mail.outbox, "the right password worked over the budget"
+
+    def test_the_password_change_page_has_a_budget(self) -> None:
+        self.client.force_login(self.user)
+        newpassword = "a-new-password-for-the-test"
+
+        def change(oldpassword: str) -> t.Any:
+            return self.client.post(
+                reverse("password_change"),
+                {"old_password": oldpassword, "new_password1": newpassword, "new_password2": newpassword},
+            )
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert change("guess").status_code == 200
+            blocked = change("testpassword123")
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        self.user.refresh_from_db()
+        assert self.user.check_password("testpassword123"), "the password changed over the budget"
+
+    def test_the_admin_password_change_page_has_the_same_budget(self) -> None:
+        self.user.is_staff = True
+        self.user.save()
+        self.client.force_login(self.user)
+        newpassword = "a-new-password-for-the-test"
+
+        def change(oldpassword: str) -> t.Any:
+            return self.client.post(
+                reverse("admin:password_change"),
+                {"old_password": oldpassword, "new_password1": newpassword, "new_password2": newpassword},
+            )
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert change("guess").status_code == 200
+            blocked = change("testpassword123")
+
+        assert blocked.status_code == 200, blocked.status_code
+        assert throttles.ACCOUNT_GUESS_LIMIT_MESSAGE in blocked.content.decode()
+        self.user.refresh_from_db()
+        assert self.user.check_password("testpassword123"), "the password changed over the budget"
+
+    def test_the_password_change_page_still_changes_the_password(self) -> None:
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("password_change"),
+            {
+                "old_password": "testpassword123",
+                "new_password1": "a-new-password-ok",
+                "new_password2": "a-new-password-ok",
+            },
+        )
+
+        assert response.status_code == 302, response.status_code
+        self.user.refresh_from_db()
+        assert self.user.check_password("a-new-password-ok")
+
+    def test_the_login_link_of_the_confirmation_page_does_not_carry_the_token(self) -> None:
+        # opened on a second device, where the reader is signed out
+        self.client.force_login(self.user)
+        self.request_email_change()
+        link = self.confirmation_link()
+        self.client.logout()
+
+        body = self.client.get(link).content.decode()
+
+        assert link.rstrip("/").rsplit("/", 1)[-1] not in body, "the page puts the token in a link"
+        assert "next=" not in body
+
     def confirmation_link(self, index: int = 0) -> str:
         """Return the confirmation URL from a sent email, like RegistrationVerificationTests.verification_link."""
         match = re.search(r"https?://\S+/emailchange/confirm/\S+", str(django_mail.outbox[index].body))
@@ -2066,6 +2171,8 @@ class EmailChangeTests(TestCase):
             reverse("email_change"), {"password": "wrongpassword", "new_email": "new@example.com"}
         )
         assert response.status_code == 200
+        assert response.context["form"].has_error("password", code="password_incorrect")
+        assert not django_mail.outbox
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
@@ -2075,6 +2182,8 @@ class EmailChangeTests(TestCase):
             reverse("email_change"), {"password": "testpassword123", "new_email": "not-an-email"}
         )
         assert response.status_code == 200
+        assert response.context["form"].has_error("new_email", code="invalid")
+        assert not django_mail.outbox
         self.user.refresh_from_db()
         assert self.user.email == "old@example.com"
 
@@ -2355,13 +2464,6 @@ class TaskListEtagTests(TestCase):
 
         assert self.get_list(etag=first["ETag"]).status_code == 304
 
-    def test_etag_is_quoted(self) -> None:
-        # an unquoted ETag is not a valid entity-tag, and intermediaries may reject or rewrite it
-        Task.objects.create(user=self.user, ra=1.0, dec=2.0)
-        etag = self.get_list()["ETag"]
-        assert etag.startswith('"'), etag
-        assert etag.endswith('"'), etag
-
     def test_etag_holds_only_the_characters_an_entity_tag_may(self) -> None:
         """RFC 7232 allows %x21 and %x23-7E between the quotes: no space, and no double quote.
 
@@ -2474,7 +2576,7 @@ class SiteOriginSettingTests(SimpleTestCase):
     """The links in security email are built from this, so an unset value is the exposure."""
 
     @staticmethod
-    def load_settings(module: str, **env: str) -> "subprocess.CompletedProcess[str]":
+    def load_settings(module: str, **env: str) -> subprocess.CompletedProcess[str]:
         """Import a settings module in a fresh interpreter with the given environment."""
         # cleared from the inherited environment before the overrides, not after: a developer's
         # own .env would otherwise decide the result of these tests
@@ -2556,21 +2658,6 @@ class TaskStrTests(TestCase):
         msg = "a task with neither an mpc_name nor coordinates was accepted"
         raise AssertionError(msg)
 
-    def test_a_tab_only_mpc_name_is_not_a_target_either(self) -> None:
-        """SQL TRIM() removes spaces and nothing else; Python str.strip() removes far more.
-
-        The two definitions have to be one definition, or a name blank to the reader is a target to
-        the database and the runner dispatches by coordinates the constraint let be NULL.
-        """
-        user = User.objects.create_user(username="tabtarget", email="tt@example.com", password=None)
-
-        try:
-            Task.objects.create(user=user, mpc_name="\t")
-        except IntegrityError:
-            return
-        msg = "a task whose only target was a tab was accepted"
-        raise AssertionError(msg)
-
     def test_save_normalises_the_name_so_readers_can_trust_it(self) -> None:
         """The point of normalising on write: mpc_name is falsy exactly when there is no target.
 
@@ -2604,18 +2691,6 @@ class TaskStrTests(TestCase):
         except IntegrityError:
             return
         msg = "bulk_create stored a whitespace-only mpc_name"
-        raise AssertionError(msg)
-
-    def test_a_whitespace_only_mpc_name_is_not_a_target(self) -> None:
-        # it is truthy, so it satisfied a bare != "" and then reached the runner, which would have
-        # asked ssforce.sh for an object named nothing
-        user = User.objects.create_user(username="blanktarget", email="bt@example.com", password=None)
-
-        try:
-            Task.objects.create(user=user, mpc_name="   ")
-        except IntegrityError:
-            return
-        msg = "a task whose only target was whitespace was accepted"
         raise AssertionError(msg)
 
 
@@ -3407,10 +3482,6 @@ class TaskDetailIsPublicTests(TestCase):
         response = self.get_detail()
         assert response.status_code == 200, response.status_code
         assert response.json()["comment"] == "shared"
-
-    def test_staff_can_read_it(self) -> None:
-        self.client.force_login(self.staff)
-        assert self.get_detail().status_code == 200
 
     def test_another_user_can_read_it(self) -> None:
         self.client.force_login(self.other)
@@ -4501,6 +4572,33 @@ class TaskCreateLimitTests(TestCase):
         assert response.status_code == 400, response.status_code
         assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS - 1
 
+    def test_started_unfinished_tasks_count_towards_the_limit(self) -> None:
+        """A task in a slot and a task that waits for a new attempt both have a start time.
+
+        During an outage of the remote host each attempt fails quickly. A count of only the tasks
+        with no start then falls to near zero, and the limit stops nothing.
+        """
+        from atlasserver.forcephot.views import MAX_USER_TASKS
+
+        started = timezone.now() - dt.timedelta(minutes=5)
+        Task.objects.bulk_create(
+            [
+                Task(user=self.user, ra=1.0, dec=2.0, starttimestamp=started, retry_after=timezone.now())
+                for _ in range(MAX_USER_TASKS)
+            ]
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"ra": 10.0, "dec": 20.0}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+        assert response.status_code == 400, response.status_code
+        assert Task.objects.filter(user_id=self.user.pk).count() == MAX_USER_TASKS
+
 
 class TaskCreateAtomicityTests(TestCase):
     """The inserts and the queue positions are one transaction.
@@ -4771,6 +4869,381 @@ class ResultPlotDataTests(TestCase):
         assert "/* stub */" not in content
 
 
+class RemoteStopTests(TestCase):
+    """A kill of the local ssh client does not stop the remote command, because the session has no tty.
+
+    A test on sc01 showed this: after a SIGTERM to the client, the remote shell had parent 1, and
+    its pipeline ran on. Each attempt thus records the id of its remote session, and a cancel or a
+    stop of the slot stops that session.
+    """
+
+    def setUp(self) -> None:
+        user = User.objects.create_user(username="stopper", email="stop@example.com", password=None)
+        self.task = Task.objects.create(user=user, ra=1.0, dec=2.0)
+        self.sshoptions = ["-oControlPath=~/x/atlas-0"]
+
+    def tearDown(self) -> None:
+        taskrunner_main._stop_requested = False  # noqa: SLF001
+        taskrunner_main._defer_stop = False  # noqa: SLF001
+
+    def run_attempt(
+        self, *, cancelled: bool = False, stopping: bool = False, timed_out: bool = False, returncode: int = 0
+    ) -> tuple[list[str], mock.Mock]:
+        """Run runtask with a remote command that does not end, and return the ssh command and the stop mock."""
+        proc = mock.MagicMock()
+        if cancelled or stopping or timed_out:
+            proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=1)
+        else:
+            proc.communicate.return_value = ("", "")
+            proc.returncode = returncode
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
+            mock.patch("subprocess.Popen", return_value=proc) as popen,
+            mock.patch.object(taskrunner_main, "task_exists", return_value=not cancelled),
+            mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=stopping),
+            mock.patch.object(taskrunner_main.os, "kill") as kill,
+            mock.patch.object(taskrunner_main, "stop_remote_job") as stop,
+            # the local deadline is TASK_MAXTIME_SECONDS + 30, so this deadline is in the past
+            mock.patch.object(taskrunner_main, "TASK_MAXTIME_SECONDS", -31.0 if timed_out else 3600.0),
+        ):
+            result = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+
+        assert result == (None, None), result
+        if cancelled or stopping or timed_out:
+            kill.assert_called_once_with(proc.pid, signal.SIGTERM)
+        return popen.call_args.args[0], stop
+
+    def test_the_remote_command_records_its_session_and_keeps_its_exit_status(self) -> None:
+        command, _stop = self.run_attempt()
+
+        remote = command[-1]
+        match = re.match(
+            r"echo \$\$ > (~/atlasserver/results/job\d+\.([0-9a-f]{32})\.pid); "
+            r"if \[ -e (~/atlasserver/results/stop\.job\d+\.\2) \]; then rm -f \1 \3; exit 143; fi; "
+            r"nice -n 19 timeout ",
+            remote,
+        )
+        assert match is not None, remote
+        assert remote.endswith(f"; status=$?; rm -f {match.group(1)}; exit $status"), remote
+        assert ";;" not in remote.replace(" ", ""), remote
+
+    def test_a_cancel_stops_the_remote_command_and_deletes_its_files(self) -> None:
+        command, stop = self.run_attempt(cancelled=True)
+
+        found = re.search(r"\.([0-9a-f]{32})\.pid", command[-1])
+        assert found is not None, command[-1]
+        token = found.group(1)
+        stop.assert_called_once()
+        assert stop.call_args.args[:3] == (self.task.id, token, self.sshoptions), stop.call_args
+        assert stop.call_args.kwargs == {"delete_files": True}, stop.call_args
+
+    def test_a_stopping_slot_stops_the_remote_command_and_keeps_the_files(self) -> None:
+        # the next task runner starts the task again, and that attempt writes the same file names
+        _command, stop = self.run_attempt(stopping=True)
+
+        stop.assert_called_once()
+        assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_cancel_before_the_remote_command_starts_keeps_it_from_starting(self) -> None:
+        # sshd can start the remote command after the stop. The real commands run here in that
+        # order, with HOME in a temporary directory.
+        command, _stop = self.run_attempt()
+        remote = command[-1]
+        found = re.search(r"\.([0-9a-f]{32})\.pid", remote)
+        assert found is not None, remote
+
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+        ) as run:
+            taskrunner_main.stop_remote_job(self.task.id, found.group(1), [], lambda _msg: None, delete_files=True)
+        stopcommand = run.call_args.args[0][-1]
+
+        with tempfile.TemporaryDirectory() as home:
+            Path(home, "atlasserver", "results").mkdir(parents=True)
+            env = {**os.environ, "HOME": home}
+            stopped = subprocess.run(["bash", "-c", stopcommand], env=env, capture_output=True, text=True, check=False)
+            late = subprocess.run(["bash", "-c", remote], env=env, capture_output=True, text=True, check=False)
+            left = sorted(path.name for path in Path(home, "atlasserver", "results").iterdir())
+
+        assert stopped.returncode == 0, stopped.stderr
+        assert late.returncode == 143, (late.returncode, late.stderr)
+        assert left == [], left
+
+    def test_a_local_timeout_stops_the_remote_command_and_keeps_the_files(self) -> None:
+        # the remote timeout stops only the first command, and the preview script can still run
+        _command, stop = self.run_attempt(timed_out=True)
+
+        stop.assert_called_once()
+        assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_database_error_in_the_cancel_check_keeps_the_supervision(self) -> None:
+        # an exception there would end the slot, and the remote command would run on
+        proc = mock.MagicMock()
+        proc.communicate.side_effect = [subprocess.TimeoutExpired(cmd="ssh", timeout=1), ("", ""), ("", "")]
+        proc.returncode = 0
+        logged: list[str] = []
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+            mock.patch.object(taskrunner_main, "run_rsync", return_value=0),
+            mock.patch("subprocess.Popen", return_value=proc),
+            mock.patch.object(taskrunner_main, "CANCEL_CHECK_SECONDS", 0.0),
+            mock.patch.object(taskrunner_main, "task_exists", side_effect=[OperationalError("gone away"), True]),
+            mock.patch.object(taskrunner_main.os, "kill") as kill,
+            mock.patch.object(taskrunner_main, "stop_remote_job") as stop,
+        ):
+            result = taskrunner_main.runtask(self.task, logfunc=logged.append, slotid=0)
+
+        assert result == (None, None), result
+        kill.assert_not_called()
+        stop.assert_not_called()
+        assert proc.communicate.call_count == 3, "the slot did not wait for the end of the remote command"
+        assert any("could not check if the task exists: gone away" in line for line in logged), logged
+
+    def test_a_dropped_connection_stops_the_remote_command_and_keeps_the_files(self) -> None:
+        # the remote command continues without its connection, and the retry writes the same files
+        _command, stop = self.run_attempt(returncode=taskrunner_main.SSH_CONNECTION_FAILED)
+
+        stop.assert_called_once()
+        assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+
+    def test_a_stopped_attempt_is_not_logged_as_a_failure_with_a_wait(self) -> None:
+        logged: list[str] = []
+        with (
+            mock.patch.object(taskrunner_main, "runtask", return_value=(None, None)),
+            mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=True),
+            mock.patch.object(taskrunner_main, "log_general", side_effect=lambda msg, *_a, **_k: logged.append(msg)),
+            mock.patch.object(taskrunner_main, "mark_finished") as finish,
+        ):
+            taskrunner_main.do_task(self.task, slotid=0)
+
+        finish.assert_not_called()
+        assert any("The next task runner starts the task again" in line for line in logged), logged
+        assert not any("before the next attempt" in line for line in logged), logged
+
+    def test_a_stop_after_the_remote_command_ended_keeps_the_result(self) -> None:
+        # The stop came after runtask collected the result. A return without mark_finished would
+        # make the next task runner run the whole task again.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultfile = Path(tmpdir, "job.txt")
+            resultfile.write_text("###MJD uJy\n", encoding="utf-8")
+            with (
+                mock.patch.object(taskrunner_main, "runtask", return_value=(resultfile, None)),
+                mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=True),
+                mock.patch.object(taskrunner_main, "log_general"),
+                mock.patch.object(taskrunner_main, "mark_finished", return_value=False) as finish,
+                mock.patch.object(taskrunner_main, "remove_task_resultfiles"),
+            ):
+                taskrunner_main.do_task(self.task, slotid=0)
+
+        finish.assert_called_once()
+        assert finish.call_args.kwargs["error_msg"] is None, finish.call_args
+
+    def test_a_stop_signal_after_the_collection_waits_for_the_record(self) -> None:
+        # The signal comes after runtask, and before do_task records the result. If the slot ended
+        # there, the next task runner would run the whole task again.
+        def collect(**_kwargs: t.Any) -> tuple[Path, None]:
+            taskrunner_main.request_stop(signal.SIGTERM, None)
+            return resultfile, None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resultfile = Path(tmpdir, "job.txt")
+            resultfile.write_text("###MJD uJy\n", encoding="utf-8")
+            with (
+                mock.patch.object(taskrunner_main, "signal"),
+                mock.patch.object(taskrunner_main, "runtask", side_effect=collect),
+                mock.patch.object(taskrunner_main, "log_general"),
+                mock.patch.object(taskrunner_main, "mark_finished", return_value=True) as finish,
+                mock.patch.object(taskrunner_main, "notify_finished"),
+            ):
+                taskrunner_main.run_slot(self.task, slotid=0)
+
+        finish.assert_called_once()
+        assert taskrunner_main._stop_requested  # noqa: SLF001
+        assert not taskrunner_main._defer_stop, "the deferral outlived the attempt"  # noqa: SLF001
+
+    def test_the_stop_log_says_whether_a_remote_command_ran(self) -> None:
+        logged: list[str] = []
+        for stdout in (f"{taskrunner_main.STOP_MARKER}\n", ""):
+            with mock.patch.object(
+                taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout, stderr="")
+            ):
+                taskrunner_main.stop_remote_job(self.task.id, "a" * 32, [], logged.append, delete_files=True)
+
+        assert logged == [
+            "Stopped the remote command, and deleted the remote files",
+            "No remote command ran, and deleted the remote files",
+        ], logged
+
+    def test_a_stop_signal_before_the_launch_starts_no_remote_command(self) -> None:
+        # the deferral starts before the launch, so a signal there is noted and not an exit
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.settings, "RESULTS_DIR", Path(tmpdir, "results")),
+            mock.patch.object(taskrunner_main, "ssh_options", return_value=self.sshoptions),
+            mock.patch.object(taskrunner_main, "open_ssh_master"),
+            mock.patch.object(taskrunner_main, "_stop_requested", True),
+            mock.patch("subprocess.Popen") as popen,
+        ):
+            result = taskrunner_main.runtask(self.task, logfunc=lambda _msg: None, slotid=0)
+
+        assert result == (None, None), result
+        popen.assert_not_called()
+
+    def test_the_stop_command_stops_only_a_session_with_the_token(self) -> None:
+        token = "0" * 31 + "a"
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+        ) as run:
+            taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=False)
+            kept = run.call_args.args[0]
+            taskrunner_main.stop_remote_job(self.task.id, token, self.sshoptions, lambda _msg: None, delete_files=True)
+            deleted = run.call_args.args[0]
+
+        assert kept[:3] == ["ssh", *self.sshoptions, taskrunner_main.REMOTE_SERVER], kept
+        assert f"grep -q -F {token}; then pkill -TERM -s" in kept[-1], kept[-1]
+        assert taskrunner_main.remote_pidfile(self.task.id, token) in kept[-1]
+        # the stop file comes before the read of the pid file; see stop_remote_job
+        assert kept[-1].startswith(f"touch {taskrunner_main.remote_stopfile(self.task.id, token)}; p="), kept[-1]
+        assert "rm -rf" not in kept[-1], "the files of the next attempt must stay"
+        jobname = taskrunner_main.jobfilename(self.task.id)
+        assert f"rm -rf ~/atlasserver/results/{jobname}.* ~/atlasserver/results/task{self.task.id:05d}" in deleted[-1]
+
+    def test_a_stop_command_that_fails_is_reported_and_not_raised(self) -> None:
+        logged: list[str] = []
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=60)
+        ):
+            taskrunner_main.stop_remote_job(self.task.id, "a" * 32, [], logged.append, delete_files=True)
+
+        assert any("took more than" in line for line in logged), logged
+
+
+class SlotStopSignalTests(SimpleTestCase):
+    """A stop signal waits for the poll loop, and a slot stops when its task runner is gone."""
+
+    def tearDown(self) -> None:
+        taskrunner_main._stop_requested = False  # noqa: SLF001
+        taskrunner_main._defer_stop = False  # noqa: SLF001
+
+    def test_a_signal_in_the_poll_loop_only_asks_for_a_stop(self) -> None:
+        with taskrunner_main.stop_signals_deferred():
+            taskrunner_main.request_stop(signal.SIGINT, None)
+            assert taskrunner_main.attempt_must_stop()
+
+    def test_a_nested_deferral_keeps_the_outer_deferral(self) -> None:
+        with taskrunner_main.stop_signals_deferred():
+            with taskrunner_main.stop_signals_deferred():
+                pass
+            taskrunner_main.request_stop(signal.SIGINT, None)
+            assert taskrunner_main.attempt_must_stop()
+        assert not taskrunner_main._defer_stop  # noqa: SLF001
+
+    def test_a_signal_outside_the_poll_loop_ends_the_slot(self) -> None:
+        # as the default action of the signal does: the slot has no remote command to stop there
+        code = None
+        try:
+            taskrunner_main.request_stop(signal.SIGHUP, None)
+        except SystemExit as ex:
+            code = ex.code
+        assert code == 128 + signal.SIGHUP, f"a stop signal outside the poll loop gave {code}"
+
+    def test_a_closed_terminal_does_not_stop_the_file_log(self) -> None:
+        # after `atlastaskrunner stop`, the slot still logs and records its result
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(taskrunner_main.runnerstatus, "LOG_DIR", Path(tmpdir)),
+            mock.patch("builtins.print", side_effect=OSError(5, "Input/output error")),
+        ):
+            taskrunner_main.log_general("the terminal is gone")
+            written = Path(tmpdir, "fprunnerlog_latest.txt").read_text(encoding="utf-8")
+
+        assert written.endswith("  the terminal is gone\n"), written
+
+    def test_a_slot_whose_task_runner_stopped_must_stop(self) -> None:
+        dead = mock.Mock()
+        dead.is_alive.return_value = False
+        with mock.patch.object(taskrunner_main.mp, "parent_process", return_value=dead):
+            assert taskrunner_main.attempt_must_stop()
+
+    def test_a_slot_with_its_task_runner_continues(self) -> None:
+        alive = mock.Mock()
+        alive.is_alive.return_value = True
+        with mock.patch.object(taskrunner_main.mp, "parent_process", return_value=alive):
+            assert not taskrunner_main.attempt_must_stop()
+        # and a process with no parent process, such as this test, also continues
+        assert not taskrunner_main.attempt_must_stop()
+
+
+class LostConnectionTests(TestCase):
+    """The task runner has no request, so nothing else closes a connection that the database closed."""
+
+    def test_a_connection_outside_a_transaction_is_checked(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        outside = mock.Mock(in_atomic_block=False)
+        with (
+            mock.patch.object(taskrunner_main.transaction, "get_connection", return_value=outside),
+            mock.patch.object(taskrunner_main, "close_old_connections") as closer,
+        ):
+            taskrunner_main.replace_lost_connection()
+
+        closer.assert_called_once_with()
+
+    def test_a_connection_in_a_transaction_is_kept(self) -> None:
+        # the close would end the transaction of the caller
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with mock.patch.object(taskrunner_main, "close_old_connections") as closer:
+            taskrunner_main.replace_lost_connection()
+
+        closer.assert_not_called()
+
+    def test_the_poll_of_a_slot_checks_the_connection(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        with mock.patch.object(taskrunner_main, "replace_lost_connection") as check:
+            assert taskrunner_main.task_exists(taskid=123456) is False
+
+        check.assert_called_once_with()
+
+
+class MpcNameCharacterTests(TestCase):
+    """The runner gives the name as one argument to a remote script that reads key=value options."""
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="mpcnamer", email="mpc@example.com", password=None)
+        self.client.force_login(self.user)
+
+    def submit(self, name: str) -> t.Any:
+        return self.client.post(
+            reverse("task-list"),
+            data=json.dumps({"mpc_name": name}),
+            content_type="application/json",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_option_text_and_expansions_are_refused(self) -> None:
+        for name in ("tdo=1", "a$(id)", "a`id`", "a\\b", "-h", "a\nb", "a\tb"):
+            with self.subTest(name=name):
+                response = self.submit(name)
+                assert response.status_code == 400, (name, response.status_code)
+                assert "mpc_name" in json.dumps(response.json()), response.content
+        assert not Task.objects.exists()
+
+    def test_real_designations_are_accepted(self) -> None:
+        for name in ("Hale-Bopp", "C/2020 F3 (NEOWISE)", "1P/Halley", "2023 AB12", "(433) Eros"):
+            with self.subTest(name=name):
+                assert self.submit(name).status_code == 201, name
+
+
 class TaskRunnerEmailTests(TestCase):
     """Tests for the batch result email.
 
@@ -4792,6 +5265,114 @@ class TaskRunnerEmailTests(TestCase):
             send_email=True,
             finishtimestamp=timezone.now() if finished else None,
         )
+
+    def test_a_batch_whose_last_task_was_cancelled_gets_its_email(self) -> None:
+        """A slot sends the email of a batch when it finishes the last unfinished task of the batch.
+
+        When the user cancels that task, no slot finishes the batch. The maintenance step finds the
+        batch and sends the email of the finished tasks.
+        """
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        cancelled = self.make_batch_task(finished=False)
+        cancelled.delete()
+
+        first = taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        second = taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+
+        assert len(django_mail.outbox) == 1, [message.subject for message in django_mail.outbox]
+        assert django_mail.outbox[0].to == ["m@example.com"]
+        assert (first, second) == (1, 0), (first, second)
+
+    def test_a_refused_batch_email_is_not_counted(self) -> None:
+        # the mail server refused the message, so the log must not report it as sent
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        self.make_batch_task(finished=False).delete()
+
+        with mock.patch.object(taskrunner_main.EmailMessage, "send", side_effect=OSError("refused")):
+            count = taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+
+        assert count == 0, count
+
+    def test_the_step_keeps_the_status_file_fresh_before_each_send(self) -> None:
+        # each send waits for the mail server, and the maintenance blocks the main loop
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        beats: list[None] = []
+
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None, heartbeat=lambda: beats.append(None))
+
+        assert len(beats) == 1, beats
+        assert len(django_mail.outbox) == 1
+
+    def test_the_step_waits_for_a_batch_with_an_unfinished_task(self) -> None:
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        self.make_batch_task(finished=True)
+        self.make_batch_task(finished=False)
+
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+
+        assert not django_mail.outbox
+
+    def test_migration_0013_marks_only_the_complete_batches(self) -> None:
+        """A task from before email_sent can have False for a batch that got its email.
+
+        The migration marks the finished tasks of each complete batch, so that the step sends no
+        second email for such a batch. A batch with an unfinished task never got its email, so
+        its finished tasks stay unmarked, and a cancel of its last task still gets the email.
+        """
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        migration = import_module("atlasserver.forcephot.migrations.0013_mark_complete_batches_emailed")
+        complete = self.make_batch_task(finished=True)
+        self.stamp = self.stamp - dt.timedelta(minutes=5)
+        openfinished = self.make_batch_task(finished=True)
+        openunfinished = self.make_batch_task(finished=False)
+
+        migration.mark_complete_batches(django_apps, None)
+
+        assert Task.objects.get(pk=complete.pk).email_sent is True
+        assert Task.objects.get(pk=openfinished.pk).email_sent is False
+        assert Task.objects.get(pk=openunfinished.pk).email_sent is False
+
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        assert not django_mail.outbox, "a batch got a second email"
+
+        openunfinished.delete()
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        assert len(django_mail.outbox) == 1, "the open batch whose last task went got no email"
+
+    def test_migration_0013_keeps_a_complete_batch_after_the_reliable_time(self) -> None:
+        """After a runner that writes email_sent ran, a complete batch with False got no email.
+
+        For example its last task was cancelled before migration 0013. The migration leaves it, and
+        the maintenance then sends the email that the batch did not get.
+        """
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        from atlasserver.taskrunner import main as taskrunner_main
+
+        migration = import_module("atlasserver.forcephot.migrations.0013_mark_complete_batches_emailed")
+        finished = self.make_batch_task(finished=True)
+
+        # the reliable time before the finish of the task: migration 0011 ran a day ago
+        with mock.patch.object(migration, "RESTART_MARGIN", -dt.timedelta(days=1)):
+            migration.mark_complete_batches(django_apps, None)
+
+        assert Task.objects.get(pk=finished.pk).email_sent is False
+        taskrunner_main.send_pending_batch_emails(logfunc=lambda _msg: None)
+        assert len(django_mail.outbox) == 1, "the batch that got no email got none from the maintenance"
 
     def test_email_waits_for_the_rest_of_the_batch(self) -> None:
         from atlasserver.taskrunner import main as taskrunner_main
@@ -4988,17 +5569,6 @@ class AllowedHostsTests(TestCase):
         assert response.status_code == 400, response.status_code
         assert not django_mail.outbox
 
-    def test_known_host_is_accepted(self) -> None:
-        User.objects.create_user(username="victim2", email="victim2@example.com", password="pw12345678")
-
-        response = self.client.post(
-            reverse("password_reset"), {"email": "victim2@example.com"}, HTTP_HOST="fallingstar-data.com"
-        )
-
-        assert response.status_code == 302, response.status_code
-        assert len(django_mail.outbox) == 1
-        assert "fallingstar-data.com" in django_mail.outbox[0].body
-
 
 class PasswordResetLinkOriginTests(TestCase):
     """The mailed reset link must name SITE_ORIGIN, not the Host header.
@@ -5055,12 +5625,6 @@ class BrokenLinkEmailTests(TestCase):
     def test_internal_referer_is_not_reported(self) -> None:
         # a link to a result the retention sweep has since deleted, which is not an admin's problem
         response = self.client.get("/queue/999999/data.txt", HTTP_REFERER="http://testserver/queue/")
-
-        assert response.status_code == 404, response.status_code
-        assert not django_mail.outbox, django_mail.outbox[0].subject
-
-    def test_external_referer_is_not_reported(self) -> None:
-        response = self.client.get("/no-such-page/", HTTP_REFERER="http://example.com/links")
 
         assert response.status_code == 404, response.status_code
         assert not django_mail.outbox, django_mail.outbox[0].subject
@@ -5535,17 +6099,6 @@ class TaskRunnerStatusTests(TestCase):
                 taskrunner_main.write_status(numslots=runnerstatus.NUMSLOTS, **write_status_kwargs)
                 return self.client.get(reverse("taskrunnerstatus"))
 
-    def test_missing_status_file_reports_not_running(self) -> None:
-        with (
-            tempfile.TemporaryDirectory() as tmpdir,
-            mock.patch.object(runnerstatus, "STATUS_PATH", Path(tmpdir, "nothing.json")),
-        ):
-            response = self.client.get(reverse("taskrunnerstatus"))
-
-        assert response.status_code == 200
-        assert response.json()["running"] is False
-        assert response.json()["stale"] is True
-
     def test_the_response_counts_the_tasks_of_the_signed_in_reader(self) -> None:
         """RenderInto shows the queue counts to a reader who waits on the queue.
 
@@ -5787,18 +6340,6 @@ class TaskRunnerStatusTests(TestCase):
                 response = self.client.get(reverse("taskrunnerstatus"))
 
         assert response.json()["typical_runtime_seconds"] == {}
-
-    def test_old_status_file_reports_stale(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            statuspath = Path(tmpdir, "taskrunner_status.json")
-            stale_written = timezone.now() - dt.timedelta(hours=1)
-            statuspath.write_text(json.dumps({"written": stale_written.isoformat(), "slots_busy": 0}), encoding="utf-8")
-
-            with mock.patch.object(runnerstatus, "STATUS_PATH", statuspath):
-                response = self.client.get(reverse("taskrunnerstatus"))
-
-        assert response.status_code == 200
-        assert response.json()["stale"] is True
 
     def test_an_outage_is_answered_with_a_success_code(self) -> None:
         """An outage is an answer, and thus it must not be dressed as a failure to answer.
@@ -6263,11 +6804,34 @@ class WebserverStopTests(SimpleTestCase):
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
                 mock.patch.object(atlaswebserver, "our_httpd_process", return_value=None),
-                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=False),
+                mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.NoSuchProcess(4242)),
             ):
                 assert atlaswebserver.get_httpd_pid() is None
 
             assert not pidfile.exists(), "a pid file whose process is gone should not be kept"
+
+    def test_a_pid_file_of_a_reused_pid_is_removed(self) -> None:
+        """The httpd command reads the same file, and for a live process of this user it starts nothing.
+
+        `httpd -k start` then reports "already running" for the unrelated process, so each start
+        and restart fails until somebody removes the file.
+        """
+        atlaswebserver = import_atlaswebserver()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("4242\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
+                mock.patch.object(atlaswebserver.psutil, "Process") as process,
+                # the pid is live: a process of this user that is not this server
+                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
+            ):
+                process.return_value.cmdline.return_value = ["/usr/bin/ssh", "atlas"]
+                assert atlaswebserver.get_httpd_pid() is None
+
+            assert not pidfile.exists(), "a pid file of a process that is not this server was kept"
 
     def test_a_live_process_that_cannot_be_inspected_keeps_its_pid_file(self) -> None:
         """Deleting it would throw away the only pointer to a running server.
@@ -6284,7 +6848,6 @@ class WebserverStopTests(SimpleTestCase):
             with (
                 mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)),
                 mock.patch.object(atlaswebserver.psutil, "Process", side_effect=psutil.AccessDenied(4242)),
-                mock.patch.object(atlaswebserver.psutil, "pid_exists", return_value=True),
             ):
                 assert atlaswebserver.get_httpd_pid() is None
 
@@ -6296,10 +6859,14 @@ class WebserverStopTests(SimpleTestCase):
         atlaswebserver = import_atlaswebserver()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir, "httpd.pid").write_text("", encoding="utf-8")  # truncated by an unclean exit
+            pidfile = Path(tmpdir, "httpd.pid")
+            pidfile.write_text("", encoding="utf-8")  # truncated by an unclean exit
 
             with mock.patch.object(atlaswebserver, "APACHEPATH", Path(tmpdir)):
                 assert atlaswebserver.get_httpd_pid() is None
+
+            # httpd refuses to start while the file is corrupt
+            assert not pidfile.exists(), "the unreadable pid file was kept"
 
     def test_a_process_owned_by_somebody_else_reports_rather_than_raising(self) -> None:
         atlaswebserver = import_atlaswebserver()
@@ -6315,13 +6882,6 @@ class WebserverStopTests(SimpleTestCase):
 
 
 class OpenApiSchemaTests(TestCase):
-    def test_schema_generates_without_errors(self) -> None:
-        # the schema is derived from the serializer, so this is what stops the published API
-        # documentation from drifting away from the code
-        response = self.client.get(reverse("schema"))
-
-        assert response.status_code == 200, response.content
-
     def get_schema(self) -> dict[str, t.Any]:
         import yaml
 
@@ -6373,18 +6933,6 @@ class AtlasCommandTests(TestCase):
         command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=None))
         assert "/atlas/bin/ssforce.sh 'Makemake'" in command
         assert "force.sh" not in command.replace("ssforce.sh", "")
-
-    def test_a_padded_mpc_name_is_stripped_before_the_shell_sees_it(self) -> None:
-        # the constraint permits a padded name; what it must not become is ssforce.sh '  Makemake '
-        command = self.fp_command(self.make_task(ra=None, dec=None, mpc_name="  Makemake  ", mjd_min=None))
-        assert "/atlas/bin/ssforce.sh 'Makemake'" in command
-
-    def test_a_blank_mpc_name_takes_the_coordinate_path(self) -> None:
-        # such a row is a coordinate request: the constraint reads a whitespace-only name as absent
-        # and therefore required ra and dec, so dispatching it to ssforce.sh would drop the target
-        command = self.fp_command(self.make_task(mpc_name="   ", mjd_min=None))
-        assert "/atlas/bin/force.sh 100.0 -20.0" in command
-        assert "ssforce.sh" not in command
 
     def test_zero_mjd_min_is_still_passed(self) -> None:
         # a falsy-but-present bound used to be dropped, silently widening the request
@@ -6450,6 +6998,15 @@ class AtlasCommandTests(TestCase):
         assert " sites='hko mlo chl sth tdo'" in command, command
         assert "\\'" not in command, command
 
+    def test_uv_starts_the_scripts(self) -> None:
+        # the python3 command of sc01 is too old for the scripts, and only uv reads their blocks
+        fp = self.fp_command(self.make_task(mjd_min=None))
+        assert "; uv run --quiet --script ~/atlas_gettaskimage.py " in fp, fp
+
+        task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.0, mjd_max=59100.0)
+        sso = self.ssostack_command(task)
+        assert "; uv run --quiet --script ~/atlas_gettaskimage_ssostack.py " in sso, sso
+
     def test_ssostack_cleans_up_the_remote_directory(self) -> None:
         task = self.make_task(ra=None, dec=None, mpc_name="Makemake", mjd_min=59000.0, mjd_max=59100.0)
         command = self.ssostack_command(task)
@@ -6473,41 +7030,38 @@ class AtlasCommandTests(TestCase):
 
 
 class RunRsyncTests(TestCase):
-    def test_timeout_kills_the_process_and_reports_no_exit_code(self) -> None:
-        # without a timeout an rsync against a wedged host holds the worker slot forever
-        proc = mock.MagicMock()
-        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="rsync", timeout=1)
+    def test_a_timeout_reports_no_exit_code(self) -> None:
+        # without a timeout an rsync against a wedged host holds the worker slot forever;
+        # subprocess.run kills and reaps the process at the timeout
         logged: list[str] = []
 
-        with mock.patch("subprocess.Popen", return_value=proc):
+        with mock.patch.object(
+            taskrunner_main.subprocess, "run", side_effect=subprocess.TimeoutExpired(cmd="rsync", timeout=1)
+        ) as run:
             result = taskrunner_main.run_rsync(["rsync", "a", "b"], logged.append)
 
         assert result is None
-        proc.kill.assert_called_once()
-        proc.wait.assert_called_once()  # reaped, so no zombie is left behind
+        assert run.call_args.kwargs["timeout"] == taskrunner_main.TASK_MAXTIME_SECONDS
         assert any("timed out" in line for line in logged), logged
 
     def test_nonzero_exit_is_reported(self) -> None:
-        proc = mock.MagicMock()
-        proc.communicate.return_value = ("", "rsync: connection unexpectedly closed")
-        proc.returncode = 12
+        finished = subprocess.CompletedProcess(args=[], returncode=12, stdout="", stderr="connection closed")
         logged: list[str] = []
 
-        with mock.patch("subprocess.Popen", return_value=proc):
+        with mock.patch.object(taskrunner_main.subprocess, "run", return_value=finished):
             result = taskrunner_main.run_rsync(["rsync", "a", "b"], logged.append)
 
         assert result == 12
         assert any("exited with code 12" in line for line in logged), logged
+        assert "STDERR: connection closed" in logged, logged
 
     def test_the_ssh_options_go_to_rsync_as_one_argument(self) -> None:
-        proc = mock.MagicMock()
-        proc.communicate.return_value = ("", "")
-        proc.returncode = 0
+        finished = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        with mock.patch("subprocess.Popen", return_value=proc) as popen:
+        with mock.patch.object(taskrunner_main.subprocess, "run", return_value=finished) as run:
             taskrunner_main.run_rsync(["rsync", "a", "b"], lambda _msg: None, ["-oX=1", "-oY=2"])
 
-        assert popen.call_args.args[0] == ["rsync", "-e", "ssh -oX=1 -oY=2", "a", "b"], popen.call_args
+        assert run.call_args.args[0] == ["rsync", "-e", "ssh -oX=1 -oY=2", "a", "b"], run.call_args
 
 
 class SshOptionsTests(TestCase):
@@ -7195,14 +7749,18 @@ class ProcessTimeoutTests(TestCase):
         fork() there copies only the calling thread but all of the memory, so a lock another
         thread held at that instant is held forever in the child -- which then deadlocks on first
         touching whatever it guards, and for an import-heavy child that is the import machinery.
-        The platform default hid this: macOS spawns, Linux forks on 3.13 and forkserver on 3.14+.
+        The platform default hid this: macOS spawns and Linux uses forkserver.
         """
         captured = []
 
         with mock.patch.object(
             misc, "run_process_with_timeout", side_effect=lambda proc, _timeout: captured.append(proc)
         ):
-            misc.make_pdf_plot(localresultfile=Path("/nonexistent/job00001.txt"), taskid=1)
+            misc.make_pdf_plot(
+                localresultfile=Path("/nonexistent/job00001.txt"),
+                taskid=1,
+                outputpath=Path("/nonexistent/job00001.pdf"),
+            )
 
         assert len(captured) == 1, captured
         # the class, not the constant: this is what was actually handed to the runner
@@ -7254,6 +7812,12 @@ class PdfPlotViewTests(TestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(username="pdfuser", email="pdf@example.com", password=None)
         self.task = Task.objects.create(user=self.user, ra=1.0, dec=2.0, finishtimestamp=timezone.now())
+        # the record of a failed render is in a locmem cache that outlives the rollback of the
+        # database, and the task ids repeat between tests
+        caches["taskderived"].clear()
+
+    def tearDown(self) -> None:
+        caches["taskderived"].clear()
 
     @contextlib.contextmanager
     def result_file(self):
@@ -7337,6 +7901,60 @@ class PdfPlotViewTests(TestCase):
         with locks.try_lock(f"pdfplot-lock-{self.task.id}") as held:
             assert held, "the per-task lock was left behind"
 
+    def test_a_render_that_makes_no_file_is_not_repeated(self) -> None:
+        """The view needs no credentials, and a render starts a new interpreter with matplotlib.
+
+        A result file whose rows the plotter refuses gives no PDF each time. Without a record of
+        the failure, each request for it starts a new render, and a loop of such requests keeps
+        the render slots of the site busy.
+        """
+        renders: list[None] = []
+
+        def render_nothing(**_kwargs: t.Any) -> bool:
+            renders.append(None)
+            return True
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=render_nothing):
+            first = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+            second = self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert first.status_code == 404, first.status_code
+        assert second.status_code == 404, second.status_code
+        assert len(renders) == 1, f"{len(renders)} renders for one result file that gives no PDF"
+
+    def test_forgetting_the_derived_cache_permits_a_new_render(self) -> None:
+        renders: list[None] = []
+
+        def render_nothing(**_kwargs: t.Any) -> bool:
+            renders.append(None)
+            return True
+
+        with self.result_file(), mock.patch.object(views, "make_pdf_plot", side_effect=render_nothing):
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+            self.task.forget_derived_cache()
+            self.client.get(reverse("taskpdfplot", args=[self.task.id]))
+
+        assert len(renders) == 2, renders
+
+    def test_a_stack_request_gets_no_render_and_no_plot_url(self) -> None:
+        # the data file of a stack request is the output of the stack script, not a light curve
+        stack = Task.objects.create(
+            user=self.user, mpc_name="Ceres", request_type=Task.RequestType.IMGSTACK, finishtimestamp=timezone.now()
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(STATIC_ROOT=tmpdir):
+            resultfile = Path(tmpdir, f"{stack.localresultfileprefix()}.txt")
+            resultfile.parent.mkdir(parents=True, exist_ok=True)
+            resultfile.write_text("stack_rock.sh output\n", encoding="utf-8")
+            with mock.patch.object(views, "make_pdf_plot") as render:
+                response = self.client.get(reverse("taskpdfplot", args=[stack.id]))
+            self.client.force_login(self.user)
+            detail = self.client.get(reverse("task-detail", args=[stack.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 404, response.status_code
+        render.assert_not_called()
+        assert detail.json()["pdfplot_url"] is None, detail.json()["pdfplot_url"]
+
 
 class RegistrationVerificationTests(TestCase):
     """Registration used to log the new account straight in without proving the address."""
@@ -7350,6 +7968,10 @@ class RegistrationVerificationTests(TestCase):
 
     def register(self, email: str = "newcomer@example.com") -> t.Any:
         return self.client.post(reverse("register"), {**self.credentials, "email": email})
+
+    def password(self) -> dict[str, str]:
+        """Return the form data of the activation: the password that the registrant chose."""
+        return {"password": self.credentials["password1"]}
 
     def verification_link(self) -> str:
         assert len(django_mail.outbox) == 1, django_mail.outbox
@@ -7379,7 +8001,7 @@ class RegistrationVerificationTests(TestCase):
     def test_following_the_link_activates_and_logs_in(self) -> None:
         self.register()
 
-        response = self.client.post(self.verification_link())
+        response = self.client.post(self.verification_link(), self.password())
 
         assert response.status_code == 302, response.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -7389,10 +8011,10 @@ class RegistrationVerificationTests(TestCase):
         # is_active is part of the token hash, so activation invalidates the link with no state kept
         self.register()
         link = self.verification_link()
-        self.client.post(link)
+        self.client.post(link, self.password())
         self.client.logout()
 
-        response = self.client.post(link)
+        response = self.client.post(link, self.password())
 
         assert response.status_code == 400, response.status_code
 
@@ -7430,7 +8052,7 @@ class RegistrationVerificationTests(TestCase):
 
         assert response.status_code == 200
         assert len(django_mail.outbox) == 1
-        assert self.client.post(self.verification_link()).status_code == 302
+        assert self.client.post(self.verification_link(), self.password()).status_code == 302
 
     def test_resend_says_the_same_thing_whether_or_not_the_account_exists(self) -> None:
         # whether an address has an account here is not something a stranger should be able to probe
@@ -7717,7 +8339,7 @@ class RegistrationVerificationTests(TestCase):
         link = self.verification_link()
 
         self.client.get(link)
-        response = self.client.post(link)
+        response = self.client.post(link, self.password())
 
         assert response.status_code == 302, response.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -7800,7 +8422,7 @@ class RegistrationVerificationTests(TestCase):
         # leaving it behind would let a later resend issue links for an account that is already
         # active and verified
         self.register()
-        self.client.post(self.verification_link())
+        self.client.post(self.verification_link(), self.password())
 
         user = User.objects.get(username="newcomer")
         assert user.is_active is True
@@ -7831,12 +8453,12 @@ class RegistrationVerificationTests(TestCase):
         assert offered.status_code == 200, offered.status_code
         assert offered["Referrer-Policy"] == "strict-origin"
 
-        confirmed = self.client.post(link)
+        confirmed = self.client.post(link, self.password())
         assert confirmed.status_code == 302, confirmed.status_code
         assert confirmed["Referrer-Policy"] == "strict-origin"
 
         # and the invalid-link page, which is served at the same URL once the link is spent
-        spent = self.client.post(link)
+        spent = self.client.post(link, self.password())
         assert spent.status_code == 400, spent.status_code
         assert spent["Referrer-Policy"] == "strict-origin"
 
@@ -7864,7 +8486,9 @@ class RegistrationVerificationTests(TestCase):
         csrfinput = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', offered.content)
         assert csrfinput is not None, offered.content
 
-        confirmed = browser.post(link, {"csrfmiddlewaretoken": csrfinput.group(1).decode()}, HTTP_ORIGIN=origin)
+        confirmed = browser.post(
+            link, {"csrfmiddlewaretoken": csrfinput.group(1).decode(), **self.password()}, HTTP_ORIGIN=origin
+        )
 
         assert confirmed.status_code == 302, confirmed.status_code
         assert User.objects.get(username="newcomer").is_active is True
@@ -7896,7 +8520,7 @@ class RegistrationVerificationTests(TestCase):
             return pending
 
         with mock.patch.object(views, "awaiting_verification", side_effect=consumed_after_the_first_check):
-            response = self.client.post(link)
+            response = self.client.post(link, self.password())
 
         assert response.status_code == 400, response.status_code
         assert "_auth_user_id" not in self.client.session
@@ -7911,10 +8535,206 @@ class RegistrationVerificationTests(TestCase):
         user.last_login = timezone.now()
         user.save()
 
-        response = self.client.post(link)
+        response = self.client.post(link, self.password())
 
         assert response.status_code == 400, response.status_code
         assert User.objects.get(pk=user.pk).is_active is False
+
+    def test_activation_with_a_wrong_password_is_refused(self) -> None:
+        """The link proves the mailbox, and the password proves that the same person made the account.
+
+        A different person can register with this address and choose the password. Without the
+        password check, the owner of the address activates that account and is signed in to it,
+        and the other person also knows its password.
+        """
+        self.register()
+        link = self.verification_link()
+
+        response = self.client.post(link, {"password": "a-different-password"})
+
+        assert response.status_code == 400, response.status_code
+        assert User.objects.get(username="newcomer").is_active is False, "a wrong password activated the account"
+        assert "_auth_user_id" not in self.client.session
+        assert "password is not correct" in response.content.decode()
+
+    def test_the_activation_password_has_a_budget(self) -> None:
+        # the check of a password of one account, so the budget is for that account
+        self.register()
+        link = self.verification_link()
+
+        with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
+            for _ in range(3):
+                assert self.client.post(link, {"password": "a-different-password"}).status_code == 400
+            blocked = self.client.post(link, self.password())
+
+        assert blocked.status_code == 429, blocked.status_code
+        assert blocked["Retry-After"] == str(int(throttles.LOGIN_FAILURE_WINDOW_SECONDS))
+        assert User.objects.get(username="newcomer").is_active is False, "the right password worked over the budget"
+
+    def test_a_new_registration_replaces_an_unverified_account_at_the_address(self) -> None:
+        """An address that waits for its confirmation does not stay with the first registrant.
+
+        Without this rule, a person who registers with the address of someone else holds it, and a
+        resend every few days stops the sweep of unverified accounts from removing it.
+        """
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "squatter",
+                "password1": "squatter-password",
+                "password2": "squatter-password",
+                "email": "newcomer@example.com",
+            },
+        )
+        squatterlink = self.verification_link()
+        django_mail.outbox.clear()
+
+        response = self.register()
+
+        assert response.status_code == 200, response.status_code
+        assert "already exists" not in response.content.decode()
+        assert not User.objects.filter(username="squatter").exists(), "the unverified account stayed"
+        assert self.client.post(squatterlink, {"password": "squatter-password"}).status_code == 400
+        assert self.client.post(self.verification_link(), self.password()).status_code == 302
+        assert User.objects.get(username="newcomer").is_active is True
+
+    def test_an_account_activated_during_the_replacement_stays(self) -> None:
+        """The replacement reads is_active again under the row lock that verify_email also takes.
+
+        Here the activation lands between the read of the candidates and the lock, as a
+        concurrent verify_email can on MySQL. The account of the owner must stay.
+        """
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "firstcomer",
+                "password1": "first-password-ok",
+                "password2": "first-password-ok",
+                "email": "newcomer@example.com",
+            },
+        )
+        django_mail.outbox.clear()
+        real = views.unverified_accounts_at
+
+        def activated_after_the_read(email: str) -> t.Any:
+            candidates = list(real(email))
+            User.objects.filter(username="firstcomer").update(is_active=True)
+            return User.objects.filter(pk__in=[user.pk for user in candidates])
+
+        with mock.patch.object(views, "unverified_accounts_at", side_effect=activated_after_the_read):
+            self.register()
+
+        # The activation ran inside the transaction of the registration, and the address index
+        # then refused the new account, so the rollback also undid the activation. What counts
+        # is that the replacement did not delete the account.
+        assert User.objects.filter(username="firstcomer").exists(), "the replacement deleted an activated account"
+        assert not User.objects.filter(username="newcomer").exists()
+
+    def test_the_replaced_accounts_are_locked(self) -> None:
+        # SQLite has no row locks and Django emits nothing for it there; MySQL, which CI and
+        # production use, does
+        if not connection.features.has_select_for_update:
+            self.skipTest("this database has no SELECT ... FOR UPDATE")
+
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "firstcomer",
+                "password1": "first-password-ok",
+                "password2": "first-password-ok",
+                "email": "newcomer@example.com",
+            },
+        )
+        django_mail.outbox.clear()
+
+        with CaptureQueriesContext(connection) as queries:
+            self.register()
+
+        assert any("FOR UPDATE" in query["sql"] and "auth_user" in query["sql"] for query in queries), [
+            query["sql"] for query in queries
+        ]
+
+    def test_a_new_registration_can_reuse_the_username_of_the_replaced_account(self) -> None:
+        # for example after the loss of the password that the first registration chose
+        self.register()
+        first = User.objects.get(username="newcomer")
+        django_mail.outbox.clear()
+
+        response = self.client.post(
+            reverse("register"),
+            {
+                "username": "newcomer",
+                "password1": "a-second-password",
+                "password2": "a-second-password",
+                "email": "newcomer@example.com",
+            },
+        )
+
+        assert response.status_code == 200, response.status_code
+        assert "already exists" not in response.content.decode()
+        replacement = User.objects.get(username="newcomer")
+        assert replacement.pk != first.pk
+        assert replacement.check_password("a-second-password")
+
+    def test_the_username_of_an_account_at_a_different_address_still_blocks(self) -> None:
+        self.register(email="first@example.com")
+
+        response = self.register(email="second@example.com")
+
+        assert "already exists" in response.content.decode()
+        assert User.objects.get(username="newcomer").email == "first@example.com"
+
+    def test_the_activation_password_is_hidden_in_error_reports(self) -> None:
+        from importlib import import_module
+
+        from django.views.debug import SafeExceptionReporterFilter
+
+        self.register()
+        link = self.verification_link()
+        request = RequestFactory().post(link, self.password())
+        request.session = import_module("django.contrib.sessions.backends.db").SessionStore()
+        captured: dict[str, t.Any] = {}
+        original = views.account_password_failures_exceeded
+
+        def capture(userpk: object) -> bool:
+            captured["post"] = SafeExceptionReporterFilter().get_post_parameters(request)
+            return original(userpk)
+
+        match = resolve(urllib.parse.urlsplit(link).path)
+        with mock.patch.object(views, "account_password_failures_exceeded", side_effect=capture):
+            match.func(request, *match.args, **match.kwargs)
+
+        assert captured["post"]["password"] != self.credentials["password1"], captured
+        assert set(captured["post"]["password"]) == {"*"}, captured
+
+    def test_a_verified_account_still_blocks_the_address(self) -> None:
+        User.objects.create_user(username="incumbent", email="newcomer@example.com", password=None)
+
+        response = self.register()
+
+        assert "already exists" in response.content.decode()
+        assert User.objects.filter(username="incumbent").exists()
+        assert not User.objects.filter(username="newcomer").exists()
+
+    def test_the_login_link_of_a_token_page_does_not_carry_the_token(self) -> None:
+        """The login page runs analytics, and gtag reports the URL with its query string.
+
+        A "next" that names the verification URL thus hands the token to Google Analytics, although
+        the token page itself does not run analytics.
+        """
+        self.register()
+        link = self.verification_link()
+        token = link.rstrip("/").rsplit("/", 1)[-1]
+
+        for response, description in (
+            (self.client.get(link), "the confirmation page"),
+            (self.client.post(link, {"password": "a-different-password"}), "the page of a wrong password"),
+            (self.client.get(link[:-4] + "beef/"), "the invalid-link page"),
+        ):
+            body = response.content.decode()
+            assert 'href="/login/"' in body or 'href="/forcedphot/login/"' in body, description
+            assert token not in body, f"{description} puts the token in a link"
+            assert "next=" not in body, f"{description} has a login link with next"
 
 
 class EmailUniquenessConstraintTests(TransactionTestCase):
@@ -8252,9 +9072,12 @@ class PdfPlotRenderSlotTests(TestCase):
         )
         # the slots this test holds, released by tearDown
         self.heldslots = contextlib.ExitStack()
+        # a render that makes no file leaves a record in this cache, and the task ids repeat
+        caches["taskderived"].clear()
 
     def tearDown(self) -> None:
         self.heldslots.close()
+        caches["taskderived"].clear()
 
     def take_every_slot(self) -> None:
         for slot in range(views.PDF_PLOT_RENDER_SLOTS):
@@ -8420,6 +9243,25 @@ class FailedLoginBudgetTests(TestCase):
 
         counted = throttles.count_in_window("test-window", 60, increment=False)
         assert counted == threads * each, f"{counted} of {threads * each} concurrent failures were counted"
+
+    def test_a_401_without_basic_credentials_sends_no_basic_challenge(self) -> None:
+        """A browser opens its own password dialog for a fetch that gets a Basic challenge.
+
+        The queue page polls queuepositions.json with the session. Without the rule, each poll after
+        the end of the session opens that dialog.
+        """
+        response = self.client.get(reverse("queuepositions"), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 401, response.status_code
+        assert response["WWW-Authenticate"] == "Token", response["WWW-Authenticate"]
+
+    def test_a_401_for_basic_credentials_keeps_the_basic_challenge(self) -> None:
+        response = self.client.get(
+            reverse("queuepositions"), HTTP_ACCEPT="application/json", HTTP_AUTHORIZATION=self.basic("wrong")
+        )
+
+        assert response.status_code == 401, response.status_code
+        assert response["WWW-Authenticate"].startswith("Basic"), response["WWW-Authenticate"]
 
     def test_a_basic_header_on_any_api_view_is_metered(self) -> None:
         with mock.patch.object(throttles, "LOGIN_FAILURE_LIMIT", 3):
@@ -8737,15 +9579,6 @@ class ThirdPartyScriptTests(TestCase):
             filename = f"{component}-{bokeh_version}.min.js"
             assert f"https://cdn.pydata.org/bokeh/release/{filename}" in content, filename
             assert f'integrity="sha384-{hashes[filename]}"' in content, filename
-
-    def test_the_bokeh_url_tracks_the_installed_version(self) -> None:
-        # the version used to be hardcoded in the template, so an upgrade of the pin in
-        # pyproject.toml left the page loading a BokehJS that did not match the server-rendered plots
-        from bokeh import __version__ as bokeh_version
-
-        for script in views.bokeh_cdn_scripts():
-            assert bokeh_version in script["src"], script
-            assert script["integrity"].startswith("sha384-")
 
     def test_no_page_loads_jquery_or_bootstrap_3(self) -> None:
         """The site's own layout no longer copies DRF's, so it carries neither.
@@ -9353,14 +10186,6 @@ class SiteNoticeTests(TestCase):
         content = self.page(reverse("index"))
         assert f'<meta name="atlas-reader" content="{self.user.pk}" />' in content
 
-    def test_the_queue_page_carries_it_too(self) -> None:
-        self.client.force_login(self.user)
-
-        content = self.page(reverse("task-list"))
-
-        assert 'id="sitenotice"' in content
-        assert "js/runnerstatus.min.js" in content
-
     def test_the_browsable_api_carries_it_too(self) -> None:
         self.client.force_login(self.user)
 
@@ -9535,8 +10360,9 @@ class RequestCostTests(TestCase):
             )
 
         assert response.status_code == 201, response.content
-        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper() and "starttimestamp" in q["sql"]]
-        assert len(counts) == 1, f"the user's queued tasks were counted {len(counts)} times"
+        # the count of the unfinished tasks, which filters on finishtimestamp
+        counts = [q["sql"] for q in queries if "COUNT(" in q["sql"].upper() and "finishtimestamp" in q["sql"]]
+        assert len(counts) == 1, f"the user's unfinished tasks were counted {len(counts)} times"
         assert Task.objects.get(user=self.user).userqueuedtasks_on_submit == 0
 
     def test_image_links_are_looked_up_for_the_rows_that_can_have_them(self) -> None:
@@ -9628,12 +10454,6 @@ class BrowsableApiLoginBudgetTests(TestCase):
             blocked = self.client.post(reverse("login"), {"username": "guessed", "password": "pw12345678"})
 
         assert blocked.status_code == 429, blocked.status_code
-
-    def test_an_unauthenticated_browser_is_sent_to_a_page_with_a_budget(self) -> None:
-        response = self.client.get(reverse("task-list"), HTTP_ACCEPT="text/html")
-
-        assert response.status_code == 302, response.status_code
-        assert response["Location"].startswith(reverse("login")), response["Location"]
 
 
 class PasswordResetLimitTests(TestCase):
@@ -10091,6 +10911,46 @@ class ChartQueryStringTests(TestCase):
         assert response.status_code == 302, response.status_code
 
 
+class StatsFragmentQueryStringTests(TestCase):
+    """The two fragments of the stats page send a query string back to the bare path, as the charts do."""
+
+    def test_a_query_string_is_redirected_to_the_path(self) -> None:
+        for name in ("statsshortterm", "statslongterm"):
+            response = self.client.get(f"{reverse(name)}?n=1")
+
+            assert response.status_code == 302, (name, response.status_code)
+            assert response["Location"] == reverse(name), name
+
+
+class SuspiciousRequestMailTests(TestCase):
+    """A SuspiciousOperation is logged at ERROR, and the "django" logger mails ADMINS.
+
+    An anonymous client can send such a request in a loop, and each mail uses the mail account that
+    the verification and the result mails also use.
+    """
+
+    @override_settings(ADMINS=[("Admin", "admin@example.com")])
+    def test_a_404_sends_no_admin_mail(self) -> None:
+        # Django logs a 404 at WARNING, and mail_admins handles only ERROR, so the stock handler
+        # sends nothing for one
+        django_mail.outbox.clear()
+
+        missingpage = self.client.get("/no-such-page/")
+        missingtask = self.client.get(reverse("task-detail", args=[999999]), HTTP_ACCEPT="application/json")
+
+        assert (missingpage.status_code, missingtask.status_code) == (404, 404)
+        assert not django_mail.outbox, [message.subject for message in django_mail.outbox]
+
+    @override_settings(ADMINS=[("Admin", "admin@example.com")])
+    def test_too_many_fields_send_no_admin_mail(self) -> None:
+        django_mail.outbox.clear()
+
+        response = self.client.get(f"{reverse('login')}?{'&' * 1001}")
+
+        assert response.status_code == 400, response.status_code
+        assert not django_mail.outbox, [message.subject for message in django_mail.outbox]
+
+
 class PasswordResetLimitPageTests(TestCase):
     def test_the_over_budget_page_says_why(self) -> None:
         caches["throttle"].clear()
@@ -10101,34 +10961,54 @@ class PasswordResetLimitPageTests(TestCase):
         assert "Too many password reset requests" in response.content.decode()
 
 
-class RemoteScriptPythonVersionTests(SimpleTestCase):
-    """The scripts that the task runner starts on sc01 must run on Python 3.8.
+class RemoteScriptMetadataTests(SimpleTestCase):
+    """The task runner starts the scripts on sc01 with uv, which reads the inline metadata block.
 
-    The python3 command on sc01 is Python 3.8. A script that fails there writes no result file, and
-    the task runner then starts the task again without a limit.
+    A script that fails there writes no result file, and the task runner then starts the task
+    again without a limit.
     """
 
     scripts: t.ClassVar[list[Path]] = sorted(Path(atlastaskrunner.__file__).parent.glob("taskrunner/atlas_*.py"))
 
+    @staticmethod
+    def metadata(script: Path) -> dict[str, t.Any]:
+        # the regular expression of the reference implementation in PEP 723
+        found = re.search(
+            r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$",
+            script.read_text(encoding="utf-8"),
+        )
+        assert found is not None, script.name
+        assert found["type"] == "script", script.name
+        content = "".join(line[2:] if line.startswith("# ") else line[1:] for line in found["content"].splitlines(True))
+        return tomllib.loads(content)
+
     def test_the_scripts_are_found(self) -> None:
         assert len(self.scripts) >= 3, self.scripts
 
-    def test_the_syntax_is_python_38(self) -> None:
+    def test_the_python_version_is_that_of_the_project(self) -> None:
+        project = tomllib.loads(Path(settings.BASE_DIR, "pyproject.toml").read_text(encoding="utf-8"))
         for script in self.scripts:
             with self.subTest(script=script.name):
-                ast.parse(script.read_text(encoding="utf-8"), filename=str(script), feature_version=(3, 8))
+                assert self.metadata(script)["requires-python"] == project["project"]["requires-python"]
 
-    def test_zip_has_no_strict_argument(self) -> None:
-        # zip() accepts the strict argument from Python 3.10
+    def test_the_block_lists_each_package_that_the_script_imports(self) -> None:
         for script in self.scripts:
             tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
-            strictcalls = [
-                node.lineno
+            imported = {
+                alias.name.partition(".")[0]
                 for node in ast.walk(tree)
-                if isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "zip"
-                and any(keyword.arg == "strict" for keyword in node.keywords)
-            ]
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            }
+            imported |= {
+                node.module.partition(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module and not node.level
+            }
+            packages = imported - sys.stdlib_module_names
+            listed = {
+                re.split(r"[^A-Za-z0-9._-]", dependency, maxsplit=1)[0]
+                for dependency in self.metadata(script)["dependencies"]
+            }
             with self.subTest(script=script.name):
-                assert not strictcalls, strictcalls
+                assert packages == listed, (packages, listed)

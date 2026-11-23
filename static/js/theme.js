@@ -65,10 +65,6 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
     return darkMediaQuery.matches ? 'dark' : 'light';
   }
 
-  function currentTheme() {
-    return document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'dark' : 'light';
-  }
-
   /*
   Colours for the light curve plots, which Plotly paints into a canvas and so cannot take from the
   stylesheet the way the rest of the page does. Both backgrounds are transparent, so a plot sits on
@@ -76,8 +72,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
   properties the surrounding page is coloured from, so there is no second set of values to keep in
   step with the theme. The series colours are the data and belong to lightcurveplotly.js.
 
-  `axis` is separate from the rest because it applies once per axis, and which axes a plot has
-  depends on what is being plotted -- see below and lightcurveplotly.js.
+  `axis` is separate from the rest because it applies once per axis.
   */
   function plotlyColors() {
     var styles = getComputedStyle(document.documentElement);
@@ -108,7 +103,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
   Every graph div Plotly has drawn into carries `data` and `layout` properties, which is what
   separates a live plot from a .plot div whose data file has not arrived yet. The axis colours are
   only sent for the axes that div already has: relayout creates an axis it is given attributes for,
-  so naming xaxis2 unconditionally would draw a second x axis on the plots that have one axis.
+  so naming an axis that a plot does not have would add that axis to the plot.
   */
   function recolourPlots() {
     if (!window.Plotly) {
@@ -117,8 +112,6 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
 
     // Not window.atlasLightcurves[divid](), which lightcurveplotly.js publishes to redraw a plot
     // in the other unit: that redraw passes an explicit range and would discard the pan and zoom.
-
-
     var colors = plotlyColors();
 
     document.querySelectorAll('div.plot').forEach(function (div) {
@@ -136,7 +129,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
         'hoverlabel.font.color': colors.hoverlabel.font.color
       };
 
-      ['xaxis', 'xaxis2', 'yaxis'].forEach(function (axisname) {
+      ['xaxis', 'yaxis'].forEach(function (axisname) {
         if (div.layout[axisname]) {
           Object.keys(colors.axis).forEach(function (property) {
             update[axisname + '.' + property] = colors.axis[property];
@@ -270,7 +263,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
 
   function applyMode(mode) {
     document.documentElement.setAttribute('data-bs-theme', resolve(mode));
-    document.dispatchEvent(new CustomEvent('atlas:theme', { detail: { theme: currentTheme() } }));
+    document.dispatchEvent(new CustomEvent('atlas:theme'));
   }
 
   /** Mark the chosen entry in the dropdown and show the icon that goes with it. */
@@ -326,7 +319,7 @@ whenever the mode changes so an existing plot or chart can be recoloured in plac
     }
   }
 
-  window.atlasTheme = { current: currentTheme, plotlyColors: plotlyColors, themeBokehItem: themeBokehItem };
+  window.atlasTheme = { plotlyColors: plotlyColors, themeBokehItem: themeBokehItem };
 
   applyMode(chosenMode);
 

@@ -1,6 +1,5 @@
 import math
 import typing as t
-from collections.abc import Mapping
 from typing import override
 
 from django.conf import settings
@@ -14,6 +13,9 @@ from atlasserver.forcephot.models import MPC_NAME_WHITESPACE
 from atlasserver.forcephot.models import Task
 from atlasserver.forcephot.webhooks import CallbackUrlError
 from atlasserver.forcephot.webhooks import validate_callback_url
+
+if t.TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def stack_requests_allowed(context: Mapping[str, t.Any]) -> bool:
@@ -34,7 +36,7 @@ def is_finite_float(val):
         return False
     try:
         f_val = float(val)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         # TypeError as well as ValueError: a JSON body can put a list or an object where a number
         # belongs, and float() raises TypeError for those, which would surface as a 500
         return False
@@ -72,7 +74,13 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         return None
 
     def get_pdfplot_url(self, obj) -> str | None:
-        if obj.localresultfile() and not obj.error_msg and (request := self.context.get("request")):
+        # only a forced photometry task has a light curve; see views.taskpdfplot
+        if (
+            obj.request_type == Task.RequestType.FP
+            and obj.localresultfile()
+            and not obj.error_msg
+            and (request := self.context.get("request"))
+        ):
             return request.build_absolute_uri(reverse("taskpdfplot", args=[obj.id]))
 
         return None
@@ -193,10 +201,20 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
         if value == "":
             return value
 
-        badchars = "'\";"
-        if any(c in dict.fromkeys(badchars) for c in value):
+        # The quotes and the semicolon would break the shell command. The runner gives the name
+        # in single quotes as one argument to the remote script, and that script reads its
+        # options as key=value arguments. Thus "=" and a leading "-" could set an option, and "$",
+        # "`" and "\\" have a meaning if the script expands its arguments. A real designation
+        # has none of these characters. A hyphen inside a name stays valid ("Hale-Bopp").
+        badchars = "'\";=$`\\"
+        if value.startswith("-") or any(c in badchars or not c.isprintable() for c in value):
             raise serializers.ValidationError(
-                {field: f"{prefix}Invalid mpc_name. May not contain quotes or semicolons"}
+                {
+                    field: (
+                        f"{prefix}Invalid mpc_name. The name must not start with a hyphen or contain quotes,"
+                        " semicolons, the characters = $ ` \\, or control characters"
+                    )
+                }
             )
 
         return value
@@ -426,7 +444,7 @@ class ForcePhotTaskSerializer(serializers.ModelSerializer[Task]):
 
             try:
                 Task.objects.all().get(id=parent_task_id, request_type="FP")
-            except (ObjectDoesNotExist, IndexError):
+            except ObjectDoesNotExist, IndexError:
                 msg = "An IMGZIP task must keep its parent_task_id set to an FP task id."
                 raise serializers.ValidationError(msg) from None
 

@@ -30,14 +30,17 @@ export class PollCache {
         return url in this.bodies;
     }
 
+    /**
+     * Remember the ETag of a page.
+     *
+     * The caller stores the tag beside the body it describes, once it has decided to apply that
+     * body: a tag held without its body makes the next poll ask for a 304 that the cache cannot
+     * restore. A missing tag keeps the previous one.
+     */
     storeEtag(url, etag) {
         if (etag) {
             this.etags[url] = etag;
         }
-    }
-
-    getEtag(url) {
-        return this.etags[url];
     }
 
     /**
@@ -52,16 +55,5 @@ export class PollCache {
             headers['If-None-Match'] = this.etags[url];
         }
         return headers;
-    }
-
-    /**
-     * Classify a response: NOT_MODIFIED for a 304, otherwise null (the caller reads the body).
-     *
-     * This stores nothing. The caller stores the tag with storeEtag beside the body it describes,
-     * once it has decided to apply that body: a tag held without its body makes the next poll ask
-     * for a 304 that the cache cannot restore.
-     */
-    noteResponse(status) {
-        return status === 304 ? NOT_MODIFIED : null;
     }
 }

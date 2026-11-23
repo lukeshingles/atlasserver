@@ -1,14 +1,12 @@
 import datetime as dt
 import shutil
 import typing as t
-from collections.abc import Collection
 from pathlib import Path
 from typing import override
 
 from django.conf import settings
 
 # the project uses the default user model, and django-stubs types against the concrete class
-from django.contrib.auth.models import User
 from django.core.cache import caches
 from django.db import models
 from django.db import transaction
@@ -22,7 +20,13 @@ from django.utils import timezone
 
 from atlasserver.forcephot.misc import country_code_to_name
 from atlasserver.forcephot.misc import datetime_to_mjd
+from atlasserver.forcephot.misc import pdfplot_failed_cachekey
 from atlasserver.forcephot.misc import resultplotdatajs_cachekey
+
+if t.TYPE_CHECKING:
+    from collections.abc import Collection
+
+    from django.contrib.auth.models import User
 
 
 def get_mjd_min_default() -> float:
@@ -165,7 +169,7 @@ class Task(models.Model):
     user_id: int
     parent_task_id: int | None
     # set by prefetch_imagerequests(), or by a caller that knows the answer; see live_imagerequests
-    prefetched_imagerequests: "list[Task]"
+    prefetched_imagerequests: list[Task]
 
     # per-instance memoisation slots, declared as class attributes so that no __init__ override is
     # needed. Model instances do not outlive a request, so a stale entry is not a concern.
@@ -367,7 +371,7 @@ class Task(models.Model):
         imagstackfile = Path(f"{self.localresultfileprefix()}.fits")
         return imagstackfile if Path(settings.STATIC_ROOT, imagstackfile).exists() else None
 
-    def live_imagerequests(self) -> "list[Task]":
+    def live_imagerequests(self) -> list[Task]:
         """Return the image requests of this task that are not archived, oldest first.
 
         Answered from the prefetch when the caller made one (see prefetch_imagerequests), so a page
@@ -386,7 +390,7 @@ class Task(models.Model):
 
         return self._imagerequest_cache
 
-    def _imagerequest_task(self) -> "Task | None":
+    def _imagerequest_task(self) -> Task | None:
         """Return the image request that this task reports, or None if it has none."""
         live = self.live_imagerequests()
 
@@ -409,7 +413,7 @@ class Task(models.Model):
         return bool(imagerequest.finishtimestamp) if imagerequest is not None else None
 
     @staticmethod
-    def live() -> "models.QuerySet[Task]":
+    def live() -> models.QuerySet[Task]:
         """Return the tasks that have not been archived: everything a reader may still be shown.
 
         delete() archives a finished task instead of removing it, so archived means the owner
@@ -418,7 +422,7 @@ class Task(models.Model):
         return Task.objects.filter(is_archived=False)
 
     @staticmethod
-    def queued() -> "models.QuerySet[Task]":
+    def queued() -> models.QuerySet[Task]:
         """Return the tasks that are waiting or running: the unfinished tasks that a reader may be shown.
 
         One definition, because both ends of the range are read together -- Task.queuepos subtracts
@@ -507,7 +511,7 @@ class Task(models.Model):
         return self.user.username
 
     @staticmethod
-    def prefetch_imagerequests() -> "models.Prefetch[str, models.QuerySet[Task, Task]]":
+    def prefetch_imagerequests() -> models.Prefetch[str, models.QuerySet[Task, Task]]:
         """Return the prefetch that lets live_imagerequests() answer without a query per task."""
         return models.Prefetch(
             "imagerequest",
@@ -515,7 +519,7 @@ class Task(models.Model):
             to_attr="prefetched_imagerequests",
         )
 
-    def create_imagerequest(self, user: User, *, from_api: bool, **fields: t.Any) -> "Task | None":
+    def create_imagerequest(self, user: User, *, from_api: bool, **fields: t.Any) -> Task | None:
         """Save an image request for this task, with its own copy of the data file; None without one.
 
         The row is saved before the copy, because the copy is named for its id. A parent with no
@@ -533,7 +537,7 @@ class Task(models.Model):
 
         return child if child.copy_parent_datafile() else None
 
-    def new_imagerequest(self, user: User, *, from_api: bool) -> "Task":
+    def new_imagerequest(self, user: User, *, from_api: bool) -> Task:
         """Return an unsaved IMGZIP task that retrieves the images behind this finished FP task.
 
         Here rather than in the view, so that the decision of which fields a child inherits sits
@@ -625,8 +629,8 @@ class Task(models.Model):
             self._unlink_results([".pdf", ".fits", ".jpg", ".txt", ".zip"])
 
     def forget_derived_cache(self) -> None:
-        """Drop the cached plot data generated from this task's result file."""
-        caches["taskderived"].delete(resultplotdatajs_cachekey(self.id))
+        """Drop the cached plot data generated from this task's result file, and the record of a failed PDF render."""
+        caches["taskderived"].delete_many([resultplotdatajs_cachekey(self.id), pdfplot_failed_cachekey(self.id)])
 
     # returns None rather than Model.delete's (count, per-type counts): a finished task is archived
     # instead of deleted, so there is no honest count to report for that branch

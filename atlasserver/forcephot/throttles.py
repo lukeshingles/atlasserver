@@ -7,6 +7,7 @@ from django.core.cache import caches
 from django.views.decorators.debug import sensitive_variables
 from rest_framework import exceptions
 from rest_framework.authentication import BasicAuthentication
+from rest_framework.authentication import get_authorization_header
 
 # the same tuple ForcePhotPermission branches on, so the two cannot drift on what counts as a read.
 # Safe methods are throttled far more loosely than writes, but not exempt: the queue page polls the
@@ -14,7 +15,7 @@ from rest_framework.authentication import BasicAuthentication
 # previously unlimited -- an unauthenticated caller could poll a task detail as fast as the server
 # would answer.
 from rest_framework.permissions import SAFE_METHODS
-from rest_framework.request import Request
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.throttling import SimpleRateThrottle
 
 from atlasserver.forcephot.locks import hold_lock
@@ -25,6 +26,7 @@ if t.TYPE_CHECKING:
     # still being imported, so importing APIView here at run time is a circular import that leaves
     # the whole app unable to start. rest_framework.permissions above is safe: views.py already
     # imports it at module scope.
+    from rest_framework.request import Request
     from rest_framework.views import APIView
 
 # Scope used for safe methods, in place of whatever the view declares for writes. Separate so that
@@ -33,6 +35,19 @@ READ_SCOPE = "forcephotread"
 
 # how many locks the fixed-window counters share; see count_in_window
 WINDOW_LOCK_STRIPES = 64
+
+
+def window_lock_name(cachekey: str) -> str:
+    """Return the name of the lock stripe of a cache key; see count_in_window."""
+    return f"window-{int(hashlib.sha256(cachekey.encode()).hexdigest(), 16) % WINDOW_LOCK_STRIPES}"
+
+
+def client_key(request: t.Any) -> str:
+    """Return the hash of the client address of a request, for a cache key.
+
+    A hash, because the cache keys appear in file names.
+    """
+    return hashlib.sha256(str(client_ip(request)).encode()).hexdigest()
 
 
 def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = True) -> int:
@@ -49,7 +64,7 @@ def count_in_window(cachekey: str, window_seconds: float, *, increment: bool = T
     """
     throttlecache = caches["throttle"]
 
-    with hold_lock(f"window-{int(hashlib.sha256(cachekey.encode()).hexdigest(), 16) % WINDOW_LOCK_STRIPES}"):
+    with hold_lock(window_lock_name(cachekey)):
         now = time.time()
         window = throttlecache.get(cachekey)
         elapsed = now - window[1] if window is not None else None
@@ -75,23 +90,27 @@ def take_send_permit(cachekey: str, interval_seconds: float) -> bool:
     both get True. The lock makes the check and the write one critical section across the workers.
     The lock uses the same stripes as count_in_window.
     """
-    with hold_lock(f"window-{int(hashlib.sha256(cachekey.encode()).hexdigest(), 16) % WINDOW_LOCK_STRIPES}"):
+    with hold_lock(window_lock_name(cachekey)):
         return caches["throttle"].add(cachekey, True, timeout=interval_seconds)
 
 
-# Failed password checks allowed from one address per window, on every path that takes a
-# password: the token endpoint, a Basic header on any API view, the login page and the admin's
-# (see login). Failures rather than attempts, so a busy shared address is not locked out by its
-# successful logins.
+# Failed password checks allowed from one address per window, at each door that signs a person
+# in: the token endpoint, a Basic header on any API view, the login page and the admin login (see
+# login). The budget counts failures and not attempts. Thus the successful logins of a busy shared
+# address do not lock it out. A check of the password of one known account uses the budget of
+# that account (see account_password_failures_exceeded).
 LOGIN_FAILURE_WINDOW_SECONDS: t.Final = 600
 LOGIN_FAILURE_LIMIT: t.Final = 10
 
 LOGIN_LIMIT_MESSAGE: t.Final = "Too many failed login attempts from this address. Please wait a few minutes."
 
+# The text for a refused check of the password of one account.
+ACCOUNT_GUESS_LIMIT_MESSAGE: t.Final = "Too many incorrect passwords for this account. Wait 10 minutes, then try again."
+
 
 def login_failures_key(request: t.Any) -> str:
     """Return the cache key of the failed-login budget for the address a request came from."""
-    return f"login-failures-{hashlib.sha256(str(client_ip(request)).encode()).hexdigest()}"
+    return f"login-failures-{client_key(request)}"
 
 
 def login_failures_exceeded(request: t.Any) -> bool:
@@ -105,6 +124,29 @@ def login_failures_exceeded(request: t.Any) -> bool:
 def note_login_failure(request: t.Any) -> int:
     """Record one failed password check for this address, and return the window's count."""
     return count_in_window(login_failures_key(request), LOGIN_FAILURE_WINDOW_SECONDS)
+
+
+def account_password_failures_key(userpk: object) -> str:
+    """Return the cache key of the failed-password budget of one account."""
+    return f"account-password-failures-{userpk}"
+
+
+def account_password_failures_exceeded(userpk: object) -> bool:
+    """Return whether the checks of the password of this account failed more times than the window allows.
+
+    These checks are on the activation page and on the pages of a signed-in account. There, the
+    person who guesses has a link or a session for one account, and can send the guesses from many
+    addresses. Thus this budget is for the account and not for the client address.
+    """
+    return (
+        count_in_window(account_password_failures_key(userpk), LOGIN_FAILURE_WINDOW_SECONDS, increment=False)
+        >= LOGIN_FAILURE_LIMIT
+    )
+
+
+def note_account_password_failure(userpk: object) -> int:
+    """Record one failed check of the password of this account, and return the count of the window."""
+    return count_in_window(account_password_failures_key(userpk), LOGIN_FAILURE_WINDOW_SECONDS)
 
 
 @sensitive_variables("password")
@@ -149,6 +191,23 @@ class ThrottledBasicAuthentication(BasicAuthentication):
     """
 
     @override
+    def authenticate_header(self, request: Request) -> str:
+        """Return the Basic challenge only to a request that sent Basic credentials.
+
+        DRF puts the challenge of the first authenticator in each 401. A browser that gets a
+        Basic challenge for a fetch shows its own dialog for a username and a password. The queue
+        page polls with the session, so without this rule each poll after the end of the session
+        opens that dialog. A client that sent a Basic header still gets the Basic challenge. The
+        other 401 responses name the token scheme, for which a browser shows no dialog.
+        """
+        scheme = get_authorization_header(request).split()[:1]
+        if scheme and scheme[0].lower() == b"basic":
+            # the challenge of BasicAuthentication.authenticate_header
+            return f'Basic realm="{self.www_authenticate_realm}"'
+
+        return "Token"
+
+    @override
     @sensitive_variables("password")
     def authenticate_credentials(self, userid: str, password: str, request: t.Any = None) -> t.Any:
         if request is not None and login_failures_exceeded(request):
@@ -162,53 +221,34 @@ class ThrottledBasicAuthentication(BasicAuthentication):
             raise
 
 
-class ForcedPhotRateThrottle(SimpleRateThrottle):
-    """Limit the rate of API calls by different amounts for various parts of the API.
+class ForcedPhotRateThrottle(ScopedRateThrottle):
+    """DRF's ScopedRateThrottle, with one scope for the reads of all the views.
 
-    Any view that has the `throttle_scope` property set will be throttled. The unique cache key is
-    generated by concatenating the user id of the request with the scope being applied, so reads
-    and writes are counted separately.
+    A view with `throttle_scope` is throttled. Its writes use that scope, and its reads use
+    READ_SCOPE, so that reads and writes are counted separately. The cache key, the user id or
+    the client address with the scope, comes from ScopedRateThrottle.
     """
-
-    scope_attr = "throttle_scope"
 
     # not the default cache: see the "throttle" alias in settings for why these counters must not
     # share a directory with the queue-recalc flag and the PDF render locks
     cache = caches["throttle"]
 
-    # allow_request() sets these. SimpleRateThrottle.__init__ also sets them, but it does not run.
+    # allow_request() sets these, because ScopedRateThrottle.__init__ does not
     num_requests: int | None
     duration: int | None
 
-    def __init__(self) -> None:  # pyrefly: ignore[missing-super-call]
-        """Do none of SimpleRateThrottle's setup: the rate is not known until the view is known."""
-
     @override
-    def allow_request(self, request: Request, view: "APIView") -> bool:
-        # We can only determine the scope once we're called by the view.
+    def allow_request(self, request: Request, view: APIView) -> bool:
         writescope = getattr(view, self.scope_attr, None)
 
-        # If a view does not have a `throttle_scope` always allow the request
+        # a view with no `throttle_scope` is not throttled
         if not writescope:
             return True
 
         self.scope = READ_SCOPE if request.method in SAFE_METHODS else writescope
-
-        # Determine the allowed request rate as we normally would during
-        # the `__init__` call.
         self.rate = self.get_rate()
         self.num_requests, self.duration = self.parse_rate(self.rate)
 
-        # We can now proceed as normal.
-        return super().allow_request(request, view)
-
-    @override
-    def get_cache_key(self, request: Request, view: "APIView") -> str:
-        """If `view.throttle_scope` is not set, don't apply this throttle.
-
-        Otherwise generate the unique cache key by concatenating the user id
-        with the '.throttle_scope` property of the view.
-        """
-        ident = request.user.pk if request.user.is_authenticated else self.get_ident(request)
-
-        return self.cache_format % {"scope": self.scope, "ident": ident}
+        # SimpleRateThrottle's check, and not ScopedRateThrottle's, which would set the scope again
+        # from the view
+        return SimpleRateThrottle.allow_request(self, request, view)

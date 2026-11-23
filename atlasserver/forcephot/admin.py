@@ -29,7 +29,6 @@ from django.db.models import Sum
 from django.db.models import Value
 from django.db.models import When
 from django.db.models.functions import Coalesce
-from django.http import HttpRequest
 
 import atlasserver.forcephot.models
 from atlasserver.forcephot.models import Task
@@ -42,7 +41,8 @@ from atlasserver.forcephot.queue import USAGE_RETENTION_DAYS
 from atlasserver.forcephot.queue import usage_weight
 from atlasserver.forcephot.queue import utcnow
 
-# Register your models here.
+if t.TYPE_CHECKING:
+    from django.http import HttpRequest
 
 
 # pyrefly: ignore [implicit-any-type-argument]

@@ -1,6 +1,7 @@
 #!/bin/bash
 
 taskrunnerpath=$(dirname "$0")
+logfile="$taskrunnerpath/logs/fprunnerlog_latest.txt"
 
 pidfile=/tmp/atlasforced/taskrunner.pid
 
@@ -8,21 +9,20 @@ pidfile=/tmp/atlasforced/taskrunner.pid
 mkdir -p "$(dirname "$pidfile")"
 
 if [ -f "$pidfile" ]; then
-  echo "ERROR: pid file $pidfile already exists. Exiting to prevent multiple instances of the task runner process." | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
+  echo "ERROR: pid file $pidfile already exists. Exiting to prevent multiple instances of the task runner process." | tee -a "$logfile"
   exit 1
 fi
 
 echo $$ > "$pidfile"
 
 clean_up() {
-  # sig=$(($? - 128))
   sig=$?
-  echo "$(date "+%F %H:%M:%S")" "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
+  echo "$(date "+%F %H:%M:%S")" "Supervisor: Caught signal $sig $(kill -l $sig)" | tee -a "$logfile"
   rm -f "$pidfile"
   exit
 }
 
-trap 'clean_up; exit' SIGHUP SIGINT SIGTERM SIGABRT SIGQUIT EXIT HUP INT QUIT PIPE TERM
+trap clean_up HUP INT QUIT ABRT PIPE TERM EXIT
 
 
 if [[ -n "$TMUX_PANE" ]]; then
@@ -37,12 +37,10 @@ else
   exit 1
 fi
 
-while (true) do
-   echo "$(date "+%F %H:%M:%S")" "Supervisor: Starting task runner Python script" | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
-   # your command goes here instead of sleep
-   python3 -u "$taskrunnerpath/main.py" 2> >(tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt" >&2) && break;
-   # show result
+while true; do
+   echo "$(date "+%F %H:%M:%S")" "Supervisor: Starting task runner Python script" | tee -a "$logfile"
+   python3 -u "$taskrunnerpath/main.py" 2> >(tee -a "$logfile" >&2) && break
    exitcode=$?
-   echo "$(date "+%F %H:%M:%S")" "Supervisor: task runner crashed? Exit code was $exitcode. Restarting in two seconds..." | tee -a "$taskrunnerpath/logs/fprunnerlog_latest.txt"
+   echo "$(date "+%F %H:%M:%S")" "Supervisor: task runner crashed? Exit code was $exitcode. Restarting in two seconds..." | tee -a "$logfile"
    sleep 2
 done

@@ -12,28 +12,11 @@
 
       {% block meta %}
         <meta charset="utf-8" />
-        {# without this a phone lays the page out at 980px and then zooms out, so the text is #}
-        {# unreadable and none of the responsive rules in main.css ever apply #}
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="NONE,NOARCHIVE" />
-
-        {# Where js/runnerstatus.min.js reads the address of the endpoint to poll. The address #}
-        {# is in the page, and not in the script. {% url %} gives the /forcedphot script prefix, #}
-        {# and only a template knows that prefix. A relative URL is sufficient for a fetch of the #}
-        {# same origin. #}
-        <meta name="atlas-runnerstatus-url" content="{% url 'taskrunnerstatus' %}" />
-
-        {# Who the page was rendered for, which is empty for a reader who is not signed in. #}
-        {# runnerstatus.js keeps its last status for the page after this one, and that status #}
-        {# holds a count of this reader's queued tasks. A tab that signs out, or signs in as #}
-        {# somebody else, keeps its sessionStorage across the change. Thus the record names the #}
-        {# reader it was kept for, and a page reads only a record with its own name on it. #}
-        <meta name="atlas-reader" content="{% if user.is_authenticated %}{{ user.pk }}{% endif %}" />
+        {% include "headtags.html" %}
       {% endblock %}
 
       <title>{% block title %}{% if name %}{{ name }} – {% endif %}ATLAS Forced Photometry{% endblock %}</title>
-
-      <link rel="icon" href="{% static "images/logos/atlas_logo.svg" %}" />
 
       {# Overridden as empty by the pages whose own URL carries a bearer token. gtag('config') #}
       {# reports a page view at the current location, so on those pages it would hand the token #}
@@ -53,7 +36,7 @@
       {% endblock %}
 
       {% block style %}
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+        {% include "bootstrapcss.html" %}
 
         {# versioned like the JS bundles: the queue page's styling lives here, so a browser holding #}
         {# a cached copy alongside a freshly deployed bundle renders the new class names unstyled #}
@@ -91,7 +74,7 @@
     </div><!-- ./wrapper -->
 
     {% block script %}
-      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+      {% include "bootstrapjs.html" %}
 
       {# At the foot of the page, unlike theme.js: this one measures the rendered navbar rather than #}
       {# deciding a colour, so it has nothing to say before the first paint. #}
