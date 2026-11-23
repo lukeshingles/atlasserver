@@ -60,7 +60,8 @@ remote command. sshd keeps the session of a remote command until the command end
 task runner stopped. Thus a full connection of the tasks does not stop the stop commands.
 
 The task runner opens no other connection to sc01. When sshd refuses a session on a shared
-connection, the command fails, and the task gets a new attempt. Without this rule, each refused
+connection, the command fails, and the task gets a new attempt. A slot whose two connections are
+not open starts no command, and the slot then waits 30 seconds. Without this rule, each refused
 command connected again, and sc01 then reset all new connections, also `ssh atlas`. This
 command shows if the connection of the first group is open:
 ```sh
