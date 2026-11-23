@@ -5348,6 +5348,28 @@ class RemoteStopTests(TestCase):
         sleep.assert_not_called()
         opened.assert_not_called()
 
+    def test_a_stopping_slot_publishes_nothing_after_an_absent_image(self) -> None:
+        # The new attempt can have copied the image, and then the old attempt finds it absent.
+        # A publish then gives the photometry of the old attempt with the image of the new one.
+        proc = mock.MagicMock()
+        proc.communicate.return_value = ("", "")
+        proc.returncode = 0
+
+        def copied(command: list[str], *_args: object) -> int:
+            if Path(command[-2]).suffix == ".txt":
+                Path(command[-1]).write_text("MJD uJy\n1.0 2.0\n", encoding="utf-8")
+                taskrunner_main._stop_requested = True  # noqa: SLF001
+                return 0
+            return taskrunner_main.RSYNC_ABSENT_FILE_CODE
+
+        with mock.patch.object(taskrunner_main, "run_rsync", side_effect=copied):
+            outcome, resultfiles = self.run_attempt_with_real_options(
+                mock.Mock(return_value=True), mock.Mock(return_value=proc), rsync=None, keep_results=True
+            )
+
+        assert outcome == (None, None), outcome
+        assert resultfiles == {}, resultfiles
+
     def test_a_failed_attempt_leaves_the_result_of_a_newer_attempt(self) -> None:
         # After a restart, a new slot can finish the task while the old slot waits to copy the
         # image again. The two attempts use the same local paths.

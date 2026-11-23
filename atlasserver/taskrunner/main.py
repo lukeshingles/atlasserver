@@ -685,11 +685,17 @@ def download_task_files(
 
             stagedfile = stagingdirs[localpath.parent] / localpath.name
             copycommand = ["rsync", "--remove-source-files", f"{REMOTE_SERVER}:{remotefile}", str(stagedfile)]
-            if copy_with_rsync(copycommand, logfunc, sshoptions, slotid) not in {0, RSYNC_ABSENT_FILE_CODE}:
+            code = copy_with_rsync(copycommand, logfunc, sshoptions, slotid)
+            if code not in {0, RSYNC_ABSENT_FILE_CODE}:
                 # A failed session also stops the next copies, because they use the same
                 # connection. A finish now gives a task with no image or no error text, and
                 # nothing copies the remote files later. Thus the task gets a new attempt.
                 logfunc("ERROR: a copy from sc01 failed, so the task will be retried")
+                return False
+            if code == RSYNC_ABSENT_FILE_CODE and attempt_must_stop():
+                # After a stop, the next task runner can run the task again, and its copies remove
+                # the remote files. The file can then be absent because the new attempt has it.
+                logfunc("ERROR: a remote file is absent after a stop of the task runner, so the task will be retried")
                 return False
             staged.append((stagedfile, localpath))
 
