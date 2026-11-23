@@ -745,6 +745,50 @@ class FairShareQueueTests(TestCase):
         assert raised
         assert before <= Shared.value <= time.time()
 
+    def test_a_slot_waits_after_a_failed_ssh_connection_and_after_its_end_time(self) -> None:
+        # sc01 refused the sessions after a restart, and one slot then failed 20 tasks in 40
+        # seconds. The wait keeps the slot busy, and the usage stops at the end time.
+        class Shared:
+            value = 0.0
+
+        task = self.add_queued(self.light, 1)[0]
+        endtimes: list[float] = []
+
+        def failed_connection(*args: object, **kwargs: object) -> None:
+            taskrunner_main.connection_failed = True
+
+        def pause() -> None:
+            endtimes.append(Shared.value)
+
+        with (
+            mock.patch.object(taskrunner_main, "do_task", side_effect=failed_connection),
+            mock.patch.object(taskrunner_main, "pause_after_connection_failure", side_effect=pause) as paused,
+        ):
+            taskrunner_main.run_slot(task, slotid=0, endedwall=Shared)
+            assert paused.call_count == 1
+            assert endtimes[0] > 0.0
+
+            # the next attempt in the same process starts with no failure
+            with mock.patch.object(taskrunner_main, "do_task"):
+                taskrunner_main.run_slot(task, slotid=0, endedwall=Shared)
+            assert paused.call_count == 1
+
+    def test_the_pause_after_a_failed_connection_ends_at_a_stop(self) -> None:
+        sleeps: list[float] = []
+        with mock.patch.object(taskrunner_main, "attempt_must_stop", side_effect=[False, False, True]):
+            taskrunner_main.pause_after_connection_failure(sleep=sleeps.append)
+
+        assert sleeps == [1.0, 1.0]
+
+        sleeps.clear()
+        with (
+            mock.patch.object(taskrunner_main, "attempt_must_stop", return_value=False),
+            mock.patch.object(taskrunner_main, "SSH_FAILURE_PAUSE_SECONDS", 0.0),
+        ):
+            taskrunner_main.pause_after_connection_failure(sleep=sleeps.append)
+
+        assert sleeps == []
+
     def test_the_expected_run_time_of_a_task_is_the_mean_of_the_user_or_of_all_users(self) -> None:
         usage = {1: taskqueue.Usage(5000.0, 5), 2: taskqueue.Usage(100.0, 1)}
 
@@ -5009,10 +5053,13 @@ class RemoteStopTests(TestCase):
 
     def test_a_dropped_connection_stops_the_remote_command_and_keeps_the_files(self) -> None:
         # the remote command continues without its connection, and the retry writes the same files
+        taskrunner_main.connection_failed = False
         _command, stop = self.run_attempt(returncode=taskrunner_main.SSH_CONNECTION_FAILED)
 
         stop.assert_called_once()
         assert stop.call_args.kwargs == {"delete_files": False}, stop.call_args
+        # run_slot then keeps the slot busy; see pause_after_connection_failure
+        assert taskrunner_main.connection_failed
 
     def test_a_stopped_attempt_is_not_logged_as_a_failure_with_a_wait(self) -> None:
         logged: list[str] = []

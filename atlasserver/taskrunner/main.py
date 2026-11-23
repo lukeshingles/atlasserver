@@ -60,6 +60,11 @@ TASK_MAXTIME_SECONDS: int = 4 * 3600
 # remote command
 SSH_CONNECTION_FAILED: int = 255
 
+# The time that a slot waits after an attempt whose ssh connection failed, before the slot becomes
+# free. Without this wait, the slot takes the next task at once. While sc01 refuses the
+# connections, the slot then fails one task each second.
+SSH_FAILURE_PAUSE_SECONDS: float = 30.0
+
 # The number of slots that use one ssh connection to the remote server. A slot has one session
 # at a time. The sshd of the remote server refuses a session above its MaxSessions limit, which
 # is 10 unless the administrator set a different value. ssh then opens a new connection for
@@ -97,6 +102,9 @@ REMOTE_RESULT_DIR: t.Final = "~/atlasserver/results"
 # waits: the poll loop of runtask stops the remote command, and do_task records a collected result.
 _stop_requested = False
 _defer_stop = False
+
+# True after the ssh connection of the attempt of this slot process failed; see run_slot.
+connection_failed = False
 
 # how long the main loop waits between polls of the queue. The longer interval applies once the
 # queue has been seen to be empty, so that an idle server is not querying twice a second all night.
@@ -712,6 +720,8 @@ def runtask(task, logfunc, slotid: int | None = None) -> tuple[Path | None, str 
         # already, empty, and collecting it would finish the task with "No data returned" for a
         # target that has data; a retry runs the command again
         logfunc("ERROR: the ssh connection failed, so the task will be retried")
+        global connection_failed  # noqa: PLW0603
+        connection_failed = True
         # The remote command has no tty, so it continues without its connection. The retry would
         # then run a second remote command that writes the same files. The stop fails while sc01
         # is not reachable, and then the remote command runs to its end.
@@ -1398,12 +1408,28 @@ def run_slot(task, slotid: int, endedwall: t.Any = None) -> None:
     for stopsignal in (SIGHUP, SIGINT, SIGTERM):
         signal(stopsignal, request_stop)
 
+    global connection_failed  # noqa: PLW0603
+    connection_failed = False
     try:
         with stop_signals_deferred():
             do_task(task, slotid)
     finally:
         if endedwall is not None:
             endedwall.value = time.time()
+
+    if connection_failed:
+        # After the end time: the usage of the user does not include the pause.
+        pause_after_connection_failure()
+
+
+def pause_after_connection_failure(sleep: t.Callable[[float], None] = time.sleep) -> None:
+    """Keep the slot busy for SSH_FAILURE_PAUSE_SECONDS, and stop at a stop signal or the end of the main process.
+
+    A stop signal outside an attempt ends the slot at once; see request_stop.
+    """
+    deadline = time.perf_counter() + SSH_FAILURE_PAUSE_SECONDS
+    while time.perf_counter() < deadline and not attempt_must_stop():
+        sleep(1.0)
 
 
 def do_task(task, slotid: int) -> None:
