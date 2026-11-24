@@ -8374,6 +8374,31 @@ class QueuePositionLockTests(TestCase):
         assert None not in positions, positions
         assert len(set(positions)) == 6, f"duplicate queue positions: {positions}"
 
+    def test_a_new_row_with_a_lower_id_than_a_locked_row_gets_no_lock(self) -> None:
+        # Two submissions can commit in the opposite order of their ids. A lock on the lower id
+        # after the higher id is out of order, so the task waits for the next pass.
+        late = self.tasks[1]
+        Task.objects.filter(pk=late.pk).update(queuepos_relative=77)
+        realqueued = Task.queued
+        calls = 0
+
+        def queued_without_the_late_row_at_first() -> models.QuerySet[Task]:
+            nonlocal calls
+            calls += 1
+            return realqueued().exclude(pk=late.pk) if calls == 1 else realqueued()
+
+        with (
+            mock.patch.object(Task, "queued", staticmethod(queued_without_the_late_row_at_first)),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            calculate_queue_positions()
+
+        late.refresh_from_db()
+        assert late.queuepos_relative == 77, late.queuepos_relative
+        assert len(self.lock_statements(queries)) <= 1, self.lock_statements(queries)
+        others = Task.objects.exclude(pk=late.pk).values_list("queuepos_relative", flat=True)
+        assert len({position for position in others if position is not None}) == 4, list(others)
+
 
 class ProcessTimeoutTests(TestCase):
     # time.sleep as the target rather than a helper defined here: the default start method on this

@@ -525,16 +525,22 @@ def calculate_queue_positions(
         # secondary index, because each entry of such an index contains the id.
         #
         # A submission can commit between the read of the ids and the lock. The loop reads the
-        # ids again after the lock and locks the new rows. A new row has a higher id than each
-        # locked row, so the order of the locks stays the order of the ids. The loop stops when a
-        # read finds no new row. That last read also gives the tasks that are queued now: a task
-        # can finish or go before its lock, and Task.queued() then does not return it.
+        # ids again after the lock and locks the new rows that have a higher id than each row
+        # before them. The order of the locks thus stays the order of the ids. The loop stops
+        # when a read finds no such row. That last read also gives the tasks that are queued now:
+        # a task can finish or go before its lock, and Task.queued() then does not return it.
+        #
+        # Two submissions can commit in the opposite order of their ids. A new row can thus have
+        # a lower id than a locked row. A lock on it is out of order, and two passes can then
+        # deadlock. Such a task is not in this pass. Its submission requests a recalculation, and
+        # it has a provisional position until then.
         locked: dict[int, Task] = {}
         # the ids that a lock statement asked for: a row that went before its lock is not in `locked`
         requestedids: set[int] = set()
         while True:
             queuedids = set(Task.queued().values_list("id", flat=True))
-            newids = sorted(queuedids - requestedids)
+            highestid = max(requestedids, default=0)
+            newids = sorted(taskid for taskid in queuedids - requestedids if taskid > highestid)
             if not newids:
                 break
             requestedids.update(newids)
