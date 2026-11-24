@@ -8345,10 +8345,34 @@ class QueuePositionLockTests(TestCase):
         finishes.refresh_from_db()
         assert finishes.queuepos_relative == 77, finishes.queuepos_relative
         positions = sorted(
-            Task.objects.filter(finishtimestamp__isnull=True).values_list("queuepos_relative", flat=True)
+            position
+            for position in Task.objects.filter(finishtimestamp__isnull=True).values_list(
+                "queuepos_relative", flat=True
+            )
+            if position is not None
         )
         assert len(positions) == 4, positions
         assert positions == list(range(positions[0], positions[0] + 4)), positions
+
+    def test_a_task_submitted_before_the_lock_is_in_the_same_pass(self) -> None:
+        realqueued = Task.queued
+        submitted: list[Task] = []
+
+        def queued_then_submit() -> models.QuerySet[Task]:
+            # The first call is the first read of the ids. A submission commits after that read,
+            # with a provisional position that a task of this pass can get also.
+            if submitted:
+                return realqueued()
+            ids = list(realqueued().values_list("id", flat=True))
+            submitted.append(Task.objects.create(user=self.user, ra=1.0, dec=2.0, queuepos_relative=2))
+            return Task.objects.filter(id__in=ids)
+
+        with mock.patch.object(Task, "queued", staticmethod(queued_then_submit)):
+            calculate_queue_positions()
+
+        positions = sorted(Task.objects.values_list("queuepos_relative", flat=True), key=lambda pos: (pos is None, pos))
+        assert None not in positions, positions
+        assert len(set(positions)) == 6, f"duplicate queue positions: {positions}"
 
 
 class ProcessTimeoutTests(TestCase):
