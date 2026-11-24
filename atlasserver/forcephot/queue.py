@@ -510,15 +510,15 @@ def calculate_queue_positions(
         # recalculations can each renumber from a snapshot that is missing the other's changes
         # and end up assigning duplicate queue positions.
         #
-        # The lock is on the primary key only, in the order of the ids. A locking read through
-        # Task.queued() used task_queue_idx: InnoDB locked the entry of each row in that index and
-        # then the row. Task.delete() locks the row first, and its DELETE then must change the
-        # entry of the row in each index. A delete of a queued task during a renumbering thus
-        # held the row and waited for the index entry, while the renumbering held the index entry
-        # and waited for the row: MySQL error 1213, a deadlock, and the API DELETE failed.
+        # The lock is on the primary key only, in the order of the ids. Task.delete() locks the
+        # row first, and its DELETE then changes the entry of the row in each index. A locking
+        # read through Task.queued() takes the locks in the opposite order: it uses
+        # task_queue_idx, and InnoDB locks the entry of each row in that index and then the row.
+        # Such a read and a delete of a queued task can each hold the lock that the other needs.
+        # InnoDB then stops one of them with MySQL error 1213, a deadlock.
         #
         # A task can finish or go between the read of the ids and the lock. The test after the
-        # lock removes it. A task submitted in that interval is not in this pass; its submission
+        # lock removes it. A task submitted in that interval is not in this pass. Its submission
         # requests a recalculation, and it has a provisional position until then.
         queuedtasks = sorted(
             (
