@@ -55,8 +55,8 @@ INDEX_NAME = "auth_user_email_ci_uniq"
 EXEMPT_COLUMN = "email_unique_exempt"
 
 # MySQL/MariaDB only. A generated column rather than a functional index on the expression: MariaDB
-# has no functional indexes, and the README lists it as a supported server alongside MySQL, while
-# Django reports connection.vendor == "mysql" for both. STORED generated columns work on both, so
+# has no functional indexes, and the README names it as the required server, while Django reports
+# connection.vendor == "mysql" for MySQL and MariaDB. STORED generated columns work on both, so
 # this is a single path -- and it is the one CI exercises against MariaDB 10.11.
 GENERATED_COLUMN = "email_ci"
 
