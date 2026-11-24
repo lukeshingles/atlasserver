@@ -8267,6 +8267,90 @@ class QueuePositionConcurrencyTests(TransactionTestCase):
         assert sorted(positions) == list(range(len(positions))), sorted(positions)
 
 
+class QueuePositionLockTests(TestCase):
+    """The lock of calculate_queue_positions() is on the primary key, in the order of the ids.
+
+    Task.delete() locks the row before the entries of the row in the indexes. A lock through
+    task_queue_idx has the opposite order, and the two then deadlock.
+    """
+
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(username="lockuser", email="lock@example.com", password=None)
+        self.tasks = [Task.objects.create(user=self.user, ra=1.0, dec=2.0) for _ in range(5)]
+
+    @staticmethod
+    def lock_statements(queries: CaptureQueriesContext) -> list[str]:
+        """Return each statement that locks rows."""
+        return [q["sql"] for q in queries if "FOR UPDATE" in q["sql"]]
+
+    @classmethod
+    def lock_conditions(cls, queries: CaptureQueriesContext) -> list[str]:
+        """Return the WHERE clause of each statement that locks rows."""
+        return [sql.partition(" WHERE ")[2] for sql in cls.lock_statements(queries)]
+
+    @skipUnless(connection.features.has_select_for_update, "select_for_update is not supported on this database")
+    def test_the_lock_selects_the_rows_by_primary_key_only(self) -> None:
+        with CaptureQueriesContext(connection) as queries:
+            calculate_queue_positions()
+
+        conditions = self.lock_conditions(queries)
+        assert len(conditions) == 1, conditions
+        # a condition on a column of task_queue_idx lets the database lock through that index
+        for column in ("finishtimestamp", "is_archived", "queuepos_relative"):
+            assert column not in conditions[0], conditions[0]
+
+    @skipUnless(connection.features.has_select_for_update, "select_for_update is not supported on this database")
+    def test_the_lock_selects_whole_rows(self) -> None:
+        # A statement that selects only the id can read a secondary index, and the database then
+        # locks the entry of that index before the row. No index contains the column "comment".
+        with CaptureQueriesContext(connection) as queries:
+            calculate_queue_positions()
+
+        statements = self.lock_statements(queries)
+        assert len(statements) == 1, statements
+        selected = statements[0].partition(" FROM ")[0]
+        assert connection.ops.quote_name("comment") in selected, selected
+
+    @skipUnless(connection.features.has_select_for_update, "select_for_update is not supported on this database")
+    def test_the_lock_takes_the_ids_in_batches_in_ascending_order(self) -> None:
+        with mock.patch.object(taskqueue, "QUEUE_LOCK_BATCH_SIZE", 2), CaptureQueriesContext(connection) as queries:
+            calculate_queue_positions()
+
+        conditions = self.lock_conditions(queries)
+        assert len(conditions) == 3, conditions
+        idlists = [re.search(r"IN \(([^)]*)\)", condition) for condition in conditions]
+        lockedids = [int(taskid) for idlist in idlists if idlist is not None for taskid in idlist[1].split(",")]
+        assert lockedids == sorted(task.id for task in self.tasks), lockedids
+
+    def test_a_task_that_finishes_before_the_lock_keeps_its_row_as_it_is(self) -> None:
+        finishes = self.tasks[2]
+        Task.objects.filter(pk=finishes.pk).update(queuepos_relative=77)
+        realqueued = Task.queued
+        calls = 0
+
+        def queued_then_finish() -> models.QuerySet[Task]:
+            # The first call is the read of the ids. The task finishes after that read: this
+            # queryset selects the rows by id, and thus it still returns the id of the task.
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                return realqueued()
+            ids = list(realqueued().values_list("id", flat=True))
+            Task.objects.filter(pk=finishes.pk).update(finishtimestamp=timezone.now())
+            return Task.objects.filter(id__in=ids)
+
+        with mock.patch.object(Task, "queued", staticmethod(queued_then_finish)):
+            calculate_queue_positions()
+
+        finishes.refresh_from_db()
+        assert finishes.queuepos_relative == 77, finishes.queuepos_relative
+        positions = sorted(
+            Task.objects.filter(finishtimestamp__isnull=True).values_list("queuepos_relative", flat=True)
+        )
+        assert len(positions) == 4, positions
+        assert positions == list(range(positions[0], positions[0] + 4)), positions
+
+
 class ProcessTimeoutTests(TestCase):
     # time.sleep as the target rather than a helper defined here: the default start method on this
     # platform is spawn, and a child that re-imports this module dies on AppRegistryNotReady before
@@ -10334,6 +10418,24 @@ class QueueRecalcHandoffTests(TestCase):
 
         assert response.status_code == 500, response.status_code
         assert delete.call_count == 1, delete.call_count
+
+    def test_a_delete_stops_after_the_maximum_number_of_deadlocks(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+        self.client.raise_request_exception = False
+        deadlock = OperationalError(1213, "Deadlock found when trying to get lock; try restarting transaction")
+
+        with (
+            mock.patch.object(Task, "delete", side_effect=deadlock) as delete,
+            mock.patch.object(views.time, "sleep") as sleep,
+        ):
+            response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 500, response.status_code
+        assert delete.call_count == views.DELETE_ATTEMPTS, delete.call_count
+        # no wait after the last attempt
+        assert sleep.call_count == views.DELETE_ATTEMPTS - 1, sleep.call_count
+        assert Task.objects.filter(id=task.id).exists()
 
 
 class ImageRequestDispatchTests(TestCase):

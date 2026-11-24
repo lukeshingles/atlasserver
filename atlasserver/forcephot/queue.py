@@ -106,6 +106,11 @@ RECALC_MAX_INTERVAL_SECONDS: t.Final = 30.0
 # move of the task to its place in the fair share order.
 RECALC_CHECK_INTERVAL_SECONDS: t.Final = 2.0
 
+# The number of rows that one statement of calculate_queue_positions() locks. MariaDB changes an IN
+# list of 1000 values or more into a join (in_predicate_conversion_threshold). It can then lock
+# the rows in an order that is not the order of the ids.
+QUEUE_LOCK_BATCH_SIZE: t.Final = 500
+
 # How far back typical_runtime_seconds() looks. A day rather than the stats page's week: this
 # figure tells a waiting user how long their task will take, so it should follow current conditions
 # -- a slow night, a backlog, a change on the remote host -- rather than average them away.
@@ -502,8 +507,9 @@ def calculate_queue_positions(
     def waits_for_retry(task: Task) -> bool:
         return task.retry_after is not None and now < task.retry_after
 
-    # The ids of the queued tasks, read without a lock. This read uses task_queue_idx.
-    queuedids = list(Task.queued().values_list("id", flat=True))
+    # The ids of the queued tasks in ascending order, read without a lock. This read uses
+    # task_queue_idx.
+    queuedids = sorted(Task.queued().values_list("id", flat=True))
 
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent
@@ -512,20 +518,25 @@ def calculate_queue_positions(
         #
         # The lock is on the primary key only, in the order of the ids. Task.delete() locks the
         # row first, and its DELETE then changes the entry of the row in each index. A locking
-        # read through Task.queued() takes the locks in the opposite order: it uses
+        # read through Task.queued() takes the locks in the opposite order. It uses
         # task_queue_idx, and InnoDB locks the entry of each row in that index and then the row.
         # Such a read and a delete of a queued task can each hold the lock that the other needs.
         # InnoDB then stops one of them with MySQL error 1213, a deadlock.
         #
-        # A task can finish or go between the read of the ids and the lock. The test after the
-        # lock removes it. A task submitted in that interval is not in this pass. Its submission
-        # requests a recalculation, and it has a provisional position until then.
+        # Each statement locks one batch of the ids; see QUEUE_LOCK_BATCH_SIZE. It selects whole
+        # rows, so the database reads the primary key. A statement that selects only the id can
+        # read a secondary index, because each entry of such an index contains the id.
+        locked: list[Task] = []
+        for batch in itertools.batched(queuedids, QUEUE_LOCK_BATCH_SIZE, strict=False):
+            locked.extend(Task.objects.select_for_update().filter(id__in=batch).order_by("id"))
+
+        # This read is after the lock, and it has no lock of its own. A task can finish or go
+        # between the read of the ids and the lock, and Task.queued() does not return it here. A
+        # task submitted in that interval is not in this pass. Its submission requests a
+        # recalculation, and it has a provisional position until then.
+        stillqueued = set(Task.queued().filter(id__in=queuedids).values_list("id", flat=True))
         queuedtasks = sorted(
-            (
-                task
-                for task in Task.objects.select_for_update().filter(id__in=queuedids).order_by("id")
-                if task.finishtimestamp is None and not task.is_archived
-            ),
+            (task for task in locked if task.id in stillqueued),
             key=operator.attrgetter("user_id", "timestamp", "id"),
         )
 
