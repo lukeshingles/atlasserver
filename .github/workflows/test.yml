@@ -83,26 +83,9 @@ jobs:
                   git diff --exit-code -- ../static/js/*.min.js ../static/js/vendor
 
     test:
-        # The job on MySQL keeps the name "Run tests", so a rule that requires a check with that
-        # name continues to apply.
-        name: ${{ matrix.name }}
+        name: Run tests
         environment: test
         runs-on: ubuntu-latest
-        strategy:
-            # each database gives its own result
-            fail-fast: false
-            matrix:
-                include:
-                    # Django 6.1 dropped support for MySQL < 8.4, which rules out the MySQL bundled
-                    # with the runner image
-                    - name: Run tests
-                      image: mysql:8.4
-                      healthcmd: mysqladmin ping
-                    # The production server uses MariaDB 10.11. MariaDB and MySQL make different
-                    # query plans, and a plan decides the order of the row locks.
-                    - name: Run tests on MariaDB
-                      image: mariadb:10.11
-                      healthcmd: mariadb-admin ping
         env:
             ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
             ATLASSERVER_DJANGO_MYSQL_USER: root
@@ -110,7 +93,7 @@ jobs:
             ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
             ATLASSERVER_DJANGO_SECRET_KEY: ${{secrets.ATLASSERVER_DJANGO_SECRET_KEY}}
             # settings_test defaults to SQLite so that the suite runs on a developer machine with
-            # no MySQL server; CI opts back in to the engine of the service container below
+            # no database server; CI opts back in to the engine used in production
             ATLASSERVER_TEST_DB: mysql
             # "localhost" would make libmysqlclient look for a unix socket, but the database service
             # below is only reachable over TCP on the mapped port
@@ -123,14 +106,17 @@ jobs:
 
         services:
             database:
-                image: ${{ matrix.image }}
+                # The production server uses MariaDB 10.11. MariaDB and MySQL make different query
+                # plans, and a plan decides the order of the row locks. The tests thus run on
+                # MariaDB and not on the MySQL of the runner image.
+                image: mariadb:10.11
                 # the MariaDB image reads these MYSQL_ variables also
                 env:
                     MYSQL_ROOT_PASSWORD: root
                     MYSQL_DATABASE: atlasserver
                 ports:
                     - 3306:3306
-                options: --health-cmd="${{ matrix.healthcmd }}" --health-interval=10s --health-timeout=5s --health-retries=3
+                options: --health-cmd="mariadb-admin ping" --health-interval=10s --health-timeout=5s --health-retries=3
 
         steps:
             - name: Checkout Code
