@@ -29,7 +29,7 @@ Then download the geoip database files with your MaxMind API key (stored in .env
 ./deploy/update_geoipdatabase.sh
 ```
 
-A MySQL or MariaDB server and tmux are required. These can be installed with homebrew on macOS:
+A MariaDB server and tmux are required. The production server and the tests in CI use MariaDB 10.11. You can install MariaDB and tmux with homebrew on macOS:
 ```sh
 brew install mariadb tmux
 ```
