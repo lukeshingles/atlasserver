@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import statistics
+import time
 import typing as t
 import uuid
 from collections import defaultdict
@@ -33,6 +34,7 @@ from django.core.cache import caches
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError
+from django.db import OperationalError
 from django.db import transaction
 from django.db.models import Count
 from django.db.models import Max
@@ -171,6 +173,17 @@ PDF_PLOT_RENDER_SLOTS: t.Final = 2
 PDF_PLOT_FAILURE_SECONDS: t.Final = 60 * 60 * 24
 
 logger = logging.getLogger(__name__)
+
+# MySQL error 1213: InnoDB rolled the transaction back to break a deadlock. MySQL tells the client
+# to restart the transaction.
+MYSQL_DEADLOCK_ERRNO: t.Final = 1213
+# the number of attempts of a task delete when InnoDB breaks a deadlock
+DELETE_ATTEMPTS: t.Final = 3
+
+
+def is_mysql_deadlock(ex: OperationalError) -> bool:
+    """Return True if the error is the rollback of a transaction that InnoDB chose to break a deadlock."""
+    return bool(ex.args) and ex.args[0] == MYSQL_DEADLOCK_ERRNO
 
 
 def entity_tag(*parts: object) -> str:
@@ -543,7 +556,18 @@ class ForcePhotTaskViewSet(viewsets.ModelViewSet[Task]):
     def perform_destroy(self, instance: Task) -> None:
         """Delete a task, and if the task is queued (not finished), then update queue positions."""
         update_queue_positions = not instance.finishtimestamp
-        instance.delete()
+        # Task.delete() is one transaction, and InnoDB rolled all of it back for error 1213. A
+        # new attempt is thus safe. The removal of the files does not change on a new attempt:
+        # each file is gone already, or the attempt removes it.
+        for attempt in range(1, DELETE_ATTEMPTS + 1):
+            try:
+                instance.delete()
+                break
+            except OperationalError as ex:
+                if attempt == DELETE_ATTEMPTS or not is_mysql_deadlock(ex):
+                    raise
+                logger.warning("Deadlock on the delete of task %s, attempt %d. Trying again.", instance.pk, attempt)
+                time.sleep(0.1 * attempt)
         if update_queue_positions:
             request_queue_recalc()
 

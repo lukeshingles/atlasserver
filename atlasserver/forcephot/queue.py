@@ -502,11 +502,32 @@ def calculate_queue_positions(
     def waits_for_retry(task: Task) -> bool:
         return task.retry_after is not None and now < task.retry_after
 
+    # The ids of the queued tasks, read without a lock. This read uses task_queue_idx.
+    queuedids = list(Task.queued().values_list("id", flat=True))
+
     with transaction.atomic():
         # Lock the queued rows and read them once. Without the lock, two concurrent
         # recalculations can each renumber from a snapshot that is missing the other's changes
         # and end up assigning duplicate queue positions.
-        queuedtasks = list(Task.queued().select_for_update().order_by("user_id", "timestamp", "id"))
+        #
+        # The lock is on the primary key only, in the order of the ids. A locking read through
+        # Task.queued() used task_queue_idx: InnoDB locked the entry of each row in that index and
+        # then the row. Task.delete() locks the row first, and its DELETE then must change the
+        # entry of the row in each index. A delete of a queued task during a renumbering thus
+        # held the row and waited for the index entry, while the renumbering held the index entry
+        # and waited for the row: MySQL error 1213, a deadlock, and the API DELETE failed.
+        #
+        # A task can finish or go between the read of the ids and the lock. The test after the
+        # lock removes it. A task submitted in that interval is not in this pass; its submission
+        # requests a recalculation, and it has a provisional position until then.
+        queuedtasks = sorted(
+            (
+                task
+                for task in Task.objects.select_for_update().filter(id__in=queuedids).order_by("id")
+                if task.finishtimestamp is None and not task.is_archived
+            ),
+            key=operator.attrgetter("user_id", "timestamp", "id"),
+        )
 
         # (member of the group or not, key, submission time, id) for each task that waits
         keys: list[tuple[int, float, dt.datetime, int]] = []

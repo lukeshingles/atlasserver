@@ -10304,6 +10304,37 @@ class QueueRecalcHandoffTests(TestCase):
         assert response.status_code == 204, response.status_code
         assert self.renumbering_requested() is False
 
+    def test_a_delete_that_meets_a_deadlock_tries_again(self) -> None:
+        # InnoDB rolls back the whole transaction for error 1213, so a second attempt is safe
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+        realdelete = Task.delete
+        calls: list[int] = []
+
+        def delete_once_deadlocked(instance: Task, *args: t.Any, **kwargs: t.Any) -> None:
+            calls.append(instance.id)
+            if len(calls) == 1:
+                raise OperationalError(1213, "Deadlock found when trying to get lock; try restarting transaction")
+            realdelete(instance, *args, **kwargs)
+
+        with mock.patch.object(Task, "delete", delete_once_deadlocked), mock.patch.object(views.time, "sleep"):
+            response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 204, response.status_code
+        assert len(calls) == 2, calls
+        assert not Task.objects.filter(id=task.id).exists()
+
+    def test_a_delete_does_not_try_again_after_another_error(self) -> None:
+        task = Task.objects.create(user=self.user, ra=1.0, dec=2.0)
+        self.client.force_login(self.user)
+        self.client.raise_request_exception = False
+
+        with mock.patch.object(Task, "delete", side_effect=OperationalError(2006, "gone away")) as delete:
+            response = self.client.delete(reverse("task-detail", args=[task.id]), HTTP_ACCEPT="application/json")
+
+        assert response.status_code == 500, response.status_code
+        assert delete.call_count == 1, delete.call_count
+
 
 class ImageRequestDispatchTests(TestCase):
     """What the runner sends for an image request, and what it expects back."""
