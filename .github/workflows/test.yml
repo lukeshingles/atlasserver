@@ -83,9 +83,26 @@ jobs:
                   git diff --exit-code -- ../static/js/*.min.js ../static/js/vendor
 
     test:
-        name: Run tests
+        # The job on MySQL keeps the name "Run tests", so a rule that requires a check with that
+        # name continues to apply.
+        name: ${{ matrix.name }}
         environment: test
         runs-on: ubuntu-latest
+        strategy:
+            # each database gives its own result
+            fail-fast: false
+            matrix:
+                include:
+                    # Django 6.1 dropped support for MySQL < 8.4, which rules out the MySQL bundled
+                    # with the runner image
+                    - name: Run tests
+                      image: mysql:8.4
+                      healthcmd: mysqladmin ping
+                    # The production server uses MariaDB 10.11. MariaDB and MySQL make different
+                    # query plans, and a plan decides the order of the row locks.
+                    - name: Run tests on MariaDB
+                      image: mariadb:10.11
+                      healthcmd: mariadb-admin ping
         env:
             ATLASSERVER_DJANGO_MYSQL_DBNAME: atlasserver
             ATLASSERVER_DJANGO_MYSQL_USER: root
@@ -93,9 +110,9 @@ jobs:
             ATLASSERVER_EMAIL_HOST_USER: atlasforced@gmail.com
             ATLASSERVER_DJANGO_SECRET_KEY: ${{secrets.ATLASSERVER_DJANGO_SECRET_KEY}}
             # settings_test defaults to SQLite so that the suite runs on a developer machine with
-            # no MySQL server; CI opts back in to the engine used in production
+            # no MySQL server; CI opts back in to the engine of the service container below
             ATLASSERVER_TEST_DB: mysql
-            # "localhost" would make libmysqlclient look for a unix socket, but the MySQL service
+            # "localhost" would make libmysqlclient look for a unix socket, but the database service
             # below is only reachable over TCP on the mapped port
             ATLASSERVER_DJANGO_MYSQL_HOST: 127.0.0.1
             DJANGO_SETTINGS_MODULE: atlasserver.settings_test
@@ -105,16 +122,15 @@ jobs:
             ATLASSERVER_SITE_ORIGIN: https://fallingstar-data.com
 
         services:
-            mysql:
-                # Django 6.1 dropped support for MySQL < 8.4, which rules out the MySQL bundled
-                # with the runner image
-                image: mysql:8.4
+            database:
+                image: ${{ matrix.image }}
+                # the MariaDB image reads these MYSQL_ variables also
                 env:
                     MYSQL_ROOT_PASSWORD: root
                     MYSQL_DATABASE: atlasserver
                 ports:
                     - 3306:3306
-                options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+                options: --health-cmd="${{ matrix.healthcmd }}" --health-interval=10s --health-timeout=5s --health-retries=3
 
         steps:
             - name: Checkout Code
@@ -135,7 +151,7 @@ jobs:
             # downloads each day. No test reads the databases, and the server opens the city
             # database only for a request.
             - name: Set up database
-              # the mysql service container has already created the database and passed its
+              # the database service container has already created the database and passed its
               # health check by the time steps run
               run: |
                   # fail if a model change was committed without its migration, rather than
